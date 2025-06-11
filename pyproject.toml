@@ -1,0 +1,28 @@
+[project]
+name = "falcon-pachinko"
+version = "0.1.0"
+description = "falcon-pachinko package"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "pyright"]
+
+[tool.pyright]
+pythonVersion = "3.13"
+strict = true
+include = ["falcon_pachinko"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.uv]
+package = true
+
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
