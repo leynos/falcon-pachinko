@@ -1,3 +1,43 @@
 # falcon-pachinko
 
-Example package generated from this Copier template.
+`falcon-pachinko` is an extension library for the
+[Falcon](https://falcon.readthedocs.io) web framework. It adds a structured
+approach to asynchronous WebSocket routing and background worker integration.
+
+See
+[docs/falcon-websocket-extension-design.md](docs/falcon-websocket-extension-design.md)
+for the full design rationale.
+
+## Key features
+
+- `app.add_websocket_route()` maps WebSocket paths to `WebSocketResource`
+  classes, mirroring Falcon's HTTP routing.
+- `WebSocketResource` provides `on_connect`, `on_disconnect`, and
+  `on_message` lifecycle hooks.
+- `@handles_message("type")` dispatches incoming JSON messages to specific
+  handler methods.
+- `WebSocketConnectionManager` tracks connections, manages rooms, and lets
+  workers broadcast messages.
+- Background tasks register via `app.add_websocket_worker` and interact with the
+  connection manager.
+
+These concepts are summarised in the design document:
+
+```python
+app.add_websocket_route('/ws/chat/{room_name}', ChatRoomResource())
+```
+
+```python
+@handles_message("new_chat_message")
+async def handle_new_chat_message(self, ws, payload):
+    ...
+```
+
+## Roadmap
+
+Implementation tasks are tracked in [docs/roadmap.md](docs/roadmap.md).
+
+## License
+
+This project is licensed under the terms of the ISC license.
+See [LICENSE](LICENSE) for details.
