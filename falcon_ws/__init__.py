@@ -10,10 +10,12 @@ _MANAGERS: dict[int, WebSocketConnectionManager] = {}
 
 
 def _get_ws_manager(app: falcon.asgi.App) -> WebSocketConnectionManager:
-    try:
-        return _MANAGERS[id(app)]
-    except KeyError as exc:
-        raise RuntimeError("WebSocketConnectionManager not installed") from exc
+    app_id = id(app)
+    if app_id not in _MANAGERS:
+        raise RuntimeError(
+            "WebSocketConnectionManager has not been installed for this Falcon app."
+        )
+    return _MANAGERS[app_id]
 
 
 __all__ = ["WebSocketConnectionManager", "install"]
