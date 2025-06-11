@@ -13,7 +13,7 @@ dev = ["pytest", "ruff", "pyright"]
 [tool.pyright]
 pythonVersion = "3.13"
 typeCheckingMode = "strict"
-include = ["falcon_pachinko", "falcon_ws"]
+include = ["falcon_pachinko"]
 
 [tool.ruff]
 line-length = 88

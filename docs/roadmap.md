@@ -6,7 +6,7 @@ formatting.
 
 1. **Foundation and API Setup** (lines 140-170)
 
-   - [x] Implement `falcon_ws.install(app)` to attach a
+   - [x] Implement `falcon_pachinko.install(app)` to attach a
      `WebSocketConnectionManager` to the Falcon `App`.
    - [ ] Provide `app.add_websocket_route()` mirroring Falcon’s HTTP routing.
 
