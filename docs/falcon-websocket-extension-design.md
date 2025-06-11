@@ -164,9 +164,8 @@ The extension will revolve around three primary components:
    mechanism will route incoming messages (assumed to be structured, e.g., JSON
    with a 'type' field) to appropriate asynchronous methods within the resource.
 3. `WebSocketConnectionManager`: A central object responsible for tracking
-   active WebSocket connections and managing logical groups or "rooms" of
-   connections. This manager will be the primary interface for background
-   workers to send messages to clients.
+   active WebSocket connections. It can be subclassed or integrated with a
+   pub/sub system to broadcast messages to connected clients.
 
 ### 3.3. Application Integration
 
@@ -287,17 +286,16 @@ a monolithic `on_receive` method with extensive conditional logic.
 ### 3.7. `WebSocketConnectionManager`
 
 The `WebSocketConnectionManager` is crucial for enabling server-initiated
-messages and managing groups of connections. It will be an in-process manager by
-default.
+messages. It will be an in-process manager by default and focuses solely on
+tracking connections. Advanced scenarios like connection grouping or external
+pub/sub integration are expected to be implemented separately.
 
 - **Purpose**:
 
   - Track all active WebSocket connections (identified by a unique ID, and
     associated with their `WebSocketResource` instance if needed).
-  - Manage logical groups or "rooms" of connections (e.g., all users in a
-    specific chat room).
   - Provide an API for background workers or other application components to
-    broadcast messages to specific connections, groups, or all connections.
+    send messages to specific connections.
 
 - **Proposed Methods**:
 
@@ -307,33 +305,16 @@ default.
     resource_instance: WebSocketResource)`:
     Registers a new connection.
   - `remove_connection(connection_id: str)`: Removes a connection.
-  - `join_room(connection_id: str, room_name: str)`: Associates a connection
-    with a room.
-  - `leave_room(connection_id: str, room_name: str)`: Disassociates a connection
-    from a room.
-  - `broadcast_to_room(room_name: str, message: Any, exclude_ids: Optional] = None)`:
-        <!-- markdownlint-disable-line MD013 --> Sends a message (typically a dict
-    to be JSON serialized) to all connections in a room.
   - `send_to_connection(connection_id: str, message: Any)`: Sends a message to a
     specific connection.
-  - `get_connections_in_room(room_name: str) -> List`: Retrieves WebSocket
-    objects for connections in a room.
-  - `get_rooms_by_prefix(prefix: str) -> List[str]`: Retrieves room names
-    matching a given prefix.
 
-  The `WebSocketResource` base class could provide convenience methods like
-  `self.join_room(room_name)`, `self.leave_room(room_name)`, and
-  `self.broadcast_to_room(room_name, message)` that internally use the
-  connection manager associated with the application. This provision of built-in
-  "room" management significantly lowers the barrier to entry for common
-  multi-user application patterns, such as chat applications, abstracting away
-  boilerplate logic that developers would otherwise need to implement
-  repeatedly.
+  Applications requiring fan-out or group messaging should integrate an
+  external pub/sub system or subclass the manager to add that functionality.
 
 - Implementation Strategy:
 
   Initially, this manager will be an in-process Python object (e.g., using
-  dictionaries and sets to store connection and room information). This approach
+  dictionaries and sets to store connection information). This approach
   aligns with Falcon's lightweight philosophy for common use cases such as
   single-instance deployments or deployments behind a load balancer with sticky
   sessions. It provides a simpler alternative to the more complex, potentially
@@ -353,8 +334,8 @@ clients.
 - **Accessing the Manager**: These workers can access the
   `WebSocketConnectionManager` instance via `app.ws_connection_manager`.
 
-- **Sending Messages**: Workers will use the manager's methods (e.g.,
-  `broadcast_to_room`, `send_to_connection`) to dispatch messages.
+- **Sending Messages**: Workers will use the manager's `send_to_connection`
+  method to dispatch messages.
 
 - **Registration**: A mechanism to register and start these workers with the
   ASGI application lifecycle will be provided, for instance:
@@ -364,10 +345,8 @@ clients.
       while True:
           await asyncio.sleep(60)
           alert_message = {"type": "system_alert", "payload": "Server maintenance soon."} <!-- markdownlint-disable-line MD013 -->
-          # Example: Get all rooms starting with 'user_' and broadcast
-          user_rooms = await conn_manager.get_rooms_by_prefix("user_")
-          for room in user_rooms:
-               await conn_manager.broadcast_to_room(room, alert_message)
+          for conn_id in list(conn_manager._connections.keys()):
+               await conn_manager.send_to_connection(conn_id, alert_message)
 
   # During application setup:
   # app.add_websocket_worker(periodic_system_alerts, app.ws_connection_manager)
@@ -383,7 +362,7 @@ serves as a quick reference to understand the main abstractions and their
 intended use.
 
 <table class="not-prose border-collapse table-auto w-full" style="min-width: 100px"> <!-- markdownlint-disable-line MD013 MD033 -->
-<colgroup><col style="min-width: 25px"><col style="min-width: 25px"><col style="min-width: 25px"><col style="min-width: 25px"></colgroup><tbody><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Component/Concept</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Key Classes/Decorators/Methods</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Purpose</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Analogy to Falcon HTTP (if applicable)</strong></p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Application Setup</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">falcon_ws.install(app)</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Initializes shared WebSocket components (e.g., connection manager) on the app.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>App-level configuration/extensions.</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Route Definition</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">app.add_websocket_route(path, resource_class_instance)</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Maps a URI path to a <code class="code-inline">WebSocketResource</code>.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">app.add_route(path, resource_instance)</code></p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Resource Class</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">falcon_ws.WebSocketResource</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Base class for handling WebSocket connections and messages for a given route.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Falcon HTTP Resource class (e.g., methods like <code class="code-inline">on_get</code>, <code class="code-inline">on_post</code> handle specific <code class="code-inline">falcon.HTTP_METHODS</code>).</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Connection Lifecycle</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">async def on_connect(req, ws, **params) -&gt; bool</code>, <code class="code-inline">async def on_disconnect(ws, close_code)</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Methods in <code class="code-inline">WebSocketResource</code> to manage connection setup and teardown.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">process_request</code> / <code class="code-inline">process_response</code> middleware (for setup/teardown aspects), though more directly tied to the connection itself.</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Message Handling (Typed)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">@falcon_ws.handles_message("type_name") async def handler(self, ws, payload)</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Decorator in <code class="code-inline">WebSocketResource</code> to route incoming JSON messages based on a 'type' field to specific methods.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>HTTP method responders like <code class="code-inline">on_get(req, resp, **params)</code>, <code class="code-inline">on_post(req, resp, **params)</code>.</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Message Handling (Generic)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">async def on_message(self, ws, message)</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Fallback method in <code class="code-inline">WebSocketResource</code> for unhandled or non-JSON messages.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>N/A (Falcon HTTP relies on specific method responders).</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Connection Management (Resource)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">self.join_room(room_name)</code>, <code class="code-inline">self.leave_room(room_name)</code>, <code class="code-inline">self.broadcast_to_room(room_name, message, exclude_self=False)</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Convenience methods within <code class="code-inline">WebSocketResource</code> to interact with rooms/groups via the connection manager.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>N/A (HTTP is stateless).</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Background Worker Integration</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">app.add_websocket_worker(worker_coro, conn_manager)</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Registers an asynchronous task that can send messages to clients via the connection manager.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Background task patterns (often custom in Falcon HTTP).</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Connection Management (Global)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">app.ws_connection_manager</code> (instance of <code class="code-inline">WebSocketConnectionManager</code>)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Central object to track connections, manage groups, and enable broadcasting from any part of the app.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>N/A (HTTP is stateless).</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Manager Methods (Global)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">conn_manager.broadcast_to_room(room, msg)</code>, <code class="code-inline">conn_manager.send_to_connection(id, msg)</code>, etc.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Methods on the connection manager for sending messages from workers or other application components.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>N/A.</p></td></tr></tbody> <!-- markdownlint-disable-line MD013 MD033 -->
+<colgroup><col style="min-width: 25px"><col style="min-width: 25px"><col style="min-width: 25px"><col style="min-width: 25px"></colgroup><tbody><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Component/Concept</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Key Classes/Decorators/Methods</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Purpose</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Analogy to Falcon HTTP (if applicable)</strong></p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Application Setup</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">falcon_ws.install(app)</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Initializes shared WebSocket components (e.g., connection manager) on the app.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>App-level configuration/extensions.</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Route Definition</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">app.add_websocket_route(path, resource_class_instance)</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Maps a URI path to a <code class="code-inline">WebSocketResource</code>.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">app.add_route(path, resource_instance)</code></p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Resource Class</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">falcon_ws.WebSocketResource</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Base class for handling WebSocket connections and messages for a given route.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Falcon HTTP Resource class (e.g., methods like <code class="code-inline">on_get</code>, <code class="code-inline">on_post</code> handle specific <code class="code-inline">falcon.HTTP_METHODS</code>).</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Connection Lifecycle</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">async def on_connect(req, ws, **params) -&gt; bool</code>, <code class="code-inline">async def on_disconnect(ws, close_code)</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Methods in <code class="code-inline">WebSocketResource</code> to manage connection setup and teardown.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">process_request</code> / <code class="code-inline">process_response</code> middleware (for setup/teardown aspects), though more directly tied to the connection itself.</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Message Handling (Typed)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">@falcon_ws.handles_message("type_name") async def handler(self, ws, payload)</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Decorator in <code class="code-inline">WebSocketResource</code> to route incoming JSON messages based on a 'type' field to specific methods.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>HTTP method responders like <code class="code-inline">on_get(req, resp, **params)</code>, <code class="code-inline">on_post(req, resp, **params)</code>.</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Message Handling (Generic)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">async def on_message(self, ws, message)</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Fallback method in <code class="code-inline">WebSocketResource</code> for unhandled or non-JSON messages.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>N/A (Falcon HTTP relies on specific method responders).</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Connection Management (Resource)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">external pub/sub integration</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Convenience methods within <code class="code-inline">WebSocketResource</code> to interact with topic channels via the connection manager.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>N/A (HTTP is stateless).</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Background Worker Integration</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">app.add_websocket_worker(worker_coro, conn_manager)</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Registers an asynchronous task that can send messages to clients via the connection manager.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Background task patterns (often custom in Falcon HTTP).</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Connection Management (Global)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">app.ws_connection_manager</code> (instance of <code class="code-inline">WebSocketConnectionManager</code>)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Central object to track connections and enable broadcasting from any part of the app.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>N/A (HTTP is stateless).</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Manager Methods (Global)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">pubsub.publish(topic, msg)</code>, <code class="code-inline">conn_manager.send_to_connection(id, msg)</code>, etc.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Methods on the connection manager for sending messages from workers or other application components.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>N/A.</p></td></tr></tbody> <!-- markdownlint-disable-line MD013 MD033 -->
 </table> <!-- markdownlint-disable-line MD033 -->
 
 This API structure is designed to be both powerful enough for complex
@@ -439,17 +418,17 @@ class ChatRoomResource(WebSocketResource):
         self.room_name = room_name
         self.connection_id = ws.subprotocol # Or generate a unique ID
         
-        await self.join_room(self.room_name) # Uses connection manager via base class <!-- markdownlint-disable-line MD013 -->
+        await pubsub.subscribe(f"chat.{room_name}", self.connection_id)
 
         await ws.send_media({
             "type": "serverSystemMessage",
             "payload": {"text": f"Welcome {self.user.name} to room '{room_name}'!"} <!-- markdownlint-disable-line MD013 -->
         })
 
-        await self.broadcast_to_room(
-            self.room_name,
+        await pubsub.publish(
+            f"chat.{self.room_name}",
             {"type": "serverUserJoined", "payload": {"user": self.user.name}},
-            exclude_self=True
+            exclude_id=self.connection_id
         )
         return True
 
@@ -457,35 +436,35 @@ class ChatRoomResource(WebSocketResource):
     async def handle_client_send_message(self, ws: falcon.asgi.WebSocket, payload: dict): <!-- markdownlint-disable-line MD013 -->
         message_text = payload.get("text", "")
         # Add validation/sanitization as needed
-        await self.broadcast_to_room(
-            self.room_name,
+        await pubsub.publish(
+            f"chat.{self.room_name}",
             {"type": "serverNewMessage", "payload": {"user": self.user.name, "text": message_text}} <!-- markdownlint-disable-line MD013 -->
         )
 
     @handles_message("clientStartTyping")
     async def handle_client_start_typing(self, ws: falcon.asgi.WebSocket, payload: dict): <!-- markdownlint-disable-line MD013 -->
-        await self.broadcast_to_room(
-            self.room_name,
+        await pubsub.publish(
+            f"chat.{self.room_name}",
             {"type": "serverUserTyping", "payload": {"user": self.user.name, "isTyping": True}}, <!-- markdownlint-disable-line MD013 -->
-            exclude_self=True
+            exclude_id=self.connection_id
         )
 
     @handles_message("clientStopTyping")
     async def handle_client_stop_typing(self, ws: falcon.asgi.WebSocket, payload: dict): <!-- markdownlint-disable-line MD013 -->
-        await self.broadcast_to_room(
-            self.room_name,
+        await pubsub.publish(
+            f"chat.{self.room_name}",
             {"type": "serverUserTyping", "payload": {"user": self.user.name, "isTyping": False}}, <!-- markdownlint-disable-line MD013 -->
-            exclude_self=True
+            exclude_id=self.connection_id
         )
 
     async def on_disconnect(self, ws: falcon.asgi.WebSocket, close_code: int):
         if hasattr(self, 'room_name') and hasattr(self, 'user'): # Ensure on_connect completed successfully <!-- markdownlint-disable-line MD013 -->
-            await self.broadcast_to_room(
-                self.room_name,
+            await pubsub.publish(
+                f"chat.{self.room_name}",
                 {"type": "serverUserLeft", "payload": {"user": self.user.name}},
-                exclude_self=True # Technically not needed if connection is already gone from room <!-- markdownlint-disable-line MD013 -->
+                exclude_id=self.connection_id
             )
-            await self.leave_room(self.room_name) # Uses connection manager
+            await pubsub.unsubscribe(f"chat.{self.room_name}", self.connection_id)
         print(f"User {getattr(self.user, 'name', 'Unknown')} disconnected from room {getattr(self, 'room_name', 'N/A')} with code {close_code}") <!-- markdownlint-disable-line MD013 -->
 
     async def on_message(self, ws: falcon.asgi.WebSocket, message: Union[str, bytes]): <!-- markdownlint-disable-line MD013 -->
@@ -499,12 +478,12 @@ class ChatRoomResource(WebSocketResource):
 ```
 
 This example demonstrates how the `WebSocketResource` and the `@handles_message`
-decorator streamline the development of a feature-rich chat application. The
-abstractions for room management (`self.join_room`, `self.broadcast_to_room`)
-and typed message handling significantly reduce boilerplate code. Applying the
-design to such a concrete use case effectively tests the ergonomics of the
-proposed API, confirming that its abstractions are intuitive and contribute to
-cleaner, more maintainable code.
+decorator streamline the development of a feature-rich chat application. Typed
+message handling significantly reduces boilerplate code. Group messaging can be
+implemented separately via an external pub/sub system. Applying the design to
+such a concrete use case effectively tests the ergonomics of the proposed API,
+confirming that its abstractions are intuitive and contribute to cleaner, more
+maintainable code.
 
 Furthermore, this use case highlights how server-side handler names or decorator
 arguments (e.g., `"clientSendMessage"`) can directly correspond to message types
@@ -546,18 +525,12 @@ async def system_announcement_worker(conn_manager: falcon_ws.WebSocketConnection
         # A method to get all rooms or rooms matching a pattern would be useful here. <!-- markdownlint-disable-line MD013 -->
         # For demonstration, assume conn_manager has a way to get all relevant room IDs. <!-- markdownlint-disable-line MD013 -->
         # This example assumes a method to get all rooms managed by the connection manager. <!-- markdownlint-disable-line MD013 -->
-        # A more specific method like get_rooms_by_prefix("chat_") would be better. <!-- markdownlint-disable-line MD013 -->
         
-        active_rooms = await conn_manager.get_all_managed_room_names() # Hypothetical method <!-- markdownlint-disable-line MD013 -->
-        # Or, if rooms are not explicitly tracked this way, broadcast to all connections <!-- markdownlint-disable-line MD013 -->
-        # with a filter on the client side or by iterating through connections and checking resource state. <!-- markdownlint-disable-line MD013 -->
-        # For this example, let's assume we target rooms with a 'chat_' prefix.
-        
-        chat_room_ids = await conn_manager.get_rooms_by_prefix("chat_")
+        room_ids = await pubsub.list_topics("chat_*")
 
-        for room_id in chat_room_ids:
-            await conn_manager.broadcast_to_room(
-                room_id,
+        for room_id in room_ids:
+            await pubsub.publish(
+                f"chat.{room_id}",
                 {"type": "serverSystemAnnouncement", "payload": {"text": announcement_text}} <!-- markdownlint-disable-line MD013 -->
             )
         print("Sent hourly system announcement.")

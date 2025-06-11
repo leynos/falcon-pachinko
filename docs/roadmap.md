@@ -6,7 +6,7 @@ formatting.
 
 1. **Foundation and API Setup** (lines 140-170)
 
-   - [ ] Implement `falcon_ws.install(app)` to attach a
+   - [x] Implement `falcon_ws.install(app)` to attach a
      `WebSocketConnectionManager` to the Falcon `App`.
    - [ ] Provide `app.add_websocket_route()` mirroring Falcon’s HTTP routing.
 
@@ -21,11 +21,9 @@ formatting.
 3. **Connection Manager** (lines 288-340)
 
    - [ ] Implement `WebSocketConnectionManager` with methods for managing
-     connections and rooms: `add_connection`, `remove_connection`, `join_room`,
-     `leave_room`, `broadcast_to_room`, `send_to_connection`,
-     `get_connections_in_room`, and `get_rooms_by_prefix`.
-   - [ ] Provide helper methods in `WebSocketResource` for common room
-     operations.
+     connections: `add_connection`, `remove_connection`, `send_to_connection`.
+   - [ ] Connection grouping and pub/sub integration will be handled
+     externally.
 
 4. **Background Worker Integration** (lines 342-375)
 
