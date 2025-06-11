@@ -345,8 +345,8 @@ clients.
       while True:
           await asyncio.sleep(60)
           alert_message = {"type": "system_alert", "payload": "Server maintenance soon."} <!-- markdownlint-disable-line MD013 -->
-          for conn_id in list(conn_manager._connections.keys()):
-               await conn_manager.send_to_connection(conn_id, alert_message)
+        for conn_id in conn_manager.get_connection_ids():
+            await conn_manager.send_to_connection(conn_id, alert_message)
 
   # During application setup:
   # app.add_websocket_worker(periodic_system_alerts, app.ws_connection_manager)
@@ -404,6 +404,7 @@ A `ChatRoomResource` class would be defined, inheriting from
 
 ```python
 import falcon.asgi
+import pubsub  # Application-specific pub/sub backend
 from falcon_ws import WebSocketResource, handles_message # Assuming falcon_ws is the extension <!-- markdownlint-disable-line MD013 -->
 
 class ChatRoomResource(WebSocketResource):
@@ -417,8 +418,10 @@ class ChatRoomResource(WebSocketResource):
 
         self.room_name = room_name
         self.connection_id = ws.subprotocol # Or generate a unique ID
-        
+
         await pubsub.subscribe(f"chat.{room_name}", self.connection_id)
+        # NOTE: `pubsub` should be created and injected by the application,
+        # for example via dependency injection or app state.
 
         await ws.send_media({
             "type": "serverSystemMessage",
