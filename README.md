@@ -39,5 +39,5 @@ Implementation tasks are tracked in [docs/roadmap.md](docs/roadmap.md).
 
 ## License
 
-This project is licensed under the terms of the MIT license.
+This project is licensed under the terms of the ISC license.
 See [LICENSE](LICENSE) for details.
