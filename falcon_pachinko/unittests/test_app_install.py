@@ -26,11 +26,25 @@ class SupportsWebSocket(typing.Protocol):
         ...
 
 
-def test_install_adds_methods_and_manager() -> None:
-    """Ensure ``install()`` attaches WebSocket helpers to the app."""
+@pytest.fixture
+def dummy_app() -> SupportsWebSocket:
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
-    app_any = typing.cast("SupportsWebSocket", app)
+    return typing.cast("SupportsWebSocket", app)
+
+
+@pytest.fixture
+def dummy_app_resource(dummy_app: SupportsWebSocket) -> type[WebSocketResource]:
+    class DummyResource(WebSocketResource):
+        pass
+
+    return DummyResource
+
+
+def test_install_adds_methods_and_manager(dummy_app: SupportsWebSocket) -> None:
+    """Ensure ``install()`` attaches WebSocket helpers to the app."""
+
+    app_any = dummy_app
 
     assert hasattr(app_any, "ws_connection_manager")
     assert isinstance(app_any.ws_connection_manager, WebSocketConnectionManager)
@@ -38,108 +52,79 @@ def test_install_adds_methods_and_manager() -> None:
     assert callable(app_any.create_websocket_resource)
 
 
-def test_add_websocket_route_registers_resource() -> None:
+def test_add_websocket_route_registers_resource(
+    dummy_app: SupportsWebSocket, dummy_app_resource: type[WebSocketResource]
+) -> None:
     """``add_websocket_route`` stores the resource class for the path."""
-    app = DummyApp()
-    install(app)  # type: ignore[arg-type]
-    app_any = typing.cast("SupportsWebSocket", app)
+    dummy_app.add_websocket_route("/ws", dummy_app_resource)
 
-    class R(WebSocketResource):
-        pass
-
-    app_any.add_websocket_route("/ws", R)
-
-    assert app_any._websocket_routes["/ws"] is R  # pyright: ignore[reportPrivateUsage]
+    assert (
+        dummy_app._websocket_routes["/ws"]  # pyright: ignore[reportPrivateUsage]
+        is dummy_app_resource
+    )
 
 
-def test_install_is_idempotent() -> None:
+def test_install_is_idempotent(dummy_app: SupportsWebSocket) -> None:
     """Calling ``install()`` twice leaves existing state intact."""
-    app = DummyApp()
-    install(app)  # type: ignore[arg-type]
-    app_any = typing.cast("SupportsWebSocket", app)
-    first_manager = app_any.ws_connection_manager
-    first_route_fn = app_any.add_websocket_route
-    first_create_fn = app_any.create_websocket_resource
+    first_manager = dummy_app.ws_connection_manager
+    first_route_fn = dummy_app.add_websocket_route
+    first_create_fn = dummy_app.create_websocket_resource
 
-    install(app)  # type: ignore[arg-type]
-    assert app_any.ws_connection_manager is first_manager
-    assert app_any.add_websocket_route is first_route_fn
-    assert app_any.create_websocket_resource is first_create_fn
+    install(dummy_app)  # type: ignore[arg-type]
+    assert dummy_app.ws_connection_manager is first_manager
+    assert dummy_app.add_websocket_route is first_route_fn
+    assert dummy_app.create_websocket_resource is first_create_fn
 
 
-def test_install_detects_partial_state() -> None:
+def test_install_detects_partial_state(dummy_app: SupportsWebSocket) -> None:
     """``install()`` raises if previous install state is corrupted."""
-    app = DummyApp()
-    install(app)  # type: ignore[arg-type]
-    app_any = typing.cast("SupportsWebSocket", app)
 
     # Simulate tampering with one of the install attributes
-    delattr(app_any, "_websocket_routes")
-    delattr(app_any, "create_websocket_resource")
+    delattr(dummy_app, "_websocket_routes")
+    delattr(dummy_app, "create_websocket_resource")
 
     with pytest.raises(RuntimeError):
-        install(app)  # type: ignore[arg-type]
+        install(dummy_app)  # type: ignore[arg-type]
 
 
-def test_add_websocket_route_duplicate_raises() -> None:
-    app = DummyApp()
-    install(app)  # type: ignore[arg-type]
-    app_any = typing.cast("SupportsWebSocket", app)
-
-    class R(WebSocketResource):
-        pass
-
-    app_any.add_websocket_route("/ws", R)
+def test_add_websocket_route_duplicate_raises(
+    dummy_app: SupportsWebSocket, dummy_app_resource: type[WebSocketResource]
+) -> None:
+    dummy_app.add_websocket_route("/ws", dummy_app_resource)
 
     with pytest.raises(ValueError):
-        app_any.add_websocket_route("/ws", R)
+        dummy_app.add_websocket_route("/ws", dummy_app_resource)
 
 
-def test_add_websocket_route_validates_path() -> None:
-    app = DummyApp()
-    install(app)  # type: ignore[arg-type]
-    app_any = typing.cast("SupportsWebSocket", app)
-
-    class R(WebSocketResource):
-        pass
-
+def test_add_websocket_route_validates_path(
+    dummy_app: SupportsWebSocket, dummy_app_resource: type[WebSocketResource]
+) -> None:
     with pytest.raises(ValueError):
-        app_any.add_websocket_route("ws", R)
+        dummy_app.add_websocket_route("ws", dummy_app_resource)
     with pytest.raises(ValueError):
-        app_any.add_websocket_route("", R)
+        dummy_app.add_websocket_route("", dummy_app_resource)
 
 
-def test_create_websocket_resource_returns_new_instances() -> None:
-    app = DummyApp()
-    install(app)  # type: ignore[arg-type]
-    app_any = typing.cast("SupportsWebSocket", app)
+def test_create_websocket_resource_returns_new_instances(
+    dummy_app: SupportsWebSocket, dummy_app_resource: type[WebSocketResource]
+) -> None:
+    dummy_app.add_websocket_route("/ws", dummy_app_resource)
 
-    class R(WebSocketResource):
-        pass
+    first = dummy_app.create_websocket_resource("/ws")
+    second = dummy_app.create_websocket_resource("/ws")
 
-    app_any.add_websocket_route("/ws", R)
-
-    first = app_any.create_websocket_resource("/ws")
-    second = app_any.create_websocket_resource("/ws")
-
-    assert isinstance(first, R)
-    assert isinstance(second, R)
+    assert isinstance(first, dummy_app_resource)
+    assert isinstance(second, dummy_app_resource)
     assert first is not second
 
 
-def test_create_websocket_resource_unregistered_path() -> None:
-    app = DummyApp()
-    install(app)  # type: ignore[arg-type]
-    app_any = typing.cast("SupportsWebSocket", app)
-
+def test_create_websocket_resource_unregistered_path(
+    dummy_app: SupportsWebSocket,
+) -> None:
     with pytest.raises(ValueError):
-        app_any.create_websocket_resource("/missing")
+        dummy_app.create_websocket_resource("/missing")
 
 
-def test_add_websocket_route_type_check() -> None:
-    app = DummyApp()
-    install(app)  # type: ignore[arg-type]
-    app_any = typing.cast("SupportsWebSocket", app)
-
+def test_add_websocket_route_type_check(dummy_app: SupportsWebSocket) -> None:
     with pytest.raises(TypeError):
-        app_any.add_websocket_route("/ws", object)  # type: ignore[arg-type]
+        dummy_app.add_websocket_route("/ws", object)  # type: ignore[arg-type]
