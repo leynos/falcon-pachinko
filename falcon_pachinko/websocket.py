@@ -47,9 +47,13 @@ def install(app: typing.Any) -> None:
 _route_lock = Lock()
 
 
-def _validate_route_path(path: str) -> None:
+def _validate_route_path(path: typing.Any) -> None:
     """Ensure ``path`` is a non-empty string starting with ``/``."""
-    if not path or not path.startswith("/"):
+    if (
+        not isinstance(path, str)
+        or not path.strip()
+        or not path.lstrip().startswith("/")
+    ):
         raise ValueError(f"Invalid WebSocket route path: {path!r}")
 
 
@@ -88,4 +92,4 @@ def _create_websocket_resource(self: typing.Any, path: str) -> typing.Any:
                 f"No WebSocket resource registered for path: {path}"
             ) from exc
 
-        return resource_cls()
+    return resource_cls()

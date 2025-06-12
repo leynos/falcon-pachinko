@@ -200,6 +200,19 @@ instantiate the `ChatRoomResource` and manage the WebSocket lifecycle through
 it. Path parameters like `{room_name}` will be passed to the relevant methods of
 the `WebSocketResource`.
 
+#### 3.4.1. Programmatic Resource Instantiation
+
+Application code can also create a resource instance directly using
+``app.create_websocket_resource(path)``. This helper returns a new object of the
+class registered for ``path`` or raises ``ValueError`` if no such route exists.
+
+```python
+chat_resource = app.create_websocket_resource('/ws/chat/{room_name}')
+```
+
+Each call yields a fresh instance so that connection-specific state can be
+maintained independently.
+
 ### 3.5. The `WebSocketResource` Class
 
 The `WebSocketResource` class is central to handling WebSocket interactions.
