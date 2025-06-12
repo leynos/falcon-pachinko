@@ -14,7 +14,7 @@ formatting.
 
    - [x] Create `WebSocketResource` with `on_connect`, `on_disconnect`, and
      `on_message` lifecycle methods.
-   - [ ] Include connection-specific state (one instance per connection).
+   - [x] Include connection-specific state (one instance per connection).
    - [ ] Add decorator `@handles_message("type")` for dispatching JSON messages
      by their `type`.
 

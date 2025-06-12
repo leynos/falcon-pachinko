@@ -95,6 +95,20 @@ def test_add_websocket_route_duplicate_raises() -> None:
         app_any.add_websocket_route("/ws", R)
 
 
+def test_add_websocket_route_validates_path() -> None:
+    app = DummyApp()
+    install(app)  # type: ignore[arg-type]
+    app_any = typing.cast("SupportsWebSocket", app)
+
+    class R(WebSocketResource):
+        pass
+
+    with pytest.raises(ValueError):
+        app_any.add_websocket_route("ws", R)
+    with pytest.raises(ValueError):
+        app_any.add_websocket_route("", R)
+
+
 def test_create_websocket_resource_returns_new_instances() -> None:
     app = DummyApp()
     install(app)  # type: ignore[arg-type]

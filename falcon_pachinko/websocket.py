@@ -52,11 +52,16 @@ def _add_websocket_route(
 ) -> None:
     """Register a ``WebSocketResource`` subclass for ``path``."""
     with _route_lock:
+        if not path or not path.startswith("/"):
+            raise ValueError(f"Invalid WebSocket route path: {path!r}")
+
         if path in self._websocket_routes:
             msg = f"WebSocket route already registered for path: {path}"
             raise ValueError(msg)
 
-        if not issubclass(resource_cls, WebSocketResource):
+        if not isinstance(resource_cls, type) or not issubclass(  # pyright: ignore[reportUnnecessaryIsInstance]
+            resource_cls, WebSocketResource
+        ):
             msg = (
                 "resource_cls must be a subclass of WebSocketResource, got "
                 f"{resource_cls!r}"
@@ -68,9 +73,12 @@ def _add_websocket_route(
 
 def _create_websocket_resource(self: typing.Any, path: str) -> typing.Any:
     """Instantiate the resource class registered for ``path``."""
-    try:
-        resource_cls = self._websocket_routes[path]
-    except KeyError as exc:
-        raise ValueError(f"No WebSocket resource registered for path: {path}") from exc
+    with _route_lock:
+        try:
+            resource_cls = self._websocket_routes[path]
+        except KeyError as exc:
+            raise ValueError(
+                f"No WebSocket resource registered for path: {path}"
+            ) from exc
 
-    return resource_cls()
+        return resource_cls()
