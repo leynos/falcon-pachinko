@@ -43,6 +43,18 @@ def test_install_is_idempotent() -> None:
     assert app_any.ws_connection_manager is first_manager
 
 
+def test_install_detects_partial_state() -> None:
+    app = DummyApp()
+    install(app)  # type: ignore[arg-type]
+    app_any = cast(Any, app)
+
+    # Simulate tampering with one of the install attributes
+    delattr(app_any, "_websocket_routes")
+
+    with pytest.raises(RuntimeError):
+        install(app)  # type: ignore[arg-type]
+
+
 def test_add_websocket_route_duplicate_raises() -> None:
     app = DummyApp()
     install(app)  # type: ignore[arg-type]

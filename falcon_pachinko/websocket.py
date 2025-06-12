@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import MethodType
-from typing import Any
+from typing import Any, cast
 
 
 class WebSocketConnectionManager:
@@ -17,12 +17,23 @@ class WebSocketConnectionManager:
 
 def install(app: Any) -> None:
     """Attach WebSocket utilities to a Falcon app."""
-    if hasattr(app, "ws_connection_manager"):
-        # Already installed – do nothing.
+    wanted = (
+        "ws_connection_manager",
+        "_websocket_routes",
+        "add_websocket_route",
+    )
+
+    # Idempotent: if all attributes are present, do nothing.
+    if all(hasattr(app, name) for name in wanted):
         return
 
+    # If only some attributes are present, raise an error to avoid
+    # leaving the app in an inconsistent state.
+    if any(hasattr(app, name) for name in wanted):
+        raise RuntimeError("Partial WebSocket install detected; aborting.")
+
     app.ws_connection_manager = WebSocketConnectionManager()
-    app._websocket_routes = {}
+    app._websocket_routes = cast(dict[str, Any], {})
     app.add_websocket_route = MethodType(_add_websocket_route, app)
 
 
