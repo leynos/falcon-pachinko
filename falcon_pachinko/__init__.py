@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
+from .resource import WebSocketResource
 from .websocket import WebSocketConnectionManager, install
 
-
-__all__ = ["install", "WebSocketConnectionManager"]
+__all__ = ["WebSocketConnectionManager", "WebSocketResource", "install"]

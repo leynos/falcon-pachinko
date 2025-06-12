@@ -5,7 +5,7 @@ description = "falcon-pachinko package"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-dependencies = []
+dependencies = ["msgspec>=0.18"]
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff", "pyright"]

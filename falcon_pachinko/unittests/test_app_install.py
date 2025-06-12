@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol, cast
+import typing
 
 import pytest
 
@@ -12,28 +12,25 @@ class DummyApp:
     pass
 
 
-class SupportsWebSocket(Protocol):
+class SupportsWebSocket(typing.Protocol):
     ws_connection_manager: WebSocketConnectionManager
     _websocket_routes: dict[str, object]
 
     def add_websocket_route(self, path: str, resource: object) -> None:
         """
-        Registers a WebSocket resource to handle connections at the specified path.
-        
-        Args:
-            path: The URL path for the WebSocket route.
-            resource: The resource object that will handle WebSocket connections for the given path.
+        Registers a resource to handle WebSocket connections at the specified path.
         
         Raises:
-            ValueError: If a resource is already registered for the specified path.
+            ValueError: If a resource is already registered for the given path.
         """
         ...
 
 
 def test_install_adds_methods_and_manager() -> None:
+    """Tests that installing WebSocket support adds the connection manager and route registration method to the app."""
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
-    app_any = cast(SupportsWebSocket, app)
+    app_any = typing.cast("SupportsWebSocket", app)
 
     assert hasattr(app_any, "ws_connection_manager")
     assert isinstance(app_any.ws_connection_manager, WebSocketConnectionManager)
@@ -41,9 +38,12 @@ def test_install_adds_methods_and_manager() -> None:
 
 
 def test_add_websocket_route_registers_resource() -> None:
+    """
+    Tests that add_websocket_route registers a resource under the specified WebSocket path.
+    """
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
-    app_any = cast(SupportsWebSocket, app)
+    app_any = typing.cast("SupportsWebSocket", app)
 
     resource = object()
     app_any.add_websocket_route("/ws", resource)
@@ -53,13 +53,11 @@ def test_add_websocket_route_registers_resource() -> None:
 
 def test_install_is_idempotent() -> None:
     """
-    Tests that calling install multiple times does not alter existing WebSocket support on the app.
-    
-    Verifies that repeated installation leaves the connection manager and route registration method unchanged, ensuring idempotency.
+    Tests that installing WebSocket support multiple times does not alter the app's WebSocket state.
     """
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
-    app_any = cast(SupportsWebSocket, app)
+    app_any = typing.cast("SupportsWebSocket", app)
     first_manager = app_any.ws_connection_manager
     first_route_fn = app_any.add_websocket_route
 
@@ -70,13 +68,11 @@ def test_install_is_idempotent() -> None:
 
 def test_install_detects_partial_state() -> None:
     """
-    Tests that `install` raises a RuntimeError if called on an app missing internal WebSocket state.
-    
-    Simulates a partially installed or tampered app by deleting the `_websocket_routes` attribute after installation, then verifies that a subsequent call to `install` detects the inconsistency and raises a RuntimeError.
+    Tests that install raises RuntimeError if required internal state is missing from the app.
     """
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
-    app_any = cast(SupportsWebSocket, app)
+    app_any = typing.cast("SupportsWebSocket", app)
 
     # Simulate tampering with one of the install attributes
     delattr(app_any, "_websocket_routes")
@@ -88,7 +84,7 @@ def test_install_detects_partial_state() -> None:
 def test_add_websocket_route_duplicate_raises() -> None:
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
-    app_any = cast(SupportsWebSocket, app)
+    app_any = typing.cast("SupportsWebSocket", app)
 
     resource = object()
     app_any.add_websocket_route("/ws", resource)

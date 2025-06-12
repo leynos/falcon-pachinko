@@ -12,7 +12,7 @@ formatting.
 
 2. **WebSocketResource Base Class** (lines 207-247)
 
-   - [ ] Create `WebSocketResource` with `on_connect`, `on_disconnect`, and
+   - [x] Create `WebSocketResource` with `on_connect`, `on_disconnect`, and
      `on_message` lifecycle methods.
    - [ ] Include connection-specific state (one instance per connection).
    - [ ] Add decorator `@handles_message("type")` for dispatching JSON messages
