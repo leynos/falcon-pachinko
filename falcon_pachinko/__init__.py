@@ -6,7 +6,12 @@ from .websocket import WebSocketConnectionManager, install
 
 
 def hello() -> str:
-    """Return a friendly greeting."""
+    """
+    Returns a friendly greeting string.
+    
+    Returns:
+        A greeting message.
+    """
     return "hello from Python"
 
 
