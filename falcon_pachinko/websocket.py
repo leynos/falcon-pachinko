@@ -9,6 +9,11 @@ class WebSocketConnectionManager:
     """Track active WebSocket connections."""
 
     def __init__(self) -> None:
+        """
+        Initialises the WebSocketConnectionManager with empty connection and room mappings.
+        
+        Creates dictionaries to track active WebSocket connections and group them into rooms.
+        """
         self.connections: dict[str, Any] = {}
         self.rooms: dict[str, set[str]] = {}
 
@@ -17,7 +22,11 @@ class WebSocketConnectionManager:
 
 
 def install(app: Any) -> None:
-    """Attach WebSocket utilities to a Falcon app."""
+    """
+    Attaches WebSocket management utilities to a Falcon app instance.
+    
+    Initialises and binds a WebSocket connection manager, a route mapping dictionary, and a method for registering WebSocket routes to the app. If the app already has all required WebSocket attributes, the function does nothing. If only some attributes are present, raises a RuntimeError to prevent inconsistent state.
+    """
     wanted = (
         "ws_connection_manager",
         "_websocket_routes",
@@ -43,10 +52,10 @@ _route_lock = Lock()
 
 
 def _add_websocket_route(self: Any, path: str, resource: Any) -> None:
-    """Register a WebSocket resource for the given path.
-
-    This function is safe to call from multiple threads, but it should usually
-    be invoked during application start-up.
+    """
+    Registers a WebSocket resource handler for a specified path on the application.
+    
+    Ensures thread-safe registration and raises a ValueError if the path is already registered.
     """
     with _route_lock:
         if path in self._websocket_routes:
