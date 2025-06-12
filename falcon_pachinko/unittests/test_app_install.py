@@ -111,3 +111,21 @@ def test_create_websocket_resource_returns_new_instances() -> None:
     assert isinstance(first, R)
     assert isinstance(second, R)
     assert first is not second
+
+
+def test_create_websocket_resource_unregistered_path() -> None:
+    app = DummyApp()
+    install(app)  # type: ignore[arg-type]
+    app_any = typing.cast("SupportsWebSocket", app)
+
+    with pytest.raises(ValueError):
+        app_any.create_websocket_resource("/missing")
+
+
+def test_add_websocket_route_type_check() -> None:
+    app = DummyApp()
+    install(app)  # type: ignore[arg-type]
+    app_any = typing.cast("SupportsWebSocket", app)
+
+    with pytest.raises(TypeError):
+        app_any.add_websocket_route("/ws", object)  # type: ignore[arg-type]
