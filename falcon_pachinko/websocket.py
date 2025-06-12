@@ -9,9 +9,7 @@ class WebSocketConnectionManager:
     """Track active WebSocket connections."""
 
     def __init__(self) -> None:
-        """
-        Initializes the WebSocketConnectionManager with empty connection and room mappings.
-        """
+        """Initialise empty connection and room mappings."""
         self.connections: dict[str, typing.Any] = {}
         self.rooms: dict[str, set[str]] = {}
 
@@ -20,15 +18,12 @@ class WebSocketConnectionManager:
 
 
 def install(app: typing.Any) -> None:
-    """
-    Attaches WebSocket connection management and routing utilities to the given application.
-    
-    Initializes the connection manager and route registry on the app. If only some required attributes are present, raises RuntimeError to prevent inconsistent state.
-    """
+    """Attach WebSocket helpers and routing utilities to ``app``."""
     wanted = (
         "ws_connection_manager",
         "_websocket_routes",
         "add_websocket_route",
+        "create_websocket_resource",
     )
 
     # Idempotent: if all attributes are present, do nothing.
@@ -44,20 +39,25 @@ def install(app: typing.Any) -> None:
     routes: dict[str, typing.Any] = {}
     app._websocket_routes = routes
     app.add_websocket_route = MethodType(_add_websocket_route, app)
+    app.create_websocket_resource = MethodType(_create_websocket_resource, app)
 
 
 _route_lock = Lock()
 
 
-def _add_websocket_route(self: typing.Any, path: str, resource: typing.Any) -> None:
-    """
-    Registers a WebSocket resource handler for the specified path on the application.
-    
-    Ensures thread-safe registration. Raises ``ValueError`` if the path is already registered.
-    """
+def _add_websocket_route(
+    self: typing.Any, path: str, resource_cls: type[typing.Any]
+) -> None:
+    """Register a ``WebSocketResource`` class for the given route."""
     with _route_lock:
         if path in self._websocket_routes:
             msg = f"WebSocket route already registered for path: {path}"
             raise ValueError(msg)
 
-        self._websocket_routes[path] = resource
+        self._websocket_routes[path] = resource_cls
+
+
+def _create_websocket_resource(self: typing.Any, path: str) -> typing.Any:
+    """Instantiate the resource class registered for ``path``."""
+    resource_cls = self._websocket_routes[path]
+    return resource_cls()
