@@ -34,6 +34,21 @@ async def echo_handler(
 EchoResource.add_handler("echo", echo_handler, payload_type=EchoPayload)
 
 
+class RawResource(WebSocketResource):
+    def __init__(self) -> None:
+        self.received: list[typing.Any] = []
+
+    async def on_message(self, ws: typing.Any, message: str | bytes) -> None:
+        self.received.append(message)
+
+
+async def raw_handler(self: RawResource, ws: typing.Any, payload: typing.Any) -> None:
+    self.received.append(payload)
+
+
+RawResource.add_handler("raw", raw_handler, payload_type=None)
+
+
 @pytest.mark.asyncio()
 async def test_dispatch_calls_registered_handler() -> None:
     r = EchoResource()
@@ -60,3 +75,33 @@ async def test_handler_shared_across_instances() -> None:
     await r2.dispatch(DummyWS(), raw)
     assert r1.seen == ["hey"]
     assert r2.seen == ["hey"]
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    "payload,expected",
+    [
+        ({"text": "hi"}, {"text": "hi"}),
+        (None, None),
+        ("MISSING", None),
+    ],
+)
+async def test_payload_type_none_passes_raw(
+    payload: typing.Any, expected: typing.Any
+) -> None:
+    r = RawResource()
+    msg: dict[str, typing.Any] = {"type": "raw"}
+    if payload != "MISSING":
+        msg["payload"] = payload
+    raw = msgspec.json.encode(msg)
+    await r.dispatch(DummyWS(), raw)
+    assert r.received == [expected]
+
+
+@pytest.mark.asyncio()
+async def test_invalid_payload_calls_fallback() -> None:
+    r = EchoResource()
+    raw = msgspec.json.encode({"type": "echo", "payload": {"text": 42}})
+    await r.dispatch(DummyWS(), raw)
+    assert r.fallback == [raw]
+    assert not r.seen

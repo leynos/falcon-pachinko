@@ -17,9 +17,10 @@ Handler = cabc.Callable[[typing.Any, typing.Any, typing.Any], cabc.Awaitable[Non
 class WebSocketResource:
     """Base class for WebSocket handlers."""
 
-    handlers: dict[str, tuple[Handler, type | None]]
+    handlers: typing.ClassVar[dict[str, tuple[Handler, type | None]]]
 
-    def __init_subclass__(cls) -> None:
+    def __init_subclass__(cls, **kwargs: typing.Any) -> None:
+        super().__init_subclass__(**kwargs)
         cls.handlers = {}
 
     async def on_connect(
@@ -59,9 +60,10 @@ class WebSocketResource:
         if payload_type is not None and payload is not None:
             try:
                 payload = typing.cast(
-                    typing.Any, msgspec.convert(payload, type=payload_type)
+                    "typing.Any",
+                    msgspec.convert(payload, type=payload_type),
                 )
-            except Exception:  # noqa: BLE001
+            except (msgspec.ValidationError, TypeError):
                 await self.on_message(ws, raw)
                 return
         await handler(self, ws, payload)
