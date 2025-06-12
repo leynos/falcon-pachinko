@@ -47,26 +47,33 @@ def install(app: typing.Any) -> None:
 _route_lock = Lock()
 
 
-def _add_websocket_route(
-    self: typing.Any, path: str, resource_cls: type[typing.Any]
-) -> None:
-    """Register a ``WebSocketResource`` subclass for ``path``."""
-    with _route_lock:
-        if not path or not path.startswith("/"):
-            raise ValueError(f"Invalid WebSocket route path: {path!r}")
+def _validate_route_path(path: str) -> None:
+    """Ensure ``path`` is a non-empty string starting with ``/``."""
+    if not path or not path.startswith("/"):
+        raise ValueError(f"Invalid WebSocket route path: {path!r}")
 
+
+def _validate_resource_cls(resource_cls: typing.Any) -> None:
+    """Ensure ``resource_cls`` is a ``WebSocketResource`` subclass."""
+    if not isinstance(resource_cls, type) or not issubclass(
+        resource_cls,
+        WebSocketResource,
+    ):
+        msg = (
+            "resource_cls must be a subclass of WebSocketResource, got "
+            f"{resource_cls!r}"
+        )
+        raise TypeError(msg)
+
+
+def _add_websocket_route(self: typing.Any, path: str, resource_cls: typing.Any) -> None:
+    """Register a ``WebSocketResource`` subclass for ``path``."""
+    _validate_route_path(path)
+    _validate_resource_cls(resource_cls)
+    with _route_lock:
         if path in self._websocket_routes:
             msg = f"WebSocket route already registered for path: {path}"
             raise ValueError(msg)
-
-        if not isinstance(resource_cls, type) or not issubclass(  # pyright: ignore[reportUnnecessaryIsInstance]
-            resource_cls, WebSocketResource
-        ):
-            msg = (
-                "resource_cls must be a subclass of WebSocketResource, got "
-                f"{resource_cls!r}"
-            )
-            raise TypeError(msg)
 
         self._websocket_routes[path] = resource_cls
 
