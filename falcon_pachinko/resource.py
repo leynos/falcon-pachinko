@@ -20,30 +20,63 @@ class WebSocketResource:
     handlers: typing.ClassVar[dict[str, tuple[Handler, type | None]]]
 
     def __init_subclass__(cls, **kwargs: typing.Any) -> None:
+        """
+        Initializes the handlers dictionary for each subclass of WebSocketResource.
+        
+        Ensures that each subclass has its own independent mapping of message types to handler functions.
+        """
         super().__init_subclass__(**kwargs)
         cls.handlers = {}
 
     async def on_connect(
         self, req: typing.Any, ws: typing.Any, **params: typing.Any
     ) -> bool:
-        """Called when the WebSocket handshake is complete."""
+        """
+        Called after the WebSocket handshake is complete to determine if the connection should be accepted.
+        
+        Args:
+            req: The incoming HTTP request associated with the WebSocket handshake.
+            ws: The WebSocket connection object.
+            **params: Additional parameters relevant to the connection.
+        
+        Returns:
+            True to accept the WebSocket connection; False to reject it.
+        """
         return True
 
     async def on_disconnect(self, ws: typing.Any, close_code: int) -> None:
-        """Called when the WebSocket disconnects."""
+        """
+        Handles cleanup or custom logic when the WebSocket connection is closed.
+        
+        Args:
+            ws: The WebSocket connection instance.
+            close_code: The close code indicating the reason for disconnection.
+        """
 
     async def on_message(self, ws: typing.Any, message: str | bytes) -> None:
-        """Fallback for unhandled messages."""
+        """
+        Handles incoming WebSocket messages that do not match any registered handler.
+        
+        Called when a message cannot be decoded or its type is unrecognized. Override to implement custom fallback behavior for such messages.
+        """
 
     @classmethod
     def add_handler(
         cls, message_type: str, handler: Handler, *, payload_type: type | None = None
     ) -> None:
-        """Register ``handler`` for ``message_type``."""
+        """
+        Registers a handler function for a specific message type.
+        
+        Associates the given handler with the specified message type. Optionally, a payload type can be provided for automatic payload validation and conversion.
+        """
         cls.handlers[message_type] = (handler, payload_type)
 
     async def dispatch(self, ws: typing.Any, raw: str | bytes) -> None:
-        """Dispatch a raw WebSocket message to a handler."""
+        """
+        Processes an incoming raw WebSocket message and dispatches it to the appropriate handler.
+        
+        Attempts to decode the message as a JSON envelope containing a message type and optional payload. If decoding or payload validation fails, or if no handler is registered for the message type, the message is passed to the fallback `on_message` method. Otherwise, the registered handler is invoked with the converted payload.
+        """
         try:
             envelope = msgspec.json.decode(raw, type=_Envelope)
         except msgspec.DecodeError:
