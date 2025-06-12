@@ -8,7 +8,7 @@ formatting.
 
    - [x] Implement `falcon_pachinko.install(app)` to attach a
      `WebSocketConnectionManager` to the Falcon `App`.
-   - [ ] Provide `app.add_websocket_route()` mirroring Falcon’s HTTP routing.
+   - [x] Provide `app.add_websocket_route()` mirroring Falcon’s HTTP routing.
 
 2. **WebSocketResource Base Class** (lines 207-247)
 
