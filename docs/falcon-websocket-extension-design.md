@@ -280,9 +280,12 @@ a monolithic `on_receive` method with extensive conditional logic.
   distinct HTTP methods and paths organize REST API interactions.
 
 - **Automatic Deserialization**: For messages routed via `@handles_message`, the
-  library will attempt to parse the message as JSON and extract the payload. If
-  parsing fails or the 'type' field is missing, the generic `on_message` handler
-  could be invoked if defined.
+    library will attempt to parse the message as JSON and extract the payload. If
+    parsing fails or the 'type' field is missing, the generic `on_message` handler
+    could be invoked if defined.
+
+- **Typed Payloads**: Message payloads are decoded using `msgspec.Struct` classes
+  for type safety and fast serialization.
 
 ### 3.7. `WebSocketConnectionManager`
 

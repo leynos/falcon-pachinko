@@ -14,6 +14,8 @@ for the full design rationale.
   classes, mirroring Falcon's HTTP routing.
 - `WebSocketResource` provides `on_connect`, `on_disconnect`, and
   `on_message` lifecycle hooks.
+- Message payloads are parsed into `msgspec.Struct` classes for speed and type
+  safety.
 - `@handles_message("type")` dispatches incoming JSON messages to specific
   handler methods.
 - `WebSocketConnectionManager` tracks connections, manages rooms, and lets
