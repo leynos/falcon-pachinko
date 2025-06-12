@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from threading import Lock
 from types import MethodType
-from typing import Any, cast
+from typing import Any
 
 
 class WebSocketConnectionManager:
@@ -33,14 +34,23 @@ def install(app: Any) -> None:
         raise RuntimeError("Partial WebSocket install detected; aborting.")
 
     app.ws_connection_manager = WebSocketConnectionManager()
-    app._websocket_routes = cast(dict[str, Any], {})
+    routes: dict[str, Any] = {}
+    app._websocket_routes = routes
     app.add_websocket_route = MethodType(_add_websocket_route, app)
 
 
-def _add_websocket_route(self: Any, path: str, resource: Any) -> None:
-    """Register a WebSocket resource for the given path."""
-    if path in self._websocket_routes:
-        msg = f"WebSocket route already registered for path: {path}"
-        raise ValueError(msg)
+_route_lock = Lock()
 
-    self._websocket_routes[path] = resource
+
+def _add_websocket_route(self: Any, path: str, resource: Any) -> None:
+    """Register a WebSocket resource for the given path.
+
+    This function is safe to call from multiple threads, but it should usually
+    be invoked during application start-up.
+    """
+    with _route_lock:
+        if path in self._websocket_routes:
+            msg = f"WebSocket route already registered for path: {path}"
+            raise ValueError(msg)
+
+        self._websocket_routes[path] = resource
