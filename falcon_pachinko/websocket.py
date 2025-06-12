@@ -9,7 +9,9 @@ class WebSocketConnectionManager:
     """Track active WebSocket connections."""
 
     def __init__(self) -> None:
-        """Initialise empty connection and room mappings."""
+        """
+        Initializes the WebSocketConnectionManager with empty connection and room mappings.
+        """
         self.connections: dict[str, typing.Any] = {}
         self.rooms: dict[str, set[str]] = {}
 
@@ -18,7 +20,11 @@ class WebSocketConnectionManager:
 
 
 def install(app: typing.Any) -> None:
-    """Attach WebSocket helpers and routing utilities to ``app``."""
+    """
+    Attaches WebSocket connection management and routing utilities to the given app.
+    
+    Initializes the app with a WebSocket connection manager, route registry, and methods for registering and creating WebSocket resources. Ensures idempotent setup and raises a RuntimeError if a partial installation is detected.
+    """
     wanted = (
         "ws_connection_manager",
         "_websocket_routes",
@@ -48,7 +54,12 @@ _route_lock = Lock()
 def _add_websocket_route(
     self: typing.Any, path: str, resource_cls: type[typing.Any]
 ) -> None:
-    """Register a ``WebSocketResource`` class for the given route."""
+    """
+    Registers a WebSocket resource class for the specified route path.
+    
+    Raises:
+        ValueError: If a resource class is already registered for the given path.
+    """
     with _route_lock:
         if path in self._websocket_routes:
             msg = f"WebSocket route already registered for path: {path}"
@@ -58,6 +69,14 @@ def _add_websocket_route(
 
 
 def _create_websocket_resource(self: typing.Any, path: str) -> typing.Any:
-    """Instantiate the resource class registered for ``path``."""
+    """
+    Instantiates and returns the WebSocket resource class registered for the given path.
+    
+    Args:
+        path: The route path for which to create the WebSocket resource.
+    
+    Returns:
+        An instance of the resource class associated with the specified path.
+    """
     resource_cls = self._websocket_routes[path]
     return resource_cls()

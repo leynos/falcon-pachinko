@@ -18,16 +18,37 @@ class SupportsWebSocket(typing.Protocol):
     _websocket_routes: dict[str, object]
 
     def create_websocket_resource(self, path: str) -> object:
-        """Return a new resource instance for the given WebSocket path."""
+        """
+        Creates and returns a new instance of the WebSocket resource class registered for the specified path.
+        
+        Args:
+            path: The WebSocket route path for which to create a resource instance.
+        
+        Returns:
+            A new instance of the resource class associated with the given path.
+        """
         ...
 
     def add_websocket_route(self, path: str, resource: type[object]) -> None:
-        """Register a ``WebSocketResource`` subclass for ``path``."""
+        """
+        Registers a WebSocketResource subclass to handle connections at the specified path.
+        
+        Args:
+            path: The URL path for the WebSocket endpoint.
+            resource: The class of the WebSocketResource to associate with the path.
+        
+        Raises:
+            ValueError: If a resource is already registered for the given path.
+        """
         ...
 
 
 def test_install_adds_methods_and_manager() -> None:
-    """Ensure ``install()`` attaches WebSocket helpers to the app."""
+    """
+    Tests that the install() function adds WebSocket management attributes and methods to the app.
+    
+    Verifies that the app gains a ws_connection_manager of the correct type, and that add_websocket_route and create_websocket_resource methods are attached and callable.
+    """
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
     app_any = typing.cast("SupportsWebSocket", app)
@@ -53,7 +74,9 @@ def test_add_websocket_route_registers_resource() -> None:
 
 
 def test_install_is_idempotent() -> None:
-    """Calling ``install()`` twice leaves existing state intact."""
+    """
+    Verifies that calling install() multiple times on the same app instance does not alter or replace existing WebSocket-related attributes or methods.
+    """
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
     app_any = typing.cast("SupportsWebSocket", app)
@@ -68,7 +91,9 @@ def test_install_is_idempotent() -> None:
 
 
 def test_install_detects_partial_state() -> None:
-    """``install()`` raises if previous install state is corrupted."""
+    """
+    Tests that `install()` raises a RuntimeError if required WebSocket attributes are missing from the app, indicating a corrupted installation state.
+    """
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
     app_any = typing.cast("SupportsWebSocket", app)
@@ -82,6 +107,11 @@ def test_install_detects_partial_state() -> None:
 
 
 def test_add_websocket_route_duplicate_raises() -> None:
+    """
+    Tests that adding a duplicate WebSocket route raises a ValueError.
+    
+    Verifies that attempting to register the same route path with the same resource class more than once results in an error.
+    """
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
     app_any = typing.cast("SupportsWebSocket", app)
@@ -96,6 +126,9 @@ def test_add_websocket_route_duplicate_raises() -> None:
 
 
 def test_create_websocket_resource_returns_new_instances() -> None:
+    """
+    Tests that create_websocket_resource returns distinct new instances of the registered resource class for a given WebSocket route.
+    """
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
     app_any = typing.cast("SupportsWebSocket", app)
