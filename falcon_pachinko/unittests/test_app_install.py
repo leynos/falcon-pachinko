@@ -50,9 +50,9 @@ def test_install_is_idempotent() -> None:
 
 def test_add_websocket_route_duplicate_raises() -> None:
     """
-    Tests that adding a duplicate websocket route raises a ValueError.
+    Tests that registering a duplicate websocket route path raises a ValueError.
     
-    Verifies that attempting to register the same websocket route path more than once results in an error.
+    Ensures that attempting to add the same websocket route path more than once results in an error.
     """
     app = DummyApp()
     install(app)  # type: ignore[arg-type]

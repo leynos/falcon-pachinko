@@ -9,9 +9,9 @@ class WebSocketConnectionManager:
 
     def __init__(self) -> None:
         """
-        Initialises the WebSocketConnectionManager with empty connection and room mappings.
+        Initialises a WebSocketConnectionManager with empty connection and room mappings.
         
-        Creates dictionaries to track active WebSocket connections and group them into rooms.
+        Sets up internal dictionaries to track active WebSocket connections and organise them into rooms.
         """
         self.connections: dict[str, Any] = {}
         self.rooms: dict[str, set[str]] = {}
@@ -22,7 +22,7 @@ class WebSocketConnectionManager:
 
 def install(app: Any) -> None:
     """
-    Attaches WebSocket connection management utilities to a Falcon app instance.
+    Attaches WebSocket connection management capabilities to a Falcon app instance.
     
     Initialises a WebSocketConnectionManager and associates it with the app if not already present. Also sets up internal structures for managing WebSocket routes and dynamically adds a method for registering WebSocket resource handlers.
     """
@@ -37,10 +37,10 @@ def install(app: Any) -> None:
 
 def _add_websocket_route(self: Any, path: str, resource: Any) -> None:
     """
-    Registers a WebSocket resource handler for a specified URL path.
+    Registers a WebSocket resource handler for a given URL path.
     
     Raises:
-        ValueError: If a WebSocket route is already registered for the given path.
+        ValueError: If a WebSocket route is already registered for the specified path.
     """
     if path in self._websocket_routes:
         msg = f"WebSocket route already registered for path: {path}"

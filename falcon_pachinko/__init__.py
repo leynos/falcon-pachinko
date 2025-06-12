@@ -7,10 +7,10 @@ from .websocket import WebSocketConnectionManager, install
 
 def hello() -> str:
     """
-    Returns a friendly greeting string.
+    Returns a friendly greeting message.
     
     Returns:
-        A greeting message.
+        A string containing a greeting.
     """
     return "hello from Python"
 
