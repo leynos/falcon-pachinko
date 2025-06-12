@@ -9,7 +9,9 @@ class WebSocketConnectionManager:
     """Track active WebSocket connections."""
 
     def __init__(self) -> None:
-        """Initialise empty connection and room mappings."""
+        """
+        Initializes the WebSocketConnectionManager with empty connection and room mappings.
+        """
         self.connections: dict[str, typing.Any] = {}
         self.rooms: dict[str, set[str]] = {}
 
@@ -18,10 +20,10 @@ class WebSocketConnectionManager:
 
 
 def install(app: typing.Any) -> None:
-    """Attach WebSocket utilities to ``app``.
-
-    Creates the connection manager and route registry. If only part of the
-    expected state is present, ``RuntimeError`` is raised.
+    """
+    Attaches WebSocket connection management and routing utilities to the given application.
+    
+    Initializes the connection manager and route registry on the app. If only some required attributes are present, raises RuntimeError to prevent inconsistent state.
     """
     wanted = (
         "ws_connection_manager",
@@ -49,10 +51,9 @@ _route_lock = Lock()
 
 def _add_websocket_route(self: typing.Any, path: str, resource: typing.Any) -> None:
     """
-    Registers a WebSocket resource handler for a specified path on the application.
-
-    Ensures thread-safe registration and raises ``ValueError`` if ``path``
-    is already registered.
+    Registers a WebSocket resource handler for the specified path on the application.
+    
+    Ensures thread-safe registration. Raises ``ValueError`` if the path is already registered.
     """
     with _route_lock:
         if path in self._websocket_routes:

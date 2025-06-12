@@ -17,17 +17,17 @@ class SupportsWebSocket(typing.Protocol):
     _websocket_routes: dict[str, object]
 
     def add_websocket_route(self, path: str, resource: object) -> None:
-        """Register ``resource`` for the given WebSocket ``path``.
-
-        Raises
-        ------
-        ValueError
-            If a resource is already registered for ``path``.
+        """
+        Registers a resource to handle WebSocket connections at the specified path.
+        
+        Raises:
+            ValueError: If a resource is already registered for the given path.
         """
         ...
 
 
 def test_install_adds_methods_and_manager() -> None:
+    """Tests that installing WebSocket support adds the connection manager and route registration method to the app."""
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
     app_any = typing.cast("SupportsWebSocket", app)
@@ -38,6 +38,9 @@ def test_install_adds_methods_and_manager() -> None:
 
 
 def test_add_websocket_route_registers_resource() -> None:
+    """
+    Tests that add_websocket_route registers a resource under the specified WebSocket path.
+    """
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
     app_any = typing.cast("SupportsWebSocket", app)
@@ -49,7 +52,9 @@ def test_add_websocket_route_registers_resource() -> None:
 
 
 def test_install_is_idempotent() -> None:
-    """Repeated installs leave WebSocket state unchanged."""
+    """
+    Tests that installing WebSocket support multiple times does not alter the app's WebSocket state.
+    """
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
     app_any = typing.cast("SupportsWebSocket", app)
@@ -62,7 +67,9 @@ def test_install_is_idempotent() -> None:
 
 
 def test_install_detects_partial_state() -> None:
-    """install raises RuntimeError when internal state is missing."""
+    """
+    Tests that install raises RuntimeError if required internal state is missing from the app.
+    """
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
     app_any = typing.cast("SupportsWebSocket", app)
