@@ -1,4 +1,4 @@
-# Falcon-AsyncWS: A Design Proposal for Asynchronous WebSocket Routing and Handling in the Falcon Web Framework <!-- markdownlint-disable-line MD013 -->
+# Falcon-Pachinko: A Design Proposal for Asynchronous WebSocket Routing and Handling in the Falcon Web Framework <!-- markdownlint-disable-line MD013 -->
 
 ## 1. Introduction
 
@@ -13,7 +13,7 @@ developers to implement custom dispatch logic within a single WebSocket handler,
 which can become complex for applications with rich real-time interaction.
 
 This report presents a design proposal for an extension library, tentatively
-named "Falcon-AsyncWS," aimed at addressing this gap. The proposed library will
+named "Falcon-Pachinko," aimed at addressing this gap. The proposed library will
 provide a structured and Falcon-idiomatic approach to routing WebSocket messages
 based on their content (e.g., a 'type' field in a JSON payload) and managing
 WebSocket connections. Furthermore, it will include a mechanism for associating
@@ -27,7 +27,7 @@ specified in the use case, will be treated as a design artifact informing the
 structure of messages and interactions, rather than being directly consumed by
 the library at runtime. This document will first survey existing solutions and
 identify the specific needs addressed by the proposed extension. It will then
-detail the core components and API of Falcon-AsyncWS, followed by an
+detail the core components and API of Falcon-Pachinko, followed by an
 illustrative use case. Finally, potential future enhancements and conclusions
 will be discussed.
 
@@ -130,11 +130,11 @@ This identifies a clear opportunity for a Falcon extension that:
 4. Achieves this in a lightweight, Falcon-idiomatic manner, consistent with the
    framework's philosophy of minimalism and developer experience.
 
-The proposed Falcon-AsyncWS library aims to fill this gap.
+The proposed Falcon-Pachinko library aims to fill this gap.
 
-## 3. Proposed Design for Falcon WebSocket Extension ("Falcon-AsyncWS")
+## 3. Proposed Design for Falcon WebSocket Extension ("Falcon-Pachinko")
 
-The design of the Falcon-AsyncWS extension is guided by the core principles of
+The design of the Falcon-Pachinko extension is guided by the core principles of
 leveraging Falcon's existing strengths, maintaining consistency with its HTTP
 API, adhering to the principle of least surprise for Falcon developers, and
 ensuring the extension remains lightweight.
@@ -148,7 +148,7 @@ ensuring the extension remains lightweight.
   resource handlers for WebSockets will closely mirror those used for HTTP,
   making the extension intuitive for existing Falcon users.
 - **Principle of Least Surprise**: Developers familiar with Falcon should find
-  the concepts and API of Falcon-AsyncWS familiar and predictable.
+  the concepts and API of Falcon-Pachinko familiar and predictable.
 - **Lightweight and Minimal Dependencies**: The core extension should introduce
   minimal overhead and dependencies, focusing on in-process functionality for
   common use cases.
@@ -175,10 +175,10 @@ required, typically during application initialization:
 
 ```python
 import falcon.asgi
-import falcon_ws # The proposed extension library
+import falcon_pachinko  # The proposed extension library
 
 app = falcon.asgi.App()
-falcon_ws.install(app) # This would initialize and attach app.ws_connection_manager <!-- markdownlint-disable-line MD013 -->
+falcon_pachinko.install(app) # This would initialize and attach app.ws_connection_manager <!-- markdownlint-disable-line MD013 -->
 ```
 
 This `install` function would instantiate the `WebSocketConnectionManager` and
@@ -195,7 +195,7 @@ provide a method to associate a URL path with a `WebSocketResource`:
 app.add_websocket_route('/ws/chat/{room_name}', ChatRoomResource())
 ```
 
-When a WebSocket upgrade request matches this path, Falcon-AsyncWS will
+When a WebSocket upgrade request matches this path, Falcon-Pachinko will
 instantiate the `ChatRoomResource` and manage the WebSocket lifecycle through
 it. Path parameters like `{room_name}` will be passed to the relevant methods of
 the `WebSocketResource`.
@@ -243,7 +243,7 @@ logic.
 
 ### 3.6. Message Handling and Dispatch
 
-A key feature of Falcon-AsyncWS is its ability to dispatch incoming WebSocket
+A key feature of Falcon-Pachinko is its ability to dispatch incoming WebSocket
 messages to specific handler methods within the `WebSocketResource`. This avoids
 a monolithic `on_receive` method with extensive conditional logic.
 
@@ -255,20 +255,28 @@ a monolithic `on_receive` method with extensive conditional logic.
   handlers for specific message types:
 
   ```python
-  from falcon_ws import WebSocketResource, handles_message
+  from falcon_pachinko import WebSocketResource, handles_message
+  import msgspec
+
+  class NewChatMessage(msgspec.Struct):
+      text: str
+
+  class StatusUpdate(msgspec.Struct):
+      room: str
 
   class ChatMessageHandler(WebSocketResource):
       @handles_message("new_chat_message")
-      async def handle_new_chat_message(self, ws: falcon.asgi.WebSocket, payload: dict): <!-- markdownlint-disable-line MD013 -->
-          # 'payload' is the deserialized content of the message,
-          # excluding the 'type' field.
-          # Process the new chat message...
-          await ws.send_media({"response_type": "ack", "message_id": payload.get("id")}) <!-- markdownlint-disable-line MD013 -->
+      async def handle_new_chat_message(
+          self, ws: falcon.asgi.WebSocket, payload: NewChatMessage
+      ) -> None:
+          text = payload.text
+          print(f"NEW MESSAGE: {text}")
 
       @handles_message("user_status_update")
-      async def handle_status_update(self, ws: falcon.asgi.WebSocket, payload: dict): <!-- markdownlint-disable-line MD013 -->
-          # Process user status update...
-          pass
+      async def handle_status_update(
+          self, ws: falcon.asgi.WebSocket, payload: StatusUpdate
+      ) -> None:
+          print(f"JOINED ROOM: {payload.room}")
 
   ```
 
@@ -284,8 +292,53 @@ a monolithic `on_receive` method with extensive conditional logic.
     parsing fails or the 'type' field is missing, the generic `on_message` handler
     could be invoked if defined.
 
-- **Typed Payloads**: Message payloads are decoded using `msgspec.Struct` classes
-  for type safety and fast serialization.
+- **Typed Payloads**: Any payload argument to a resource method is converted into
+  a `msgspec.Struct` instance for type safety and fast serialization.
+
+#### Descriptor Implementation of `handles_message`
+
+The decorator is implemented as a descriptor so that handlers are registered
+when their containing class is created:
+
+```python
+import functools
+from typing import Callable, Dict, Any
+
+
+class _MessageHandlerDescriptor:
+    """Store the original function and remember its owner class."""
+
+    def __init__(self, msg_type: str, func: Callable) -> None:
+        self.msg_type = msg_type
+        self.func = func
+        functools.update_wrapper(self, func)
+        self.owner = None
+        self.name = None
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.owner = owner
+        self.name = name
+
+        registry: Dict[str, Callable] = getattr(owner, "_message_handlers", {})
+        if self.msg_type in registry:
+            raise RuntimeError(
+                f"Duplicate handler for message type {self.msg_type!r} on {owner.__qualname__}"
+            )
+        registry[self.msg_type] = self.func
+        owner._message_handlers = registry
+
+    def __get__(self, instance: Any, owner: type | None = None) -> Callable:
+        return self.func.__get__(instance, owner or self.owner)
+
+
+def handles_message(msg_type: str) -> Callable[[Callable], _MessageHandlerDescriptor]:
+    """Decorator factory returning the descriptor wrapper."""
+
+    def decorator(func: Callable) -> _MessageHandlerDescriptor:
+        return _MessageHandlerDescriptor(msg_type, func)
+
+    return decorator
+```
 
 ### 3.7. `WebSocketConnectionManager`
 
@@ -380,7 +433,7 @@ clients.
 
 ### 3.9. API Overview
 
-The following table summarizes the key components of the proposed Falcon-AsyncWS
+The following table summarizes the key components of the proposed Falcon-Pachinko
 API and their analogies to Falcon's HTTP mechanisms, where applicable. This
 serves as a quick reference to understand the main abstractions and their
 intended use.
@@ -388,11 +441,11 @@ intended use.
 <!-- markdownlint-disable MD013 -->
 | Component/Concept | Key Classes/Decorators/Methods | Purpose | Analogy to Falcon HTTP (if applicable) |
 | --- | --- | --- | --- |
-| Application Setup | `falcon_ws.install(app)` | Initializes shared WebSocket components (e.g., connection manager) on the app. | App-level configuration/extensions. |
+| Application Setup | `falcon_pachinko.install(app)` | Initializes shared WebSocket components (e.g., connection manager) on the app. | App-level configuration/extensions. |
 | Route Definition | `app.add_websocket_route(path, resource_class_instance)` | Maps a URI path to a `WebSocketResource`. | `app.add_route(path, resource_instance)` |
-| Resource Class | `falcon_ws.WebSocketResource` | Base class for handling WebSocket connections and messages for a given route. | Falcon HTTP Resource class (e.g., methods like `on_get`, `on_post` handle specific `falcon.HTTP_METHODS`). |
+| Resource Class | `falcon_pachinko.WebSocketResource` | Base class for handling WebSocket connections and messages for a given route. | Falcon HTTP Resource class (e.g., methods like `on_get`, `on_post` handle specific `falcon.HTTP_METHODS`). |
 | Connection Lifecycle | `async def on_connect(req, ws, **params) -> bool`, `async def on_disconnect(ws, close_code)` | Methods in `WebSocketResource` to manage connection setup and teardown. | `process_request` / `process_response` middleware (for setup/teardown aspects), though more directly tied to the connection itself. |
-| Message Handling (Typed) | `@falcon_ws.handles_message("type_name") async def handler(self, ws, payload)` | Decorator in `WebSocketResource` to route incoming JSON messages based on a `type` field to specific methods. | HTTP method responders like `on_get(req, resp, **params)`, `on_post(req, resp, **params)`. |
+| Message Handling (Typed) | `@falcon_pachinko.handles_message("type_name") async def handler(self, ws, payload)` | Decorator in `WebSocketResource` to route incoming JSON messages based on a `type` field to specific methods. | HTTP method responders like `on_get(req, resp, **params)`, `on_post(req, resp, **params)`. |
 | Message Handling (Generic) | `async def on_message(self, ws, message)` | Fallback method in `WebSocketResource` for unhandled or non-JSON messages. | N/A (Falcon HTTP relies on specific method responders). |
 | Connection Management (Resource) | `self.join_room(room_name)`, `self.leave_room(room_name)`, `self.broadcast_to_room(room_name, message, exclude_self=False)` | Convenience methods within `WebSocketResource` to interact with rooms/groups via the connection manager. | N/A (HTTP is stateless). |
 | Background Worker Integration | `app.add_websocket_worker(worker_coro, conn_manager)` | Registers an asynchronous task that can send messages to clients via the connection manager. | Background task patterns (often custom in Falcon HTTP). |
@@ -406,7 +459,7 @@ applications and intuitive for developers accustomed to Falcon.
 ## 4. Illustrative Usecase: Real-time Chat Application
 
 To demonstrate the practical application and ergonomics of the proposed
-Falcon-AsyncWS extension, this section outlines its use in building a real-time
+Falcon-Pachinko extension, this section outlines its use in building a real-time
 chat application.
 
 ### 4.1. Scenario Overview
@@ -435,11 +488,11 @@ structures. For example:
 ### 4.2. Defining the Chat WebSocket Resource
 
 A `ChatRoomResource` class would be defined, inheriting from
-`falcon_ws.WebSocketResource`:
+`falcon_pachinko.WebSocketResource`:
 
 ```python
 import falcon.asgi
-from falcon_ws import WebSocketResource, handles_message # Assuming falcon_ws is the extension <!-- markdownlint-disable-line MD013 -->
+from falcon_pachinko import WebSocketResource, handles_message
 
 class ChatRoomResource(WebSocketResource):
     async def on_connect(self, req: falcon.Request, ws: falcon.asgi.WebSocket, room_name: str) -> bool: <!-- markdownlint-disable-line MD013 -->
@@ -533,14 +586,14 @@ In the main application file:
 
 ```python
 import falcon.asgi
-import falcon_ws # The proposed extension
+import falcon_pachinko  # The proposed extension
 import asyncio
 
 # Assuming ChatRoomResource is defined as above
 # Assuming an authentication middleware `AuthMiddleware` that sets `req.context.user` <!-- markdownlint-disable-line MD013 -->
 
 app = falcon.asgi.App(middleware=[AuthMiddleware()])
-falcon_ws.install(app) # Initializes app.ws_connection_manager
+falcon_pachinko.install(app) # Initializes app.ws_connection_manager
 
 chat_resource = ChatRoomResource() # Instantiated once if it's stateless or per-connection by the lib <!-- markdownlint-disable-line MD013 -->
 app.add_websocket_route('/ws/chat/{room_name}', chat_resource)
@@ -552,7 +605,7 @@ A background worker could periodically send system-wide announcements to all
 active chat rooms:
 
 ```python
-async def system_announcement_worker(conn_manager: falcon_ws.WebSocketConnectionManager): <!-- markdownlint-disable-line MD013 -->
+async def system_announcement_worker(conn_manager: falcon_pachinko.WebSocketConnectionManager) -> None: <!-- markdownlint-disable-line MD013 -->
     while True:
         await asyncio.sleep(3600) # Every hour
         announcement_text = "System maintenance is scheduled for 2 AM UTC. Brief disruptions may occur." <!-- markdownlint-disable-line MD013 -->
@@ -576,7 +629,7 @@ async def system_announcement_worker(conn_manager: falcon_ws.WebSocketConnection
             )
         print("Sent hourly system announcement.")
 
-# In application setup, after falcon_ws.install(app):
+# In application setup, after falcon_pachinko.install(app):
 # Ensure the event loop is running if this setup is outside an async context
 # For Uvicorn, tasks can be added to app.router.lifespan_context
 # A more robust way would be to use Falcon's lifespan events if available for ASGI tasks, <!-- markdownlint-disable-line MD013 -->
@@ -622,7 +675,7 @@ A JavaScript client would interact as follows:
 ```
 ````
 
-This illustrative use case shows how Falcon-AsyncWS can provide a comprehensive
+This illustrative use case shows how Falcon-Pachinko can provide a comprehensive
 and developer-friendly solution for building real-time applications on Falcon.
 
 ## 5. Future Considerations and Potential Enhancements
@@ -707,7 +760,7 @@ significantly more complex undertaking.
 
 ## 6. Conclusion
 
-This report has outlined a design proposal for Falcon-AsyncWS, an extension
+This report has outlined a design proposal for Falcon-Pachinko, an extension
 library aimed at providing idiomatic, asynchronous WebSocket routing and
 handling for the Falcon Web Framework. The proposed design introduces key
 components such as the `WebSocketResource` for class-based message handling, a
@@ -731,7 +784,7 @@ The core of the proposal revolves around:
 
 ### 6.2. Benefits and Advantages
 
-The Falcon-AsyncWS extension, as designed, offers several benefits:
+The Falcon-Pachinko extension, as designed, offers several benefits:
 
 - **Falcon-Idiomatic Development**: It provides an interface consistent with
   Falcon's existing HTTP patterns, reducing the learning curve for Falcon
@@ -769,7 +822,7 @@ query:
 
 ### 6.4. Final Thoughts
 
-The Falcon-AsyncWS extension has the potential to significantly enhance Falcon's
+The Falcon-Pachinko extension has the potential to significantly enhance Falcon's
 capabilities in the domain of real-time web applications. By providing a robust
 yet lightweight solution for asynchronous WebSocket communication, it can
 empower developers to build sophisticated interactive applications, such as chat
