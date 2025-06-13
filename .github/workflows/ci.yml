@@ -52,7 +52,7 @@ jobs:
 
       - name: Install CodeScene Coverage CLI
         if: env.CS_ACCESS_TOKEN != ''
-        run: curl https://downloads.codescene.io/enterprise/cli/install-cs-coverage-tool.sh | bash -s -- -y
+        run: curl -fsSL https://downloads.codescene.io/enterprise/cli/install-cs-coverage-tool.sh | bash -s -- -y
 
       - name: Upload coverage to CodeScene
         if: env.CS_ACCESS_TOKEN != ''
