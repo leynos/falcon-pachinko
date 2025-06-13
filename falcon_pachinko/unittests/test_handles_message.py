@@ -92,13 +92,12 @@ async def test_decorated_override() -> None:
 
 
 def test_unresolved_annotation_is_ignored() -> None:
-
     class UnknownAnnoResource(WebSocketResource):
         @handles_message("unknown")
         async def handler(
             self,
             ws: typing.Any,
-            payload: "UnknownType"  # noqa: UP037,F821  # pyright: ignore[reportUnknownParameterType,reportUndefinedVariable]
+            payload: "UnknownType",  # noqa: UP037,F821  # pyright: ignore[reportUnknownParameterType,reportUndefinedVariable]
         ) -> None:  # pyright: ignore[reportUnknownVariableType]
             ...
 

@@ -23,9 +23,7 @@ def _select_payload_param(
 
     params = list(sig.parameters.values())
     if len(params) < 3:
-        raise TypeError(
-            f"Handler {func_name} must accept self, ws, and a payload"
-        )
+        raise TypeError(f"Handler {func_name} must accept self, ws, and a payload")
 
     payload_param = sig.parameters.get("payload")
     if payload_param is None:
@@ -141,9 +139,7 @@ class WebSocketResource:
         return combined
 
     @classmethod
-    def _apply_overrides(
-        cls, handlers: dict[str, tuple[Handler, type | None]]
-    ) -> None:
+    def _apply_overrides(cls, handlers: dict[str, tuple[Handler, type | None]]) -> None:
         """Update ``handlers`` when methods are overridden in ``cls``."""
 
         shadowed = {
