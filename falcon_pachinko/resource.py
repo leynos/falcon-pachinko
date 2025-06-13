@@ -16,6 +16,27 @@ class _Envelope(msgspec.Struct, frozen=True):
 Handler = cabc.Callable[[typing.Any, typing.Any, typing.Any], cabc.Awaitable[None]]
 
 
+def _select_payload_param(
+    sig: inspect.Signature, *, func_name: str
+) -> inspect.Parameter:
+    """Return the parameter representing the message payload."""
+
+    params = list(sig.parameters.values())
+    if len(params) < 3:
+        raise TypeError(
+            f"Handler {func_name} must accept self, ws, and a payload"
+        )
+
+    payload_param = sig.parameters.get("payload")
+    if payload_param is None:
+        for candidate in params[2:]:
+            if candidate.annotation is not inspect.Signature.empty:
+                return candidate
+        payload_param = params[2]
+
+    return payload_param
+
+
 def _get_payload_type(func: Handler) -> type | None:
     """Validate ``func``'s signature and return the payload annotation."""
 
@@ -29,23 +50,9 @@ def _get_payload_type(func: Handler) -> type | None:
             f"Cannot inspect signature for handler {func.__qualname__}"
         ) from exc
 
-    params = list(sig.parameters.values())
-    if len(params) < 3:
-        raise TypeError(
-            f"Handler {func.__qualname__} must accept self, ws, and a payload"
-        )
-
-    payload_param = sig.parameters.get("payload")
-    if payload_param is None:
-        for candidate in params[2:]:
-            if candidate.annotation is not inspect.Signature.empty:
-                payload_param = candidate
-                break
-        else:
-            payload_param = params[2]
-
+    param = _select_payload_param(sig, func_name=func.__qualname__)
     hints: dict[str, type] = typing.get_type_hints(func)
-    return hints.get(payload_param.name)
+    return hints.get(param.name)
 
 
 class _HandlesMessageDescriptor:
@@ -82,7 +89,11 @@ class _HandlesMessageDescriptor:
             payload_type=payload_type,
         )
 
-    def __get__(self, instance: typing.Any, owner: type | None = None) -> Handler:
+    def __get__(
+        self, instance: typing.Any, owner: type | None = None
+    ) -> Handler | _HandlesMessageDescriptor:  # type: ignore[override]
+        if instance is None:
+            return self
         return self.func.__get__(instance, owner or self.owner)
 
 
@@ -103,22 +114,33 @@ class WebSocketResource:
     handlers: typing.ClassVar[dict[str, tuple[Handler, type | None]]]
 
     def __init_subclass__(cls, **kwargs: typing.Any) -> None:
-        """
-        Initializes the handlers dictionary for each subclass of
-        WebSocketResource.
-
-        Ensures that each subclass has its own independent mapping of message
-        types to handler functions.
-        """
+        """Initialize and merge handler mappings for subclasses."""
         super().__init_subclass__(**kwargs)
 
         existing = getattr(cls, "handlers", {})
+        handlers = cls._collect_base_handlers()
+        handlers.update(existing)
+        cls._apply_overrides(handlers)
+        cls.handlers = handlers
+
+    @classmethod
+    def _collect_base_handlers(
+        cls,
+    ) -> dict[str, tuple[Handler, type | None]]:
+        """Gather handler mappings from base classes."""
+
         combined: dict[str, tuple[Handler, type | None]] = {}
         for base in cls.__mro__[1:]:
             base_handlers = getattr(base, "handlers", None)
             if base_handlers:
                 combined.update(base_handlers)
-        combined.update(existing)
+        return combined
+
+    @classmethod
+    def _apply_overrides(
+        cls, handlers: dict[str, tuple[Handler, type | None]]
+    ) -> None:
+        """Update ``handlers`` when methods are overridden in ``cls``."""
 
         shadowed = {
             name
@@ -127,12 +149,10 @@ class WebSocketResource:
             and inspect.iscoroutinefunction(obj)
         }
 
-        for msg_type, (handler, payload_type) in list(combined.items()):
+        for msg_type, (handler, payload_type) in list(handlers.items()):
             if handler.__name__ in shadowed:
                 new_handler = typing.cast("Handler", cls.__dict__[handler.__name__])
-                combined[msg_type] = (new_handler, payload_type)
-
-        cls.handlers = combined
+                handlers[msg_type] = (new_handler, payload_type)
 
     async def on_connect(
         self, req: typing.Any, ws: typing.Any, **params: typing.Any

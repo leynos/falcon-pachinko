@@ -34,7 +34,7 @@ async def test_decorator_registers_handler() -> None:
 
 
 def test_duplicate_handler_raises() -> None:
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="Duplicate handler"):
 
         class BadResource(WebSocketResource):  # pyright: ignore[reportUnusedClass]
             @handles_message("dup")
