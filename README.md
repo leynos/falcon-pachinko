@@ -39,6 +39,19 @@ async def handle_new_chat_message(self, ws, payload):
 
 Implementation tasks are tracked in [docs/roadmap.md](docs/roadmap.md).
 
+## Examples
+
+An end-to-end demonstration lives under
+`examples/random_status`. It shows how to:
+
+- expose an HTTP endpoint returning the current status
+- handle a WebSocket message that updates that status in an
+  SQLite database
+- send a periodic "random" message from a background task.
+
+Run `server.py` with Uvicorn and connect using the provided
+`client.py` to observe the interaction.
+
 ## License
 
 This project is licensed under the terms of the ISC license.
