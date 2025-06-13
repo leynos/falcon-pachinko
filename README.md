@@ -46,7 +46,7 @@ An end-to-end demonstration lives under
 
 - expose an HTTP endpoint returning the current status
 - handle a WebSocket message that updates that status in an
-  SQLite database
+  SQLite database using `aiosqlite`
 - send a periodic "random" message from a background task.
 
 Run `server.py` with Uvicorn and connect using the provided

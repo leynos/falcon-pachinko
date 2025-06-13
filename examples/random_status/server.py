@@ -1,15 +1,23 @@
 import asyncio
 import secrets
-import sqlite3
 import typing
 
+import aiosqlite
 import falcon.asgi
+from falcon.asgi import WebSocketClosedError
 
 from falcon_pachinko import WebSocketResource, handles_message, install
 
-DB = sqlite3.connect(":memory:")
-DB.execute("CREATE TABLE status(value TEXT)")
-DB.execute("INSERT INTO status(value) VALUES('ready')")
+
+async def _setup_db() -> aiosqlite.Connection:
+    conn = await aiosqlite.connect(":memory:")
+    await conn.execute("CREATE TABLE status(value TEXT)")
+    await conn.execute("INSERT INTO status(value) VALUES('ready')")
+    await conn.commit()
+    return conn
+
+
+DB = asyncio.run(_setup_db())
 
 
 class StatusPayload(typing.TypedDict):
@@ -27,6 +35,9 @@ async def random_worker(ws: falcon.asgi.WebSocket) -> None:
             await asyncio.sleep(5)
             number = secrets.randbelow(65536)
             await ws.send_media({"type": "random", "payload": str(number)})
+    except WebSocketClosedError:
+        # Exit if the connection is lost
+        pass
     except asyncio.CancelledError:
         pass
 
@@ -68,8 +79,8 @@ class StatusResource(WebSocketResource):
         Updates the status in the database with the provided text and sends an acknowledgment message back to the client containing the updated value.
         """
         text = payload["text"]
-        with DB:
-            DB.execute("UPDATE status SET value=?", (text,))
+        await DB.execute("UPDATE status SET value=?", (text,))
+        await DB.commit()
         await ws.send_media({"type": "ack", "payload": text})
 
 
@@ -80,7 +91,8 @@ class StatusEndpoint:
         
         Responds with a JSON object containing the current status text from the database under the "status" key. If no status is set, the value is null.
         """
-        row = DB.execute("SELECT value FROM status").fetchone()
+        async with DB.execute("SELECT value FROM status") as cursor:
+            row = await cursor.fetchone()
         resp.media = {"status": row[0] if row else None}
 
 
