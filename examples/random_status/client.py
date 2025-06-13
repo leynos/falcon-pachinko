@@ -5,10 +5,20 @@ import websocket
 
 
 def on_message(ws: websocket.WebSocketApp, message: str) -> None:
+    """
+    Handles incoming messages from the WebSocket server.
+    
+    Prints each received message to standard output, prefixed with "<".
+    """
     print("<", message)
 
 
 def on_open(ws: websocket.WebSocketApp) -> None:
+    """
+    Sends a status message to the WebSocket server when the connection is opened.
+    
+    The status text is taken from the first command-line argument, or defaults to "hello" if not provided. The message is sent as a JSON object with "type" set to "status" and "payload" containing the status text.
+    """
     status = sys.argv[1] if len(sys.argv) > 1 else "hello"
     msg = json.dumps({"type": "status", "payload": {"text": status}})
     ws.send(msg)
