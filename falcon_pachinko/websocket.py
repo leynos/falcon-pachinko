@@ -11,7 +11,9 @@ class WebSocketConnectionManager:
     """Track active WebSocket connections."""
 
     def __init__(self) -> None:
-        """Initialise empty connection and room mappings."""
+        """
+        Initializes the WebSocketConnectionManager with empty connection and room mappings.
+        """
         self.connections: dict[str, typing.Any] = {}
         self.rooms: dict[str, set[str]] = {}
 
@@ -20,7 +22,11 @@ class WebSocketConnectionManager:
 
 
 def install(app: typing.Any) -> None:
-    """Attach WebSocket helpers and routing utilities to ``app``."""
+    """
+    Attaches WebSocket connection management and routing utilities to the application object.
+    
+    Initializes and binds WebSocket-related attributes and methods to the given app, enabling WebSocket route registration and resource instantiation. This function is idempotent and will raise a RuntimeError if a partial installation is detected.
+    """
     wanted = (
         "ws_connection_manager",
         "_websocket_routes",
@@ -53,7 +59,17 @@ def _has_whitespace(text: str) -> bool:
 
 
 def _is_valid_route_path(path: typing.Any) -> bool:
-    """Return ``True`` if ``path`` looks like a WebSocket route."""
+    """
+    Checks if the given path is a valid WebSocket route path.
+    
+    A valid route path is a non-empty string that starts with '/', contains no leading or trailing whitespace, and has no internal whitespace characters.
+    
+    Args:
+        path: The value to check.
+    
+    Returns:
+        True if the path is a valid WebSocket route path, False otherwise.
+    """
 
     if not isinstance(path, str):
         return False
@@ -65,13 +81,11 @@ def _is_valid_route_path(path: typing.Any) -> bool:
 
 
 def _validate_route_path(path: typing.Any) -> None:
-    """Validate ``path`` for use as a WebSocket route.
-
-    Rules enforced:
-    - ``path`` must be a string.
-    - it may not be empty or contain any whitespace characters.
-    - leading and trailing whitespace are not allowed.
-    - it must start with ``/``.
+    """
+    Validates that the given path is suitable for use as a WebSocket route.
+    
+    Raises:
+        ValueError: If the path is not a non-empty string starting with '/', contains whitespace, or has leading/trailing whitespace.
     """
 
     if not _is_valid_route_path(path):
@@ -79,7 +93,12 @@ def _validate_route_path(path: typing.Any) -> None:
 
 
 def _validate_resource_cls(resource_cls: typing.Any) -> None:
-    """Ensure ``resource_cls`` is a ``WebSocketResource`` subclass."""
+    """
+    Validates that the provided class is a subclass of WebSocketResource.
+    
+    Raises:
+        TypeError: If resource_cls is not a subclass of WebSocketResource.
+    """
     if not isinstance(resource_cls, type) or not issubclass(
         resource_cls,
         WebSocketResource,
@@ -92,7 +111,11 @@ def _validate_resource_cls(resource_cls: typing.Any) -> None:
 
 
 def _add_websocket_route(self: typing.Any, path: str, resource_cls: typing.Any) -> None:
-    """Register a ``WebSocketResource`` subclass for ``path``."""
+    """
+    Registers a WebSocketResource subclass for the specified route path.
+    
+    Associates the given resource class with the provided path, ensuring the path is valid and not already registered. Raises a ValueError if the path is already in use.
+    """
     _validate_route_path(path)
     _validate_resource_cls(resource_cls)
     with self._websocket_route_lock:
@@ -104,7 +127,18 @@ def _add_websocket_route(self: typing.Any, path: str, resource_cls: typing.Any) 
 
 
 def _create_websocket_resource(self: typing.Any, path: str) -> WebSocketResource:
-    """Instantiate the resource class registered for ``path``."""
+    """
+    Instantiates and returns the WebSocket resource class registered for the given path.
+    
+    Args:
+        path: The route path for which to create the WebSocket resource.
+    
+    Returns:
+        An instance of the resource class associated with the specified path.
+    
+    Raises:
+        ValueError: If no resource class is registered for the given path.
+    """
     with self._websocket_route_lock:
         try:
             resource_cls = self._websocket_routes[path]
