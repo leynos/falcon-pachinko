@@ -47,13 +47,23 @@ def install(app: typing.Any) -> None:
 _route_lock = Lock()
 
 
+def _is_valid_route_path(path: typing.Any) -> bool:
+    """Return ``True`` if ``path`` looks like a WebSocket route."""
+
+    if not isinstance(path, str):
+        return False
+
+    stripped = path.strip()
+    if not stripped:
+        return False
+
+    return stripped.startswith("/")
+
+
 def _validate_route_path(path: typing.Any) -> None:
     """Ensure ``path`` is a non-empty string starting with ``/``."""
-    if (
-        not isinstance(path, str)
-        or not path.strip()
-        or not path.lstrip().startswith("/")
-    ):
+
+    if not _is_valid_route_path(path):
         raise ValueError(f"Invalid WebSocket route path: {path!r}")
 
 
