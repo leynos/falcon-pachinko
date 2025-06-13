@@ -26,6 +26,7 @@ def install(app: typing.Any) -> None:
         "_websocket_routes",
         "add_websocket_route",
         "create_websocket_resource",
+        "_websocket_route_lock",
     )
 
     # Idempotent: if all attributes are present, do nothing.
@@ -42,9 +43,7 @@ def install(app: typing.Any) -> None:
     app._websocket_routes = routes
     app.add_websocket_route = MethodType(_add_websocket_route, app)
     app.create_websocket_resource = MethodType(_create_websocket_resource, app)
-
-
-_route_lock = Lock()
+    app._websocket_route_lock = Lock()
 
 
 def _is_valid_route_path(path: typing.Any) -> bool:
@@ -83,7 +82,7 @@ def _add_websocket_route(self: typing.Any, path: str, resource_cls: typing.Any) 
     """Register a ``WebSocketResource`` subclass for ``path``."""
     _validate_route_path(path)
     _validate_resource_cls(resource_cls)
-    with _route_lock:
+    with self._websocket_route_lock:
         if path in self._websocket_routes:
             msg = f"WebSocket route already registered for path: {path}"
             raise ValueError(msg)
@@ -93,7 +92,7 @@ def _add_websocket_route(self: typing.Any, path: str, resource_cls: typing.Any) 
 
 def _create_websocket_resource(self: typing.Any, path: str) -> typing.Any:
     """Instantiate the resource class registered for ``path``."""
-    with _route_lock:
+    with self._websocket_route_lock:
         try:
             resource_cls = self._websocket_routes[path]
         except KeyError as exc:

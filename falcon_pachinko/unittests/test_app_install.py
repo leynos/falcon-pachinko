@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import typing
+from threading import Lock
 
 import pytest
 
@@ -16,6 +17,7 @@ class DummyApp:
 class SupportsWebSocket(typing.Protocol):
     ws_connection_manager: WebSocketConnectionManager
     _websocket_routes: dict[str, object]
+    _websocket_route_lock: Lock
 
     def create_websocket_resource(self, path: str) -> object:
         """Return a new resource instance for the given WebSocket path."""
@@ -50,6 +52,8 @@ def test_install_adds_methods_and_manager(dummy_app: SupportsWebSocket) -> None:
     assert isinstance(app_any.ws_connection_manager, WebSocketConnectionManager)
     assert callable(app_any.add_websocket_route)
     assert callable(app_any.create_websocket_resource)
+    assert hasattr(app_any, "_websocket_route_lock")
+    assert isinstance(app_any._websocket_route_lock, Lock)  # pyright: ignore[reportPrivateUsage]
 
 
 def test_add_websocket_route_registers_resource(
@@ -69,11 +73,13 @@ def test_install_is_idempotent(dummy_app: SupportsWebSocket) -> None:
     first_manager = dummy_app.ws_connection_manager
     first_route_fn = dummy_app.add_websocket_route
     first_create_fn = dummy_app.create_websocket_resource
+    first_lock = dummy_app._websocket_route_lock  # pyright: ignore[reportPrivateUsage]
 
     install(dummy_app)  # type: ignore[arg-type]
     assert dummy_app.ws_connection_manager is first_manager
     assert dummy_app.add_websocket_route is first_route_fn
     assert dummy_app.create_websocket_resource is first_create_fn
+    assert dummy_app._websocket_route_lock is first_lock  # pyright: ignore[reportPrivateUsage]
 
 
 def test_install_detects_partial_state(dummy_app: SupportsWebSocket) -> None:
@@ -82,6 +88,7 @@ def test_install_detects_partial_state(dummy_app: SupportsWebSocket) -> None:
     # Simulate tampering with one of the install attributes
     delattr(dummy_app, "_websocket_routes")
     delattr(dummy_app, "create_websocket_resource")
+    delattr(dummy_app, "_websocket_route_lock")
 
     with pytest.raises(RuntimeError):
         install(dummy_app)  # type: ignore[arg-type]
