@@ -74,10 +74,7 @@ def _is_valid_route_path(path: typing.Any) -> bool:
     if not isinstance(path, str):
         return False
 
-    if not path or _has_whitespace(path):
-        return False
-
-    return path.startswith("/")
+    return False if not path or _has_whitespace(path) else path.startswith("/")
 
 
 def _validate_route_path(path: typing.Any) -> None:
