@@ -52,7 +52,7 @@ def _is_valid_route_path(path: typing.Any) -> bool:
     if not isinstance(path, str):
         return False
 
-    if not path or path != path.strip():
+    if not path or path != path.strip() or any(ch.isspace() for ch in path):
         return False
 
     return path.startswith("/")

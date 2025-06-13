@@ -105,7 +105,7 @@ def test_add_websocket_route_duplicate_raises(
 
 @pytest.mark.parametrize(
     "path",
-    ["ws", "", " /ws", "/ws ", 123],
+    ["ws", "", " /ws", "/ws ", "/ws\n", 123],
 )
 def test_add_websocket_route_invalid_path(
     dummy_app: SupportsWebSocket,
@@ -126,6 +126,7 @@ def test_create_websocket_resource_returns_new_instances(
 
     assert isinstance(first, dummy_resource_cls)
     assert isinstance(second, dummy_resource_cls)
+    assert type(first) is dummy_resource_cls
     assert first is not second
 
 
