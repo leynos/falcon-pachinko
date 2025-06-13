@@ -27,7 +27,7 @@ class StatusPayload(typing.TypedDict):
 async def random_worker(ws: falcon.asgi.WebSocket) -> None:
     """
     Periodically sends random numbers to the client over a WebSocket connection.
-    
+
     Runs indefinitely, sending a JSON message with a random number every 5 seconds until cancelled.
     """
     try:
@@ -54,7 +54,7 @@ class StatusResource(WebSocketResource):
     ) -> bool:
         """
         Handles a new WebSocket connection by accepting it and starting a background task to send random numbers.
-        
+
         Returns:
             True to indicate the WebSocket connection has been accepted.
         """
@@ -75,7 +75,7 @@ class StatusResource(WebSocketResource):
     ) -> None:
         """
         Handles incoming WebSocket "status" messages to update the stored status value.
-        
+
         Updates the status in the database with the provided text and sends an acknowledgment message back to the client containing the updated value.
         """
         text = payload["text"]
@@ -88,7 +88,7 @@ class StatusEndpoint:
     async def on_get(self, req: falcon.Request, resp: falcon.Response) -> None:
         """
         Handles HTTP GET requests to retrieve the current status value.
-        
+
         Responds with a JSON object containing the current status text from the database under the "status" key. If no status is set, the value is null.
         """
         async with DB.execute("SELECT value FROM status") as cursor:
@@ -99,7 +99,7 @@ class StatusEndpoint:
 def create_app() -> falcon.asgi.App:
     """
     Creates and configures the Falcon ASGI application with WebSocket and HTTP routes.
-    
+
     Returns:
         The configured Falcon ASGI application instance.
     """
