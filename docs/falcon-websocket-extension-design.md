@@ -200,6 +200,19 @@ instantiate the `ChatRoomResource` and manage the WebSocket lifecycle through
 it. Path parameters like `{room_name}` will be passed to the relevant methods of
 the `WebSocketResource`.
 
+#### 3.4.1. Programmatic Resource Instantiation
+
+Application code can also create a resource instance directly using
+``app.create_websocket_resource(path)``. This helper returns a new object of the
+class registered for ``path`` or raises ``ValueError`` if no such route exists.
+
+```python
+chat_resource = app.create_websocket_resource('/ws/chat/{room_name}')
+```
+
+Each call yields a fresh instance so that connection-specific state can be
+maintained independently.
+
 ### 3.5. The `WebSocketResource` Class
 
 The `WebSocketResource` class is central to handling WebSocket interactions.
@@ -443,6 +456,7 @@ intended use.
 | --- | --- | --- | --- |
 | Application Setup | `falcon_pachinko.install(app)` | Initializes shared WebSocket components (e.g., connection manager) on the app. | App-level configuration/extensions. |
 | Route Definition | `app.add_websocket_route(path, resource_class_instance)` | Maps a URI path to a `WebSocketResource`. | `app.add_route(path, resource_instance)` |
+| Resource Instantiation | `app.create_websocket_resource(path)` | Returns a new resource instance for the given path. | N/A |
 | Resource Class | `falcon_pachinko.WebSocketResource` | Base class for handling WebSocket connections and messages for a given route. | Falcon HTTP Resource class (e.g., methods like `on_get`, `on_post` handle specific `falcon.HTTP_METHODS`). |
 | Connection Lifecycle | `async def on_connect(req, ws, **params) -> bool`, `async def on_disconnect(ws, close_code)` | Methods in `WebSocketResource` to manage connection setup and teardown. | `process_request` / `process_response` middleware (for setup/teardown aspects), though more directly tied to the connection itself. |
 | Message Handling (Typed) | `@falcon_pachinko.handles_message("type_name") async def handler(self, ws, payload)` | Decorator in `WebSocketResource` to route incoming JSON messages based on a `type` field to specific methods. | HTTP method responders like `on_get(req, resp, **params)`, `on_post(req, resp, **params)`. |
