@@ -89,3 +89,17 @@ async def test_decorated_override() -> None:
     r = DecoratedOverride()
     await r.dispatch(DummyWS(), msgspec.json.encode({"type": "parent"}))
     assert r.invoked == "decorated"
+
+
+def test_unresolved_annotation_is_ignored() -> None:
+
+    class UnknownAnnoResource(WebSocketResource):
+        @handles_message("unknown")
+        async def handler(
+            self,
+            ws: typing.Any,
+            payload: "UnknownType"  # noqa: UP037,F821  # pyright: ignore[reportUnknownParameterType,reportUndefinedVariable]
+        ) -> None:  # pyright: ignore[reportUnknownVariableType]
+            ...
+
+    assert UnknownAnnoResource.handlers["unknown"][1] is None

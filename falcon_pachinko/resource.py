@@ -51,7 +51,11 @@ def _get_payload_type(func: Handler) -> type | None:
         ) from exc
 
     param = _select_payload_param(sig, func_name=func.__qualname__)
-    hints: dict[str, type] = typing.get_type_hints(func)
+    try:
+        hints: dict[str, type] = typing.get_type_hints(func)
+    except (NameError, AttributeError):
+        hints = {}
+
     return hints.get(param.name)
 
 
