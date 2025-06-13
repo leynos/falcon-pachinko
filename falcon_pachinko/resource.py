@@ -41,16 +41,25 @@ class _HandlesMessageDescriptor:
             )
             raise RuntimeError(msg)
 
-        payload_type: type | None = None
         try:
             sig = inspect.signature(self.func)
-            params = list(sig.parameters.values())
-            if len(params) >= 3:
-                annotation = params[2].annotation
-                if annotation is not inspect.Signature.empty:
-                    payload_type = typing.cast("type | None", annotation)
-        except (ValueError, TypeError):
-            payload_type = None
+        except ValueError as exc:  # pragma: no cover - C extensions unlikely
+            raise RuntimeError(
+                f"Cannot inspect signature for handler {self.func.__qualname__}"
+            ) from exc
+
+        params = sig.parameters
+        if len(params) < 3:
+            raise TypeError(
+                f"Handler {self.func.__qualname__} must accept self, ws, payload"
+            )
+
+        payload_param = params.get("payload")
+        if payload_param is None:
+            payload_param = list(params.values())[2]
+
+        hints: dict[str, type] = typing.get_type_hints(self.func)
+        payload_type = hints.get(payload_param.name)
 
         typed_owner.add_handler(self.message_type, self.func, payload_type=payload_type)
 
@@ -83,7 +92,15 @@ class WebSocketResource:
         types to handler functions.
         """
         super().__init_subclass__(**kwargs)
-        cls.handlers = {}
+
+        existing = getattr(cls, "handlers", {})
+        combined: dict[str, tuple[Handler, type | None]] = {}
+        for base in cls.__mro__[1:]:
+            base_handlers = getattr(base, "handlers", None)
+            if base_handlers:
+                combined.update(base_handlers)
+        combined.update(existing)
+        cls.handlers = combined
 
     async def on_connect(
         self, req: typing.Any, ws: typing.Any, **params: typing.Any

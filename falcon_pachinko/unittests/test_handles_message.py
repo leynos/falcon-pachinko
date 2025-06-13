@@ -42,3 +42,37 @@ def test_duplicate_handler_raises() -> None:
 
             @handles_message("dup")
             async def h2(self, ws: typing.Any, payload: typing.Any) -> None: ...
+
+
+def test_missing_payload_param_raises() -> None:
+    with pytest.raises(TypeError):
+
+        class BadSig(WebSocketResource):  # pyright: ignore[reportUnusedClass]
+            @handles_message("oops")  # pyright: ignore[reportArgumentType]
+            async def bad(self, ws: typing.Any) -> None: ...
+
+
+class ParentResource(WebSocketResource):
+    @handles_message("parent")
+    async def parent(self, ws: typing.Any, payload: typing.Any) -> None: ...
+
+
+class ChildResource(ParentResource):
+    def __init__(self) -> None:
+        self.invoked: list[str] = []
+
+    @handles_message("child")
+    async def child(self, ws: typing.Any, payload: typing.Any) -> None:
+        self.invoked.append("child")
+
+    async def parent(self, ws: typing.Any, payload: typing.Any) -> None:  # pyright: ignore[reportIncompatibleVariableOverride]
+        # override to record
+        self.invoked.append("parent")
+
+
+@pytest.mark.asyncio()
+async def test_handlers_inherited() -> None:
+    r = ChildResource()
+    await r.dispatch(DummyWS(), msgspec.json.encode({"type": "parent"}))
+    await r.dispatch(DummyWS(), msgspec.json.encode({"type": "child"}))
+    assert r.invoked == ["parent", "child"]
