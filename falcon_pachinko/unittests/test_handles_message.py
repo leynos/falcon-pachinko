@@ -70,9 +70,22 @@ class ChildResource(ParentResource):
         self.invoked.append("parent")
 
 
+class DecoratedOverride(ParentResource):
+    @handles_message("parent")
+    async def parent(self, ws: typing.Any, payload: typing.Any) -> None:
+        self.invoked = "decorated"
+
+
 @pytest.mark.asyncio()
 async def test_handlers_inherited() -> None:
     r = ChildResource()
     await r.dispatch(DummyWS(), msgspec.json.encode({"type": "parent"}))
     await r.dispatch(DummyWS(), msgspec.json.encode({"type": "child"}))
     assert r.invoked == ["parent", "child"]
+
+
+@pytest.mark.asyncio()
+async def test_decorated_override() -> None:
+    r = DecoratedOverride()
+    await r.dispatch(DummyWS(), msgspec.json.encode({"type": "parent"}))
+    assert r.invoked == "decorated"

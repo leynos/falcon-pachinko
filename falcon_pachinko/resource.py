@@ -16,6 +16,28 @@ class _Envelope(msgspec.Struct, frozen=True):
 Handler = cabc.Callable[[typing.Any, typing.Any, typing.Any], cabc.Awaitable[None]]
 
 
+def _get_payload_type(func: Handler) -> type | None:
+    """Validate ``func``'s signature and return the payload annotation."""
+
+    try:
+        sig = inspect.signature(func)
+    except ValueError as exc:  # pragma: no cover - C extensions unlikely
+        raise RuntimeError(
+            f"Cannot inspect signature for handler {func.__qualname__}"
+        ) from exc
+
+    params = sig.parameters
+    if len(params) < 3:
+        raise TypeError(f"Handler {func.__qualname__} must accept self, ws, payload")
+
+    payload_param = params.get("payload")
+    if payload_param is None:
+        payload_param = list(params.values())[2]
+
+    hints: dict[str, type] = typing.get_type_hints(func)
+    return hints.get(payload_param.name)
+
+
 class _HandlesMessageDescriptor:
     """Register a method as a message handler on its class."""
 
@@ -31,37 +53,24 @@ class _HandlesMessageDescriptor:
         self.name = name
 
         typed_owner = typing.cast("type[WebSocketResource]", owner)
-        if not hasattr(typed_owner, "handlers"):
+        if "handlers" not in typed_owner.__dict__:
             typed_owner.handlers = {}
 
-        if self.message_type in typed_owner.handlers:
+        current = typed_owner.__dict__.get("handlers", {})
+        if self.message_type in current:
             msg = (
                 f"Duplicate handler for message type {self.message_type!r} "
                 f"on {owner.__qualname__}"
             )
             raise RuntimeError(msg)
 
-        try:
-            sig = inspect.signature(self.func)
-        except ValueError as exc:  # pragma: no cover - C extensions unlikely
-            raise RuntimeError(
-                f"Cannot inspect signature for handler {self.func.__qualname__}"
-            ) from exc
+        payload_type = _get_payload_type(self.func)
 
-        params = sig.parameters
-        if len(params) < 3:
-            raise TypeError(
-                f"Handler {self.func.__qualname__} must accept self, ws, payload"
-            )
-
-        payload_param = params.get("payload")
-        if payload_param is None:
-            payload_param = list(params.values())[2]
-
-        hints: dict[str, type] = typing.get_type_hints(self.func)
-        payload_type = hints.get(payload_param.name)
-
-        typed_owner.add_handler(self.message_type, self.func, payload_type=payload_type)
+        typed_owner.add_handler(
+            self.message_type,
+            self.func,
+            payload_type=payload_type,
+        )
 
     def __get__(self, instance: typing.Any, owner: type | None = None) -> Handler:
         return self.func.__get__(instance, owner or self.owner)
@@ -100,6 +109,19 @@ class WebSocketResource:
             if base_handlers:
                 combined.update(base_handlers)
         combined.update(existing)
+
+        shadowed = {
+            name
+            for name, obj in cls.__dict__.items()
+            if not isinstance(obj, _HandlesMessageDescriptor)
+            and inspect.iscoroutinefunction(obj)
+        }
+
+        for msg_type, (handler, payload_type) in list(combined.items()):
+            if handler.__name__ in shadowed:
+                new_handler = typing.cast("Handler", cls.__dict__[handler.__name__])
+                combined[msg_type] = (new_handler, payload_type)
+
         cls.handlers = combined
 
     async def on_connect(
