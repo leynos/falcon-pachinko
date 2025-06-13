@@ -19,6 +19,9 @@ Handler = cabc.Callable[[typing.Any, typing.Any, typing.Any], cabc.Awaitable[Non
 def _get_payload_type(func: Handler) -> type | None:
     """Validate ``func``'s signature and return the payload annotation."""
 
+    if not inspect.iscoroutinefunction(func):
+        raise TypeError(f"Handler {func.__qualname__} must be async")
+
     try:
         sig = inspect.signature(func)
     except ValueError as exc:  # pragma: no cover - C extensions unlikely
@@ -26,13 +29,20 @@ def _get_payload_type(func: Handler) -> type | None:
             f"Cannot inspect signature for handler {func.__qualname__}"
         ) from exc
 
-    params = sig.parameters
+    params = list(sig.parameters.values())
     if len(params) < 3:
-        raise TypeError(f"Handler {func.__qualname__} must accept self, ws, payload")
+        raise TypeError(
+            f"Handler {func.__qualname__} must accept self, ws, and a payload"
+        )
 
-    payload_param = params.get("payload")
+    payload_param = sig.parameters.get("payload")
     if payload_param is None:
-        payload_param = list(params.values())[2]
+        for candidate in params[2:]:
+            if candidate.annotation is not inspect.Signature.empty:
+                payload_param = candidate
+                break
+        else:
+            payload_param = params[2]
 
     hints: dict[str, type] = typing.get_type_hints(func)
     return hints.get(payload_param.name)
@@ -53,10 +63,10 @@ class _HandlesMessageDescriptor:
         self.name = name
 
         typed_owner = typing.cast("type[WebSocketResource]", owner)
-        if "handlers" not in typed_owner.__dict__:
-            typed_owner.handlers = {}
-
-        current = typed_owner.__dict__.get("handlers", {})
+        current = typed_owner.__dict__.get("handlers")
+        if current is None:
+            current = {}
+            typed_owner.handlers = current
         if self.message_type in current:
             msg = (
                 f"Duplicate handler for message type {self.message_type!r} "
