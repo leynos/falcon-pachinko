@@ -20,7 +20,7 @@ class EchoResource(WebSocketResource):
     def __init__(self) -> None:
         """
         Initializes the EchoResource with empty lists for handled and fallback messages.
-        
+
         The `seen` list stores texts from successfully handled payloads, while the `fallback` list records messages that do not match any registered handler or fail payload validation.
         """
         self.seen: list[typing.Any] = []
@@ -29,7 +29,7 @@ class EchoResource(WebSocketResource):
     async def on_message(self, ws: typing.Any, message: str | bytes) -> None:
         """
         Handles messages that do not match any registered handler by appending them to the fallback list.
-        
+
         Args:
             ws: The WebSocket connection instance.
             message: The raw message received, as a string or bytes.
@@ -42,7 +42,7 @@ async def echo_handler(
 ) -> None:
     """
     Handles an "echo" message by recording the payload text.
-    
+
     Appends the `text` field from the received `EchoPayload` to the resource's `seen` list.
     """
     self.seen.append(payload.text)
@@ -61,7 +61,7 @@ class RawResource(WebSocketResource):
     async def on_message(self, ws: typing.Any, message: str | bytes) -> None:
         """
         Handles incoming messages by appending them to the received list.
-        
+
         This method acts as a fallback for messages that do not match any registered handler.
         """
         self.received.append(message)
@@ -70,7 +70,7 @@ class RawResource(WebSocketResource):
 async def raw_handler(self: RawResource, ws: typing.Any, payload: typing.Any) -> None:
     """
     Handles incoming messages of type "raw" by appending the payload to the resource's received list.
-    
+
     Args:
         payload: The raw payload received with the message. Can be any type, including None.
     """
@@ -93,7 +93,7 @@ async def test_dispatch_calls_registered_handler() -> None:
 async def test_dispatch_unknown_type_calls_fallback() -> None:
     """
     Tests that dispatching a message with an unknown type invokes the fallback handler.
-    
+
     Verifies that when a message with an unregistered type is dispatched to EchoResource, the raw message is appended to the resource's fallback list.
     """
     r = EchoResource()
@@ -127,7 +127,7 @@ async def test_payload_type_none_passes_raw(
 ) -> None:
     """
     Tests that RawResource receives the raw payload as-is when no payload type is specified.
-    
+
     Verifies that the received list contains the exact payload passed, or None if the payload is missing.
     """
     r = RawResource()
@@ -143,7 +143,7 @@ async def test_payload_type_none_passes_raw(
 async def test_invalid_payload_calls_fallback() -> None:
     """
     Tests that an invalid payload type causes the message to be handled by the fallback method.
-    
+
     Sends a message with an incorrect payload type to EchoResource and verifies that it is appended to the fallback list and not processed by the registered handler.
     """
     r = EchoResource()

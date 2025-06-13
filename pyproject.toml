@@ -8,7 +8,7 @@ license = { text = "MIT" }
 dependencies = ["msgspec>=0.18"]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "pyright"]
+dev = ["pytest", "pytest-asyncio", "ruff", "pyright"]
 
 [tool.pyright]
 pythonVersion = "3.13"
@@ -48,6 +48,7 @@ select = [
     "B",
     "RUF",
 ]
+ignore = ["E501"]
 per-file-ignores = {"**/test_*.py" = ["S101"]}
 
 [tool.ruff.lint.flake8-import-conventions]

@@ -24,7 +24,7 @@ class WebSocketConnectionManager:
 def install(app: typing.Any) -> None:
     """
     Attaches WebSocket connection management and routing utilities to the application object.
-    
+
     Initializes and binds WebSocket-related attributes and methods to the given app, enabling WebSocket route registration and resource instantiation. This function is idempotent and will raise a RuntimeError if a partial installation is detected.
     """
     wanted = (
@@ -61,12 +61,12 @@ def _has_whitespace(text: str) -> bool:
 def _is_valid_route_path(path: typing.Any) -> bool:
     """
     Checks if the given path is a valid WebSocket route path.
-    
+
     A valid route path is a non-empty string that starts with '/', contains no leading or trailing whitespace, and has no internal whitespace characters.
-    
+
     Args:
         path: The value to check.
-    
+
     Returns:
         True if the path is a valid WebSocket route path, False otherwise.
     """
@@ -80,7 +80,7 @@ def _is_valid_route_path(path: typing.Any) -> bool:
 def _validate_route_path(path: typing.Any) -> None:
     """
     Validates that the given path is suitable for use as a WebSocket route.
-    
+
     Raises:
         ValueError: If the path is not a non-empty string starting with '/', contains whitespace, or has leading/trailing whitespace.
     """
@@ -92,7 +92,7 @@ def _validate_route_path(path: typing.Any) -> None:
 def _validate_resource_cls(resource_cls: typing.Any) -> None:
     """
     Validates that the provided class is a subclass of WebSocketResource.
-    
+
     Raises:
         TypeError: If resource_cls is not a subclass of WebSocketResource.
     """
@@ -110,7 +110,7 @@ def _validate_resource_cls(resource_cls: typing.Any) -> None:
 def _add_websocket_route(self: typing.Any, path: str, resource_cls: typing.Any) -> None:
     """
     Registers a WebSocketResource subclass for the specified route path.
-    
+
     Associates the given resource class with the provided path, ensuring the path is valid and not already registered. Raises a ValueError if the path is already in use.
     """
     _validate_route_path(path)
@@ -126,13 +126,13 @@ def _add_websocket_route(self: typing.Any, path: str, resource_cls: typing.Any) 
 def _create_websocket_resource(self: typing.Any, path: str) -> WebSocketResource:
     """
     Instantiates and returns the WebSocket resource class registered for the given path.
-    
+
     Args:
         path: The route path for which to create the WebSocket resource.
-    
+
     Returns:
         An instance of the resource class associated with the specified path.
-    
+
     Raises:
         ValueError: If no resource class is registered for the given path.
     """

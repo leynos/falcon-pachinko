@@ -22,7 +22,7 @@ class WebSocketResource:
     def __init_subclass__(cls, **kwargs: typing.Any) -> None:
         """
         Initializes the handlers dictionary for each subclass of WebSocketResource.
-        
+
         Ensures that each subclass has its own independent mapping of message types to handler functions.
         """
         super().__init_subclass__(**kwargs)
@@ -33,12 +33,12 @@ class WebSocketResource:
     ) -> bool:
         """
         Called after the WebSocket handshake is complete to determine if the connection should be accepted.
-        
+
         Args:
             req: The incoming HTTP request associated with the WebSocket handshake.
             ws: The WebSocket connection object.
             **params: Additional parameters relevant to the connection.
-        
+
         Returns:
             True to accept the WebSocket connection; False to reject it.
         """
@@ -47,7 +47,7 @@ class WebSocketResource:
     async def on_disconnect(self, ws: typing.Any, close_code: int) -> None:
         """
         Handles cleanup or custom logic when the WebSocket connection is closed.
-        
+
         Args:
             ws: The WebSocket connection instance.
             close_code: The close code indicating the reason for disconnection.
@@ -56,7 +56,7 @@ class WebSocketResource:
     async def on_message(self, ws: typing.Any, message: str | bytes) -> None:
         """
         Handles incoming WebSocket messages that do not match any registered handler.
-        
+
         Called when a message cannot be decoded or its type is unrecognized. Override to implement custom fallback behavior for such messages.
         """
 
@@ -66,7 +66,7 @@ class WebSocketResource:
     ) -> None:
         """
         Registers a handler function for a specific message type.
-        
+
         Associates the given handler with the specified message type. Optionally, a payload type can be provided for automatic payload validation and conversion.
         """
         cls.handlers[message_type] = (handler, payload_type)
@@ -74,7 +74,7 @@ class WebSocketResource:
     async def dispatch(self, ws: typing.Any, raw: str | bytes) -> None:
         """
         Processes an incoming raw WebSocket message and dispatches it to the appropriate handler.
-        
+
         Attempts to decode the message as a JSON envelope containing a message type and optional payload. If decoding or payload validation fails, or if no handler is registered for the message type, the message is passed to the fallback `on_message` method. Otherwise, the registered handler is invoked with the converted payload.
         """
         try:
