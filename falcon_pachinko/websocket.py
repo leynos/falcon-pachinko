@@ -59,7 +59,14 @@ def _is_valid_route_path(path: typing.Any) -> bool:
 
 
 def _validate_route_path(path: typing.Any) -> None:
-    """Ensure ``path`` is a non-empty string starting with ``/``."""
+    """Validate ``path`` for use as a WebSocket route.
+
+    Rules enforced:
+    - ``path`` must be a string.
+    - it may not be empty or contain any whitespace characters.
+    - leading and trailing whitespace are not allowed.
+    - it must start with ``/``.
+    """
 
     if not _is_valid_route_path(path):
         raise ValueError(f"Invalid WebSocket route path: {path!r}")
@@ -90,7 +97,7 @@ def _add_websocket_route(self: typing.Any, path: str, resource_cls: typing.Any) 
         self._websocket_routes[path] = resource_cls
 
 
-def _create_websocket_resource(self: typing.Any, path: str) -> typing.Any:
+def _create_websocket_resource(self: typing.Any, path: str) -> WebSocketResource:
     """Instantiate the resource class registered for ``path``."""
     with self._websocket_route_lock:
         try:
