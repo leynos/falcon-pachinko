@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    env:
+      CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .[dev] slipcover pytest-forked
+
+      - name: Check formatting
+        run: ruff format --check .
+
+      - name: Run ruff
+        run: ruff check .
+
+      - name: Run pyright
+        run: pyright
+
+      - name: Run tests with coverage
+        run: |
+          python -m slipcover \
+            --source=./falcon_pachinko \
+            --omit="*/unittests/*,*/.venv/*" \
+            --branch \
+            --out coverage.xml \
+            -m pytest --forked -v falcon_pachinko/unittests
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+
+      - name: Install CodeScene Coverage CLI
+        if: env.CS_ACCESS_TOKEN != ''
+        run: curl https://downloads.codescene.io/enterprise/cli/install-cs-coverage-tool.sh | bash -s -- -y
+
+      - name: Upload coverage to CodeScene
+        if: env.CS_ACCESS_TOKEN != ''
+        run: |
+          if [ ! -f coverage.xml ]; then
+            echo "coverage.xml not found!"
+            exit 1
+          fi
+          cs-coverage upload \
+            --format "cobertura" \
+            --metric "line-coverage" \
+            coverage.xml

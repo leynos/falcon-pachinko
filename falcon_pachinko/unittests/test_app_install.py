@@ -22,13 +22,13 @@ class SupportsWebSocket(typing.Protocol):
     def create_websocket_resource(self, path: str) -> object:
         """
         Creates and returns a new instance of the WebSocket resource class registered for the specified path.
-        
+
         Args:
             path: The WebSocket route path for which to create a resource instance.
-        
+
         Returns:
             A new instance of the resource class associated with the given path.
-        
+
         Raises:
             ValueError: If no resource class is registered for the specified path.
         """
@@ -37,11 +37,11 @@ class SupportsWebSocket(typing.Protocol):
     def add_websocket_route(self, path: str, resource: type[object]) -> None:
         """
         Registers a WebSocketResource subclass to handle connections at the specified path.
-        
+
         Args:
             path: The WebSocket route path to register (must be a non-empty string starting with '/').
             resource: The class of the WebSocketResource to associate with the path.
-        
+
         Raises:
             ValueError: If the path is invalid or already registered.
             TypeError: If resource is not a subclass of WebSocketResource.
@@ -53,7 +53,7 @@ class SupportsWebSocket(typing.Protocol):
 def dummy_app() -> SupportsWebSocket:
     """
     Creates a dummy application instance with WebSocket support installed.
-    
+
     Returns:
         The dummy app instance cast to the SupportsWebSocket protocol, with WebSocket integration methods and attributes added.
     """
@@ -66,13 +66,14 @@ def dummy_app() -> SupportsWebSocket:
 def dummy_resource_cls(dummy_app: SupportsWebSocket) -> type[WebSocketResource]:
     """
     Creates and returns a dummy WebSocketResource subclass for testing purposes.
-    
+
     Args:
         dummy_app: The application instance supporting WebSocket features.
-    
+
     Returns:
         A subclass of WebSocketResource named DummyResource.
     """
+
     class DummyResource(WebSocketResource):
         pass
 
@@ -159,7 +160,7 @@ def test_add_websocket_route_invalid_path(
 ) -> None:
     """
     Tests that add_websocket_route raises ValueError when given an invalid path.
-    
+
     Verifies that attempting to register a WebSocket route with an invalid path value
     (such as missing a leading slash, being empty, containing only whitespace, or being a non-string)
     results in a ValueError.
