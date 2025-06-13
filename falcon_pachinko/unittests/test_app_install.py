@@ -96,7 +96,10 @@ def test_add_websocket_route_duplicate_raises(
         dummy_app.add_websocket_route("/ws", dummy_resource_cls)
 
 
-@pytest.mark.parametrize("path", ["ws", "", 123])
+@pytest.mark.parametrize(
+    "path",
+    ["ws", "", " /ws", "/ws ", 123],
+)
 def test_add_websocket_route_invalid_path(
     dummy_app: SupportsWebSocket,
     dummy_resource_cls: type[WebSocketResource],

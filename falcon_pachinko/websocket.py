@@ -53,11 +53,10 @@ def _is_valid_route_path(path: typing.Any) -> bool:
     if not isinstance(path, str):
         return False
 
-    stripped = path.strip()
-    if not stripped:
+    if not path or path != path.strip():
         return False
 
-    return stripped.startswith("/")
+    return path.startswith("/")
 
 
 def _validate_route_path(path: typing.Any) -> None:
