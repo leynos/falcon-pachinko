@@ -46,13 +46,19 @@ def install(app: typing.Any) -> None:
     app._websocket_route_lock = Lock()
 
 
+def _has_whitespace(text: str) -> bool:
+    """Return ``True`` if ``text`` contains any whitespace characters."""
+
+    return text != text.strip() or any(ch.isspace() for ch in text)
+
+
 def _is_valid_route_path(path: typing.Any) -> bool:
     """Return ``True`` if ``path`` looks like a WebSocket route."""
 
     if not isinstance(path, str):
         return False
 
-    if not path or path != path.strip() or any(ch.isspace() for ch in path):
+    if not path or _has_whitespace(path):
         return False
 
     return path.startswith("/")
