@@ -38,6 +38,11 @@ formatting.
    - [ ] Develop tools similar to `falcon.testing` that simulate WebSocket
      clients for unit and integration tests.
    - [ ] Enable sending and receiving messages and verifying connection events.
+   - [ ] Provide a `WebSocketSimulator` class for opening connections to an ASGI
+     app under test.
+   - [ ] Expose `simulate_websocket()` on the test client API for convenience.
+   - [ ] Ship pytest fixtures for common patterns such as a reusable test client
+     and background worker hooks.
 
 6. **Illustrative Example**
 
