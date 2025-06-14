@@ -764,6 +764,14 @@ Such utilities would allow developers to:
   otherwise be complex to test. Proactively considering these utilities enhances
   the library's completeness and professional appeal.
 
+An initial API could include a `WebSocketSimulator` class that mimics a client
+connection using Falcon's ASGI test harness. The simulator would operate as an
+asynchronous context manager returning a connection object with helpers like
+`send_json()` and `receive_json()`. A convenience method,
+`simulate_websocket()`, on the standard test client would construct this
+simulator. Additionally, pytest fixtures should expose a ready-to-use simulator
+and manage background worker startup so tests can focus on asserting behaviour.
+
 ### 5.6. Automatic AsyncAPI Documentation Generation (Ambitious)
 
 As a long-term vision, the structured nature of `WebSocketResource` and the
