@@ -772,6 +772,52 @@ asynchronous context manager returning a connection object with helpers like
 simulator. Additionally, pytest fixtures should expose a ready-to-use simulator
 and manage background worker startup so tests can focus on asserting behaviour.
 
+```mermaid
+sequenceDiagram
+    actor Developer
+    participant TC as TestClient
+    participant WSSim as WebSocketSimulator
+    participant WSConn as WebSocketConnection
+    participant App as ASGIAppUnderTest
+
+    Developer->>TC: client.simulate_websocket()
+    activate TC
+    TC->>WSSim: new WebSocketSimulator()
+    TC-->>Developer: simulator
+    deactivate TC
+
+    Developer->>WSSim: async with simulator as conn:
+    activate WSSim
+    WSSim->>App: Establish Connection (via ASGI Test Harness)
+    activate App
+    WSSim-->>Developer: conn (WebSocketConnection instance)
+    deactivate WSSim
+
+    Developer->>WSConn: conn.send_json(data)
+    activate WSConn
+    WSConn->>App: Send JSON data
+    App-->>WSConn: (optional ack/response data)
+    deactivate App
+    WSConn-->>Developer: (return from send)
+    deactivate WSConn
+
+    Developer->>WSConn: data = conn.receive_json()
+    activate WSConn
+    WSConn->>App: Request/await data
+    activate App
+    App-->>WSConn: Send JSON data
+    deactivate App
+    WSConn-->>Developer: received_data
+    deactivate WSConn
+
+    Developer->>WSSim: (end of async with block / context exit)
+    activate WSSim
+    WSSim->>App: Close Connection
+    activate App
+    deactivate App
+    deactivate WSSim
+```
+
 ### 5.6. Automatic AsyncAPI Documentation Generation (Ambitious)
 
 As a long-term vision, the structured nature of `WebSocketResource` and the
