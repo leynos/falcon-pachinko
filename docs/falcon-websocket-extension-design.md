@@ -766,11 +766,11 @@ Such utilities would allow developers to:
 
 An initial API could include a `WebSocketSimulator` class that mimics a client
 connection using Falcon's ASGI test harness. The simulator would operate as an
-asynchronous context manager returning a connection object with helpers like
+asynchronous context manager, returning a connection object with helpers like
 `send_json()` and `receive_json()`. A convenience method,
 `simulate_websocket()`, on the standard test client would construct this
 simulator. Additionally, pytest fixtures should expose a ready-to-use simulator
-and manage background worker startup so tests can focus on asserting behaviour.
+and manage background worker startup, so tests can focus on asserting behaviour.
 
 ```mermaid
 sequenceDiagram
