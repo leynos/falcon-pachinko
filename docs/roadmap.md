@@ -1,8 +1,8 @@
 # Falcon-Pachinko Roadmap
 
-This roadmap outlines the implementation tasks for the Falcon-Pachinko extension.
-Line numbers refer to `docs/falcon-websocket-extension-design.md` after
-formatting.
+This roadmap outlines the implementation tasks for the Falcon-Pachinko
+extension. Line numbers refer to `docs/falcon-websocket-extension-design.md`
+after formatting.
 
 1. **Foundation and API Setup** (lines 140-170)
 
