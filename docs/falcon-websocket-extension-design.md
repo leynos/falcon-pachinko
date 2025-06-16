@@ -203,8 +203,8 @@ the `WebSocketResource`.
 #### 3.4.1. Programmatic Resource Instantiation
 
 Application code can also create a resource instance directly using
-``app.create_websocket_resource(path)``. This helper returns a new object of the
-class registered for ``path`` or raises ``ValueError`` if no such route exists.
+`app.create_websocket_resource(path)`. This helper returns a new object of the
+class registered for `path` or raises `ValueError` if no such route exists.
 
 ```python
 chat_resource = app.create_websocket_resource('/ws/chat/{room_name}')
@@ -221,21 +221,19 @@ logic.
 
 - **Lifecycle Methods**:
 
-  - `async def on_connect(
-    self, req: falcon.Request, ws: falcon.asgi.WebSocket,
-    **params) -> bool`:
-    WebSocket connection is established and routed to this resource. `req` is
-    the standard Falcon `Request` object associated with the initial HTTP
-    upgrade request, and `ws` is the `falcon.asgi.WebSocket` object. `params`
-    will contain any path parameters from the route. The method should return
-    `True` to accept the connection or `False` to reject it. If `False` is
-    returned, the library will handle sending an appropriate closing handshake
-    (e.g., HTTP 403 or a custom code if supported by an extension like WebSocket
-    Denial Response 12). This boolean return abstracts the direct
-    `await ws.accept()` or `await ws.close()` call, simplifying the resource
-    method to focus on connection logic rather than raw ASGI mechanics. This
-    design aligns with Falcon's higher-level approach for HTTP handlers, where
-    the framework manages response sending.
+  - `async def on_connect(self, req, ws, **params) -> bool`: WebSocket
+    connection is established and routed to this resource. `req` is the standard
+    Falcon `Request` object associated with the initial HTTP upgrade request,
+    and `ws` is the `falcon.asgi.WebSocket` object. `params` will contain any
+    path parameters from the route. The method should return `True` to accept
+    the connection or `False` to reject it. If `False` is returned, the library
+    will handle sending an appropriate closing handshake (e.g., HTTP 403 or a
+    custom code if supported by an extension like WebSocket Denial Response 12).
+    This boolean return abstracts the direct `await ws.accept()` or
+    `await ws.close()` call, simplifying the resource method to focus on
+    connection logic rather than raw ASGI mechanics. This design aligns with
+    Falcon's higher-level approach for HTTP handlers, where the framework
+    manages response sending.
 
   - `async def on_disconnect(self, ws: falcon.asgi.WebSocket, close_code: int)`:
     Called when the WebSocket connection is closed, either by the client or the
@@ -301,12 +299,12 @@ a monolithic `on_receive` method with extensive conditional logic.
   distinct HTTP methods and paths organize REST API interactions.
 
 - **Automatic Deserialization**: For messages routed via `@handles_message`, the
-    library will attempt to parse the message as JSON and extract the payload. If
-    parsing fails or the 'type' field is missing, the generic `on_message` handler
-    could be invoked if defined.
+  library will attempt to parse the message as JSON and extract the payload. If
+  parsing fails or the 'type' field is missing, the generic `on_message` handler
+  could be invoked if defined.
 
-- **Typed Payloads**: Any payload argument to a resource method is converted into
-  a `msgspec.Struct` instance for type safety and fast serialization.
+- **Typed Payloads**: Any payload argument to a resource method is converted
+  into a `msgspec.Struct` instance for type safety and fast serialization.
 
 #### Descriptor Implementation of `handles_message`
 
@@ -370,11 +368,8 @@ default.
 
 - **Proposed Methods**:
 
-  - `add_connection(
-    connection_id: str,
-    websocket_object: falcon.asgi.WebSocket,
-    resource_instance: WebSocketResource)`:
-    Registers a new connection.
+  - `add_connection(connection_id, websocket, resource_instance)`: Registers a
+    new connection.
   - `remove_connection(connection_id: str)`: Removes a connection.
   - `join_room(connection_id: str, room_name: str)`: Associates a connection
     with a room.
@@ -446,25 +441,27 @@ clients.
 
 ### 3.9. API Overview
 
-The following table summarizes the key components of the proposed Falcon-Pachinko
-API and their analogies to Falcon's HTTP mechanisms, where applicable. This
-serves as a quick reference to understand the main abstractions and their
-intended use.
+The following table summarizes the key components of the proposed
+Falcon-Pachinko API and their analogies to Falcon's HTTP mechanisms, where
+applicable. This serves as a quick reference to understand the main abstractions
+and their intended use.
 
 <!-- markdownlint-disable MD013 -->
-| Component/Concept | Key Classes/Decorators/Methods | Purpose | Analogy to Falcon HTTP (if applicable) |
-| --- | --- | --- | --- |
-| Application Setup | `falcon_pachinko.install(app)` | Initializes shared WebSocket components (e.g., connection manager) on the app. | App-level configuration/extensions. |
-| Route Definition | `app.add_websocket_route(path, resource_class_instance)` | Maps a URI path to a `WebSocketResource`. | `app.add_route(path, resource_instance)` |
-| Resource Instantiation | `app.create_websocket_resource(path)` | Returns a new resource instance for the given path. | N/A |
-| Resource Class | `falcon_pachinko.WebSocketResource` | Base class for handling WebSocket connections and messages for a given route. | Falcon HTTP Resource class (e.g., methods like `on_get`, `on_post` handle specific `falcon.HTTP_METHODS`). |
-| Connection Lifecycle | `async def on_connect(req, ws, **params) -> bool`, `async def on_disconnect(ws, close_code)` | Methods in `WebSocketResource` to manage connection setup and teardown. | `process_request` / `process_response` middleware (for setup/teardown aspects), though more directly tied to the connection itself. |
-| Message Handling (Typed) | `@falcon_pachinko.handles_message("type_name") async def handler(self, ws, payload)` | Decorator in `WebSocketResource` to route incoming JSON messages based on a `type` field to specific methods. | HTTP method responders like `on_get(req, resp, **params)`, `on_post(req, resp, **params)`. |
-| Message Handling (Generic) | `async def on_message(self, ws, message)` | Fallback method in `WebSocketResource` for unhandled or non-JSON messages. | N/A (Falcon HTTP relies on specific method responders). |
-| Connection Management (Resource) | `self.join_room(room_name)`, `self.leave_room(room_name)`, `self.broadcast_to_room(room_name, message, exclude_self=False)` | Convenience methods within `WebSocketResource` to interact with rooms/groups via the connection manager. | N/A (HTTP is stateless). |
-| Background Worker Integration | `app.add_websocket_worker(worker_coro, conn_manager)` | Registers an asynchronous task that can send messages to clients via the connection manager. | Background task patterns (often custom in Falcon HTTP). |
-| Connection Management (Global) | `app.ws_connection_manager` (instance of `WebSocketConnectionManager`) | Central object to track connections, manage groups, and enable broadcasting from any part of the app. | N/A (HTTP is stateless). |
-| Manager Methods (Global) | `conn_manager.broadcast_to_room(room, msg)`, `conn_manager.send_to_connection(id, msg)`, etc. | Methods on the connection manager for sending messages from workers or other application components. | N/A |
+
+| Component/Concept                | Key Classes/Decorators/Methods                                                                                              | Purpose                                                                                                       | Analogy to Falcon HTTP (if applicable)                                                                                              |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Application Setup                | `falcon_pachinko.install(app)`                                                                                              | Initializes shared WebSocket components (e.g., connection manager) on the app.                                | App-level configuration/extensions.                                                                                                 |
+| Route Definition                 | `app.add_websocket_route(path, resource_class_instance)`                                                                    | Maps a URI path to a `WebSocketResource`.                                                                     | `app.add_route(path, resource_instance)`                                                                                            |
+| Resource Instantiation           | `app.create_websocket_resource(path)`                                                                                       | Returns a new resource instance for the given path.                                                           | N/A                                                                                                                                 |
+| Resource Class                   | `falcon_pachinko.WebSocketResource`                                                                                         | Base class for handling WebSocket connections and messages for a given route.                                 | Falcon HTTP Resource class (e.g., methods like `on_get`, `on_post` handle specific `falcon.HTTP_METHODS`).                          |
+| Connection Lifecycle             | `async def on_connect(req, ws, **params) -> bool`, `async def on_disconnect(ws, close_code)`                                | Methods in `WebSocketResource` to manage connection setup and teardown.                                       | `process_request` / `process_response` middleware (for setup/teardown aspects), though more directly tied to the connection itself. |
+| Message Handling (Typed)         | `@falcon_pachinko.handles_message("type_name") async def handler(self, ws, payload)`                                        | Decorator in `WebSocketResource` to route incoming JSON messages based on a `type` field to specific methods. | HTTP method responders like `on_get(req, resp, **params)`, `on_post(req, resp, **params)`.                                          |
+| Message Handling (Generic)       | `async def on_message(self, ws, message)`                                                                                   | Fallback method in `WebSocketResource` for unhandled or non-JSON messages.                                    | N/A (Falcon HTTP relies on specific method responders).                                                                             |
+| Connection Management (Resource) | `self.join_room(room_name)`, `self.leave_room(room_name)`, `self.broadcast_to_room(room_name, message, exclude_self=False)` | Convenience methods within `WebSocketResource` to interact with rooms/groups via the connection manager.      | N/A (HTTP is stateless).                                                                                                            |
+| Background Worker Integration    | `app.add_websocket_worker(worker_coro, conn_manager)`                                                                       | Registers an asynchronous task that can send messages to clients via the connection manager.                  | Background task patterns (often custom in Falcon HTTP).                                                                             |
+| Connection Management (Global)   | `app.ws_connection_manager` (instance of `WebSocketConnectionManager`)                                                      | Central object to track connections, manage groups, and enable broadcasting from any part of the app.         | N/A (HTTP is stateless).                                                                                                            |
+| Manager Methods (Global)         | `conn_manager.broadcast_to_room(room, msg)`, `conn_manager.send_to_connection(id, msg)`, etc.                               | Methods on the connection manager for sending messages from workers or other application components.          | N/A                                                                                                                                 |
+
 <!-- markdownlint-enable MD013 -->
 
 This API structure is designed to be both powerful enough for complex
@@ -890,12 +887,12 @@ query:
 
 ### 6.4. Final Thoughts
 
-The Falcon-Pachinko extension has the potential to significantly enhance Falcon's
-capabilities in the domain of real-time web applications. By providing a robust
-yet lightweight solution for asynchronous WebSocket communication, it can
-empower developers to build sophisticated interactive applications, such as chat
-systems, live dashboards, and collaborative tools, with the same elegance and
-performance they expect from Falcon for HTTP APIs.
+The Falcon-Pachinko extension has the potential to significantly enhance
+Falcon's capabilities in the domain of real-time web applications. By providing
+a robust yet lightweight solution for asynchronous WebSocket communication, it
+can empower developers to build sophisticated interactive applications, such as
+chat systems, live dashboards, and collaborative tools, with the same elegance
+and performance they expect from Falcon for HTTP APIs.
 
 The successful development and adoption of this library could broaden Falcon's
 applicability, attracting developers who require first-class real-time features
