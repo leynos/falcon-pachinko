@@ -79,10 +79,7 @@ jobs:
       - name: Upload wheels to release
         run: |
           set -eu
-          for dir in dist/wheels-*; do
-            for file in "$dir"/*.whl; do
-              gh release upload "${{ github.ref_name }}" "$file"
-            done
-          done
+          find dist/wheels-* -type f -name "*.whl" -print0 | \
+            xargs -0 -r gh release upload "${{ github.ref_name }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
