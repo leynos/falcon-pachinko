@@ -49,7 +49,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
       - name: Build wheels
         run: |
-          uvx --with cibuildwheel>=3.16.0,<4.0.0 \
+          uvx --with cibuildwheel>=2.16.0,<4.0.0 \
             cibuildwheel --output-dir wheelhouse
         env:
           CIBW_ARCHS: ${{ matrix.cibw_arch }}
