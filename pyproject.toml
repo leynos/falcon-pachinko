@@ -4,8 +4,8 @@ version = "0.1.0-alpha1"
 description = "falcon-pachinko package"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
-dependencies = ["msgspec>=0.18"]
+license = { text = "ISC" }
+dependencies = ["msgspec>=0.18", "falcon"]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio", "ruff", "pyright"]
@@ -63,3 +63,5 @@ asyncio_default_fixture_loop_scope = "function"
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+packages = ["falcon_pachinko"]
