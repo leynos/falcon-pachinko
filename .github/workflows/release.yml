@@ -1,0 +1,79 @@
+name: Release Wheels
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+env:
+  REPO_NAME: ${{ github.event.repository.name }}
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+            cibw_arch: x86_64
+          - os: ubuntu-latest
+            arch: aarch64
+            cibw_arch: aarch64
+          - os: windows-latest
+            arch: x86_64
+            cibw_arch: AMD64
+          - os: windows-latest
+            arch: aarch64
+            cibw_arch: ARM64
+          - os: macos-latest
+            arch: x86_64
+            cibw_arch: x86_64
+          - os: macos-latest
+            arch: aarch64
+            cibw_arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install cibuildwheel
+      - name: Build wheels
+        run: |
+          cibuildwheel --output-dir wheelhouse
+        env:
+          CIBW_ARCHS: ${{ matrix.cibw_arch }}
+          CIBW_SKIP: 'pp*'
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: softprops/action-gh-release@v1
+        with:
+          generate_release_notes: true
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Upload wheels to release
+        run: |
+          for dir in dist/wheels-*; do
+            for file in "$dir"/*.whl; do
+              gh release upload "${{ github.ref_name }}" "$file"
+            done
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
