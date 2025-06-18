@@ -1,4 +1,5 @@
 name: Build Pure Python Wheel
+description: Builds a pure Python wheel using UV and uploads it as an artifact.
 inputs:
   python-version:
     description: Python version to set up
