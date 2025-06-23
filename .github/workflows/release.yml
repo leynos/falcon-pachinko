@@ -14,10 +14,6 @@ permissions:
 
 
 jobs:
-  build:
-    uses: ./.github/workflows/build-wheels.yml
-    with:
-      python-version: '3.13'
 
   pure-wheel:
     runs-on: ubuntu-latest
