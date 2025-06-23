@@ -38,6 +38,8 @@ async def handle_new_chat_message(self, ws, payload):
 ## Roadmap
 
 Implementation tasks are tracked in [docs/roadmap.md](docs/roadmap.md).
+See the [Release Workflow documentation](docs/release-workflow.md) for release
+details.
 
 ## Examples
 
