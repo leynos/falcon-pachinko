@@ -8,13 +8,19 @@ from types import MethodType
 from .resource import WebSocketResource
 
 
+def _new_kwargs_dict() -> dict[str, typing.Any]:
+    """Return a fresh kwargs dict with a precise type."""
+
+    return {}
+
+
 @dc.dataclass(slots=True)
 class RouteSpec:
     """Hold configuration for a WebSocket route."""
 
     resource_cls: type[WebSocketResource]
     args: tuple[typing.Any, ...] = ()
-    kwargs: dict[str, typing.Any] = dc.field(default_factory=dict[str, typing.Any])
+    kwargs: dict[str, typing.Any] = dc.field(default_factory=_new_kwargs_dict)
 
 
 class WebSocketConnectionManager:
@@ -55,7 +61,8 @@ def install(app: typing.Any) -> None:
         raise RuntimeError("Partial WebSocket install detected; aborting.")
 
     app.ws_connection_manager = WebSocketConnectionManager()
-    app._websocket_routes = typing.cast("dict[str, RouteSpec]", {})
+    routes: dict[str, RouteSpec] = {}
+    app._websocket_routes = routes
     app.add_websocket_route = MethodType(_add_websocket_route, app)
     app.create_websocket_resource = MethodType(_create_websocket_resource, app)
     app._websocket_route_lock = Lock()
@@ -161,7 +168,7 @@ def _create_websocket_resource(self: typing.Any, path: str) -> WebSocketResource
         ValueError: If no resource class is registered for ``path``.
     """
     with self._websocket_route_lock:
-        routes = typing.cast("dict[str, RouteSpec]", self._websocket_routes)
+        routes = self._websocket_routes
         try:
             entry = routes[path]
         except KeyError as exc:

@@ -200,9 +200,10 @@ app.add_websocket_route(
 ```
 
 When a WebSocket upgrade request matches this path, Falcon-Pachinko will
-instantiate `ChatRoomResource` using the given arguments and manage the
-connection lifecycle. Path parameters like `{room_name}` and the
-`history_size` option will be passed to the resource's constructor and methods.
+instantiate `ChatRoomResource` with the provided arguments and manage the
+connection lifecycle. Path parameters like `{room_name}` are supplied to the
+resource's `on_*` methods, while options such as `history_size` are applied
+during construction.
 
 ```mermaid
 sequenceDiagram
