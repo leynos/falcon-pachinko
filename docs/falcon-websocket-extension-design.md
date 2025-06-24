@@ -192,13 +192,17 @@ Analogous to Falcon's HTTP routing (`app.add_route()`), the extension will
 provide a method to associate a URL path with a `WebSocketResource`:
 
 ```python
-app.add_websocket_route('/ws/chat/{room_name}', ChatRoomResource())
+app.add_websocket_route(
+    '/ws/chat/{room_name}',
+    ChatRoomResource,
+    history_size=100,
+)
 ```
 
 When a WebSocket upgrade request matches this path, Falcon-Pachinko will
-instantiate the `ChatRoomResource` and manage the WebSocket lifecycle through
-it. Path parameters like `{room_name}` will be passed to the relevant methods of
-the `WebSocketResource`.
+instantiate `ChatRoomResource` using the given arguments and manage the
+connection lifecycle. Path parameters like `{room_name}` and the
+`history_size` option will be passed to the resource's constructor and methods.
 
 #### 3.4.1. Programmatic Resource Instantiation
 
@@ -451,7 +455,7 @@ and their intended use.
 | Component/Concept                | Key Classes/Decorators/Methods                                                                                              | Purpose                                                                                                       | Analogy to Falcon HTTP (if applicable)                                                                                              |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | Application Setup                | `falcon_pachinko.install(app)`                                                                                              | Initializes shared WebSocket components (e.g., connection manager) on the app.                                | App-level configuration/extensions.                                                                                                 |
-| Route Definition                 | `app.add_websocket_route(path, resource_class_instance)`                                                                    | Maps a URI path to a `WebSocketResource`.                                                                     | `app.add_route(path, resource_instance)`                                                                                            |
+| Route Definition                 | `app.add_websocket_route(path, resource_class, *args, **kwargs)`                                                                    | Maps a URI path to a `WebSocketResource` with optional initialization parameters.                                                                     | `app.add_route(path, resource_instance)`                                                                                            |
 | Resource Instantiation           | `app.create_websocket_resource(path)`                                                                                       | Returns a new resource instance for the given path.                                                           | N/A                                                                                                                                 |
 | Resource Class                   | `falcon_pachinko.WebSocketResource`                                                                                         | Base class for handling WebSocket connections and messages for a given route.                                 | Falcon HTTP Resource class (e.g., methods like `on_get`, `on_post` handle specific `falcon.HTTP_METHODS`).                          |
 | Connection Lifecycle             | `async def on_connect(req, ws, **params) -> bool`, `async def on_disconnect(ws, close_code)`                                | Methods in `WebSocketResource` to manage connection setup and teardown.                                       | `process_request` / `process_response` middleware (for setup/teardown aspects), though more directly tied to the connection itself. |

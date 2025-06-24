@@ -11,7 +11,8 @@ for the full design rationale.
 ## Key features
 
 - `app.add_websocket_route()` maps WebSocket paths to `WebSocketResource`
-  classes, mirroring Falcon's HTTP routing.
+  classes, mirroring Falcon's HTTP routing. Initialization parameters can be
+  supplied so one resource class supports multiple configurations.
 - `WebSocketResource` provides `on_connect`, `on_disconnect`, and
   `on_message` lifecycle hooks.
 - Message payloads are parsed into `msgspec.Struct` classes for speed and type
@@ -26,7 +27,8 @@ for the full design rationale.
 These concepts are summarised in the design document:
 
 ```python
-app.add_websocket_route('/ws/chat/{room_name}', ChatRoomResource())
+# pass route-specific options to the resource
+app.add_websocket_route('/ws/chat/{room_name}', ChatRoomResource, history_size=100)
 ```
 
 ```python

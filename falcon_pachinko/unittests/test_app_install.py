@@ -7,7 +7,7 @@ import pytest
 
 from falcon_pachinko import install
 from falcon_pachinko.resource import WebSocketResource
-from falcon_pachinko.websocket import WebSocketConnectionManager
+from falcon_pachinko.websocket import RouteSpec, WebSocketConnectionManager
 
 
 class DummyApp:
@@ -16,7 +16,7 @@ class DummyApp:
 
 class SupportsWebSocket(typing.Protocol):
     ws_connection_manager: WebSocketConnectionManager
-    _websocket_routes: dict[str, object]
+    _websocket_routes: dict[str, RouteSpec]
     _websocket_route_lock: Lock
 
     def create_websocket_resource(self, path: str) -> object:
@@ -34,13 +34,17 @@ class SupportsWebSocket(typing.Protocol):
         """
         ...
 
-    def add_websocket_route(self, path: str, resource: type[object]) -> None:
+    def add_websocket_route(
+        self, path: str, resource: type[object], *args: typing.Any, **kwargs: typing.Any
+    ) -> None:
         """
         Registers a WebSocketResource subclass to handle connections at the specified path.
 
         Args:
             path: The WebSocket route path to register (must be a non-empty string starting with '/').
             resource: The class of the WebSocketResource to associate with the path.
+            *args: Positional arguments used when instantiating the resource.
+            **kwargs: Keyword arguments used when instantiating the resource.
 
         Raises:
             ValueError: If the path is invalid or already registered.
@@ -99,12 +103,12 @@ def test_add_websocket_route_registers_resource(
     """
     Tests that `add_websocket_route` registers the given resource class under the specified path in the app's internal WebSocket routes mapping.
     """
-    dummy_app.add_websocket_route("/ws", dummy_resource_cls)
+    dummy_app.add_websocket_route("/ws", dummy_resource_cls, 1, flag=True)
 
-    assert (
-        dummy_app._websocket_routes["/ws"]  # pyright: ignore[reportPrivateUsage]
-        is dummy_resource_cls
-    )
+    stored = dummy_app._websocket_routes["/ws"]  # pyright: ignore[reportPrivateUsage]
+    assert stored.resource_cls is dummy_resource_cls
+    assert stored.args == (1,)
+    assert stored.kwargs == {"flag": True}
 
 
 def test_install_is_idempotent(dummy_app: SupportsWebSocket) -> None:
@@ -184,6 +188,21 @@ def test_create_websocket_resource_returns_new_instances(
     assert isinstance(second, dummy_resource_cls)
     assert type(first) is dummy_resource_cls
     assert first is not second
+
+
+def test_route_specific_init_args(dummy_app: SupportsWebSocket) -> None:
+    class ConfigResource(WebSocketResource):
+        def __init__(self, value: int) -> None:
+            self.value = value
+
+    dummy_app.add_websocket_route("/one", ConfigResource, 1)
+    dummy_app.add_websocket_route("/two", ConfigResource, 2)
+
+    r1 = typing.cast("ConfigResource", dummy_app.create_websocket_resource("/one"))
+    r2 = typing.cast("ConfigResource", dummy_app.create_websocket_resource("/two"))
+
+    assert r1.value == 1
+    assert r2.value == 2
 
 
 def test_create_websocket_resource_unregistered_path(
