@@ -1,10 +1,26 @@
 from __future__ import annotations
 
+import dataclasses as dc
 import typing
 from threading import Lock
 from types import MethodType
 
 from .resource import WebSocketResource
+
+
+def _kwargs_factory() -> dict[str, typing.Any]:
+    """Return a new kwargs dict with a precise type."""
+
+    return {}
+
+
+@dc.dataclass(slots=True)
+class RouteSpec:
+    """Hold configuration for a WebSocket route."""
+
+    resource_cls: type[WebSocketResource]
+    args: tuple[typing.Any, ...] = ()
+    kwargs: dict[str, typing.Any] = dc.field(default_factory=_kwargs_factory)
 
 
 class WebSocketConnectionManager:
@@ -45,7 +61,7 @@ def install(app: typing.Any) -> None:
         raise RuntimeError("Partial WebSocket install detected; aborting.")
 
     app.ws_connection_manager = WebSocketConnectionManager()
-    routes: dict[str, typing.Any] = {}
+    routes: dict[str, RouteSpec] = {}
     app._websocket_routes = routes
     app.add_websocket_route = MethodType(_add_websocket_route, app)
     app.create_websocket_resource = MethodType(_create_websocket_resource, app)
@@ -107,11 +123,19 @@ def _validate_resource_cls(resource_cls: typing.Any) -> None:
         raise TypeError(msg)
 
 
-def _add_websocket_route(self: typing.Any, path: str, resource_cls: typing.Any) -> None:
+def _add_websocket_route(
+    self: typing.Any,
+    path: str,
+    resource_cls: typing.Any,
+    *init_args: typing.Any,
+    **init_kwargs: typing.Any,
+) -> None:
     """
-    Registers a WebSocketResource subclass for the specified route path.
+    Registers ``resource_cls`` to handle connections for ``path``.
 
-    Associates the given resource class with the provided path, ensuring the path is valid and not already registered. Raises a ValueError if the path is already in use.
+    Any ``init_args`` or ``init_kwargs`` supplied are stored and applied when
+    ``create_websocket_resource`` is called. This allows a single resource class
+    to be configured differently across multiple routes.
     """
     _validate_route_path(path)
     _validate_resource_cls(resource_cls)
@@ -120,28 +144,36 @@ def _add_websocket_route(self: typing.Any, path: str, resource_cls: typing.Any) 
             msg = f"WebSocket route already registered for path: {path}"
             raise ValueError(msg)
 
-        self._websocket_routes[path] = resource_cls
+        self._websocket_routes[path] = RouteSpec(
+            resource_cls,
+            init_args,
+            dict(init_kwargs),
+        )
 
 
 def _create_websocket_resource(self: typing.Any, path: str) -> WebSocketResource:
     """
-    Instantiates and returns the WebSocket resource class registered for the given path.
+    Instantiates and returns the WebSocket resource registered for ``path``.
+
+    Initialization parameters provided to :func:`add_websocket_route` are
+    forwarded to the resource constructor.
 
     Args:
-        path: The route path for which to create the WebSocket resource.
+        path: The route path for which to create the resource.
 
     Returns:
-        An instance of the resource class associated with the specified path.
+        A new instance of the resource associated with ``path``.
 
     Raises:
-        ValueError: If no resource class is registered for the given path.
+        ValueError: If no resource class is registered for ``path``.
     """
     with self._websocket_route_lock:
+        routes = self._websocket_routes
         try:
-            resource_cls = self._websocket_routes[path]
+            entry = routes[path]
         except KeyError as exc:
             raise ValueError(
                 f"No WebSocket resource registered for path: {path}"
             ) from exc
 
-    return resource_cls()
+    return entry.resource_cls(*entry.args, **entry.kwargs)

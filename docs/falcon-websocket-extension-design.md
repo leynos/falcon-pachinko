@@ -192,13 +192,31 @@ Analogous to Falcon's HTTP routing (`app.add_route()`), the extension will
 provide a method to associate a URL path with a `WebSocketResource`:
 
 ```python
-app.add_websocket_route('/ws/chat/{room_name}', ChatRoomResource())
+app.add_websocket_route(
+    '/ws/chat/{room_name}',
+    ChatRoomResource,
+    history_size=100,
+)
 ```
 
 When a WebSocket upgrade request matches this path, Falcon-Pachinko will
-instantiate the `ChatRoomResource` and manage the WebSocket lifecycle through
-it. Path parameters like `{room_name}` will be passed to the relevant methods of
-the `WebSocketResource`.
+instantiate `ChatRoomResource` with the provided arguments and manage the
+connection lifecycle. Path parameters like `{room_name}` are supplied to the
+resource's `on_*` methods, while options such as `history_size` are applied
+during construction.
+
+```mermaid
+sequenceDiagram
+    actor Developer
+    participant App
+    participant WebSocketConnectionManager as Manager
+    participant RouteSpec
+
+    Developer->>App: add_websocket_route(path, resource_cls, *args, **kwargs)
+    App->>Manager: _add_websocket_route(path, resource_cls, *args, **kwargs)
+    Manager->>RouteSpec: create RouteSpec(resource_cls, args, kwargs)
+    Manager->>Manager: Store RouteSpec in _websocket_routes[path]
+```
 
 #### 3.4.1. Programmatic Resource Instantiation
 
@@ -212,6 +230,20 @@ chat_resource = app.create_websocket_resource('/ws/chat/{room_name}')
 
 Each call yields a fresh instance so that connection-specific state can be
 maintained independently.
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant WebSocketConnectionManager as Manager
+    participant RouteSpec
+    participant WebSocketResource as Resource
+
+    App->>Manager: create_websocket_resource(path)
+    Manager->>Manager: Lookup RouteSpec in _websocket_routes[path]
+    Manager->>RouteSpec: Access resource_cls, args, kwargs
+    Manager->>Resource: Instantiate resource_cls(*args, **kwargs)
+    Manager-->>App: Return Resource instance
+```
 
 ### 3.5. The `WebSocketResource` Class
 
@@ -451,7 +483,7 @@ and their intended use.
 | Component/Concept                | Key Classes/Decorators/Methods                                                                                              | Purpose                                                                                                       | Analogy to Falcon HTTP (if applicable)                                                                                              |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | Application Setup                | `falcon_pachinko.install(app)`                                                                                              | Initializes shared WebSocket components (e.g., connection manager) on the app.                                | App-level configuration/extensions.                                                                                                 |
-| Route Definition                 | `app.add_websocket_route(path, resource_class_instance)`                                                                    | Maps a URI path to a `WebSocketResource`.                                                                     | `app.add_route(path, resource_instance)`                                                                                            |
+| Route Definition                 | `app.add_websocket_route(path, resource_class, *args, **kwargs)`                                                                    | Maps a URI path to a `WebSocketResource` with optional initialization parameters.                                                                     | `app.add_route(path, resource_instance)`                                                                                            |
 | Resource Instantiation           | `app.create_websocket_resource(path)`                                                                                       | Returns a new resource instance for the given path.                                                           | N/A                                                                                                                                 |
 | Resource Class                   | `falcon_pachinko.WebSocketResource`                                                                                         | Base class for handling WebSocket connections and messages for a given route.                                 | Falcon HTTP Resource class (e.g., methods like `on_get`, `on_post` handle specific `falcon.HTTP_METHODS`).                          |
 | Connection Lifecycle             | `async def on_connect(req, ws, **params) -> bool`, `async def on_disconnect(ws, close_code)`                                | Methods in `WebSocketResource` to manage connection setup and teardown.                                       | `process_request` / `process_response` middleware (for setup/teardown aspects), though more directly tied to the connection itself. |
