@@ -204,6 +204,19 @@ instantiate `ChatRoomResource` using the given arguments and manage the
 connection lifecycle. Path parameters like `{room_name}` and the
 `history_size` option will be passed to the resource's constructor and methods.
 
+```mermaid
+sequenceDiagram
+    actor Developer
+    participant App
+    participant WebSocketConnectionManager as Manager
+    participant RouteSpec
+
+    Developer->>App: add_websocket_route(path, resource_cls, *args, **kwargs)
+    App->>Manager: _add_websocket_route(path, resource_cls, *args, **kwargs)
+    Manager->>RouteSpec: create RouteSpec(resource_cls, args, kwargs)
+    Manager->>Manager: Store RouteSpec in _websocket_routes[path]
+```
+
 #### 3.4.1. Programmatic Resource Instantiation
 
 Application code can also create a resource instance directly using
@@ -216,6 +229,20 @@ chat_resource = app.create_websocket_resource('/ws/chat/{room_name}')
 
 Each call yields a fresh instance so that connection-specific state can be
 maintained independently.
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant WebSocketConnectionManager as Manager
+    participant RouteSpec
+    participant WebSocketResource as Resource
+
+    App->>Manager: create_websocket_resource(path)
+    Manager->>Manager: Lookup RouteSpec in _websocket_routes[path]
+    Manager->>RouteSpec: Access resource_cls, args, kwargs
+    Manager->>Resource: Instantiate resource_cls(*args, **kwargs)
+    Manager-->>App: Return Resource instance
+```
 
 ### 3.5. The `WebSocketResource` Class
 
