@@ -8,8 +8,8 @@ from types import MethodType
 from .resource import WebSocketResource
 
 
-def _new_kwargs_dict() -> dict[str, typing.Any]:
-    """Return a fresh kwargs dict with a precise type."""
+def _kwargs_factory() -> dict[str, typing.Any]:
+    """Return a new kwargs dict with a precise type."""
 
     return {}
 
@@ -20,7 +20,7 @@ class RouteSpec:
 
     resource_cls: type[WebSocketResource]
     args: tuple[typing.Any, ...] = ()
-    kwargs: dict[str, typing.Any] = dc.field(default_factory=_new_kwargs_dict)
+    kwargs: dict[str, typing.Any] = dc.field(default_factory=_kwargs_factory)
 
 
 class WebSocketConnectionManager:

@@ -12,7 +12,7 @@ for the full design rationale.
 
 - `app.add_websocket_route()` maps WebSocket paths to `WebSocketResource`
   classes, mirroring Falcon's HTTP routing. Initialization parameters can be
-  supplied so one resource class supports multiple configurations.
+  supplied, so one resource class supports multiple configurations.
 - `WebSocketResource` provides `on_connect`, `on_disconnect`, and
   `on_message` lifecycle hooks.
 - Message payloads are parsed into `msgspec.Struct` classes for speed and type
