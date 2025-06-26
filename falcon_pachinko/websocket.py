@@ -1,3 +1,12 @@
+"""WebSocket routing utilities and connection management.
+
+This module extends a Falcon application with helpers for registering
+``WebSocketResource`` classes under specific route paths and for instantiating
+them on demand. It also provides ``WebSocketConnectionManager`` to track active
+connections and organize them into rooms. The overall design rationale for this
+approach is documented in :doc:`falcon-websocket-extension-design`.
+"""
+
 from __future__ import annotations
 
 import dataclasses as dc
