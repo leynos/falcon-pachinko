@@ -34,6 +34,9 @@ class WebSocketConnectionManager:
     This manager starts as an in-process store but is expected to gain a
     pluggable backend so that distributed deployments can share connection
     state.
+
+    Implementations MUST be thread-safe; the in-process store relies on an
+    application-level :class:`threading.Lock` when mutating state.
     """
 
     def __init__(self) -> None:
