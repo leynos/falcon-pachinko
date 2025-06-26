@@ -7,14 +7,11 @@ standard output.
 Dependencies
 ------------
 * websocket-client
- 
-from __future__ import annotations
 
 import json
 import sys
 
 import websocket
-
 
 def on_message(ws: websocket.WebSocketApp, message: str) -> None:
     """
