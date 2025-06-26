@@ -1,3 +1,19 @@
+"""Example server showcasing the ``falcon_pachinko`` extension.
+
+The application exposes an HTTP endpoint and a WebSocket route that
+processes ``status`` messages and periodically broadcasts random
+numbers. Run the server with ``uvicorn`` and connect using the
+accompanying ``client.py`` script.
+
+Dependencies
+------------
+* falcon
+* falcon-pachinko
+* msgspec
+* aiosqlite
+* uvicorn
+"""
+
 import asyncio
 import secrets
 import typing
