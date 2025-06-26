@@ -24,19 +24,19 @@ class RouteSpec:
 
 
 class WebSocketConnectionManager:
-    """Manage active WebSocket connections.
+    """Track active WebSocket connections and group them into rooms.
 
-    The ``connections`` mapping stores WebSocket objects keyed by a
-    connection ID so other parts of the app can address individual clients.
-    The ``rooms`` mapping groups connection IDs under room names, enabling
-    server-side broadcasting to multiple clients at once.
+    ``connections`` maps each connection ID to a ``falcon.asgi.WebSocket``
+    object, allowing other components of the application to send targeted
+    messages. ``rooms`` maps room names to sets of connection IDs so that
+    multiple clients can be addressed at once. A single connection may join
+    any number of rooms.
 
-    This manager starts as an in-process store but is expected to gain a
-    pluggable backend so that distributed deployments can share connection
-    state.
-
-    Implementations MUST be thread-safe; the in-process store relies on an
-    application-level :class:`threading.Lock` when mutating state.
+    The initial implementation is an in-process store, but the class is
+    designed to evolve into a pluggable backend so that distributed
+    deployments can share state. Implementations MUST be thread-safe; the
+    in-process version relies on the framework holding a :class:`threading.Lock`
+    whenever the manager's state is mutated.
     """
 
     def __init__(self) -> None:
