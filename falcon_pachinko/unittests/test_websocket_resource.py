@@ -5,22 +5,12 @@ import typing
 import msgspec
 import pytest
 
-from falcon_pachinko.resource import WebSocketLike, WebSocketResource
+from falcon_pachinko import WebSocketLike, WebSocketResource
+from falcon_pachinko.unittests.helpers import DummyWS
 
 
 class EchoPayload(msgspec.Struct):
     text: str
-
-
-class DummyWS:
-    async def accept(self, subprotocol: str | None = None) -> None:
-        pass
-
-    async def close(self, code: int = 1000) -> None:
-        pass
-
-    async def send_media(self, data: typing.Any) -> None:
-        pass
 
 
 class EchoResource(WebSocketResource):

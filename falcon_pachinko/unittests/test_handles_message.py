@@ -5,23 +5,8 @@ import typing
 import msgspec
 import pytest
 
-from falcon_pachinko import WebSocketResource, handles_message
-
-if typing.TYPE_CHECKING:
-    from falcon_pachinko.resource import WebSocketLike
-else:  # pragma: no cover - used for runtime type hints
-    WebSocketLike = typing.Any
-
-
-class DummyWS:
-    async def accept(self, subprotocol: str | None = None) -> None:
-        pass
-
-    async def close(self, code: int = 1000) -> None:
-        pass
-
-    async def send_media(self, data: typing.Any) -> None:
-        pass
+from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
+from falcon_pachinko.unittests.helpers import DummyWS
 
 
 class PingPayload(msgspec.Struct):

@@ -26,6 +26,8 @@ class _Envelope(msgspec.Struct, frozen=True):
     payload: typing.Any | None = None
 
 
+# Handlers accept ``self``, a ``WebSocketLike`` connection, and a decoded
+# payload. The return value is ignored.
 Handler = cabc.Callable[[typing.Any, WebSocketLike, typing.Any], cabc.Awaitable[None]]
 
 
