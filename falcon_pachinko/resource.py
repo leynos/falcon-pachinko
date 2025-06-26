@@ -61,6 +61,22 @@ class _HandlesMessageDescriptor:
     """Register a method as a message handler on its class."""
 
     def __init__(self, message_type: str, func: Handler) -> None:
+        """Store metadata about a message handler.
+
+        Parameters
+        ----------
+        message_type : str
+            The message ``type`` this handler responds to.
+        func : Handler
+            The coroutine implementing the handler logic.
+
+        Notes
+        -----
+        The handler is not added to the owning class until ``__set_name__``
+        executes, allowing multiple subclasses to register handlers
+        independently.
+        """
+
         self.message_type = message_type
         self.func = func
         functools.update_wrapper(self, func)  # pyright: ignore[reportArgumentType]
@@ -68,6 +84,27 @@ class _HandlesMessageDescriptor:
         self.name: str | None = None
 
     def __set_name__(self, owner: type, name: str) -> None:
+        """Register the handler with ``owner`` when the class is created.
+
+        Parameters
+        ----------
+        owner : type
+            The class declaring the handler.
+        name : str
+            The attribute name under which the handler is defined.
+
+        Raises
+        ------
+        RuntimeError
+            If ``owner`` already defines a handler for ``message_type``.
+
+        Notes
+        -----
+        This method updates ``owner.handlers`` with ``func`` and its expected
+        payload type so that :meth:`WebSocketResource.dispatch` can look up and
+        invoke the correct coroutine.
+        """
+
         self.owner = owner
         self.name = name
 
@@ -94,6 +131,28 @@ class _HandlesMessageDescriptor:
     def __get__(
         self, instance: typing.Any, owner: type | None = None
     ) -> Handler | _HandlesMessageDescriptor:  # type: ignore[override]
+        """Return the bound handler when accessed via an instance.
+
+        Parameters
+        ----------
+        instance : Any
+            The :class:`WebSocketResource` instance or ``None`` when accessed on
+            the class.
+        owner : type, optional
+            The class owning the descriptor.
+
+        Returns
+        -------
+        Handler | _HandlesMessageDescriptor
+            The bound coroutine if accessed through ``instance``; otherwise the
+            descriptor itself.
+
+        Notes
+        -----
+        ``dispatch`` retrieves bound handlers from the registry created in
+        ``__set_name__``.
+        """
+
         if instance is None:
             return self
         return self.func.__get__(instance, owner or self.owner)
