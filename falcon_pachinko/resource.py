@@ -61,6 +61,23 @@ class _HandlesMessageDescriptor:
     """Register a method as a message handler on its class."""
 
     def __init__(self, message_type: str, func: Handler) -> None:
+        """Store metadata about a message handler.
+
+        Parameters
+        ----------
+        message_type : str
+            The message ``type`` this handler responds to.
+        func : Handler
+            The coroutine implementing the handler logic.
+
+        Notes
+        -----
+        This descriptor merely records the handler and ``message_type`` until
+        ``__set_name__`` adds it to the class-level ``handlers`` registry used
+        by :meth:`WebSocketResource.dispatch`. Keeping the registry update
+        separate allows subclasses to define their own handlers independently.
+        """
+
         self.message_type = message_type
         self.func = func
         functools.update_wrapper(self, func)  # pyright: ignore[reportArgumentType]
@@ -68,6 +85,30 @@ class _HandlesMessageDescriptor:
         self.name: str | None = None
 
     def __set_name__(self, owner: type, name: str) -> None:
+        """Register the handler with ``owner`` when the class is created.
+
+        Parameters
+        ----------
+        owner : type
+            The class declaring the handler.
+        name : str
+            The attribute name under which the handler is defined.
+
+        Raises
+        ------
+        RuntimeError
+            If ``owner.add_handler`` raises a ``RuntimeError``, for example if
+            ``owner`` already defines a handler for ``message_type``.
+
+        Notes
+        -----
+        Invoked automatically during class creation, this method inserts the
+        handler into ``owner.handlers`` by calling ``owner.add_handler``. The
+        registry maps message types to handlers and optional payload types so
+        that :meth:`WebSocketResource.dispatch` can quickly find and invoke the
+        correct coroutine.
+        """
+
         self.owner = owner
         self.name = name
 
@@ -94,6 +135,29 @@ class _HandlesMessageDescriptor:
     def __get__(
         self, instance: typing.Any, owner: type | None = None
     ) -> Handler | _HandlesMessageDescriptor:  # type: ignore[override]
+        """Return the bound handler when accessed via an instance.
+
+        Parameters
+        ----------
+        instance : Any
+            The :class:`WebSocketResource` instance or ``None`` when accessed on
+            the class.
+        owner : type, optional
+            The class owning the descriptor.
+
+        Returns
+        -------
+        Handler | _HandlesMessageDescriptor
+            The bound coroutine if accessed through ``instance``; otherwise the
+            descriptor itself.
+
+        Notes
+        -----
+        ``dispatch`` looks up handlers in the ``handlers`` registry and then
+        calls ``__get__`` on the descriptor to obtain the bound coroutine to
+        invoke.
+        """
+
         if instance is None:
             return self
         return self.func.__get__(instance, owner or self.owner)
@@ -102,7 +166,39 @@ class _HandlesMessageDescriptor:
 def handles_message(
     message_type: str,
 ) -> cabc.Callable[[Handler], _HandlesMessageDescriptor]:
-    """Decorator factory to mark a method as a WebSocket message handler."""
+    """Decorator factory to mark a method as a WebSocket message handler.
+
+    Parameters
+    ----------
+    message_type : str
+        The value of the ``type`` field for messages this handler should
+        process.
+
+    Examples
+    --------
+    Basic usage::
+
+        class MyResource(WebSocketResource):
+            @handles_message("ping")
+            async def handle_ping(self, ws, payload):
+                await ws.send_text("pong")
+
+    Typed payloads can be declared using ``msgspec.Struct``::
+
+        class Status(msgspec.Struct):
+            text: str
+
+        class StatusResource(WebSocketResource):
+            @handles_message("status")
+            async def update_status(self, ws, payload: Status) -> None:
+                print(payload.text)
+
+    Returns
+    -------
+    Callable[[Handler], _HandlesMessageDescriptor]
+        A descriptor that registers the decorated coroutine as a handler for
+        ``message_type`` when the class is created.
+    """
 
     def decorator(func: Handler) -> _HandlesMessageDescriptor:
         return _HandlesMessageDescriptor(message_type, func)
