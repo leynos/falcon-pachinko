@@ -13,14 +13,11 @@ Dependencies
 * aiosqlite
 * uvicorn
 """
-from __future__ import annotations
-
 import asyncio
 import secrets
 import typing
 
 import aiosqlite
-import falcon.asgi
 from falcon.asgi import WebSocketClosedError
 
 from falcon_pachinko import WebSocketResource, handles_message, install
