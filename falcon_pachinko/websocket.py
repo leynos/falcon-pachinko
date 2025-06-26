@@ -24,7 +24,17 @@ class RouteSpec:
 
 
 class WebSocketConnectionManager:
-    """Track active WebSocket connections."""
+    """Manage active WebSocket connections.
+
+    The ``connections`` mapping stores WebSocket objects keyed by a
+    connection ID so other parts of the app can address individual clients.
+    The ``rooms`` mapping groups connection IDs under room names, enabling
+    server-side broadcasting to multiple clients at once.
+
+    This manager starts as an in-process store but is expected to gain a
+    pluggable backend so that distributed deployments can share connection
+    state.
+    """
 
     def __init__(self) -> None:
         """
