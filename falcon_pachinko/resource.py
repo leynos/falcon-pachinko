@@ -72,9 +72,10 @@ class _HandlesMessageDescriptor:
 
         Notes
         -----
-        The handler is not added to the owning class until ``__set_name__``
-        executes, allowing multiple subclasses to register handlers
-        independently.
+        This descriptor merely records the handler and ``message_type`` until
+        ``__set_name__`` adds it to the class-level ``handlers`` registry used
+        by :meth:`WebSocketResource.dispatch`. Keeping the registry update
+        separate allows subclasses to define their own handlers independently.
         """
 
         self.message_type = message_type
@@ -96,13 +97,16 @@ class _HandlesMessageDescriptor:
         Raises
         ------
         RuntimeError
-            If ``owner`` already defines a handler for ``message_type``.
+            If ``owner.add_handler`` raises a ``RuntimeError``, for example if
+            ``owner`` already defines a handler for ``message_type``.
 
         Notes
         -----
-        This method updates ``owner.handlers`` with ``func`` and its expected
-        payload type so that :meth:`WebSocketResource.dispatch` can look up and
-        invoke the correct coroutine.
+        Invoked automatically during class creation, this method inserts the
+        handler into ``owner.handlers`` by calling ``owner.add_handler``. The
+        registry maps message types to handlers and optional payload types so
+        that :meth:`WebSocketResource.dispatch` can quickly find and invoke the
+        correct coroutine.
         """
 
         self.owner = owner
@@ -149,8 +153,9 @@ class _HandlesMessageDescriptor:
 
         Notes
         -----
-        ``dispatch`` retrieves bound handlers from the registry created in
-        ``__set_name__``.
+        ``dispatch`` looks up handlers in the ``handlers`` registry and then
+        calls ``__get__`` on the descriptor to obtain the bound coroutine to
+        invoke.
         """
 
         if instance is None:
@@ -161,7 +166,39 @@ class _HandlesMessageDescriptor:
 def handles_message(
     message_type: str,
 ) -> cabc.Callable[[Handler], _HandlesMessageDescriptor]:
-    """Decorator factory to mark a method as a WebSocket message handler."""
+    """Decorator factory to mark a method as a WebSocket message handler.
+
+    Parameters
+    ----------
+    message_type : str
+        The value of the ``type`` field for messages this handler should
+        process.
+
+    Examples
+    --------
+    Basic usage::
+
+        class MyResource(WebSocketResource):
+            @handles_message("ping")
+            async def handle_ping(self, ws, payload):
+                await ws.send_text("pong")
+
+    Typed payloads can be declared using ``msgspec.Struct``::
+
+        class Status(msgspec.Struct):
+            text: str
+
+        class StatusResource(WebSocketResource):
+            @handles_message("status")
+            async def update_status(self, ws, payload: Status) -> None:
+                print(payload.text)
+
+    Returns
+    -------
+    Callable[[Handler], _HandlesMessageDescriptor]
+        A descriptor that registers the decorated coroutine as a handler for
+        ``message_type`` when the class is created.
+    """
 
     def decorator(func: Handler) -> _HandlesMessageDescriptor:
         return _HandlesMessageDescriptor(message_type, func)
