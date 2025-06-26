@@ -97,7 +97,8 @@ class _HandlesMessageDescriptor:
         Raises
         ------
         RuntimeError
-            If ``owner`` already defines a handler for ``message_type``.
+            If ``owner.add_handler`` raises a ``RuntimeError``, for example if
+            ``owner`` already defines a handler for ``message_type``.
 
         Notes
         -----
@@ -191,6 +192,12 @@ def handles_message(
             @handles_message("status")
             async def update_status(self, ws, payload: Status) -> None:
                 print(payload.text)
+
+    Returns
+    -------
+    Callable[[Handler], _HandlesMessageDescriptor]
+        A descriptor that registers the decorated coroutine as a handler for
+        ``message_type`` when the class is created.
     """
 
     def decorator(func: Handler) -> _HandlesMessageDescriptor:
