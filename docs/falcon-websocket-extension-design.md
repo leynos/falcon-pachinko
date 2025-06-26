@@ -257,9 +257,9 @@ logic.
     connection is established and routed to this resource. `req` is the standard
     Falcon `Request` object associated with the initial HTTP upgrade request,
     and `ws` is a **`WebSocketLike` connection**. The protocol defines the
-    minimal `send`, `accept`, and `close` methods needed by the resource.
+    minimal `send_media`, `accept`, and `close` methods needed by the resource.
     `params` will contain any
-    path parameters from the route. The method should return `True` to accept
+    path parameters from the route. It returns `True` to accept
     the connection or `False` to reject it. If `False` is returned, the library
     will handle sending an appropriate closing handshake (e.g., HTTP 403 or a
     custom code if supported by an extension like WebSocket Denial Response 12).

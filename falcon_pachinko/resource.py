@@ -5,6 +5,8 @@ import functools
 import inspect
 import typing
 
+if typing.TYPE_CHECKING:
+    import falcon
 import msgspec
 
 
@@ -170,7 +172,7 @@ class WebSocketResource:
                 handlers[msg_type] = (new_handler, payload_type)
 
     async def on_connect(
-        self, req: typing.Any, ws: WebSocketLike, **params: typing.Any
+        self, req: falcon.Request, ws: WebSocketLike, **params: typing.Any
     ) -> bool:
         """
         Called after the WebSocket handshake is complete to decide whether the
