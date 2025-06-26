@@ -7,6 +7,7 @@ standard output.
 Dependencies
 ------------
 * websocket-client
+"""
  
 from __future__ import annotations
 
