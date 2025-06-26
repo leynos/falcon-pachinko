@@ -1,4 +1,19 @@
+"""WebSocket client for the ``random_status`` demo.
+
+This script connects to the example server and sends a ``status`` message
+using the `falcon-pachinko` protocol. Any responses are printed to
+standard output.
+
+Dependencies
+------------
+* websocket-client
+"""
+"""
+ 
+from __future__ import annotations
+
 import json
+import sys
 import sys
 
 import websocket
