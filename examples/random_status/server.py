@@ -48,7 +48,8 @@ async def random_worker(ws: falcon.asgi.WebSocket) -> None:
     """
     Periodically sends random numbers to the client over a WebSocket connection.
 
-    Runs indefinitely, sending a JSON message with a random number every 5 seconds until cancelled.
+    Runs indefinitely, sending a JSON message with a random number every 5 seconds
+    until cancelled.
     """
     try:
         while True:
@@ -73,7 +74,9 @@ class StatusResource(WebSocketResource):
         self, req: falcon.Request, ws: falcon.asgi.WebSocket, **_: typing.Any
     ) -> bool:
         """
-        Handle a new WebSocket connection by accepting it and starting a background task to send random numbers.
+        Handle a new WebSocket connection by accepting it and starting a background task.
+
+        Accepts the connection and starts a background task to send random numbers.
 
         Returns
         -------
@@ -84,7 +87,10 @@ class StatusResource(WebSocketResource):
         return True
 
     async def on_disconnect(self, ws: falcon.asgi.WebSocket, close_code: int) -> None:
-        """Handle cleanup when a WebSocket connection is closed by cancelling the background task if it exists."""
+        """Handle cleanup when a WebSocket connection is closed.
+
+        Cancels the background task if it exists when the connection is closed.
+        """
         if self._task:
             self._task.cancel()
 
@@ -95,7 +101,8 @@ class StatusResource(WebSocketResource):
         """
         Handle incoming WebSocket "status" messages to update the stored status value.
 
-        Updates the status in the database with the provided text and sends an acknowledgment message back to the client containing the updated value.
+        Updates the status in the database with the provided text and sends an
+        acknowledgment message back to the client containing the updated value.
         """
         text = payload["text"]
         await DB.execute("UPDATE status SET value=?", (text,))
@@ -110,7 +117,8 @@ class StatusEndpoint:
         """
         Handle HTTP GET requests to retrieve the current status value.
 
-        Responds with a JSON object containing the current status text from the database under the "status" key. If no status is set, the value is null.
+        Responds with a JSON object containing the current status text from the
+        database under the "status" key. If no status is set, the value is null.
         """
         async with DB.execute("SELECT value FROM status") as cursor:
             row = await cursor.fetchone()

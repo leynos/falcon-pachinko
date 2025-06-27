@@ -55,7 +55,6 @@ select = [
     "TRY",
     "D",
 ]
-ignore = ["E501"]
 per-file-ignores = {"**/test_*.py" = ["S101"]}
 
 [tool.ruff.lint.flake8-import-conventions]
