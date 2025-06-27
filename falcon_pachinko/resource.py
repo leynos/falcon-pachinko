@@ -87,12 +87,12 @@ class WebSocketLike(typing.Protocol):
             The WebSocket close code, by default 1000
         """
 
-    async def send_media(self, data: typing.Any) -> None:
+    async def send_media(self, data: object) -> None:
         """Send structured data over the connection.
 
         Parameters
         ----------
-        data : typing.Any
+        data : object
             The data to send over the WebSocket connection
         """
 
@@ -242,13 +242,13 @@ class _HandlesMessageDescriptor:
         )
 
     def __get__(
-        self, instance: typing.Any, owner: type | None = None
+        self, instance: object, owner: type | None = None
     ) -> Handler | _HandlesMessageDescriptor:  # type: ignore[override]
         """Return the bound handler when accessed via an instance.
 
         Parameters
         ----------
-        instance : Any
+        instance : object
             The :class:`WebSocketResource` instance or ``None`` when accessed on
             the class.
         owner : type, optional
@@ -319,7 +319,7 @@ class WebSocketResource:
 
     handlers: typing.ClassVar[dict[str, tuple[Handler, type | None]]]
 
-    def __init_subclass__(cls, **kwargs: typing.Any) -> None:
+    def __init_subclass__(cls, **kwargs: object) -> None:
         """Initialize and merge handler mappings for subclasses."""
         super().__init_subclass__(**kwargs)
 
@@ -357,7 +357,7 @@ class WebSocketResource:
                 handlers[msg_type] = (new_handler, payload_type)
 
     async def on_connect(
-        self, req: falcon.Request, ws: WebSocketLike, **params: typing.Any
+        self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
         """Decide whether the connection should be accepted after handshake.
 
@@ -369,7 +369,7 @@ class WebSocketResource:
             The incoming HTTP request associated with the WebSocket handshake
         ws : WebSocketLike
             The WebSocket connection object
-        **params : typing.Any
+        **params : object
             Additional parameters relevant to the connection
 
         Returns
