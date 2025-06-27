@@ -26,11 +26,11 @@ class DummyWS:
             The WebSocket close code, by default 1000
         """
 
-    async def send_media(self, data: typing.Any) -> None:  # pragma: no cover
+    async def send_media(self, data: object) -> None:  # pragma: no cover
         """Send structured data over the connection.
 
         Parameters
         ----------
-        data : typing.Any
+        data : object
             The data to send over the WebSocket connection
         """

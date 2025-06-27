@@ -75,10 +75,10 @@ def test_duplicate_handler_raises() -> None:
 
         class BadResource(WebSocketResource):  # pyright: ignore[reportUnusedClass]
             @handles_message("dup")
-            async def h1(self, ws: WebSocketLike, payload: typing.Any) -> None: ...
+            async def h1(self, ws: WebSocketLike, payload: object) -> None: ...
 
             @handles_message("dup")
-            async def h2(self, ws: WebSocketLike, payload: typing.Any) -> None: ...
+            async def h2(self, ws: WebSocketLike, payload: object) -> None: ...
 
 
 def test_missing_payload_param_raises() -> None:
@@ -101,7 +101,7 @@ class ParentResource(WebSocketResource):
     """
 
     @handles_message("parent")
-    async def parent(self, ws: WebSocketLike, payload: typing.Any) -> None:
+    async def parent(self, ws: WebSocketLike, payload: object) -> None:
         """Handle parent messages.
 
         Parameters
@@ -128,7 +128,7 @@ class ChildResource(ParentResource):
         self.invoked: list[str] = []
 
     @handles_message("child")
-    async def child(self, ws: WebSocketLike, payload: typing.Any) -> None:
+    async def child(self, ws: WebSocketLike, payload: object) -> None:
         """Handle child-specific messages.
 
         Parameters
@@ -140,7 +140,7 @@ class ChildResource(ParentResource):
         """
         self.invoked.append("child")
 
-    async def parent(self, ws: WebSocketLike, payload: typing.Any) -> None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    async def parent(self, ws: WebSocketLike, payload: object) -> None:  # pyright: ignore[reportIncompatibleVariableOverride]
         """Override the parent handler to record invocation.
 
         Parameters
@@ -162,7 +162,7 @@ class DecoratedOverride(ParentResource):
     """
 
     @handles_message("parent")
-    async def parent(self, ws: WebSocketLike, payload: typing.Any) -> None:
+    async def parent(self, ws: WebSocketLike, payload: object) -> None:
         """Override the parent handler with decoration.
 
         Parameters

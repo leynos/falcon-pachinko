@@ -71,7 +71,7 @@ class StatusResource(WebSocketResource):
         self._task: asyncio.Task[None] | None = None
 
     async def on_connect(
-        self, req: falcon.Request, ws: falcon.asgi.WebSocket, **_: typing.Any
+        self, req: falcon.Request, ws: falcon.asgi.WebSocket, **_: object
     ) -> bool:
         """Handle a new WebSocket connection by accepting it and starting a background
         task.

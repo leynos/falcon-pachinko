@@ -101,7 +101,7 @@ class RawResource(WebSocketResource):
 
 
 async def raw_handler(
-    self: RawResource, ws: WebSocketLike, payload: typing.Any
+    self: RawResource, ws: WebSocketLike, payload: object
 ) -> None:
     """Handle incoming messages of type "raw".
 
@@ -170,7 +170,7 @@ async def test_handler_shared_across_instances() -> None:
     ],
 )
 async def test_payload_type_none_passes_raw(
-    payload: typing.Any, expected: typing.Any
+    payload: object, expected: object
 ) -> None:
     """Tests that RawResource receives the raw payload as-is when no payload type is
     specified.

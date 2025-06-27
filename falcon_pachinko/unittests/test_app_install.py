@@ -54,7 +54,7 @@ class SupportsWebSocket(typing.Protocol):
         ...
 
     def add_websocket_route(
-        self, path: str, resource: type[object], *args: typing.Any, **kwargs: typing.Any
+        self, path: str, resource: type[object], *args: object, **kwargs: object
     ) -> None:
         """Register a WebSocketResource subclass to handle connections.
 
@@ -68,9 +68,9 @@ class SupportsWebSocket(typing.Protocol):
             starting with '/')
         resource : type[object]
             The class of the WebSocketResource to associate with the path
-        *args : typing.Any
+        *args : object
             Positional arguments used when instantiating the resource
-        **kwargs : typing.Any
+        **kwargs : object
             Keyword arguments used when instantiating the resource
 
         Raises
