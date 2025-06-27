@@ -78,7 +78,8 @@ class RawResource(WebSocketResource):
         """Initialize the RawResource instance with an empty list.
 
         Initializes the RawResource instance with an empty list to store received
-        messages or payloads."""
+        messages or payloads.
+        """
         self.received: list[typing.Any] = []
 
     async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:

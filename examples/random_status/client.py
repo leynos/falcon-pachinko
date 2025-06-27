@@ -19,7 +19,7 @@ import websocket
 
 def on_message(ws: websocket.WebSocketApp, message: str) -> None:
     """
-    Handles incoming messages from the WebSocket server.
+    Handle incoming messages from the WebSocket server.
 
     Prints each received message to standard output, prefixed with "<".
     """
@@ -28,7 +28,7 @@ def on_message(ws: websocket.WebSocketApp, message: str) -> None:
 
 def on_open(ws: websocket.WebSocketApp) -> None:
     """
-    Sends a status message to the WebSocket server when the connection is opened.
+    Send a status message to the WebSocket server when the connection is opened.
 
     The status text is taken from the first command-line argument, or defaults to "hello" if not provided. The message is sent as a JSON object with "type" set to "status" and "payload" containing the status text.
     """

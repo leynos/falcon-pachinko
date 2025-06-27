@@ -135,7 +135,6 @@ class _HandlesMessageDescriptor:
         by :meth:`WebSocketResource.dispatch`. Keeping the registry update
         separate allows subclasses to define their own handlers independently.
         """
-
         self.message_type = message_type
         self.func = func
         functools.update_wrapper(self, func)  # pyright: ignore[reportArgumentType]
@@ -166,7 +165,6 @@ class _HandlesMessageDescriptor:
         that :meth:`WebSocketResource.dispatch` can quickly find and invoke the
         correct coroutine.
         """
-
         self.owner = owner
         self.name = name
 
@@ -215,7 +213,6 @@ class _HandlesMessageDescriptor:
         calls ``__get__`` on the descriptor to obtain the bound coroutine to
         invoke.
         """
-
         if instance is None:
             return self
         return self.func.__get__(instance, owner or self.owner)
