@@ -47,7 +47,7 @@ When implementing changes, adhere to the following testing procedures:
     * **Testing:** Passes all relevant unit and behavioral tests according to the guidelines above.
     * **Linting:** Passes lint checks (`ruff check`).
     * **Formatting:** Adheres to formatting standards (`ruff format` and `ruff check --select I --fix .`).
-    * **Typechecking:** Passes type checking (`ty check`).
+    * **Typechecking:** Passes type checking (`pyright` and `ty check`).
   * For TypeScript files:
     * **Testing:** Passes all relevant unit and behavioral tests according to the guidelines above.
     * **Linting:** Passes lint checks (`biome check .`).
