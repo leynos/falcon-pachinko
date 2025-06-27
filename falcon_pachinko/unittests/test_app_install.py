@@ -187,7 +187,7 @@ def test_install_detects_partial_state(dummy_app: SupportsWebSocket) -> None:
 def test_add_websocket_route_duplicate_raises(
     dummy_app: SupportsWebSocket, dummy_resource_cls: type[WebSocketResource]
 ) -> None:
-    """Test that registering a WebSocket route for a path already in use raises error."""
+    """Test that registering a WebSocket route for an existing path raises error."""
     dummy_app.add_websocket_route("/ws", dummy_resource_cls)
 
     with pytest.raises(ValueError, match="already registered"):

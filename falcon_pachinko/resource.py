@@ -224,7 +224,7 @@ class _HandlesMessageDescriptor:
 def handles_message(
     message_type: str,
 ) -> cabc.Callable[[Handler], _HandlesMessageDescriptor]:
-    """Create a decorator to mark a method as a WebSocket message handler."""
+    """Create a decorator to mark a method as a WebSocket message handler.
 
     Parameters
     ----------
