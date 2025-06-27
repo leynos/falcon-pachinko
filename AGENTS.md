@@ -45,17 +45,17 @@ When implementing changes, adhere to the following testing procedures:
 * **Quality Gates:** Before considering a change complete or proposing a commit, ensure it meets the following criteria:
   * For Python files:
     * **Testing:** Passes all relevant unit and behavioral tests according to the guidelines above.
-    * **Linting:** Passes lint checks (`ruff check` or integrated editor linting).
-    * **Formatting:** Adheres to formatting standards (`ruff format` or integrated editor formatting).
-    * **Typechecking:** Passes type checking (`pyright` or integrated editor type checking).
+    * **Linting:** Passes lint checks (`ruff check`).
+    * **Formatting:** Adheres to formatting standards (`ruff format` and `ruff check --select I --fix .`).
+    * **Typechecking:** Passes type checking (`ty check`).
   * For TypeScript files:
     * **Testing:** Passes all relevant unit and behavioral tests according to the guidelines above.
-    * **Linting:** Passes lint checks (`biome check .` or integrated editor linting).
-    * **Formatting:** Adheres to formatting standards (`biome check --apply .` or integrated editor formatting).
+    * **Linting:** Passes lint checks (`biome check .`).
+    * **Formatting:** Adheres to formatting standards (`biome check --apply .`).
     * **TypeScript Compilation:** Compiles successfully without TypeScript errors (`tsc --noEmit`).
   
   * For Markdown files (`.md` only):
-    * **Linting:** Passes lint checks (`markdownlint filename.md` or integrated editor linting).
+    * **Linting:** Passes lint checks (`markdownlint filename.md`).
     * **Mermaid diagrams:** Passes validation using nixie (`nixie filename.md`)
 * **Committing:**
   * Only changes that meet all the quality gates above should be committed.
