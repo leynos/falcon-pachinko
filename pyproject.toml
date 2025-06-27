@@ -72,6 +72,7 @@ banned-from = [
 datetime = "dt"
 dataclasses = "dc"
 "collections.abc" = "cabc"
+"msgspec.json" = "msgspec_json"
 
 [tool.ruff.lint.pydocstyle]
 # Enforce NumPy docstring style

@@ -54,7 +54,8 @@ async def echo_handler(
 ) -> None:
     """Handle an "echo" message by recording the payload text.
 
-    Appends the `text` field from the received `EchoPayload` to the resource's `seen` list.
+    Appends the `text` field from the received `EchoPayload` to the resource's
+    `seen` list.
 
     Parameters
     ----------
@@ -134,7 +135,8 @@ async def test_dispatch_calls_registered_handler() -> None:
 
 @pytest.mark.asyncio
 async def test_dispatch_unknown_type_calls_fallback() -> None:
-    """Test that dispatching a message with an unknown type invokes the fallback handler.
+    """Test that dispatching a message with an unknown type invokes the fallback
+    handler.
 
     Verifies that when a message with an unregistered type is dispatched to
     EchoResource, the raw message is appended to the resource's fallback list.
@@ -170,9 +172,11 @@ async def test_payload_type_none_passes_raw(
     payload: typing.Any, expected: typing.Any
 ) -> None:
     """
-    Tests that RawResource receives the raw payload as-is when no payload type is specified.
+    Tests that RawResource receives the raw payload as-is when no payload type is
+    specified.
 
-    Verifies that the received list contains the exact payload passed, or None if the payload is missing.
+    Verifies that the received list contains the exact payload passed, or None if
+    the payload is missing.
     """
     r = RawResource()
     msg: dict[str, typing.Any] = {"type": "raw"}
@@ -185,10 +189,12 @@ async def test_payload_type_none_passes_raw(
 
 @pytest.mark.asyncio
 async def test_invalid_payload_calls_fallback() -> None:
-    """
-    Tests that an invalid payload type causes the message to be handled by the fallback method.
+    """Tests that an invalid payload type causes the message to be handled by the
+    fallback method.
 
-    Sends a message with an incorrect payload type to EchoResource and verifies that it is appended to the fallback list and not processed by the registered handler.
+    Sends a message with an incorrect payload type to EchoResource and verifies
+    that it is appended to the fallback list and not processed by the registered
+    handler.
     """
     r = EchoResource()
     raw = msgspec.json.encode({"type": "echo", "payload": {"text": 42}})

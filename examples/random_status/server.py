@@ -74,7 +74,8 @@ class StatusResource(WebSocketResource):
         self, req: falcon.Request, ws: falcon.asgi.WebSocket, **_: typing.Any
     ) -> bool:
         """
-        Handle a new WebSocket connection by accepting it and starting a background task.
+        Handle a new WebSocket connection by accepting it and starting a background
+        task.
 
         Accepts the connection and starts a background task to send random numbers.
 
