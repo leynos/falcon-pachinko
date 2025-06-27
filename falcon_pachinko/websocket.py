@@ -256,7 +256,7 @@ def _add_websocket_route(
             raise ValueError(msg)
 
         self._websocket_routes[path] = RouteSpec(
-            resource_cls,
+            typing.cast("type[WebSocketResource]", resource_cls),
             init_args,
             dict(init_kwargs),
         )

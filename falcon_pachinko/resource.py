@@ -7,9 +7,11 @@ import functools
 import inspect
 import typing
 
+import msgspec
+import msgspec.json as msgspec_json
+
 if typing.TYPE_CHECKING:
     import falcon
-import msgspec
 
 
 class HandlerSignatureError(TypeError):
@@ -444,7 +446,7 @@ class WebSocketResource:
             The raw message to process and dispatch
         """
         try:
-            envelope = msgspec.json.decode(raw, type=_Envelope)
+            envelope = msgspec_json.decode(raw, type=_Envelope)
         except msgspec.DecodeError:
             await self.on_message(ws, raw)
             return

@@ -4,15 +4,16 @@ The application exposes an HTTP endpoint and a WebSocket route that
 processes ``status`` messages and periodically broadcasts random
 numbers. Run the server with ``uvicorn`` and connect using the
 accompanying ``client.py`` script.
-
-Dependencies
-------------
-* falcon
-* falcon-pachinko
-* msgspec
-* aiosqlite
-* uvicorn
 """
+# /// script
+# dependencies = [
+#     "falcon",
+#     "falcon-pachinko",
+#     "msgspec",
+#     "aiosqlite",
+#     "uvicorn",
+# ]
+# ///
 
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ import typing
 
 import aiosqlite
 import falcon.asgi
-from falcon.asgi import WebSocketClosedError
+# WebSocket disconnection will be handled by generic exceptions
 
 from falcon_pachinko import WebSocketResource, handles_message, install
 
@@ -56,7 +57,7 @@ async def random_worker(ws: falcon.asgi.WebSocket) -> None:
             await asyncio.sleep(5)
             number = secrets.randbelow(65536)
             await ws.send_media({"type": "random", "payload": str(number)})
-    except WebSocketClosedError:
+    except (ConnectionError, OSError):
         # Exit if the connection is lost
         pass
     except asyncio.CancelledError:
@@ -135,7 +136,7 @@ def create_app() -> falcon.asgi.App:
     """
     app = falcon.asgi.App()
     install(app)
-    app.add_websocket_route("/ws", StatusResource)
+    app.add_websocket_route("/ws", StatusResource)  # type: ignore[attr-defined]
     app.add_route("/status", StatusEndpoint())
     return app
 

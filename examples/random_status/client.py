@@ -3,11 +3,12 @@
 This script connects to the example server and sends a ``status`` message
 using the `falcon-pachinko` protocol. Any responses are printed to
 standard output.
-
-Dependencies
-------------
-* websocket-client
 """
+# /// script
+# dependencies = [
+#     "websocket-client",
+# ]
+# ///
 
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ import sys
 import websocket
 
 
-def on_message(ws: websocket.WebSocketApp, message: str) -> None:
+def on_message(ws: websocket.WebSocket, message: object) -> None:
     """
     Handle incoming messages from the WebSocket server.
 
@@ -26,7 +27,7 @@ def on_message(ws: websocket.WebSocketApp, message: str) -> None:
     print("<", message)
 
 
-def on_open(ws: websocket.WebSocketApp) -> None:
+def on_open(ws: websocket.WebSocket) -> None:
     """
     Send a status message to the WebSocket server when the connection is opened.
 
