@@ -46,4 +46,4 @@ if __name__ == "__main__":
         on_open=on_open,
         on_message=on_message,
     )
-    wsapp.run_forever()
+    wsapp.run_forever()  # type: ignore[reportUnknownMemberType]

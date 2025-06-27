@@ -25,7 +25,7 @@ import aiosqlite
 import falcon.asgi
 
 # WebSocket disconnection will be handled by generic exceptions
-from falcon_pachinko import WebSocketResource, handles_message, install
+from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message, install
 
 
 async def _setup_db() -> aiosqlite.Connection:
@@ -45,7 +45,7 @@ class StatusPayload(typing.TypedDict):
     text: str
 
 
-async def random_worker(ws: falcon.asgi.WebSocket) -> None:
+async def random_worker(ws: WebSocketLike) -> None:
     """
     Periodically sends random numbers to the client over a WebSocket connection.
 
@@ -72,7 +72,7 @@ class StatusResource(WebSocketResource):
         self._task: asyncio.Task[None] | None = None
 
     async def on_connect(
-        self, req: falcon.Request, ws: falcon.asgi.WebSocket, **_: object
+        self, req: falcon.Request, ws: WebSocketLike, **_: object
     ) -> bool:
         """Handle a new WebSocket connection by accepting it and starting a background
         task.
@@ -87,7 +87,7 @@ class StatusResource(WebSocketResource):
         self._task = asyncio.create_task(random_worker(ws))
         return True
 
-    async def on_disconnect(self, ws: falcon.asgi.WebSocket, close_code: int) -> None:
+    async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Handle cleanup when a WebSocket connection is closed.
 
         Cancels the background task if it exists when the connection is closed.
@@ -97,7 +97,7 @@ class StatusResource(WebSocketResource):
 
     @handles_message("status")
     async def update_status(
-        self, ws: falcon.asgi.WebSocket, payload: StatusPayload
+        self, ws: WebSocketLike, payload: StatusPayload
     ) -> None:
         """
         Handle incoming WebSocket "status" messages to update the stored status value.
