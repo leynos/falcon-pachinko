@@ -13,8 +13,6 @@ cover various scenarios including:
 
 from __future__ import annotations
 
-import typing
-
 import msgspec
 import msgspec.json as msgspec_json
 import pytest

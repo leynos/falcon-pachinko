@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import typing
-
 
 class DummyWS:
     """A dummy WebSocket implementation for testing purposes."""
