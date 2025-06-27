@@ -23,8 +23,8 @@ import typing
 
 import aiosqlite
 import falcon.asgi
-# WebSocket disconnection will be handled by generic exceptions
 
+# WebSocket disconnection will be handled by generic exceptions
 from falcon_pachinko import WebSocketResource, handles_message, install
 
 
