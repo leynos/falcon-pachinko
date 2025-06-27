@@ -4,7 +4,7 @@ from __future__ import annotations
 import typing
 
 import msgspec
-import msgspec.json
+import msgspec.json as msgspec_json
 import pytest
 
 from falcon_pachinko import WebSocketLike, WebSocketResource
@@ -127,7 +127,7 @@ RawResource.add_handler("raw", raw_handler, payload_type=None)
 async def test_dispatch_calls_registered_handler() -> None:
     """Test that dispatching a message with a registered type calls the handler."""
     r = EchoResource()
-    raw = msgspec.json.encode({"type": "echo", "payload": {"text": "hi"}})
+    raw = msgspec_json.encode({"type": "echo", "payload": {"text": "hi"}})
     await r.dispatch(DummyWS(), raw)
     assert r.seen == ["hi"]
     assert not r.fallback
@@ -142,7 +142,7 @@ async def test_dispatch_unknown_type_calls_fallback() -> None:
     EchoResource, the raw message is appended to the resource's fallback list.
     """
     r = EchoResource()
-    raw = msgspec.json.encode({"type": "unknown", "payload": {"text": "oops"}})
+    raw = msgspec_json.encode({"type": "unknown", "payload": {"text": "oops"}})
     await r.dispatch(DummyWS(), raw)
     assert r.fallback == [raw]
 
@@ -152,7 +152,7 @@ async def test_handler_shared_across_instances() -> None:
     """Test that handlers are shared across instances of the same resource class."""
     r1 = EchoResource()
     r2 = EchoResource()
-    raw = msgspec.json.encode({"type": "echo", "payload": {"text": "hey"}})
+    raw = msgspec_json.encode({"type": "echo", "payload": {"text": "hey"}})
     await r1.dispatch(DummyWS(), raw)
     await r2.dispatch(DummyWS(), raw)
     assert r1.seen == ["hey"]
@@ -182,7 +182,7 @@ async def test_payload_type_none_passes_raw(
     msg: dict[str, typing.Any] = {"type": "raw"}
     if payload != "MISSING":
         msg["payload"] = payload
-    raw = msgspec.json.encode(msg)
+    raw = msgspec_json.encode(msg)
     await r.dispatch(DummyWS(), raw)
     assert r.received == [expected]
 
@@ -197,7 +197,7 @@ async def test_invalid_payload_calls_fallback() -> None:
     handler.
     """
     r = EchoResource()
-    raw = msgspec.json.encode({"type": "echo", "payload": {"text": 42}})
+    raw = msgspec_json.encode({"type": "echo", "payload": {"text": 42}})
     await r.dispatch(DummyWS(), raw)
     assert r.fallback == [raw]
     assert not r.seen
