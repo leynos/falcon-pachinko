@@ -11,6 +11,60 @@ if typing.TYPE_CHECKING:
 import msgspec
 
 
+class HandlerSignatureError(TypeError):
+    """Raised when a handler function has an invalid signature.
+
+    This exception is raised when a handler function doesn't have the required
+    parameters (self, ws, and payload) or has an incorrect signature structure.
+    """
+
+    def __init__(self, func_name: str) -> None:
+        """Initialize the exception with the function name.
+
+        Parameters
+        ----------
+        func_name : str
+            The name of the handler function with invalid signature
+        """
+        super().__init__(f"Handler {func_name} must accept self, ws, and a payload")
+
+
+class HandlerNotAsyncError(TypeError):
+    """Raised when a handler function is not an async function.
+
+    This exception is raised when attempting to register a handler that is not
+    defined as an async function, which is required for WebSocket message handling.
+    """
+
+    def __init__(self, func_qualname: str) -> None:
+        """Initialize the exception with the function qualified name.
+
+        Parameters
+        ----------
+        func_qualname : str
+            The qualified name of the non-async handler function
+        """
+        super().__init__(f"Handler {func_qualname} must be async")
+
+
+class SignatureInspectionError(RuntimeError):
+    """Raised when unable to inspect a handler function's signature.
+
+    This exception is raised when the inspect module cannot analyze a handler
+    function's signature, typically with C extensions or other special functions.
+    """
+
+    def __init__(self, func_qualname: str) -> None:
+        """Initialize the exception with the function qualified name.
+
+        Parameters
+        ----------
+        func_qualname : str
+            The qualified name of the function that cannot be inspected
+        """
+        super().__init__(f"Cannot inspect signature for handler {func_qualname}")
+
+
 class WebSocketLike(typing.Protocol):
     """Minimal interface for WebSocket connections."""
 
@@ -71,7 +125,7 @@ def _select_payload_param(
     """
     params = list(sig.parameters.values())
     if len(params) < 3:
-        raise TypeError(f"Handler {func_name} must accept self, ws, and a payload")
+        raise HandlerSignatureError(func_name)
 
     payload_param = sig.parameters.get("payload")
     if payload_param is None:
@@ -97,14 +151,12 @@ def _get_payload_type(func: Handler) -> type | None:
         The payload type annotation, or None if not found
     """
     if not inspect.iscoroutinefunction(func):
-        raise TypeError(f"Handler {func.__qualname__} must be async")
+        raise HandlerNotAsyncError(func.__qualname__)
 
     try:
         sig = inspect.signature(func)
     except ValueError as exc:  # pragma: no cover - C extensions unlikely
-        raise RuntimeError(
-            f"Cannot inspect signature for handler {func.__qualname__}"
-        ) from exc
+        raise SignatureInspectionError(func.__qualname__) from exc
 
     param = _select_payload_param(sig, func_name=func.__qualname__)
     try:

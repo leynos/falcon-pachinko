@@ -17,6 +17,55 @@ from types import MethodType
 from .resource import WebSocketResource
 
 
+class PartialWebSocketInstallError(RuntimeError):
+    """Raised when WebSocket installation is partially complete.
+
+    This exception is raised when some but not all WebSocket attributes are
+    present on the application, indicating an inconsistent installation state.
+    """
+
+    def __init__(self) -> None:
+        """Initialize the exception."""
+        super().__init__("Partial WebSocket install detected; aborting.")
+
+
+class InvalidWebSocketRoutePathError(ValueError):
+    """Raised when an invalid WebSocket route path is provided.
+
+    This exception is raised when attempting to register a WebSocket route
+    with a path that doesn't meet the required format (non-empty string
+    starting with '/', no whitespace, no leading/trailing whitespace).
+    """
+
+    def __init__(self, path: str) -> None:
+        """Initialize the exception with the invalid path.
+
+        Parameters
+        ----------
+        path : str
+            The invalid route path that was provided
+        """
+        super().__init__(f"Invalid WebSocket route path: {path!r}")
+
+
+class WebSocketResourceNotFoundError(ValueError):
+    """Raised when no WebSocket resource is registered for a path.
+
+    This exception is raised when attempting to create a WebSocket resource
+    for a path that has not been registered with the application.
+    """
+
+    def __init__(self, path: str) -> None:
+        """Initialize the exception with the missing path.
+
+        Parameters
+        ----------
+        path : str
+            The path for which no resource is registered
+        """
+        super().__init__(f"No WebSocket resource registered for path: {path}")
+
+
 def _kwargs_factory() -> dict[str, typing.Any]:
     """Return a new kwargs dict with a precise type."""
     return {}
@@ -83,7 +132,7 @@ def install(app: typing.Any) -> None:
     # If only some attributes are present, raise an error to avoid
     # leaving the app in an inconsistent state.
     if any(hasattr(app, name) for name in wanted):
-        raise RuntimeError("Partial WebSocket install detected; aborting.")
+        raise PartialWebSocketInstallError
 
     app.ws_connection_manager = WebSocketConnectionManager()
     routes: dict[str, RouteSpec] = {}
@@ -146,7 +195,7 @@ def _validate_route_path(path: typing.Any) -> None:
         whitespace, or has leading/trailing whitespace
     """
     if not _is_valid_route_path(path):
-        raise ValueError(f"Invalid WebSocket route path: {path!r}")
+        raise InvalidWebSocketRoutePathError(path)
 
 
 def _validate_resource_cls(resource_cls: typing.Any) -> None:
@@ -241,8 +290,6 @@ def _create_websocket_resource(self: typing.Any, path: str) -> WebSocketResource
         try:
             entry = routes[path]
         except KeyError as exc:
-            raise ValueError(
-                f"No WebSocket resource registered for path: {path}"
-            ) from exc
+            raise WebSocketResourceNotFoundError(path) from exc
 
     return entry.resource_cls(*entry.args, **entry.kwargs)
