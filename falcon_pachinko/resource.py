@@ -5,7 +5,22 @@ import functools
 import inspect
 import typing
 
+if typing.TYPE_CHECKING:
+    import falcon
 import msgspec
+
+
+class WebSocketLike(typing.Protocol):
+    """Minimal interface for WebSocket connections."""
+
+    async def accept(self, subprotocol: str | None = None) -> None:
+        """Accept the WebSocket handshake."""
+
+    async def close(self, code: int = 1000) -> None:
+        """Close the WebSocket connection."""
+
+    async def send_media(self, data: typing.Any) -> None:
+        """Send structured data over the connection."""
 
 
 class _Envelope(msgspec.Struct, frozen=True):
@@ -13,7 +28,9 @@ class _Envelope(msgspec.Struct, frozen=True):
     payload: typing.Any | None = None
 
 
-Handler = cabc.Callable[[typing.Any, typing.Any, typing.Any], cabc.Awaitable[None]]
+# Handlers accept ``self``, a ``WebSocketLike`` connection, and a decoded
+# payload. The return value is ignored.
+Handler = cabc.Callable[[typing.Any, WebSocketLike, typing.Any], cabc.Awaitable[None]]
 
 
 def _select_payload_param(
@@ -251,7 +268,7 @@ class WebSocketResource:
                 handlers[msg_type] = (new_handler, payload_type)
 
     async def on_connect(
-        self, req: typing.Any, ws: typing.Any, **params: typing.Any
+        self, req: falcon.Request, ws: WebSocketLike, **params: typing.Any
     ) -> bool:
         """
         Called after the WebSocket handshake is complete to decide whether the
@@ -267,7 +284,7 @@ class WebSocketResource:
         """
         return True
 
-    async def on_disconnect(self, ws: typing.Any, close_code: int) -> None:
+    async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """
         Handles cleanup or custom logic when the WebSocket connection is closed.
 
@@ -276,7 +293,7 @@ class WebSocketResource:
             close_code: The close code indicating the reason for disconnection.
         """
 
-    async def on_message(self, ws: typing.Any, message: str | bytes) -> None:
+    async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
         """
         Handles incoming WebSocket messages that do not match any registered handler.
 
@@ -297,7 +314,7 @@ class WebSocketResource:
         """
         cls.handlers[message_type] = (handler, payload_type)
 
-    async def dispatch(self, ws: typing.Any, raw: str | bytes) -> None:
+    async def dispatch(self, ws: WebSocketLike, raw: str | bytes) -> None:
         """
         Processes an incoming raw WebSocket message and dispatches it to the
         appropriate handler.

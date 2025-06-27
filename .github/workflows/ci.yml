@@ -25,7 +25,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system .[dev] slipcover pytest-forked
+          uv pip install --system --group dev .
+          uv pip install --system slipcover pytest-forked
 
       - name: Check formatting
         run: ruff format --check .

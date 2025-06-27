@@ -256,8 +256,10 @@ logic.
   - `async def on_connect(self, req, ws, **params) -> bool`: WebSocket
     connection is established and routed to this resource. `req` is the standard
     Falcon `Request` object associated with the initial HTTP upgrade request,
-    and `ws` is the `falcon.asgi.WebSocket` object. `params` will contain any
-    path parameters from the route. The method should return `True` to accept
+    and `ws` is a **`WebSocketLike` connection**. The protocol defines the
+    minimal `send_media`, `accept`, and `close` methods needed by the resource.
+    `params` will contain any
+    path parameters from the route. It returns `True` to accept
     the connection or `False` to reject it. If `False` is returned, the library
     will handle sending an appropriate closing handshake (e.g., HTTP 403 or a
     custom code if supported by an extension like WebSocket Denial Response 12).
@@ -267,11 +269,11 @@ logic.
     Falcon's higher-level approach for HTTP handlers, where the framework
     manages response sending.
 
-  - `async def on_disconnect(self, ws: falcon.asgi.WebSocket, close_code: int)`:
+  - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`:
     Called when the WebSocket connection is closed, either by the client or the
     server. `close_code` provides the WebSocket close code.
 
-  - `async def on_message(self, ws: falcon.asgi.WebSocket, message: Union[str, bytes])`:
+  - `async def on_message(self, ws: WebSocketLike, message: Union[str, bytes])`:
         <!-- markdownlint-disable-line MD013 --> A fallback handler for messages
     that are not dispatched by the more specific message handlers (see below).
     This can be used for raw text/binary data or messages that don't conform to
@@ -298,7 +300,7 @@ a monolithic `on_receive` method with extensive conditional logic.
   handlers for specific message types:
 
   ```python
-  from falcon_pachinko import WebSocketResource, handles_message
+  from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
   import msgspec
 
   class NewChatMessage(msgspec.Struct):
@@ -310,14 +312,14 @@ a monolithic `on_receive` method with extensive conditional logic.
   class ChatMessageHandler(WebSocketResource):
       @handles_message("new_chat_message")
       async def handle_new_chat_message(
-          self, ws: falcon.asgi.WebSocket, payload: NewChatMessage
+          self, ws: WebSocketLike, payload: NewChatMessage
       ) -> None:
           text = payload.text
           print(f"NEW MESSAGE: {text}")
 
       @handles_message("user_status_update")
       async def handle_status_update(
-          self, ws: falcon.asgi.WebSocket, payload: StatusUpdate
+          self, ws: WebSocketLike, payload: StatusUpdate
       ) -> None:
           print(f"JOINED ROOM: {payload.room}")
 
@@ -535,10 +537,10 @@ A `ChatRoomResource` class would be defined, inheriting from
 
 ```python
 import falcon.asgi
-from falcon_pachinko import WebSocketResource, handles_message
+from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
 
 class ChatRoomResource(WebSocketResource):
-    async def on_connect(self, req: falcon.Request, ws: falcon.asgi.WebSocket, room_name: str) -> bool: <!-- markdownlint-disable-line MD013 -->
+    async def on_connect(self, req: falcon.Request, ws: WebSocketLike, room_name: str) -> bool: <!-- markdownlint-disable-line MD013 -->
         # Assume authentication middleware has set req.context.user
         self.user = req.context.get("user")
         if not self.user:
@@ -564,7 +566,7 @@ class ChatRoomResource(WebSocketResource):
         return True
 
     @handles_message("clientSendMessage")
-    async def handle_client_send_message(self, ws: falcon.asgi.WebSocket, payload: dict): <!-- markdownlint-disable-line MD013 -->
+    async def handle_client_send_message(self, ws: WebSocketLike, payload: dict): <!-- markdownlint-disable-line MD013 -->
         message_text = payload.get("text", "")
         # Add validation/sanitization as needed
         await self.broadcast_to_room(
@@ -573,7 +575,7 @@ class ChatRoomResource(WebSocketResource):
         )
 
     @handles_message("clientStartTyping")
-    async def handle_client_start_typing(self, ws: falcon.asgi.WebSocket, payload: dict): <!-- markdownlint-disable-line MD013 -->
+    async def handle_client_start_typing(self, ws: WebSocketLike, payload: dict): <!-- markdownlint-disable-line MD013 -->
         await self.broadcast_to_room(
             self.room_name,
             {"type": "serverUserTyping", "payload": {"user": self.user.name, "isTyping": True}}, <!-- markdownlint-disable-line MD013 -->
@@ -581,14 +583,14 @@ class ChatRoomResource(WebSocketResource):
         )
 
     @handles_message("clientStopTyping")
-    async def handle_client_stop_typing(self, ws: falcon.asgi.WebSocket, payload: dict): <!-- markdownlint-disable-line MD013 -->
+    async def handle_client_stop_typing(self, ws: WebSocketLike, payload: dict): <!-- markdownlint-disable-line MD013 -->
         await self.broadcast_to_room(
             self.room_name,
             {"type": "serverUserTyping", "payload": {"user": self.user.name, "isTyping": False}}, <!-- markdownlint-disable-line MD013 -->
             exclude_self=True
         )
 
-    async def on_disconnect(self, ws: falcon.asgi.WebSocket, close_code: int):
+    async def on_disconnect(self, ws: WebSocketLike, close_code: int):
         if hasattr(self, 'room_name') and hasattr(self, 'user'): # Ensure on_connect completed successfully <!-- markdownlint-disable-line MD013 -->
             await self.broadcast_to_room(
                 self.room_name,
@@ -598,7 +600,7 @@ class ChatRoomResource(WebSocketResource):
             await self.leave_room(self.room_name) # Uses connection manager
         print(f"User {getattr(self.user, 'name', 'Unknown')} disconnected from room {getattr(self, 'room_name', 'N/A')} with code {close_code}") <!-- markdownlint-disable-line MD013 -->
 
-    async def on_message(self, ws: falcon.asgi.WebSocket, message: Union[str, bytes]): <!-- markdownlint-disable-line MD013 -->
+    async def on_message(self, ws: WebSocketLike, message: Union[str, bytes]): <!-- markdownlint-disable-line MD013 -->
         # Fallback for messages not matching handled types or non-JSON
         print(f"Received unhandled message from {self.user.name} in {self.room_name}: {message}") <!-- markdownlint-disable-line MD013 -->
         await ws.send_media({

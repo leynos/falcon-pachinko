@@ -5,15 +5,12 @@ import typing
 import msgspec
 import pytest
 
-from falcon_pachinko.resource import WebSocketResource
+from falcon_pachinko import WebSocketLike, WebSocketResource
+from falcon_pachinko.unittests.helpers import DummyWS
 
 
 class EchoPayload(msgspec.Struct):
     text: str
-
-
-class DummyWS:
-    pass
 
 
 class EchoResource(WebSocketResource):
@@ -26,7 +23,7 @@ class EchoResource(WebSocketResource):
         self.seen: list[typing.Any] = []
         self.fallback: list[typing.Any] = []
 
-    async def on_message(self, ws: typing.Any, message: str | bytes) -> None:
+    async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
         """
         Handles messages that do not match any registered handler by appending them to the fallback list.
 
@@ -38,7 +35,7 @@ class EchoResource(WebSocketResource):
 
 
 async def echo_handler(
-    self: EchoResource, ws: typing.Any, payload: EchoPayload
+    self: EchoResource, ws: WebSocketLike, payload: EchoPayload
 ) -> None:
     """
     Handles an "echo" message by recording the payload text.
@@ -58,7 +55,7 @@ class RawResource(WebSocketResource):
         """
         self.received: list[typing.Any] = []
 
-    async def on_message(self, ws: typing.Any, message: str | bytes) -> None:
+    async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
         """
         Handles incoming messages by appending them to the received list.
 
@@ -67,7 +64,9 @@ class RawResource(WebSocketResource):
         self.received.append(message)
 
 
-async def raw_handler(self: RawResource, ws: typing.Any, payload: typing.Any) -> None:
+async def raw_handler(
+    self: RawResource, ws: WebSocketLike, payload: typing.Any
+) -> None:
     """
     Handles incoming messages of type "raw" by appending the payload to the resource's received list.
 
