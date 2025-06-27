@@ -105,7 +105,7 @@ class WebSocketConnectionManager:
 # Public API ---------------------------------------------------------------
 
 
-def install(app: typing.Any) -> None:
+def install(app: typing.Any) -> None:  # noqa: ANN401
     """Attach WebSocket connection management and routing utilities to the app.
 
     Initializes and binds WebSocket-related attributes and methods to the given app,
@@ -158,7 +158,7 @@ def _has_whitespace(text: str) -> bool:
     return text != text.strip() or any(ch.isspace() for ch in text)
 
 
-def _is_valid_route_path(path: typing.Any) -> bool:
+def _is_valid_route_path(path: object) -> bool:
     """Check if the given path is a valid WebSocket route path.
 
     A valid route path is a non-empty string that starts with '/', contains no
@@ -166,7 +166,7 @@ def _is_valid_route_path(path: typing.Any) -> bool:
 
     Parameters
     ----------
-    path : typing.Any
+    path : object
         The value to check
 
     Returns
@@ -180,12 +180,12 @@ def _is_valid_route_path(path: typing.Any) -> bool:
     return False if not path or _has_whitespace(path) else path.startswith("/")
 
 
-def _validate_route_path(path: typing.Any) -> None:
+def _validate_route_path(path: object) -> None:
     """Validate that the given path is suitable for use as a WebSocket route.
 
     Parameters
     ----------
-    path : typing.Any
+    path : object
         The path to validate
 
     Raises
@@ -195,15 +195,15 @@ def _validate_route_path(path: typing.Any) -> None:
         whitespace, or has leading/trailing whitespace
     """
     if not _is_valid_route_path(path):
-        raise InvalidWebSocketRoutePathError(path)
+        raise InvalidWebSocketRoutePathError(str(path))
 
 
-def _validate_resource_cls(resource_cls: typing.Any) -> None:
+def _validate_resource_cls(resource_cls: object) -> None:
     """Validate that the provided class is a subclass of WebSocketResource.
 
     Parameters
     ----------
-    resource_cls : typing.Any
+    resource_cls : object
         The class to validate
 
     Raises
@@ -223,11 +223,11 @@ def _validate_resource_cls(resource_cls: typing.Any) -> None:
 
 
 def _add_websocket_route(
-    self: typing.Any,
+    self: typing.Any,  # noqa: ANN401
     path: str,
-    resource_cls: typing.Any,
-    *init_args: typing.Any,
-    **init_kwargs: typing.Any,
+    resource_cls: object,
+    *init_args: object,
+    **init_kwargs: object,
 ) -> None:
     """Register ``resource_cls`` to handle connections for ``path``.
 
@@ -241,11 +241,11 @@ def _add_websocket_route(
         The application instance
     path : str
         The WebSocket route path
-    resource_cls : typing.Any
+    resource_cls : object
         The WebSocketResource subclass to register
-    *init_args : typing.Any
+    *init_args : object
         Positional arguments for resource initialization
-    **init_kwargs : typing.Any
+    **init_kwargs : object
         Keyword arguments for resource initialization
     """
     _validate_route_path(path)
@@ -262,7 +262,7 @@ def _add_websocket_route(
         )
 
 
-def _create_websocket_resource(self: typing.Any, path: str) -> WebSocketResource:
+def _create_websocket_resource(self: typing.Any, path: str) -> WebSocketResource:  # noqa: ANN401
     """Instantiate and return the WebSocket resource registered for ``path``.
 
     Initialization parameters provided to :func:`add_websocket_route` are
