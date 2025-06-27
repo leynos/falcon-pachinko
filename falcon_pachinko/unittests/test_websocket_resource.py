@@ -159,7 +159,7 @@ async def test_handler_shared_across_instances() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "payload,expected",
+    ("payload", "expected"),
     [
         ({"text": "hi"}, {"text": "hi"}),
         (None, None),
