@@ -10,6 +10,7 @@ cover various scenarios including:
 - Method overriding with and without decorators
 - Type annotation handling for payload parameters
 """
+
 from __future__ import annotations
 
 import typing
@@ -211,6 +212,7 @@ def test_unresolved_annotation_is_ignored() -> None:
     gracefully handles this by setting the payload type to None in the
     handler registry, rather than raising an error.
     """
+
     class UnknownAnnoResource(WebSocketResource):
         """A resource with an unresolved payload type annotation."""
 
@@ -218,7 +220,7 @@ def test_unresolved_annotation_is_ignored() -> None:
         async def handler(
             self,
             ws: WebSocketLike,
-            payload: "UnknownPayload", # type: ignore  # noqa: F821, UP037
+            payload: "UnknownPayload",  # type: ignore  # noqa: F821, UP037
         ) -> None:
             """Handle messages with unresolved payload type.
 

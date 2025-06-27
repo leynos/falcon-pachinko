@@ -4,6 +4,7 @@ This module contains comprehensive tests for the install() function and related
 WebSocket integration features, including route registration, resource creation,
 and application state management.
 """
+
 from __future__ import annotations
 
 import typing
@@ -236,6 +237,7 @@ def test_create_websocket_resource_returns_new_instances(
 
 def test_route_specific_init_args(dummy_app: SupportsWebSocket) -> None:
     """Test that WebSocket resources are initialized with route-specific arguments."""
+
     class ConfigResource(WebSocketResource):
         def __init__(self, value: int) -> None:
             self.value = value
@@ -259,8 +261,6 @@ def test_create_websocket_resource_unregistered_path(
 
 
 def test_add_websocket_route_type_check(dummy_app: SupportsWebSocket) -> None:
-    """Test that add_websocket_route raises TypeError when given
-    non-WebSocketResource.
-    """
+    """Test that add_websocket_route raises TypeError given a non-WebSocketResource."""
     with pytest.raises(TypeError):
         dummy_app.add_websocket_route("/ws", object)  # type: ignore[arg-type]

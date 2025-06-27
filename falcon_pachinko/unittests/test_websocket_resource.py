@@ -1,4 +1,5 @@
 """Tests for WebSocketResource functionality."""
+
 from __future__ import annotations
 
 import typing
@@ -171,8 +172,7 @@ async def test_handler_shared_across_instances() -> None:
 async def test_payload_type_none_passes_raw(
     payload: typing.Any, expected: typing.Any
 ) -> None:
-    """
-    Tests that RawResource receives the raw payload as-is when no payload type is
+    """Tests that RawResource receives the raw payload as-is when no payload type is
     specified.
 
     Verifies that the received list contains the exact payload passed, or None if
@@ -189,7 +189,7 @@ async def test_payload_type_none_passes_raw(
 
 @pytest.mark.asyncio
 async def test_invalid_payload_calls_fallback() -> None:
-    """Tests that an invalid payload type causes the message to be handled by the
+    """Test that an invalid payload type causes the message to be handled by the
     fallback method.
 
     Sends a message with an incorrect payload type to EchoResource and verifies
