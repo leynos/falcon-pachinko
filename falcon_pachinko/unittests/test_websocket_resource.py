@@ -1,8 +1,10 @@
+"""Tests for WebSocketResource functionality."""
 from __future__ import annotations
 
 import typing
 
 import msgspec
+import msgspec.json
 import pytest
 
 from falcon_pachinko import WebSocketLike, WebSocketResource
@@ -10,26 +12,39 @@ from falcon_pachinko.unittests.helpers import DummyWS
 
 
 class EchoPayload(msgspec.Struct):
+    """A simple message payload structure for testing echo messages."""
+
     text: str
 
 
 class EchoResource(WebSocketResource):
-    def __init__(self) -> None:
-        """
-        Initializes the EchoResource with empty lists for handled and fallback messages.
+    """A WebSocket resource for testing message handling and fallback behavior."""
 
-        The `seen` list stores texts from successfully handled payloads, while the `fallback` list records messages that do not match any registered handler or fail payload validation.
+    def __init__(self) -> None:
+        """Initialize the EchoResource with empty lists.
+
+        Initializes the EchoResource with empty lists for handled and fallback
+        messages.
+
+        The `seen` list stores texts from successfully handled payloads, while the
+        `fallback` list records messages that do not match any registered handler
+        or fail payload validation.
         """
         self.seen: list[typing.Any] = []
         self.fallback: list[typing.Any] = []
 
     async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """
-        Handles messages that do not match any registered handler by appending them to the fallback list.
+        """Handle messages that do not match any registered handler.
 
-        Args:
-            ws: The WebSocket connection instance.
-            message: The raw message received, as a string or bytes.
+        Handles messages that do not match any registered handler by appending
+        them to the fallback list.
+
+        Parameters
+        ----------
+        ws : WebSocketLike
+            The WebSocket connection instance
+        message : str or bytes
+            The raw message received, as a string or bytes
         """
         self.fallback.append(message)
 
@@ -37,10 +52,18 @@ class EchoResource(WebSocketResource):
 async def echo_handler(
     self: EchoResource, ws: WebSocketLike, payload: EchoPayload
 ) -> None:
-    """
-    Handles an "echo" message by recording the payload text.
+    """Handle an "echo" message by recording the payload text.
 
     Appends the `text` field from the received `EchoPayload` to the resource's `seen` list.
+
+    Parameters
+    ----------
+    self : EchoResource
+        The resource instance
+    ws : WebSocketLike
+        The WebSocket connection instance
+    payload : EchoPayload
+        The echo message payload containing text
     """
     self.seen.append(payload.text)
 
@@ -49,17 +72,27 @@ EchoResource.add_handler("echo", echo_handler, payload_type=EchoPayload)
 
 
 class RawResource(WebSocketResource):
+    """A WebSocket resource for testing raw message handling."""
+
     def __init__(self) -> None:
-        """
-        Initializes the RawResource instance with an empty list to store received messages or payloads.
-        """
+        """Initialize the RawResource instance with an empty list.
+
+        Initializes the RawResource instance with an empty list to store received
+        messages or payloads."""
         self.received: list[typing.Any] = []
 
     async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """
-        Handles incoming messages by appending them to the received list.
+        """Handle incoming messages by appending them to the received list.
 
-        This method acts as a fallback for messages that do not match any registered handler.
+        This method acts as a fallback for messages that do not match any
+        registered handler.
+
+        Parameters
+        ----------
+        ws : WebSocketLike
+            The WebSocket connection instance
+        message : str or bytes
+            The raw message received
         """
         self.received.append(message)
 
@@ -67,11 +100,20 @@ class RawResource(WebSocketResource):
 async def raw_handler(
     self: RawResource, ws: WebSocketLike, payload: typing.Any
 ) -> None:
-    """
-    Handles incoming messages of type "raw" by appending the payload to the resource's received list.
+    """Handle incoming messages of type "raw".
 
-    Args:
-        payload: The raw payload received with the message. Can be any type, including None.
+    Handles incoming messages of type "raw" by appending the payload to the
+    resource's received list.
+
+    Parameters
+    ----------
+    self : RawResource
+        The resource instance
+    ws : WebSocketLike
+        The WebSocket connection instance
+    payload : typing.Any
+        The raw payload received with the message. Can be any type, including
+        None
     """
     self.received.append(payload)
 
@@ -79,8 +121,9 @@ async def raw_handler(
 RawResource.add_handler("raw", raw_handler, payload_type=None)
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 async def test_dispatch_calls_registered_handler() -> None:
+    """Test that dispatching a message with a registered type calls the handler."""
     r = EchoResource()
     raw = msgspec.json.encode({"type": "echo", "payload": {"text": "hi"}})
     await r.dispatch(DummyWS(), raw)
@@ -88,12 +131,12 @@ async def test_dispatch_calls_registered_handler() -> None:
     assert not r.fallback
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 async def test_dispatch_unknown_type_calls_fallback() -> None:
-    """
-    Tests that dispatching a message with an unknown type invokes the fallback handler.
+    """Test that dispatching a message with an unknown type invokes the fallback handler.
 
-    Verifies that when a message with an unregistered type is dispatched to EchoResource, the raw message is appended to the resource's fallback list.
+    Verifies that when a message with an unregistered type is dispatched to
+    EchoResource, the raw message is appended to the resource's fallback list.
     """
     r = EchoResource()
     raw = msgspec.json.encode({"type": "unknown", "payload": {"text": "oops"}})
@@ -101,8 +144,9 @@ async def test_dispatch_unknown_type_calls_fallback() -> None:
     assert r.fallback == [raw]
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 async def test_handler_shared_across_instances() -> None:
+    """Test that handlers are shared across instances of the same resource class."""
     r1 = EchoResource()
     r2 = EchoResource()
     raw = msgspec.json.encode({"type": "echo", "payload": {"text": "hey"}})
@@ -112,7 +156,7 @@ async def test_handler_shared_across_instances() -> None:
     assert r2.seen == ["hey"]
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload,expected",
     [
@@ -138,7 +182,7 @@ async def test_payload_type_none_passes_raw(
     assert r.received == [expected]
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 async def test_invalid_payload_calls_fallback() -> None:
     """
     Tests that an invalid payload type causes the message to be handled by the fallback method.

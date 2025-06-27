@@ -1,3 +1,9 @@
+"""Tests for the WebSocket application installation functionality.
+
+This module contains comprehensive tests for the install() function and related
+WebSocket integration features, including route registration, resource creation,
+and application state management.
+"""
 from __future__ import annotations
 
 import typing
@@ -11,55 +17,79 @@ from falcon_pachinko.websocket import RouteSpec, WebSocketConnectionManager
 
 
 class DummyApp:
+    """A minimal dummy application class for testing WebSocket installation."""
+
     pass
 
 
 class SupportsWebSocket(typing.Protocol):
+    """Protocol defining the interface for applications with WebSocket support."""
+
     ws_connection_manager: WebSocketConnectionManager
     _websocket_routes: dict[str, RouteSpec]
     _websocket_route_lock: Lock
 
     def create_websocket_resource(self, path: str) -> object:
-        """
-        Creates and returns a new instance of the WebSocket resource class registered for the specified path.
+        """Create and return a new instance of the WebSocket resource class.
 
-        Args:
-            path: The WebSocket route path for which to create a resource instance.
+        Creates a new instance of the WebSocket resource class registered for the
+        specified path.
 
-        Returns:
-            A new instance of the resource class associated with the given path.
+        Parameters
+        ----------
+        path : str
+            The WebSocket route path for which to create a resource instance
 
-        Raises:
-            ValueError: If no resource class is registered for the specified path.
+        Returns
+        -------
+        object
+            A new instance of the resource class associated with the given path
+
+        Raises
+        ------
+        ValueError
+            If no resource class is registered for the specified path
         """
         ...
 
     def add_websocket_route(
         self, path: str, resource: type[object], *args: typing.Any, **kwargs: typing.Any
     ) -> None:
-        """
-        Registers a WebSocketResource subclass to handle connections at the specified path.
+        """Register a WebSocketResource subclass to handle connections.
 
-        Args:
-            path: The WebSocket route path to register (must be a non-empty string starting with '/').
-            resource: The class of the WebSocketResource to associate with the path.
-            *args: Positional arguments used when instantiating the resource.
-            **kwargs: Keyword arguments used when instantiating the resource.
+        Registers a WebSocketResource subclass to handle connections at the
+        specified path.
 
-        Raises:
-            ValueError: If the path is invalid or already registered.
-            TypeError: If resource is not a subclass of WebSocketResource.
+        Parameters
+        ----------
+        path : str
+            The WebSocket route path to register (must be a non-empty string
+            starting with '/')
+        resource : type[object]
+            The class of the WebSocketResource to associate with the path
+        *args : typing.Any
+            Positional arguments used when instantiating the resource
+        **kwargs : typing.Any
+            Keyword arguments used when instantiating the resource
+
+        Raises
+        ------
+        ValueError
+            If the path is invalid or already registered
+        TypeError
+            If resource is not a subclass of WebSocketResource
         """
         ...
 
 
 @pytest.fixture
 def dummy_app() -> SupportsWebSocket:
-    """
-    Creates a dummy application instance with WebSocket support installed.
+    """Create a dummy application instance with WebSocket support installed.
 
-    Returns:
-        The dummy app instance cast to the SupportsWebSocket protocol, with WebSocket integration methods and attributes added.
+    Returns
+    -------
+        The dummy app instance cast to the SupportsWebSocket protocol, with
+        WebSocket integration methods and attributes added
     """
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
@@ -68,14 +98,17 @@ def dummy_app() -> SupportsWebSocket:
 
 @pytest.fixture
 def dummy_resource_cls(dummy_app: SupportsWebSocket) -> type[WebSocketResource]:
-    """
-    Creates and returns a dummy WebSocketResource subclass for testing purposes.
+    """Create and return a dummy WebSocketResource subclass for testing purposes.
 
-    Args:
-        dummy_app: The application instance supporting WebSocket features.
+    Parameters
+    ----------
+    dummy_app : SupportsWebSocket
+        The application instance supporting WebSocket features
 
-    Returns:
-        A subclass of WebSocketResource named DummyResource.
+    Returns
+    -------
+    type[WebSocketResource]
+        A subclass of WebSocketResource named DummyResource
     """
 
     class DummyResource(WebSocketResource):
@@ -85,8 +118,12 @@ def dummy_resource_cls(dummy_app: SupportsWebSocket) -> type[WebSocketResource]:
 
 
 def test_install_adds_methods_and_manager(dummy_app: SupportsWebSocket) -> None:
-    """Verify that the install() function adds WebSocket-related attributes and methods to the app, including the connection manager, route registration, resource creation, and locking mechanism."""
+    """Verify that the install() function adds WebSocket-related attributes and methods.
 
+    Verifies that the install() function adds WebSocket-related attributes and
+    methods to the app, including the connection manager, route registration,
+    resource creation, and locking mechanism.
+    """
     app_any = dummy_app
 
     assert hasattr(app_any, "ws_connection_manager")
@@ -100,8 +137,10 @@ def test_install_adds_methods_and_manager(dummy_app: SupportsWebSocket) -> None:
 def test_add_websocket_route_registers_resource(
     dummy_app: SupportsWebSocket, dummy_resource_cls: type[WebSocketResource]
 ) -> None:
-    """
-    Tests that `add_websocket_route` registers the given resource class under the specified path in the app's internal WebSocket routes mapping.
+    """Test that `add_websocket_route` registers the given resource class.
+
+    Tests that `add_websocket_route` registers the given resource class under the
+    specified path in the app's internal WebSocket routes mapping.
     """
     dummy_app.add_websocket_route("/ws", dummy_resource_cls, 1, flag=True)
 
@@ -112,8 +151,10 @@ def test_add_websocket_route_registers_resource(
 
 
 def test_install_is_idempotent(dummy_app: SupportsWebSocket) -> None:
-    """
-    Verifies that calling install() multiple times does not alter or replace existing WebSocket-related attributes and methods on the app.
+    """Verify that calling install() multiple times does not alter existing attributes.
+
+    Verifies that calling install() multiple times does not alter or replace
+    existing WebSocket-related attributes and methods on the app.
     """
     first_manager = dummy_app.ws_connection_manager
     first_route_fn = dummy_app.add_websocket_route
@@ -128,10 +169,12 @@ def test_install_is_idempotent(dummy_app: SupportsWebSocket) -> None:
 
 
 def test_install_detects_partial_state(dummy_app: SupportsWebSocket) -> None:
-    """
-    Tests that `install()` raises a RuntimeError if required WebSocket-related attributes are missing from the app, indicating a corrupted or incomplete installation state.
-    """
+    """Test that `install()` raises a RuntimeError if required attributes are missing.
 
+    Tests that `install()` raises a RuntimeError if required WebSocket-related
+    attributes are missing from the app, indicating a corrupted or incomplete
+    installation state.
+    """
     # Simulate tampering with one of the install attributes
     delattr(dummy_app, "_websocket_routes")
     delattr(dummy_app, "create_websocket_resource")
@@ -144,12 +187,10 @@ def test_install_detects_partial_state(dummy_app: SupportsWebSocket) -> None:
 def test_add_websocket_route_duplicate_raises(
     dummy_app: SupportsWebSocket, dummy_resource_cls: type[WebSocketResource]
 ) -> None:
-    """
-    Tests that registering a WebSocket route for a path already in use raises a ValueError.
-    """
+    """Test that registering a WebSocket route for a path already in use raises error."""
     dummy_app.add_websocket_route("/ws", dummy_resource_cls)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="already registered"):
         dummy_app.add_websocket_route("/ws", dummy_resource_cls)
 
 
@@ -166,18 +207,21 @@ def test_add_websocket_route_invalid_path(
     Tests that add_websocket_route raises ValueError when given an invalid path.
 
     Verifies that attempting to register a WebSocket route with an invalid path value
-    (such as missing a leading slash, being empty, containing only whitespace, or being a non-string)
+    (such as missing a leading slash, being empty, containing only whitespace, or
+    being a non-string)
     results in a ValueError.
     """
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Invalid WebSocket route path"):
         dummy_app.add_websocket_route(path, dummy_resource_cls)  # type: ignore[arg-type]
 
 
 def test_create_websocket_resource_returns_new_instances(
     dummy_app: SupportsWebSocket, dummy_resource_cls: type[WebSocketResource]
 ) -> None:
-    """
-    Tests that create_websocket_resource returns new, distinct instances of the registered resource class for a given WebSocket path.
+    """Test that create_websocket_resource returns new, distinct instances.
+
+    Tests that create_websocket_resource returns new, distinct instances of the
+    registered resource class for a given WebSocket path.
     """
     dummy_app.add_websocket_route("/ws", dummy_resource_cls)
 
@@ -191,6 +235,7 @@ def test_create_websocket_resource_returns_new_instances(
 
 
 def test_route_specific_init_args(dummy_app: SupportsWebSocket) -> None:
+    """Test that WebSocket resources are initialized with route-specific arguments."""
     class ConfigResource(WebSocketResource):
         def __init__(self, value: int) -> None:
             self.value = value
@@ -208,16 +253,12 @@ def test_route_specific_init_args(dummy_app: SupportsWebSocket) -> None:
 def test_create_websocket_resource_unregistered_path(
     dummy_app: SupportsWebSocket,
 ) -> None:
-    """
-    Tests that creating a WebSocket resource for an unregistered path raises ValueError.
-    """
-    with pytest.raises(ValueError):
+    """Test that creating a WebSocket resource for an unregistered path raises error."""
+    with pytest.raises(ValueError, match="No WebSocket resource registered"):
         dummy_app.create_websocket_resource("/missing")
 
 
 def test_add_websocket_route_type_check(dummy_app: SupportsWebSocket) -> None:
-    """
-    Tests that add_websocket_route raises TypeError when given a non-WebSocketResource subclass.
-    """
+    """Test that add_websocket_route raises TypeError when given non-WebSocketResource."""
     with pytest.raises(TypeError):
         dummy_app.add_websocket_route("/ws", object)  # type: ignore[arg-type]

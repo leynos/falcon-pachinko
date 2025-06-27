@@ -24,11 +24,12 @@ from falcon_pachinko.unittests.helpers import DummyWS
 
 class PingPayload(msgspec.Struct):
     """A simple message payload structure for testing ping messages."""
+
     text: str
 
 
 class DecoratedResource(WebSocketResource):
-    """A WebSocket resource with a decorated message handler for testing basic functionality."""
+    """A WebSocket resource with a decorated message handler for testing."""
 
     def __init__(self) -> None:
         """Initialize the resource with an empty list to track seen messages."""
@@ -38,14 +39,17 @@ class DecoratedResource(WebSocketResource):
     async def handle_ping(self, ws: WebSocketLike, payload: PingPayload) -> None:
         """Handle ping messages by recording the text payload.
 
-        Args:
-            ws: The WebSocket connection
-            payload: The ping message payload containing text
+        Parameters
+        ----------
+        ws : WebSocketLike
+            The WebSocket connection
+        payload : PingPayload
+            The ping message payload containing text
         """
         self.seen.append(payload.text)
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 async def test_decorator_registers_handler() -> None:
     """Test that the @handles_message decorator properly registers a message handler.
 
@@ -61,7 +65,7 @@ async def test_decorator_registers_handler() -> None:
 
 
 def test_duplicate_handler_raises() -> None:
-    """Test that registering duplicate handlers for the same message type raises an error.
+    """Test that registering duplicate handlers for the same message type raises error.
 
     This test ensures that attempting to register multiple handlers for the same
     message type results in a RuntimeError with an appropriate error message.
@@ -99,9 +103,12 @@ class ParentResource(WebSocketResource):
     async def parent(self, ws: WebSocketLike, payload: typing.Any) -> None:
         """Handle parent messages.
 
-        Args:
-            ws: The WebSocket connection
-            payload: The message payload
+        Parameters
+        ----------
+        ws : WebSocketLike
+            The WebSocket connection
+        payload : typing.Any
+            The message payload
         """
         ...
 
@@ -123,18 +130,24 @@ class ChildResource(ParentResource):
     async def child(self, ws: WebSocketLike, payload: typing.Any) -> None:
         """Handle child-specific messages.
 
-        Args:
-            ws: The WebSocket connection
-            payload: The message payload
+        Parameters
+        ----------
+        ws : WebSocketLike
+            The WebSocket connection
+        payload : typing.Any
+            The message payload
         """
         self.invoked.append("child")
 
     async def parent(self, ws: WebSocketLike, payload: typing.Any) -> None:  # pyright: ignore[reportIncompatibleVariableOverride]
         """Override the parent handler to record invocation.
 
-        Args:
-            ws: The WebSocket connection
-            payload: The message payload
+        Parameters
+        ----------
+        ws : WebSocketLike
+            The WebSocket connection
+        payload : typing.Any
+            The message payload
         """
         # override to record
         self.invoked.append("parent")
@@ -151,14 +164,17 @@ class DecoratedOverride(ParentResource):
     async def parent(self, ws: WebSocketLike, payload: typing.Any) -> None:
         """Override the parent handler with decoration.
 
-        Args:
-            ws: The WebSocket connection
-            payload: The message payload
+        Parameters
+        ----------
+        ws : WebSocketLike
+            The WebSocket connection
+        payload : typing.Any
+            The message payload
         """
         self.invoked = "decorated"
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 async def test_handlers_inherited() -> None:
     """Test that child classes inherit message handlers from parent classes.
 
@@ -174,7 +190,7 @@ async def test_handlers_inherited() -> None:
     assert r.invoked == ["parent", "child"]
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 async def test_decorated_override() -> None:
     """Test that child classes can override parent handlers using decoration.
 
@@ -206,9 +222,12 @@ def test_unresolved_annotation_is_ignored() -> None:
         ) -> None:
             """Handle messages with unresolved payload type.
 
-            Args:
-                ws: The WebSocket connection
-                payload: The message payload with unresolved type
+            Parameters
+            ----------
+            ws : WebSocketLike
+                The WebSocket connection
+            payload : UnknownPayload
+                The message payload with unresolved type
             """
             ...
 

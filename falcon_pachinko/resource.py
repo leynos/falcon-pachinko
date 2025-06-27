@@ -1,3 +1,4 @@
+"""WebSocket resource handling and message dispatching functionality."""
 from __future__ import annotations
 
 import collections.abc as cabc
@@ -14,13 +15,31 @@ class WebSocketLike(typing.Protocol):
     """Minimal interface for WebSocket connections."""
 
     async def accept(self, subprotocol: str | None = None) -> None:
-        """Accept the WebSocket handshake."""
+        """Accept the WebSocket handshake.
+
+        Parameters
+        ----------
+        subprotocol : str or None, optional
+            The WebSocket subprotocol to use, by default None
+        """
 
     async def close(self, code: int = 1000) -> None:
-        """Close the WebSocket connection."""
+        """Close the WebSocket connection.
+
+        Parameters
+        ----------
+        code : int, optional
+            The WebSocket close code, by default 1000
+        """
 
     async def send_media(self, data: typing.Any) -> None:
-        """Send structured data over the connection."""
+        """Send structured data over the connection.
+
+        Parameters
+        ----------
+        data : typing.Any
+            The data to send over the WebSocket connection
+        """
 
 
 class _Envelope(msgspec.Struct, frozen=True):
@@ -36,8 +55,20 @@ Handler = cabc.Callable[[typing.Any, WebSocketLike, typing.Any], cabc.Awaitable[
 def _select_payload_param(
     sig: inspect.Signature, *, func_name: str
 ) -> inspect.Parameter:
-    """Return the parameter representing the message payload."""
+    """Return the parameter representing the message payload.
 
+    Parameters
+    ----------
+    sig : inspect.Signature
+        The function signature to analyze
+    func_name : str
+        The name of the function for error messages
+
+    Returns
+    -------
+    inspect.Parameter
+        The parameter representing the message payload
+    """
     params = list(sig.parameters.values())
     if len(params) < 3:
         raise TypeError(f"Handler {func_name} must accept self, ws, and a payload")
@@ -53,8 +84,18 @@ def _select_payload_param(
 
 
 def _get_payload_type(func: Handler) -> type | None:
-    """Validate ``func``'s signature and return the payload annotation."""
+    """Validate ``func``'s signature and return the payload annotation.
 
+    Parameters
+    ----------
+    func : Handler
+        The handler function to analyze
+
+    Returns
+    -------
+    type or None
+        The payload type annotation, or None if not found
+    """
     if not inspect.iscoroutinefunction(func):
         raise TypeError(f"Handler {func.__qualname__} must be async")
 
@@ -183,7 +224,7 @@ class _HandlesMessageDescriptor:
 def handles_message(
     message_type: str,
 ) -> cabc.Callable[[Handler], _HandlesMessageDescriptor]:
-    """Decorator factory to mark a method as a WebSocket message handler.
+    """Create a decorator to mark a method as a WebSocket message handler."""
 
     Parameters
     ----------
@@ -243,7 +284,6 @@ class WebSocketResource:
         cls,
     ) -> dict[str, tuple[Handler, type | None]]:
         """Gather handler mappings from base classes."""
-
         combined: dict[str, tuple[Handler, type | None]] = {}
         for base in cls.__mro__[1:]:
             base_handlers = getattr(base, "handlers", None)
@@ -254,7 +294,6 @@ class WebSocketResource:
     @classmethod
     def _apply_overrides(cls, handlers: dict[str, tuple[Handler, type | None]]) -> None:
         """Update ``handlers`` when methods are overridden in ``cls``."""
-
         shadowed = {
             name
             for name, obj in cls.__dict__.items()
@@ -270,60 +309,89 @@ class WebSocketResource:
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: typing.Any
     ) -> bool:
-        """
-        Called after the WebSocket handshake is complete to decide whether the
-        connection should be accepted.
+        """Decide whether the connection should be accepted after handshake.
 
-        Args:
-            req: The incoming HTTP request associated with the WebSocket handshake.
-            ws: The WebSocket connection object.
-            **params: Additional parameters relevant to the connection.
+        Called after the WebSocket handshake is complete to determine acceptance.
 
-        Returns:
-            True to accept the WebSocket connection; False to reject it.
+        Parameters
+        ----------
+        req : falcon.Request
+            The incoming HTTP request associated with the WebSocket handshake
+        ws : WebSocketLike
+            The WebSocket connection object
+        **params : typing.Any
+            Additional parameters relevant to the connection
+
+        Returns
+        -------
+        bool
+            True to accept the WebSocket connection; False to reject it
         """
         return True
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
-        """
-        Handles cleanup or custom logic when the WebSocket connection is closed.
+        """Handle cleanup or custom logic when the WebSocket connection is closed.
 
-        Args:
-            ws: The WebSocket connection instance.
-            close_code: The close code indicating the reason for disconnection.
+        Parameters
+        ----------
+        ws : WebSocketLike
+            The WebSocket connection instance
+        close_code : int
+            The close code indicating the reason for disconnection
         """
 
     async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """
-        Handles incoming WebSocket messages that do not match any registered handler.
+        """Handle incoming WebSocket messages that do not match any registered handler.
 
         Called when a message cannot be decoded or its type is unrecognized.
         Override to implement custom fallback behavior for such messages.
+
+        Parameters
+        ----------
+        ws : WebSocketLike
+            The WebSocket connection instance
+        message : str or bytes
+            The raw message received
         """
 
     @classmethod
     def add_handler(
         cls, message_type: str, handler: Handler, *, payload_type: type | None = None
     ) -> None:
-        """
-        Registers a handler function for a specific message type.
+        """Register a handler function for a specific message type.
 
         Associates the given handler with the specified message type.
         Optionally, a payload type can be provided for automatic payload
         validation and conversion.
+
+        Parameters
+        ----------
+        message_type : str
+            The message type to handle
+        handler : Handler
+            The handler function to register
+        payload_type : type or None, optional
+            The payload type for automatic validation and conversion, by default None
         """
         cls.handlers[message_type] = (handler, payload_type)
 
     async def dispatch(self, ws: WebSocketLike, raw: str | bytes) -> None:
-        """
-        Processes an incoming raw WebSocket message and dispatches it to the
-        appropriate handler.
+        """Process an incoming raw WebSocket message and dispatch it to the handler.
+
+        Dispatches the message to the appropriate handler based on its type.
 
         Attempts to decode the message as a JSON envelope containing a message
         type and optional payload. If decoding or payload validation fails, or
         if no handler is registered for the message type, the message is passed
         to the fallback ``on_message`` method. Otherwise, the registered handler
         is invoked with the converted payload.
+
+        Parameters
+        ----------
+        ws : WebSocketLike
+            The WebSocket connection instance
+        raw : str or bytes
+            The raw message to process and dispatch
         """
         try:
             envelope = msgspec.json.decode(raw, type=_Envelope)

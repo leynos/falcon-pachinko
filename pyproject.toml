@@ -47,6 +47,13 @@ select = [
     "FURB",
     "B",
     "RUF",
+    "LOG",
+    "Q",
+    "PT",
+    "RSE",
+    "PERF",
+    "TRY",
+    "D",
 ]
 ignore = ["E501"]
 per-file-ignores = {"**/test_*.py" = ["S101"]}
@@ -54,6 +61,10 @@ per-file-ignores = {"**/test_*.py" = ["S101"]}
 [tool.ruff.lint.flake8-import-conventions]
 # Declare the banned `from` imports.
 banned-from = ["typing", "datetime", "collections.abc", "dataclasses"]
+
+[tool.ruff.lint.pydocstyle]
+# Enforce NumPy docstring style
+convention = "numpy"
 
 [tool.pytest.ini_options]
 # Ensure asyncio fixtures create a new event loop for each test

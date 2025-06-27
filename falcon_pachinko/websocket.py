@@ -19,7 +19,6 @@ from .resource import WebSocketResource
 
 def _kwargs_factory() -> dict[str, typing.Any]:
     """Return a new kwargs dict with a precise type."""
-
     return {}
 
 
@@ -49,9 +48,7 @@ class WebSocketConnectionManager:
     """
 
     def __init__(self) -> None:
-        """
-        Initializes the WebSocketConnectionManager with empty connection and room mappings.
-        """
+        """Initialize the WebSocketConnectionManager with empty mappings."""
         self.connections: dict[str, typing.Any] = {}
         self.rooms: dict[str, set[str]] = {}
 
@@ -60,10 +57,16 @@ class WebSocketConnectionManager:
 
 
 def install(app: typing.Any) -> None:
-    """
-    Attaches WebSocket connection management and routing utilities to the application object.
+    """Attach WebSocket connection management and routing utilities to the app.
 
-    Initializes and binds WebSocket-related attributes and methods to the given app, enabling WebSocket route registration and resource instantiation. This function is idempotent and will raise a RuntimeError if a partial installation is detected.
+    Initializes and binds WebSocket-related attributes and methods to the given app,
+    enabling WebSocket route registration and resource instantiation. This function
+    is idempotent and will raise a RuntimeError if a partial installation is detected.
+
+    Parameters
+    ----------
+    app : typing.Any
+        The application object to install WebSocket support on
     """
     wanted = (
         "ws_connection_manager",
@@ -91,24 +94,37 @@ def install(app: typing.Any) -> None:
 
 
 def _has_whitespace(text: str) -> bool:
-    """Return ``True`` if ``text`` contains any whitespace characters."""
+    """Return ``True`` if ``text`` contains any whitespace characters.
 
+    Parameters
+    ----------
+    text : str
+        The text to check for whitespace
+
+    Returns
+    -------
+    bool
+        True if text contains any whitespace characters, False otherwise
+    """
     return text != text.strip() or any(ch.isspace() for ch in text)
 
 
 def _is_valid_route_path(path: typing.Any) -> bool:
+    """Check if the given path is a valid WebSocket route path.
+
+    A valid route path is a non-empty string that starts with '/', contains no
+    leading or trailing whitespace, and has no internal whitespace characters.
+
+    Parameters
+    ----------
+    path : typing.Any
+        The value to check
+
+    Returns
+    -------
+    bool
+        True if the path is a valid WebSocket route path, False otherwise
     """
-    Checks if the given path is a valid WebSocket route path.
-
-    A valid route path is a non-empty string that starts with '/', contains no leading or trailing whitespace, and has no internal whitespace characters.
-
-    Args:
-        path: The value to check.
-
-    Returns:
-        True if the path is a valid WebSocket route path, False otherwise.
-    """
-
     if not isinstance(path, str):
         return False
 
@@ -116,23 +132,35 @@ def _is_valid_route_path(path: typing.Any) -> bool:
 
 
 def _validate_route_path(path: typing.Any) -> None:
-    """
-    Validates that the given path is suitable for use as a WebSocket route.
+    """Validate that the given path is suitable for use as a WebSocket route.
 
-    Raises:
-        ValueError: If the path is not a non-empty string starting with '/', contains whitespace, or has leading/trailing whitespace.
-    """
+    Parameters
+    ----------
+    path : typing.Any
+        The path to validate
 
+    Raises
+    ------
+    ValueError
+        If the path is not a non-empty string starting with '/', contains
+        whitespace, or has leading/trailing whitespace
+    """
     if not _is_valid_route_path(path):
         raise ValueError(f"Invalid WebSocket route path: {path!r}")
 
 
 def _validate_resource_cls(resource_cls: typing.Any) -> None:
-    """
-    Validates that the provided class is a subclass of WebSocketResource.
+    """Validate that the provided class is a subclass of WebSocketResource.
 
-    Raises:
-        TypeError: If resource_cls is not a subclass of WebSocketResource.
+    Parameters
+    ----------
+    resource_cls : typing.Any
+        The class to validate
+
+    Raises
+    ------
+    TypeError
+        If resource_cls is not a subclass of WebSocketResource
     """
     if not isinstance(resource_cls, type) or not issubclass(
         resource_cls,
@@ -152,12 +180,24 @@ def _add_websocket_route(
     *init_args: typing.Any,
     **init_kwargs: typing.Any,
 ) -> None:
-    """
-    Registers ``resource_cls`` to handle connections for ``path``.
+    """Register ``resource_cls`` to handle connections for ``path``.
 
     Any ``init_args`` or ``init_kwargs`` supplied are stored and applied when
     ``create_websocket_resource`` is called. This allows a single resource class
     to be configured differently across multiple routes.
+
+    Parameters
+    ----------
+    self : typing.Any
+        The application instance
+    path : str
+        The WebSocket route path
+    resource_cls : typing.Any
+        The WebSocketResource subclass to register
+    *init_args : typing.Any
+        Positional arguments for resource initialization
+    **init_kwargs : typing.Any
+        Keyword arguments for resource initialization
     """
     _validate_route_path(path)
     _validate_resource_cls(resource_cls)
@@ -174,20 +214,27 @@ def _add_websocket_route(
 
 
 def _create_websocket_resource(self: typing.Any, path: str) -> WebSocketResource:
-    """
-    Instantiates and returns the WebSocket resource registered for ``path``.
+    """Instantiate and return the WebSocket resource registered for ``path``.
 
     Initialization parameters provided to :func:`add_websocket_route` are
     forwarded to the resource constructor.
 
-    Args:
-        path: The route path for which to create the resource.
+    Parameters
+    ----------
+    self : typing.Any
+        The application instance
+    path : str
+        The route path for which to create the resource
 
-    Returns:
-        A new instance of the resource associated with ``path``.
+    Returns
+    -------
+    WebSocketResource
+        A new instance of the resource associated with ``path``
 
-    Raises:
-        ValueError: If no resource class is registered for ``path``.
+    Raises
+    ------
+    ValueError
+        If no resource class is registered for ``path``
     """
     with self._websocket_route_lock:
         routes = self._websocket_routes
