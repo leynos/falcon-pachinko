@@ -349,7 +349,6 @@ when their containing class is created:
 import functools
 from typing import Callable, Dict, Any
 
-
 class _MessageHandlerDescriptor:
     """Store the original function and remember its owner class."""
 
@@ -374,7 +373,6 @@ class _MessageHandlerDescriptor:
 
     def __get__(self, instance: Any, owner: type | None = None) -> Callable:
         return self.func.__get__(instance, owner or self.owner)
-
 
 def handles_message(msg_type: str) -> Callable[[Callable], _MessageHandlerDescriptor]:
     """Decorator factory returning the descriptor wrapper."""
@@ -933,3 +931,59 @@ applicability, attracting developers who require first-class real-time features
 within a high-performance Python framework. This, in turn, could foster a larger
 and more diverse Falcon community and ecosystem, centered around both
 traditional API development and emerging real-time use cases.
+
+## 7. Composable Routing and Schema-Driven Dispatch
+
+This addendum extends the base design with a composable routing architecture
+and schema-driven message handling. The goal is to offer ergonomic parity with
+Falcon's HTTP API while enabling complex, maintainable real-time services.
+
+### 7.1. `WebSocketRouter`
+
+- Provide a `WebSocketRouter` class supporting `add_route(path, resource_cls)`.
+- Applications assign the router to `app.ws_app`; HTTP and WebSocket routing are
+  kept separate yet share the same `falcon.App` instance.
+
+### 7.2. Nested Resources
+
+- Resources may register children via `add_subroute(subpath, resource_cls)` to
+  create channel hierarchies.
+- Parent resources are instantiated first so they can pass context to their
+  children.
+
+### 7.3. Schema-Driven Message Handling
+
+- A resource can declare `schema` as a `msgspec` tagged union.
+- Incoming messages are decoded with `msgspec` and dispatched to
+  `on_<tag>` handlers matching the union tag.
+- The base class provides `on_unknown_message` for unmatched tags or
+  validation errors.
+
+### 7.4. Hooks and Middleware
+
+- Global hooks on the router and per-resource hooks support `before_connect`,
+  `after_connect`, `before_receive`, `after_receive`, and `before_disconnect`.
+- Hooks execute in defined layers: global hooks wrap resource hooks and
+  handler logic.
+
+### 7.5. Dependency Injection and State
+
+- Resource instances are created per connection. A dependency injection
+  mechanism will supply long-lived services to these short-lived objects.
+- Context from parent resources is passed explicitly to child constructors.
+
+### 7.6. Error Handling
+
+- Exceptions in `before_*` hooks abort the current connection or message.
+- Exceptions in `after_*` hooks are logged but do not stop remaining cleanup.
+
+### 7.7. Implementation Outline
+
+1. Implement `WebSocketRouter` with path matching and delegation.
+2. Extend `WebSocketResource` for nested routes and context passing.
+3. Integrate `msgspec` for tagged-union dispatch.
+4. Add hook management supporting global and per-resource hooks.
+5. Provide a dependency injection API for resource construction.
+6. Create comprehensive tests covering nested routing and schema dispatch.
+This approach preserves Falcon's minimalism while enabling powerful, structured
+WebSocket applications.

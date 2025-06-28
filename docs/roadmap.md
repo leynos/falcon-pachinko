@@ -1,3 +1,4 @@
+
 # Falcon-Pachinko Roadmap
 
 This roadmap outlines the implementation tasks for the Falcon-Pachinko
@@ -56,3 +57,11 @@ after formatting.
    - [ ] Make the connection manager pluggable for distributed deployments.
    - [ ] Consider automatic AsyncAPI stub generation based on resources and
      handlers.
+
+8. **Composable Routing Addendum** (lines 936-1000)
+   - [ ] Implement `WebSocketRouter` with `add_route` and mounting via `app.ws_app`.
+   - [ ] Support `add_subroute` for nested resources and context passing.
+   - [ ] Use `msgspec` tagged unions for automatic dispatch to `on_<tag>` handlers.
+   - [ ] Provide global and per-resource hooks for connection and message events.
+   - [ ] Introduce a dependency injection mechanism for resource construction.
+   - [ ] Expand tests to cover nested routing and schema-driven dispatch.
