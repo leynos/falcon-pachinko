@@ -87,7 +87,6 @@ import falcon_pachinko  # The proposed extension library
 app = falcon.asgi.App()
 falcon_pachinko.install(app) # This would initialize and attach app.ws_connection_manager
 
-
 ```
 
 This `install` function would instantiate the `WebSocketConnectionManager` and make it accessible via the application instance (e.g., `app.ws_connection_manager`), allowing other parts of the application, including background workers, to access it.
@@ -102,7 +101,6 @@ app.add_websocket_route(
     ChatRoomResource,
     history_size=100,
 )
-
 
 ```
 
@@ -120,7 +118,6 @@ sequenceDiagram
     Manager->>RouteSpec: create RouteSpec(resource_cls, args, kwargs)
     Manager->>Manager: Store RouteSpec in _websocket_routes[path]
 
-
 ```
 
 #### 3.4.1. Programmatic Resource Instantiation
@@ -129,7 +126,6 @@ Application code can also create a resource instance directly using `app.create_
 
 ```
 chat_resource = app.create_websocket_resource('/ws/chat/{room_name}')
-
 
 ```
 
@@ -147,7 +143,6 @@ sequenceDiagram
     Manager->>RouteSpec: Access resource_cls, args, kwargs
     Manager->>Resource: Instantiate resource_cls(*args, **kwargs)
     Manager-->>App: Return Resource instance
-
 
 ```
 
@@ -195,7 +190,6 @@ A key feature of Falcon-Pachinko is its ability to dispatch incoming WebSocket m
           print(f"NEW MESSAGE: {payload.text}")
   
   
-  
   ```
 
 - **Automatic Deserialization and Strictness**: For routed messages where the handler's `payload` parameter is type-annotated with a `msgspec.Struct`, the library will perform high-performance validation and deserialization. By default, `msgspec` forbids extra fields in the payload. This strictness is a feature for ensuring contract adherence. The library will document this behaviour clearly and may expose an option like `@handles_message("type", strict=False)` to relax this for specific handlers if required.
@@ -241,7 +235,6 @@ def handles_message(msg_type: str) -> Callable[[Callable], _MessageHandlerDescri
 
     return decorator
 
-
 ```
 
 ### 3.7. `WebSocketConnectionManager`
@@ -257,7 +250,6 @@ The `WebSocketConnectionManager` is crucial for enabling server-initiated messag
     ```
     async for ws in conn_mgr.connections(room='general'):
         await ws.send_media(...)
-    
     
     
     ```
@@ -326,7 +318,6 @@ def worker(fn: WorkerFn) -> WorkerFn:
     fn.__pachinko_worker__ = True
     return fn
 
-
 ```
 
 #### 3.8.3. Application Usage
@@ -367,7 +358,6 @@ async def lifespan(app_instance):
     # --- app is live ---
     await controller.stop()
 
-
 ```
 
 This pattern eliminates the need for a bespoke worker registry, making the entire process explicit and testable. Unhandled exceptions in `announcement_worker` will propagate and terminate the server, preventing silent failures.
@@ -376,23 +366,9 @@ This pattern eliminates the need for a bespoke worker registry, making the entir
 
 The following table summarizes the key components of the proposed Falcon-Pachinko API and their analogies to Falcon's HTTP mechanisms, where applicable. This serves as a quick reference to understand the main abstractions and their intended use.
 
-| Component/Concept | Key Classes/Decorators/Methods | Purpose | Analogy to Falcon HTTP (if applicable) |
-
-| Application Setup | falcon_pachinko.install(app) | Initializes shared WebSocket components (e.g., connection manager) on the app. | App-level configuration/extensions. |
-
-| Route Definition | app.add_websocket_route() and WebSocketRouter.add_route() | Maps a URI path to a WebSocketResource or factory, with optional initialization parameters. | app.add_route(path, resource_instance) |
-
-| Resource Class | falcon_pachinko.WebSocketResource | Base class for handling WebSocket connections and messages for a given route. | Falcon HTTP Resource class |
-
-| Connection Lifecycle | on_connect(), on_disconnect() | Methods in WebSocketResource to manage connection setup and teardown. | process_request / process_response middleware. |
-
-| Message Handling (Typed) | @handles_message() and on\_{type} convention | Mechanisms in WebSocketResource to route incoming JSON messages based on a type field. | HTTP method responders like on_get, on_post. |
-
-| Message Handling (Generic) | on_unhandled() | Fallback method in WebSocketResource for unhandled or non-JSON messages. | N/A |
-
-| Background Worker Integration | WorkerController, @app.lifespan | Manages long-running tasks within the standard ASGI application lifecycle. | Background task patterns (often custom). |
-
-| Connection Management (Global) | app.ws_connection_manager (instance of WebSocketConnectionManager) | Central object to track connections, manage groups, and enable broadcasting from any part of the app. | N/A (HTTP is stateless). |
+<table class="not-prose border-collapse table-auto w-full" style="min-width: 100px">
+<colgroup><col style="min-width: 25px"><col style="min-width: 25px"><col style="min-width: 25px"><col style="min-width: 25px"></colgroup><tbody><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Component/Concept</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Key Classes/Decorators/Methods</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Purpose</strong></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><strong>Analogy to Falcon HTTP (if applicable)</strong></p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Application Setup</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">falcon_pachinko.install(app)</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Initializes shared WebSocket components (e.g., connection manager) on the app.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>App-level configuration/extensions.</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Route Definition</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">app.add_websocket_route()</code> and <code class="code-inline">WebSocketRouter.add_route()</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Maps a URI path to a <code class="code-inline">WebSocketResource</code> or factory, with optional initialization parameters.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">app.add_route(path, resource_instance)</code></p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Resource Class</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">falcon_pachinko.WebSocketResource</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Base class for handling WebSocket connections and messages for a given route.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Falcon HTTP Resource class</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Connection Lifecycle</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">on_connect()</code>, <code class="code-inline">on_disconnect()</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Methods in <code class="code-inline">WebSocketResource</code> to manage connection setup and teardown.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">process_request</code> / <code class="code-inline">process_response</code> middleware.</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Message Handling (Typed)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">@handles_message()</code> and <code class="code-inline">on_{type}</code> convention</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Mechanisms in <code class="code-inline">WebSocketResource</code> to route incoming JSON messages based on a <code class="code-inline">type</code> field.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>HTTP method responders like <code class="code-inline">on_get</code>, <code class="code-inline">on_post</code>.</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Message Handling (Generic)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">on_unhandled()</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Fallback method in <code class="code-inline">WebSocketResource</code> for unhandled or non-JSON messages.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>N/A</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Background Worker Integration</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">WorkerController</code>, <code class="code-inline">@app.lifespan</code></p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Manages long-running tasks within the standard ASGI application lifecycle.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Background task patterns (often custom).</p></td></tr><tr><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Connection Management (Global)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p><code class="code-inline">app.ws_connection_manager</code> (instance of <code class="code-inline">WebSocketConnectionManager</code>)</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>Central object to track connections, manage groups, and enable broadcasting from any part of the app.</p></td><td class="border border-neutral-300 dark:border-neutral-600 p-1.5" colspan="1" rowspan="1"><p>N/A (HTTP is stateless).</p></td></tr></tbody>
+</table>
 
 This API structure is designed to be both powerful enough for complex applications and intuitive for developers accustomed to Falcon.
 
@@ -498,7 +474,6 @@ class ChatRoomResource(WebSocketResource):
             "payload": {"error": "Unrecognized message format or type."}
         })
 
-
 ```
 
 This example demonstrates how the `WebSocketResource` streamlines the development of a feature-rich chat application. The abstractions for room management and typed message handling significantly reduce boilerplate code.
@@ -543,7 +518,6 @@ async def lifespan(app_instance):
     yield
     await controller.stop()
 
-
 ```
 
 ### 4.4. Client-Side Interaction (Conceptual)
@@ -557,7 +531,6 @@ A JavaScript client would interact as follows:
    ```
    socket.send(JSON.stringify({type: "clientSendMessage", payload: {text: "Hi there!"}}));
    socket.send(JSON.stringify({type: "clientStartTyping"}));
-   
    
    
    ```
@@ -577,7 +550,6 @@ A JavaScript client would interact as follows:
            // Handle other message types...
        }
    };
-   
    
    
    ```
@@ -616,7 +588,6 @@ classDiagram
     WebSocketRouter "1" --o "*" WebSocketResource : routes
     WebSocketResource ..> TaggedUnion : uses for schema
 
-
 ```
 
 ### 5.1. The `WebSocketRouter` as a Composable Falcon Resource
@@ -641,7 +612,6 @@ app.add_route('/ws/chat', chat_router)
 # To achieve this, the WebSocketRouter will implement the on_websocket
 # responder method, which will contain the logic to dispatch the connection
 # to the correct sub-route defined on the router itself.
-
 
 ```
 
@@ -675,7 +645,6 @@ app.add_route('/ws/chat', chat_router)
 # url = app.url_for('chat:room', room_id='general') # Hypothetical top-level reversal
 # -> '/ws/chat/general'
 
-
 ```
 
 The router is responsible for matching the incoming connection URI against its registered routes, parsing any path parameters (like `{room_id}`), instantiating the correct `WebSocketResource` with its specific initialization arguments, and handing off control of the connection.
@@ -705,7 +674,6 @@ router.add_route('/projects/{project_id}', ProjectResource)
 
 # A connection to "ws://.../projects/123/tasks" would be handled
 # by an instance of TasksResource, with the context of project "123".
-
 
 ```
 
@@ -750,7 +718,6 @@ class ChatResource(WebSocketResource):
     # The framework converts 'sendMessage' to 'on_send_message'
     async def on_send_message(self, req, ws, msg: SendMessage):
         print(f"Message received: {msg.text}")
-
 
 ```
 
@@ -799,7 +766,6 @@ flowchart TD
     C --> D[Handler Logic]
     D --> E[After Hooks]
     E --> F[Cleanup/Error Handling]
-
 
 ```
 
@@ -919,7 +885,6 @@ sequenceDiagram
     activate App
     deactivate App
     deactivate WSSim
-
 
 ```
 
