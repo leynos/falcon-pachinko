@@ -96,7 +96,7 @@ When implementing changes, adhere to the following testing procedures:
     - **Imperative Mood:** Use the imperative mood in the subject line (e.g.,
       "Fix bug", "Add feature" instead of "Fixed bug", "Added feature").
     - **Subject Line:** The first line should be a concise summary of the change
-      (ideally 50 characters or less).
+      (ideally 50 characters or fewer).
     - **Body:** Separate the subject from the body with a blank line. Subsequent
       lines should explain the *what* and *why* of the change in more detail,
       including rationale, goals, and scope. Wrap the body at 72 characters.
