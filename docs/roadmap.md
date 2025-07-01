@@ -136,8 +136,9 @@ applications.
   - [ ] Add support for global hooks on `WebSocketRouter` and per-resource hooks
     on `WebSocketResource`.
 
-  - [ ] Implement the "onion-style" execution order and define the error
-    propagation behaviour for exceptions raised within the hook chain.
+  - [ ] Implement the "onion-style" execution order (outermost hooks run first)
+    and define the error propagation behaviour for exceptions raised within the
+    hook chain.
 
 - [ ] **Design and Implement Dependency Injection.**
 
