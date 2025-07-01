@@ -1,6 +1,8 @@
-.PHONY: help all clean build lint fmt check-fmt markdownlint \
-tools nixie test typecheck
+.PHONY: help all build lint fmt check-fmt markdownlint \
+tools nixie test typecheck clean
 
+clean: ## Remove build / cache artifacts
+	@rm -rf .venv .uv .pytest_cache target
 BUILD_JOBS ?=
 MDLINT ?= markdownlint
 NIXIE ?= nixie
