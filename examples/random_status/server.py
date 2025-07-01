@@ -96,9 +96,7 @@ class StatusResource(WebSocketResource):
             self._task.cancel()
 
     @handles_message("status")
-    async def update_status(
-        self, ws: WebSocketLike, payload: StatusPayload
-    ) -> None:
+    async def update_status(self, ws: WebSocketLike, payload: StatusPayload) -> None:
         """
         Handle incoming WebSocket "status" messages to update the stored status value.
 

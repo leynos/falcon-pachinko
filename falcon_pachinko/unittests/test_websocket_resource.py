@@ -100,9 +100,7 @@ class RawResource(WebSocketResource):
         self.received.append(message)
 
 
-async def raw_handler(
-    self: RawResource, ws: WebSocketLike, payload: object
-) -> None:
+async def raw_handler(self: RawResource, ws: WebSocketLike, payload: object) -> None:
     """Handle incoming messages of type "raw".
 
     Handles incoming messages of type "raw" by appending the payload to the
@@ -169,9 +167,7 @@ async def test_handler_shared_across_instances() -> None:
         ("MISSING", None),
     ],
 )
-async def test_payload_type_none_passes_raw(
-    payload: object, expected: object
-) -> None:
+async def test_payload_type_none_passes_raw(payload: object, expected: object) -> None:
     """Tests that RawResource receives the raw payload as-is when no payload type is
     specified.
 
