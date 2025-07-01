@@ -130,11 +130,11 @@ When implementing changes, adhere to the following testing procedures:
   the heuristics above.
 - **Separate Atomic Refactors:** If refactoring is deemed necessary:
   - Perform the refactoring as a **separate, atomic commit** *after* the
-    functional change commit.
+    functional-change commit.
   - Ensure the refactoring adheres to the testing guidelines (behavioral tests
     pass before and after, unit tests added for new units).
   - Ensure the refactoring commit itself passes all quality gates.
 
 ## Python Development Guidelines
 
-See \`.rules/python-\*.mdc for guidance on Python development.
+See \`.rules/python-\*.mdc\` for guidance on Python development.
