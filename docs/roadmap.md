@@ -1,129 +1,179 @@
 # Falcon-Pachinko: Updated Development Roadmap
 
-This roadmap outlines the implementation tasks for the Falcon-Pachinko extension based on the revised, composable architecture detailed in the main design document. It supersedes the previous roadmap and reflects a pivot towards a more robust, scalable, and Falcon-idiomatic system.
+This roadmap outlines the implementation tasks for the Falcon-Pachinko extension
+based on the revised, composable architecture detailed in the main design
+document. It supersedes the previous roadmap and reflects a pivot towards a more
+robust, scalable, and Falcon-idiomatic system.
 
 ## Phase 1: Foundational Composable Router
 
-This phase replaces the initial `app.add_websocket_route` mechanism with the more powerful and modular `WebSocketRouter`. This is the most significant architectural change and underpins all subsequent features.
+This phase replaces the initial `app.add_websocket_route` mechanism with the
+more powerful and modular `WebSocketRouter`. This is the most significant
+architectural change and underpins all subsequent features.
 
 - [ ] **Deprecate the old routing API.**
 
-  - [ ] Mark `app.add_websocket_route` and `app.create_websocket_resource` for deprecation. The logic will be entirely superseded by the new router.
+  - [ ] Mark `app.add_websocket_route` and `app.create_websocket_resource` for
+    deprecation. The logic will be entirely superseded by the new router.
 
 - [ ] **Implement** `WebSocketRouter` **as a Falcon Resource.**
 
   - [ ] Create the new module `falcon_pachinko/router.py`.
 
-  - [ ] Define the `WebSocketRouter` class, ensuring it has an `on_websocket(req, ws)` responder method to make it a valid, mountable Falcon resource.
+  - [ ] Define the `WebSocketRouter` class, ensuring it has an
+    `on_websocket(req, ws)` responder method to make it a valid, mountable
+    Falcon resource.
 
-  - [ ] Implement the router's internal path-matching logic, leveraging `falcon.routing.compile_uri_template` to handle routes relative to its mount point.
+  - [ ] Implement the router's internal path-matching logic, leveraging
+    `falcon.routing.compile_uri_template` to handle routes relative to its mount
+    point.
 
 - [ ] **Implement the** `WebSocketRouter.add_route()` **API.**
 
-  - [ ] The method must accept a relative path, a name for URL reversal, and the target resource.
+  - [ ] The method must accept a relative path, a name for URL reversal, and the
+    target resource.
 
-  - [ ] Add support for both `WebSocketResource` classes and callable factories as route targets, mirroring Falcon's HTTP routing flexibility.
+  - [ ] Add support for both `WebSocketResource` classes and callable factories
+    as route targets, mirroring Falcon's HTTP routing flexibility.
 
-  - [ ] Add support for passing `*args` and `**kwargs` during route definition for resource initialization.
+  - [ ] Add support for passing `*args` and `**kwargs` during route definition
+    for resource initialization.
 
   - [ ] Implement `router.url_for(name, **params)` for reverse URL generation.
 
 - [ ] **Update Core Tests.**
 
-  - [ ] Write new integration tests to verify that a `WebSocketRouter` can be mounted on a Falcon `App`.
+  - [ ] Write new integration tests to verify that a `WebSocketRouter` can be
+    mounted on a Falcon `App`.
 
-  - [ ] Test that connections to routes defined on the router correctly instantiate the associated resource with the correct path parameters and initialization arguments.
+  - [ ] Test that connections to routes defined on the router correctly
+    instantiate the associated resource with the correct path parameters and
+    initialization arguments.
 
 ## Phase 2: Advanced Dispatch and Resource Model
 
-This phase refines the `WebSocketResource` to support the new schema-driven and composable patterns.
+This phase refines the `WebSocketResource` to support the new schema-driven and
+composable patterns.
 
 - [ ] **Integrate** `msgspec` **for Schema-Driven Dispatch.**
 
-  - [ ] Refactor the `WebSocketResource` dispatch loop to prioritize the `schema` attribute (a `msgspec` tagged union).
+  - [ ] Refactor the `WebSocketResource` dispatch loop to prioritize the
+    `schema` attribute (a `msgspec` tagged union).
 
-  - [ ] Implement the logic to decode messages against the schema and route to handlers based on the message tag.
+  - [ ] Implement the logic to decode messages against the schema and route to
+    handlers based on the message tag.
 
-  - [ ] Make the `@handles_message("type")` decorator the canonical, preferred way to register a handler.
+  - [ ] Make the `@handles_message("type")` decorator the canonical, preferred
+    way to register a handler.
 
-  - [ ] Implement the `on_{tag}` naming convention as a best-effort convenience, including the `CamelCase` to `snake_case` conversion.
+  - [ ] Implement the `on_{tag}` naming convention as a best-effort convenience,
+    including the `CamelCase` to `snake_case` conversion.
 
-  - [ ] Document `msgspec`'s default strictness (no extra fields) and expose a `strict=False` option on the decorator.
+  - [ ] Document `msgspec`'s default strictness (no extra fields) and expose a
+    `strict=False` option on the decorator.
 
 - [ ] **Refine Resource API and State Management.**
 
-  - [ ] Rename the fallback handler method from `on_message` to `on_unhandled` to avoid ambiguity.
+  - [ ] Rename the fallback handler method from `on_message` to `on_unhandled`
+    to avoid ambiguity.
 
-  - [ ] Implement the `self.state` attribute on `WebSocketResource` as a swappable, dict-like proxy to facilitate external session stores. Provide guidance on this pattern for high-concurrency scenarios.
+  - [ ] Implement the `self.state` attribute on `WebSocketResource` as a
+    swappable, dict-like proxy to facilitate external session stores. Provide
+    guidance on this pattern for high-concurrency scenarios.
 
 - [ ] **Implement Nested Resource Composition.**
 
-  - [ ] Add the `add_subroute(path, resource, ...)` method to `WebSocketResource`.
+  - [ ] Add the `add_subroute(path, resource, ...)` method to
+    `WebSocketResource`.
 
-  - [ ] Enhance the `WebSocketRouter`'s matching logic to handle multi-level nested paths.
+  - [ ] Enhance the `WebSocketRouter`'s matching logic to handle multi-level
+    nested paths.
 
-  - [ ] Design and implement a robust context-passing mechanism for parent resources to inject state into child resources.
+  - [ ] Design and implement a robust context-passing mechanism for parent
+    resources to inject state into child resources.
 
 ## Phase 3: Lifespan Workers and Connection Management
 
-This phase implements the redesigned, ASGI-native background worker system and finalizes the connection manager API.
+This phase implements the redesigned, ASGI-native background worker system and
+finalizes the connection manager API.
 
 - [ ] **Implement Lifespan-Based Worker Management.**
 
   - [ ] Create the new `falcon_pachinko/workers.py` module.
 
-  - [ ] Implement the `WorkerController` class with its `start()` and `stop()` methods.
+  - [ ] Implement the `WorkerController` class with its `start()` and `stop()`
+    methods.
 
   - [ ] Implement the optional `@worker` decorator for clarity.
 
-  - [ ] Update all examples and documentation to use the `@app.lifespan` pattern for managing workers, completely removing the old `add_websocket_worker` concept.
+  - [ ] Update all examples and documentation to use the `@app.lifespan` pattern
+    for managing workers, completely removing the old `add_websocket_worker`
+    concept.
 
 - [ ] **Finalize** `WebSocketConnectionManager` **API.**
 
-  - [ ] Refactor all I/O methods (e.g., `broadcast_to_room`) to be `async def` and ensure they propagate exceptions correctly.
+  - [ ] Refactor all I/O methods (e.g., `broadcast_to_room`) to be `async def`
+    and ensure they propagate exceptions correctly.
 
-  - [ ] Implement `async for` iterators (e.g., `conn_mgr.connections(room=...)`) for composable bulk operations.
+  - [ ] Implement `async for` iterators (e.g., `conn_mgr.connections(room=...)`)
+    for composable bulk operations.
 
-  - [ ] Define the abstract backend interface (ABC) for the connection manager to pave the way for future distributed backends.
+  - [ ] Define the abstract backend interface (ABC) for the connection manager
+    to pave the way for future distributed backends.
 
-  - [ ] Ensure the default `InProcessBackend` correctly implements this new, robust interface.
+  - [ ] Ensure the default `InProcessBackend` correctly implements this new,
+    robust interface.
 
 ## Phase 4: Cross-Cutting Concerns
 
-This phase adds the essential features for building production-grade applications.
+This phase adds the essential features for building production-grade
+applications.
 
 - [ ] **Implement the Multi-Tiered Hook System.**
 
   - [ ] Create a `HookManager` to orchestrate hook execution.
 
-  - [ ] Add support for global hooks on `WebSocketRouter` and per-resource hooks on `WebSocketResource`.
+  - [ ] Add support for global hooks on `WebSocketRouter` and per-resource hooks
+    on `WebSocketResource`.
 
-  - [ ] Implement the "onion-style" execution order and define the error propagation behaviour for exceptions raised within the hook chain.
+  - [ ] Implement the "onion-style" execution order (outermost hooks run first)
+    and define the error propagation behaviour for exceptions raised within the
+    hook chain.
 
 - [ ] **Design and Implement Dependency Injection.**
 
-  - [ ] Formalize and implement a strategy for injecting shared services into ephemeral `WebSocketResource` instances. This will likely involve allowing a DI container or factory to be provided to the `WebSocketRouter`.
+  - [ ] Formalize and implement a strategy for injecting shared services into
+    ephemeral `WebSocketResource` instances. This will likely involve allowing a
+    DI container or factory to be provided to the `WebSocketRouter`.
 
 ## Phase 5: Testing, Documentation, and Examples
 
-This is an ongoing process, but it will be finalized in this phase to ensure the library is ready for use.
+This is an ongoing process, but it will be finalized in this phase to ensure the
+library is ready for use.
 
 - [ ] **Develop Comprehensive Testing Utilities.**
 
-  - [ ] Build a `WebSocketTestClient` or `WebSocketSimulator` for high-level integration testing.
+  - [ ] Build a `WebSocketTestClient` or `WebSocketSimulator` for high-level
+    integration testing.
 
-  - [ ] Ensure the test client API is intuitive and supports the full connection and message lifecycle.
+  - [ ] Ensure the test client API is intuitive and supports the full connection
+    and message lifecycle.
 
   - [ ] Provide pytest fixtures to simplify test setup.
 
 - [ ] **Build a Full Reference Example.**
 
-  - [ ] Create a new, comprehensive example application that demonstrates all the advanced features working in concert: a mountable router, schema-driven dispatch, nested resources, lifespan workers, hooks, and dependency injection.
+  - [ ] Create a new, comprehensive example application that demonstrates all
+    the advanced features working in concert: a mountable router, schema-driven
+    dispatch, nested resources, lifespan workers, hooks, and dependency
+    injection.
 
 - [ ] **Rewrite the Documentation.**
 
-  - [ ] Update the project's official documentation to reflect the new, composable architecture as the primary and recommended approach.
+  - [ ] Update the project's official documentation to reflect the new,
+    composable architecture as the primary and recommended approach.
 
   - [ ] Create a migration guide for users of the pre-release version.
 
-  - [ ] Add detailed "how-to" guides for advanced features like DI, state management, and custom connection manager backends.
+  - [ ] Add detailed "how-to" guides for advanced features like DI, state
+    management, and custom connection manager backends.
