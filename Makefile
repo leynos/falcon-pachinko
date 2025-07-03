@@ -1,14 +1,17 @@
-.PHONY: help default all clean build build-release lint fmt check-fmt \
-       markdownlint tools nixie test typecheck
+MDLINT ?= $(shell which markdownlint)
+NIXIE ?= $(shell which nixie)
+MDFORMAT_ALL ?= $(shell which mdformat-all)
+TOOLS = $(MDFORMAT_ALL) ruff ty $(MDLINT) $(NIXIE) uv
+VENV_TOOLS = pytest
 
-MDLINT ?= markdownlint
-NIXIE ?= nixie
+.PHONY: help default all clean build build-release lint fmt check-fmt \
+	markdownlint tools nixie test typecheck $(TOOLS) $(VENV_TOOLS)
+
+.DEFAULT_GOAL := build
 
 all: build check-fmt test typecheck
 
-default: build
-
-build: ## Build virtual-env and install deps
+build: uv ## Build virtual-env and install deps
 	uv venv
 	uv sync --group dev --group examples
 
@@ -17,44 +20,51 @@ build-release: ## Build artefacts (sdist & wheel)
 
 clean: ## Remove build artifacts
 	rm -rf build dist *.egg-info \
-	  .mypy_cache .pytest_cache .coverage coverage.* lcov.info htmlcov \
-	  .venv
-	find . -type d -name '__pycache__' -exec rm -rf '{}' +
+	  .mypy_cache .pytest_cache .coverage coverage.* \
+	  lcov.info htmlcov .venv
+	find . -type d -name '__pycache__' -print0 | xargs -0 -r rm -rf
 
 define ensure_tool
-$(if $(shell uv run --which $(1) >/dev/null 2>&1 && echo y),,\
-$(error $(1) is required but not installed in the uv environment))
+	@command -v $(1) >/dev/null 2>&1 || { \
+	  printf "Error: '%s' is required, but not installed\n" "$(1)" >&2; \
+	  exit 1; \
+	}
 endef
 
+define ensure_tool_venv
+	@uv run --which $(1) >/dev/null 2>&1 || { \
+	  printf "Error: '%s' is required in the virtualenv, but is not installed\n" "$(1)" >&2; \
+	  exit 1; \
+	}
+endef
 
-TOOLS = mdformat-all ruff ty $(MDLINT) $(NIXIE) pytest uv
+$(TOOLS): ## Verify required CLI tools
+	$(call ensure_tool,$@)
 
-tools: ## Verify required CLI tools
-	$(foreach t,$(TOOLS),$(call ensure_tool,$t))
-	@:
+$(VENV_TOOLS): ## Verify required CLI tools in venv
+	$(call ensure_tool_venv,$@)
 
-fmt: tools ## Format sources
+fmt: ruff $(MDFORMAT_ALL) ## Format sources
 	ruff format
-	mdformat-all
+	$(MDFORMAT_ALL)
 
-check-fmt: ## Verify formatting
+check-fmt: ruff ## Verify formatting
 	ruff format --check
-	mdformat-all --check
+	# mdformat-all doesn't currently do checking
 
-lint: tools ## Run linters
+lint: ruff ## Run linters
 	ruff check
 
-typecheck: build ## Run typechecking
-	uv run pyright
-	uv run ty check
+typecheck: build ty ## Run typechecking
+	ty check
 
-markdownlint: tools ## Lint Markdown files
+markdownlint: $(MDLINT) ## Lint Markdown files
 	find . -type f -name '*.md' -not -path './target/*' -print0 | xargs -0 $(MDLINT)
 
-nixie: tools ## Validate Mermaid diagrams
+nixie: $(NIXIE) ## Validate Mermaid diagrams
 	find . -type f -name '*.md' -not -path './target/*' -print0 | xargs -0 $(NIXIE)
 
-test: build ## Run tests
+test: build uv pytest ## Run tests
 	uv run pytest -v
 
 help: ## Show available targets
