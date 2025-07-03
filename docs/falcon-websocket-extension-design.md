@@ -683,6 +683,39 @@ The `WebSocketRouter` must resolve these composite paths. A trie (prefix tree) i
 
 A critical aspect is **context passing**. The router must facilitate passing state from parent to child. A robust implementation would involve the router instantiating the entire resource chain, allowing parent resources to pass relevant state (or `self`) into the constructors of their children.
 
+```mermaid
+classDiagram
+    class WebSocketRouter {
+        - name: str | None
+        - _mount_path: str | None
+        - _router: CompiledRouter
+        - _routes: list[_Route]
+        - _name_map: dict[str, _Route]
+        + __init__(name: str | None)
+        + add_route(path, target, name, init_args, init_kwargs)
+        + url_for(name, **params)
+        + on_websocket(req, ws)
+    }
+    class _Route {
+        + path: str
+        + target: Callable[..., WebSocketResource] | type[WebSocketResource]
+        + args: tuple[Any, ...]
+        + kwargs: dict[str, Any]
+        + name: str | None
+    }
+    class WebSocketRouteNotFoundError
+    class DuplicateRouteNameError
+    WebSocketRouter --> _Route : uses
+    WebSocketRouter --> WebSocketRouteNotFoundError : raises
+    WebSocketRouter --> DuplicateRouteNameError : raises
+    _Route --> WebSocketResource : target
+    WebSocketRouter --> CompiledRouter : _router
+    note for WebSocketRouter "New class for composable WebSocket routing"
+    note for _Route "Internal dataclass for route info"
+    note for WebSocketRouteNotFoundError "Exception for missing route"
+    note for DuplicateRouteNameError "Exception for duplicate route name"
+```
+
 ### 5.3. High-Performance Schema-Driven Dispatch with `msgspec`
 
 This proposal elevates the dispatch mechanism using `msgspec` and its support for tagged unions. This moves from simple dispatch to a declarative, schema-driven approach.

@@ -11,7 +11,7 @@ This phase replaces the initial `app.add_websocket_route` mechanism with the
 more powerful and modular `WebSocketRouter`. This is the most significant
 architectural change and underpins all subsequent features.
 
-- [ ] **Deprecate the old routing API.**
+- [x] **Deprecate the old routing API.**
 
   - [x] Mark `app.add_websocket_route` and `app.create_websocket_resource` for
     deprecation. The logic will be entirely superseded by the new router.
@@ -39,7 +39,7 @@ architectural change and underpins all subsequent features.
   - [x] Add support for passing `*args` and `**kwargs` during route definition
     for resource initialization.
 
-  - [ ] Implement `router.url_for(name, **params)` for reverse URL generation.
+  - [x] Implement `router.url_for(name, **params)` for reverse URL generation.
 
 - [ ] **Update Core Tests.**
 
