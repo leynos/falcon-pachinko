@@ -33,9 +33,11 @@ class DuplicateRouteNameError(ValueError):
 class WebSocketRouter:
     """Route WebSocket connections relative to its mount point."""
 
-    def __init__(self, *, name: str | None = None) -> None:
+    def __init__(
+        self, *, name: str | None = None, mount_path: str | None = None
+    ) -> None:
         self.name = name
-        self._mount_path: str | None = None
+        self._mount_path: str | None = mount_path
         self._router = compiled.CompiledRouter()
         self._routes: list[_Route] = []
         self._name_map: dict[str, _Route] = {}
@@ -78,9 +80,11 @@ class WebSocketRouter:
         self, req: falcon.Request, ws: WebSocketLike
     ) -> WebSocketResource:
         """Handle a WebSocket connection dispatched to this router."""
-        if self._mount_path is None:
-            self._mount_path = req.uri_template
-        path = req.path[len(self._mount_path) :] or "/"
+        mount_path = self._mount_path
+        if mount_path is None:
+            mount_path = req.uri_template
+            self._mount_path = mount_path
+        path = req.path[len(mount_path) :] or "/"
         match = self._router.find(path)
         if not match:
             raise WebSocketRouteNotFoundError(path)

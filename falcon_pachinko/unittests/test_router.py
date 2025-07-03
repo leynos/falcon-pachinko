@@ -40,7 +40,9 @@ async def test_router_dispatches_to_route() -> None:
     router = WebSocketRouter()
     router.add_route("/{id}", DummyResource, init_args=(1,), name="item")
 
-    req = types.SimpleNamespace(path="/ws/42", uri_template="/ws")
+    req = typing.cast(
+        "falcon.Request", types.SimpleNamespace(path="/ws/42", uri_template="/ws")
+    )
     ws = DummyWS()
     resource = await router.on_websocket(req, ws)
 
@@ -71,7 +73,9 @@ def test_duplicate_route_name_raises() -> None:
 async def test_route_not_found() -> None:
     """``on_websocket`` should raise for unknown paths."""
     router = WebSocketRouter()
-    req = types.SimpleNamespace(path="/missing", uri_template="/ws")
+    req = typing.cast(
+        "falcon.Request", types.SimpleNamespace(path="/missing", uri_template="/ws")
+    )
 
     with pytest.raises(WebSocketRouteNotFoundError):
         await router.on_websocket(req, DummyWS())
@@ -87,7 +91,9 @@ async def test_callable_target_supported() -> None:
     router = WebSocketRouter()
     router.add_route("/", factory, name="home")
 
-    req = types.SimpleNamespace(path="/ws/", uri_template="/ws")
+    req = typing.cast(
+        "falcon.Request", types.SimpleNamespace(path="/ws/", uri_template="/ws")
+    )
     res = await router.on_websocket(req, DummyWS())
     assert isinstance(res, DummyResource)
     assert res.value == 2
