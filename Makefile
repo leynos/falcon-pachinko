@@ -5,7 +5,7 @@ TOOLS = $(MDFORMAT_ALL) ruff ty $(MDLINT) $(NIXIE) uv
 VENV_TOOLS = pytest
 
 .PHONY: help all clean build build-release lint fmt check-fmt \
-	markdownlint tools nixie test typecheck $(TOOLS) $(VENV_TOOLS)
+	markdownlint nixie test typecheck $(TOOLS) $(VENV_TOOLS)
 
 .DEFAULT_GOAL := build
 
