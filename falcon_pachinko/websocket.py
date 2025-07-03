@@ -235,9 +235,6 @@ def _add_websocket_route(
     .. deprecated:: 0.1.0
        Use :class:`falcon_pachinko.router.WebSocketRouter` instead.
 
-    .. deprecated:: 0.1.0
-       Use :class:`falcon_pachinko.router.WebSocketRouter` instead.
-
     Any ``init_args`` or ``init_kwargs`` supplied are stored and applied when
     ``create_websocket_resource`` is called. This allows a single resource class
     to be configured differently across multiple routes.

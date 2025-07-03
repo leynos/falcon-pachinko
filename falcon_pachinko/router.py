@@ -67,7 +67,11 @@ class WebSocketRouter:
 
     def url_for(self, name: str, **params: str) -> str:
         """Return the relative URI for the named route."""
-        route = self._name_map[name]
+        try:
+            route = self._name_map[name]
+        except KeyError:  # pragma: no cover - defensive
+            raise ValueError(f"No route found with name: {name!r}") from None  # noqa: TRY003
+
         return route.path.format(**params)
 
     async def on_websocket(
@@ -76,19 +80,13 @@ class WebSocketRouter:
         """Handle a WebSocket connection dispatched to this router."""
         if self._mount_path is None:
             self._mount_path = req.uri_template
-        path = req.path[len(self._mount_path) :]
-        if not path:
-            path = "/"
+        path = req.path[len(self._mount_path) :] or "/"
         match = self._router.find(path)
         if not match:
             raise WebSocketRouteNotFoundError(path)
         route = typing.cast("_Route", match[0])
         params = match[2]
         target = route.target
-        resource: WebSocketResource
-        if isinstance(target, type):
-            resource = target(*route.args, **route.kwargs)
-        else:
-            resource = target(*route.args, **route.kwargs)
+        resource: WebSocketResource = target(*route.args, **route.kwargs)
         await resource.on_connect(req, ws, **params)
         return resource

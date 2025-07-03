@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD013 MD040 MD033 -->
 # Falcon-Pachinko: A Design Proposal for Asynchronous WebSocket Routing and Handling in the Falcon Web Framework
 
 ## 1. Introduction
