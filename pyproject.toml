@@ -14,7 +14,7 @@ examples = ["aiosqlite", "uvicorn", "websocket-client"]
 [tool.pyright]
 pythonVersion = "3.13"
 typeCheckingMode = "strict"
-include = ["falcon_pachinko", "examples"]
+include = ["falcon_pachinko"]
 
 [tool.uv]
 package = true

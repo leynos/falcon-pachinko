@@ -23,23 +23,30 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - name: Install dependencies
+      - name: Install CLI tools
         run: |
-          uv pip install --system --group dev .
-          uv pip install --system slipcover pytest-forked
+          for tool in mbake ty ruff; do uv tool install ${tool}; done
+          npm install -g markdownlint-cli2
+
+      - name: Validate Makefile
+        run: mbake validate Makefile
+
+      - name: Install code
+        run: make build
 
       - name: Check formatting
-        run: ruff format --check .
+        run: make check-fmt
 
       - name: Run ruff
-        run: ruff check .
+        run: make lint
 
-      - name: Run pyright
-        run: pyright
+      - name: Run typechecker
+        run: make typecheck
 
       - name: Run tests with coverage
         run: |
-          python -m slipcover \
+          uv pip install slipcover pytest-forked
+          uv run python -m slipcover \
             --source=./falcon_pachinko \
             --omit="*/unittests/*,*/.venv/*" \
             --branch \
