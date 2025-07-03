@@ -67,7 +67,10 @@ When implementing changes, adhere to the following testing procedures:
   development environment, running linters, formatting, type checking, and
   tests. Use `make build` to create the local virtual environment with both the
   `dev` and `examples` dependency groups. Prefer these targets over invoking
-  tools directly.
+  tools directly. When editing `Makefile`, run `mbake validate Makefile` to
+  confirm the syntax is correct. The `dev` dependency group includes all CLI
+  tooling such as linters and markdown checks, so `make build` installs
+  everything required for development and CI.
 
 - **Atomicity:** Aim for small, focused, atomic changes. Each change (and
   subsequent commit) should represent a single logical unit of work.

@@ -26,7 +26,12 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install --system --group dev --group examples .
-          uv pip install --system slipcover pytest-forked mbake
+
+      - name: Install CLI tools
+        run: |
+          uv pip install --system slipcover pytest-forked mbake ty
+          uv tool install mdformat nixie
+          npm install -g markdownlint-cli2
 
       - name: Validate Makefile
         run: mbake validate Makefile

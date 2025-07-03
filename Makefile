@@ -1,5 +1,5 @@
 .PHONY: help default all clean build build-release lint fmt check-fmt \
-	markdownlint tools nixie test typecheck
+       markdownlint tools nixie test typecheck
 
 MDLINT ?= markdownlint
 NIXIE ?= nixie
@@ -8,7 +8,7 @@ all: build check-fmt test typecheck
 
 default: build
 
-build: tools ## Build for test/typecheck
+build: ## Build virtual-env and install deps
 	uv venv
 	uv sync --group dev --group examples
 
@@ -22,8 +22,8 @@ clean: ## Remove build artifacts
 	find . -type d -name '__pycache__' -exec rm -rf '{}' +
 
 define ensure_tool
-$(if $(shell command -v $(1) >/dev/null 2>&1 && echo y),,\
-$(error $(1) is required but not installed))
+$(if $(shell uv run --which $(1) >/dev/null 2>&1 && echo y),,\
+$(error $(1) is required but not installed in the uv environment))
 endef
 
 
