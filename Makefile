@@ -7,7 +7,7 @@ VENV_TOOLS = pytest
 .PHONY: help all clean build build-release lint fmt check-fmt \
 	markdownlint nixie test typecheck $(TOOLS) $(VENV_TOOLS)
 
-.DEFAULT_GOAL := build
+.DEFAULT_GOAL := all
 
 all: build check-fmt test typecheck
 
