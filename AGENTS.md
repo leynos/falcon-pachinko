@@ -63,10 +63,18 @@ When implementing changes, adhere to the following testing procedures:
 
 ## Change Quality & Committing
 
+- **Use the Makefile.** The root `Makefile` defines targets for setting up the
+  development environment, running linters, formatting, type checking, and
+  tests. Use `make build` to create the local virtual environment with both the
+  `dev` and `examples` dependency groups. Prefer these targets over invoking
+  tools directly.
+
 - **Atomicity:** Aim for small, focused, atomic changes. Each change (and
   subsequent commit) should represent a single logical unit of work.
+
 - **Quality Gates:** Before considering a change complete or proposing a commit,
   ensure it meets the following criteria:
+
   - For Python files:
 
     - **Testing:** Passes all relevant unit and behavioral tests according to
@@ -89,7 +97,9 @@ When implementing changes, adhere to the following testing procedures:
 
     - **Linting:** Passes lint checks (`markdownlint filename.md`).
     - **Mermaid diagrams:** Passes validation using nixie (`nixie filename.md`)
+
 - **Committing:**
+
   - Only changes that meet all the quality gates above should be committed.
   - Write clear, descriptive commit messages summarizing the change, following
     these formatting guidelines:
