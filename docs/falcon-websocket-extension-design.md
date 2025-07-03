@@ -106,7 +106,7 @@ app.add_websocket_route(
 
 When a WebSocket upgrade request matches this path, Falcon-Pachinko will instantiate `ChatRoomResource` with the provided arguments and manage the connection lifecycle. Path parameters like `{room_name}` are supplied to the resource's `on_*` methods, while options such as `history_size` are applied during construction.
 
-```
+```mermaid
 sequenceDiagram
     actor Developer
     participant App
@@ -124,14 +124,14 @@ sequenceDiagram
 
 Application code can also create a resource instance directly using `app.create_websocket_resource(path)`. This helper returns a new object of the class registered for `path` or raises `ValueError` if no such route exists.
 
-```
+```python
 chat_resource = app.create_websocket_resource('/ws/chat/{room_name}')
 
 ```
 
 Each call yields a fresh instance so that connection-specific state can be maintained independently.
 
-```
+```mermaid
 sequenceDiagram
     participant App
     participant WebSocketConnectionManager as Manager
@@ -562,7 +562,7 @@ Building upon the foundational concepts outlined above, this section details a m
 
 The following diagram provides a high-level overview of the main classes and their relationships within this advanced proposal.
 
-```
+```mermaid
 classDiagram
     class App {
         +add_route(path, resource)
@@ -841,7 +841,7 @@ To aid developers in creating robust WebSocket applications, dedicated testing u
 
 An initial API could include a `WebSocketSimulator` class that mimics a client connection using Falcon's ASGI test harness. The simulator would operate as an asynchronous context manager, returning a connection object with helpers like `send_json()` and `receive_json()`. A convenience method, `simulate_websocket()`, on the standard test client would construct this simulator. Additionally, pytest fixtures should expose a ready-to-use simulator and manage background worker startup, so tests can focus on asserting behaviour.
 
-```
+```mermaid
 sequenceDiagram
     actor Developer
     participant TC as TestClient
