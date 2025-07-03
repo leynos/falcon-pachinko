@@ -13,30 +13,30 @@ architectural change and underpins all subsequent features.
 
 - [ ] **Deprecate the old routing API.**
 
-  - [ ] Mark `app.add_websocket_route` and `app.create_websocket_resource` for
+  - [x] Mark `app.add_websocket_route` and `app.create_websocket_resource` for
     deprecation. The logic will be entirely superseded by the new router.
 
-- [ ] **Implement** `WebSocketRouter` **as a Falcon Resource.**
+- [x] **Implement** `WebSocketRouter` **as a Falcon Resource.**
 
-  - [ ] Create the new module `falcon_pachinko/router.py`.
+  - [x] Create the new module `falcon_pachinko/router.py`.
 
-  - [ ] Define the `WebSocketRouter` class, ensuring it has an
+  - [x] Define the `WebSocketRouter` class, ensuring it has an
     `on_websocket(req, ws)` responder method to make it a valid, mountable
     Falcon resource.
 
-  - [ ] Implement the router's internal path-matching logic, leveraging
+  - [x] Implement the router's internal path-matching logic, leveraging
     `falcon.routing.compile_uri_template` to handle routes relative to its mount
     point.
 
-- [ ] **Implement the** `WebSocketRouter.add_route()` **API.**
+- [x] **Implement the** `WebSocketRouter.add_route()` **API.**
 
-  - [ ] The method must accept a relative path, a name for URL reversal, and the
+  - [x] The method must accept a relative path, a name for URL reversal, and the
     target resource.
 
-  - [ ] Add support for both `WebSocketResource` classes and callable factories
+  - [x] Add support for both `WebSocketResource` classes and callable factories
     as route targets, mirroring Falcon's HTTP routing flexibility.
 
-  - [ ] Add support for passing `*args` and `**kwargs` during route definition
+  - [x] Add support for passing `*args` and `**kwargs` during route definition
     for resource initialization.
 
   - [ ] Implement `router.url_for(name, **params)` for reverse URL generation.
