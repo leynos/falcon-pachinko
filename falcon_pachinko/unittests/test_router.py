@@ -180,3 +180,38 @@ def test_url_for_unknown_route() -> None:
 
     with pytest.raises(KeyError, match="no route registered"):
         router.url_for("missing")
+
+
+def test_url_for_missing_params() -> None:
+    """Missing params should raise ``KeyError`` with the param name."""
+    router = WebSocketRouter()
+    router.add_route("/rooms/{room}", DummyResource, name="room")
+
+    with pytest.raises(KeyError) as excinfo:
+        router.url_for("room")
+    assert "room" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_on_connect_exception_closes_ws() -> None:
+    """Exceptions in ``on_connect`` should close the connection."""
+
+    class BadResource(WebSocketResource):
+        async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            raise RuntimeError("boom")
+
+    router = WebSocketRouter()
+    router.add_route("/boom", BadResource)
+    ws = DummyWS()
+    called = {}
+
+    async def close(code: int = 1000) -> None:  # pragma: no cover - simple stub
+        called["closed"] = code
+
+    typing.cast("typing.Any", ws).close = close
+
+    req = type("Req", (), {"path": "/boom"})()
+    with pytest.raises(RuntimeError):
+        await router.on_websocket(req, ws)
+
+    assert called.get("closed") == 1000

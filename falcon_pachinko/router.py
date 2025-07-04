@@ -103,14 +103,24 @@ class WebSocketRouter:
         subpath = req.path[len(prefix) :] if prefix else req.path
         subpath = subpath or "/"
 
+        # Routes are tested in the order they were added. Register more
+        # specific paths before general ones to control precedence.
         for _template, pattern, factory in self._routes:
             match = pattern.fullmatch(subpath)
             if match:
-                resource = factory()
-                should_accept = await resource.on_connect(req, ws, **match.groupdict())
+                try:
+                    resource = factory()
+                    should_accept = await resource.on_connect(
+                        req, ws, **match.groupdict()
+                    )
+                except Exception:
+                    await ws.close()
+                    raise
+
                 if not should_accept:
                     await ws.close()
                     return
+
                 await ws.accept()
                 return
 
