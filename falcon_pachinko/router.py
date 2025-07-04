@@ -19,6 +19,21 @@ def _compile_template(template: str) -> re.Pattern[str]:
     return re.compile(pattern)
 
 
+def _normalize_path(path: str) -> str:
+    """Ensure the path has a leading slash."""
+    if not path.startswith("/"):
+        path = "/" + path
+    return path
+
+
+def _canonical_path(path: str) -> str:
+    """Return the normalized path without a trailing slash."""
+    path = _normalize_path(path)
+    if path != "/":
+        path = path.rstrip("/")
+    return path
+
+
 class WebSocketRouter:
     """Minimal Falcon resource for routing WebSocket connections."""
 
@@ -46,9 +61,18 @@ class WebSocketRouter:
             msg = "resource must be callable"
             raise TypeError(msg)
 
+        path = _normalize_path(path)
+        canonical = _canonical_path(path)
+        if any(existing == canonical for existing, _p, _f in self._routes):
+            msg = f"route path {path!r} already registered"
+            raise ValueError(msg)
+        if name and name in self._names:
+            msg = f"route name {name!r} already registered"
+            raise ValueError(msg)
+
         factory = functools.partial(resource, *args, **kwargs)
 
-        self._routes.append((path, _compile_template(path), factory))
+        self._routes.append((path, _compile_template(canonical), factory))
         if name:
             self._names[name] = path
 
@@ -60,7 +84,7 @@ class WebSocketRouter:
             msg = f"no route registered with name {name!r}"
             raise KeyError(msg) from exc
 
-        return template.format(**params)
+        return _normalize_path(template.format(**params))
 
     async def on_websocket(
         self, req: falcon.Request, ws: WebSocketLike
