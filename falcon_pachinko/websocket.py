@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import typing
+import warnings
 from threading import Lock
 from types import MethodType
 
@@ -231,6 +232,9 @@ def _add_websocket_route(
 ) -> None:
     """Register ``resource_cls`` to handle connections for ``path``.
 
+    .. deprecated:: 0.1
+       Use :class:`falcon_pachinko.router.WebSocketRouter` instead.
+
     Any ``init_args`` or ``init_kwargs`` supplied are stored and applied when
     ``create_websocket_resource`` is called. This allows a single resource class
     to be configured differently across multiple routes.
@@ -248,6 +252,11 @@ def _add_websocket_route(
     **init_kwargs : object
         Keyword arguments for resource initialization
     """
+    warnings.warn(
+        "_add_websocket_route is deprecated; use WebSocketRouter.add_route instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     _validate_route_path(path)
     _validate_resource_cls(resource_cls)
     with self._websocket_route_lock:
@@ -268,6 +277,9 @@ def _create_websocket_resource(self: typing.Any, path: str) -> WebSocketResource
     Initialization parameters provided to :func:`add_websocket_route` are
     forwarded to the resource constructor.
 
+    .. deprecated:: 0.1
+       Use :class:`falcon_pachinko.router.WebSocketRouter` instead.
+
     Parameters
     ----------
     self : typing.Any
@@ -285,6 +297,11 @@ def _create_websocket_resource(self: typing.Any, path: str) -> WebSocketResource
     ValueError
         If no resource class is registered for ``path``
     """
+    warnings.warn(
+        "_create_websocket_resource is deprecated; use WebSocketRouter instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     with self._websocket_route_lock:
         routes = self._websocket_routes
         try:

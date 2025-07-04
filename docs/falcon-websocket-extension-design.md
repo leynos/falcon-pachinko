@@ -93,7 +93,9 @@ This `install` function would instantiate the `WebSocketConnectionManager` and m
 
 ### 3.4. Routing WebSocket Connections
 
-Analogous to Falcon's HTTP routing (`app.add_route()`), the extension will provide a method to associate a URL path with a `WebSocketResource`:
+Analogous to Falcon's HTTP routing (`app.add_route()`), the extension originally provided `app.add_websocket_route()` to associate a URL path with a `WebSocketResource`.
+
+> **Deprecated**: Use :meth:`falcon_pachinko.router.WebSocketRouter.add_route` instead.
 
 ```
 app.add_websocket_route(
@@ -123,6 +125,8 @@ sequenceDiagram
 #### 3.4.1. Programmatic Resource Instantiation
 
 Application code can also create a resource instance directly using `app.create_websocket_resource(path)`. This helper returns a new object of the class registered for `path` or raises `ValueError` if no such route exists.
+
+> **Deprecated**: A :class:`WebSocketRouter` and its `add_route` API should be used to instantiate resources.
 
 ```python
 chat_resource = app.create_websocket_resource('/ws/chat/{room_name}')
@@ -648,6 +652,71 @@ app.add_route('/ws/chat', chat_router)
 ```
 
 The router is responsible for matching the incoming connection URI against its registered routes, parsing any path parameters (like `{room_id}`), instantiating the correct `WebSocketResource` with its specific initialization arguments, and handing off control of the connection.
+
+#### 5.1.3. Router Flow and Structure
+
+The diagrams below illustrate the flow of a WebSocket connection through the router and the relationships between the main classes.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant FalconApp
+    participant WebSocketRouter
+    participant WebSocketResource
+
+    Client->>FalconApp: Initiate WebSocket connection (URL)
+    FalconApp->>WebSocketRouter: on_websocket(req, ws)
+    WebSocketRouter->>WebSocketRouter: Match URL to route
+    WebSocketRouter->>WebSocketResource: Instantiate resource
+    WebSocketRouter->>WebSocketResource: on_connect(req, ws, **params)
+    alt on_connect returns False
+        WebSocketRouter->>Client: Close WebSocket
+    else on_connect returns True
+        WebSocketRouter->>Client: Accept WebSocket
+    end
+```
+
+```mermaid
+erDiagram
+    WEBSOCKETROUTER ||--o{ ROUTE : registers
+    ROUTE {
+        string path
+        regex pattern
+        callable factory
+    }
+    WEBSOCKETROUTER {
+        string name
+        dict names
+    }
+    ROUTE }o--|| WEBSOCKETRESOURCE : instantiates
+    WEBSOCKETRESOURCE {
+        method on_connect
+    }
+```
+
+```mermaid
+classDiagram
+    class WebSocketRouter {
+        - _routes: list[tuple[str, re.Pattern[str], Callable[..., WebSocketResource]]]
+        - _names: dict[str, str]
+        - name: str | None
+        + __init__(name: str | None = None)
+        + add_route(path: str, resource: type[WebSocketResource] | Callable[..., WebSocketResource], name: str | None = None, args: tuple = (), kwargs: dict | None = None)
+        + url_for(name: str, **params: object) str
+        + on_websocket(req: falcon.Request, ws: WebSocketLike)
+    }
+    class WebSocketResource {
+        + on_connect(req: falcon.Request, ws: WebSocketLike, **params)
+    }
+    class WebSocketLike
+    class falcon.Request
+
+    WebSocketRouter --> WebSocketResource : creates
+    WebSocketRouter ..> WebSocketLike : uses
+    WebSocketRouter ..> falcon.Request : uses
+    WebSocketResource ..> WebSocketLike : uses
+    WebSocketResource ..> falcon.Request : uses
+```
 
 ### 5.2. Composable Architecture: Nested Resources
 

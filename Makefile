@@ -46,6 +46,7 @@ $(VENV_TOOLS): ## Verify required CLI tools in venv
 
 fmt: ruff $(MDFORMAT_ALL) ## Format sources
 	ruff format
+	ruff check --select I --fix
 	$(MDFORMAT_ALL)
 
 check-fmt: ruff ## Verify formatting
@@ -59,10 +60,12 @@ typecheck: build ty ## Run typechecking
 	ty check
 
 markdownlint: $(MDLINT) ## Lint Markdown files
-	find . -type f -name '*.md' -not -path './target/*' -print0 | xargs -0 $(MDLINT)
+	find . -type f -name '*.md' \
+	  -not -path './.venv/*' -print0 | xargs -0 $(MDLINT)
 
 nixie: $(NIXIE) ## Validate Mermaid diagrams
-	find . -type f -name '*.md' -not -path './target/*' -print0 | xargs -0 $(NIXIE)
+	find . -type f -name '*.md' \
+	  -not -path './.venv/*' -print0 | xargs -0 $(NIXIE)
 
 test: build uv pytest ## Run tests
 	uv run pytest -v
