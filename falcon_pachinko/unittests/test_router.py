@@ -115,7 +115,7 @@ async def test_on_connect_accepts_connection() -> None:
     async def accept() -> None:
         called["accepted"] = True
 
-    typing.cast(typing.Any, ws).accept = accept
+    typing.cast("typing.Any", ws).accept = accept
     req = type("Req", (), {"path": "/ok"})()
     await router.on_websocket(req, ws)
     assert called.get("accepted") is True
