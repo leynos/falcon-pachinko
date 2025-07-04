@@ -44,10 +44,15 @@ $(TOOLS): ## Verify required CLI tools
 $(VENV_TOOLS): ## Verify required CLI tools in venv
 	$(call ensure_tool_venv,$@)
 
-fmt: ruff $(MDFORMAT_ALL) ## Format sources
+fmt: ruff ## Format sources
 	ruff format
 	ruff check --select I --fix
-	$(MDFORMAT_ALL)
+	mdformat --number --wrap 80 AGENTS.md README.md \
+	docs/release-workflow.md docs/roadmap-v1-legacy.md docs/roadmap.md
+	mdtablefix --in-place AGENTS.md README.md \
+	docs/release-workflow.md docs/roadmap-v1-legacy.md docs/roadmap.md
+	markdownlint --fix AGENTS.md README.md \
+	docs/release-workflow.md docs/roadmap-v1-legacy.md docs/roadmap.md
 
 check-fmt: ruff ## Verify formatting
 	ruff format --check
@@ -60,7 +65,10 @@ typecheck: build ty ## Run typechecking
 	ty check
 
 markdownlint: $(MDLINT) ## Lint Markdown files
-	find . -type f -name '*.md' -not -path './target/*' -print0 | xargs -0 $(MDLINT)
+	find . -type f -name '*.md' -not -path './target/*' \
+	! -path './docs/falcon-websocket-extension-design.md' \
+	! -path './docs/guide-to-modern-python-code-coverage.md' \
+	! -path './AGENTS.md' -print0 | xargs -0 $(MDLINT)
 
 nixie: $(NIXIE) ## Validate Mermaid diagrams
 	find . -type f -name '*.md' -not -path './target/*' -print0 | xargs -0 $(NIXIE)

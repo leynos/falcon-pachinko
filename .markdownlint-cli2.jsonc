@@ -1,8 +1,0 @@
-{
-  "ignores": [
-    "docs/falcon-websocket-extension-design.md",
-    "docs/guide-to-modern-python-code-coverage.md",
-    "AGENTS.md",
-    "**/.venv/**"
-  ]
-}
