@@ -253,7 +253,7 @@ def _add_websocket_route(
         Keyword arguments for resource initialization
     """
     warnings.warn(
-        "add_websocket_route is deprecated; use WebSocketRouter.add_route instead",
+        "_add_websocket_route is deprecated; use WebSocketRouter.add_route instead",
         DeprecationWarning,
         stacklevel=2,
     )
@@ -298,7 +298,7 @@ def _create_websocket_resource(self: typing.Any, path: str) -> WebSocketResource
         If no resource class is registered for ``path``
     """
     warnings.warn(
-        "create_websocket_resource is deprecated; use WebSocketRouter instead",
+        "_create_websocket_resource is deprecated; use WebSocketRouter instead",
         DeprecationWarning,
         stacklevel=2,
     )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import re
 import typing
 
@@ -12,8 +13,9 @@ if typing.TYPE_CHECKING:
 
 
 def _compile_template(template: str) -> re.Pattern[str]:
+    """Compile a simple path template into a regex pattern."""
     pattern = re.sub(r"{([^}]+)}", r"(?P<\1>[^/]+)", template.rstrip("/"))
-    pattern = f"^{pattern}$"
+    pattern = f"^{pattern}/?$"
     return re.compile(pattern)
 
 
@@ -40,10 +42,7 @@ class WebSocketRouter:
         if kwargs is None:
             kwargs = {}
 
-        def factory() -> WebSocketResource:
-            if isinstance(resource, type):
-                return resource(*args, **kwargs)
-            return resource(*args, **kwargs)
+        factory = functools.partial(resource, *args, **kwargs)
 
         self._routes.append((path, _compile_template(path), factory))
         if name:
@@ -57,9 +56,19 @@ class WebSocketRouter:
     async def on_websocket(
         self, req: falcon.Request, ws: WebSocketLike
     ) -> None:  # pragma: no cover - simple wrapper
-        """Dispatch the connection to the first matching route."""
+        """Dispatch the connection to the first matching route.
+
+        Assumes that ``req.path_template`` (if present) is a prefix of
+        ``req.path``.
+        """
         prefix = getattr(req, "path_template", "").rstrip("/")
-        subpath = req.path[len(prefix) :] or "/"
+        if prefix and not req.path.startswith(prefix):
+            msg = (
+                f"path_template '{prefix}' is not a prefix of request path '{req.path}'"
+            )
+            raise ValueError(msg)
+        subpath = req.path[len(prefix) :] if prefix else req.path
+        subpath = subpath or "/"
 
         for _template, pattern, factory in self._routes:
             match = pattern.fullmatch(subpath)

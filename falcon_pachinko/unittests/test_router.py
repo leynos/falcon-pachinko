@@ -5,9 +5,11 @@ from __future__ import annotations
 import inspect
 import typing
 
+import falcon
 import pytest
 
 from falcon_pachinko import WebSocketResource, WebSocketRouter
+from falcon_pachinko.unittests.helpers import DummyWS
 
 pytest_plugins = ["falcon_pachinko.unittests.test_app_install"]
 
@@ -17,6 +19,11 @@ if typing.TYPE_CHECKING:
 
 class DummyResource(WebSocketResource):
     """Capture connection parameters for testing."""
+
+    instances: typing.ClassVar[list[DummyResource]] = []
+
+    def __init__(self) -> None:  # pragma: no cover - simple init
+        DummyResource.instances.append(self)
 
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
         """Record params and refuse the connection."""
@@ -41,3 +48,29 @@ def test_deprecation_warnings(
     dummy_app.add_websocket_route("/ws2", dummy_resource_cls)
     with pytest.deprecated_call():
         dummy_app.create_websocket_resource("/ws2")
+
+
+@pytest.mark.asyncio
+async def test_parameterized_route_and_url_for() -> None:
+    """Verify parameter matching and URL reversal."""
+    DummyResource.instances.clear()
+    router = WebSocketRouter()
+    router.add_route("/rooms/{room}", DummyResource, name="room")
+
+    assert router.url_for("room", room="abc") == "/rooms/abc"
+
+    req = type("Req", (), {"path": "/api/rooms/42", "path_template": "/api"})()
+    await router.on_websocket(req, DummyWS())
+
+    assert DummyResource.instances[-1].params == {"room": "42"}
+
+
+@pytest.mark.asyncio
+async def test_not_found_raises() -> None:
+    """Ensure unmatched paths raise HTTPNotFound."""
+    router = WebSocketRouter()
+    router.add_route("/ok", DummyResource)
+    req = type("Req", (), {"path": "/missing"})()
+
+    with pytest.raises(falcon.HTTPNotFound):
+        await router.on_websocket(req, DummyWS())
