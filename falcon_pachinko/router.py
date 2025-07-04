@@ -37,7 +37,7 @@ def _compile_template(template: str) -> re.Pattern[str]:
 def _normalize_path(path: str) -> str:
     """Ensure the path has a leading slash."""
     if not path.startswith("/"):
-        path = "/" + path
+        path = f"/{path}"
     return path
 
 
@@ -129,8 +129,7 @@ class WebSocketRouter:
         # Routes are tested in the order they were added. Register more
         # specific paths before general ones to control precedence.
         for _template, pattern, factory in self._routes:
-            match = pattern.fullmatch(subpath)
-            if match:
+            if match := pattern.fullmatch(subpath):
                 try:
                     resource = factory()
                     should_accept = await resource.on_connect(
