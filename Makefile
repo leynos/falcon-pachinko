@@ -46,6 +46,7 @@ $(VENV_TOOLS): ## Verify required CLI tools in venv
 
 fmt: ruff $(MDFORMAT_ALL) ## Format sources
 	ruff format
+	ruff check --select I --fix
 	$(MDFORMAT_ALL)
 
 check-fmt: ruff ## Verify formatting
