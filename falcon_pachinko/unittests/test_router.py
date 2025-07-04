@@ -155,6 +155,13 @@ def test_add_route_duplicate_name_and_path() -> None:
         router.add_route("/a/", DummyResource)
 
 
+def test_add_route_invalid_template() -> None:
+    """Empty parameter names should raise ``ValueError``."""
+    router = WebSocketRouter()
+    with pytest.raises(ValueError, match="Empty parameter name"):
+        router.add_route("/rooms/{}", DummyResource)
+
+
 @pytest.mark.asyncio
 async def test_overlapping_routes() -> None:
     """Ensure the first matching route is used when paths overlap."""

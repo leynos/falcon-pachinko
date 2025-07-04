@@ -1,4 +1,11 @@
-"""WebSocket routing utilities."""
+"""WebSocket routing utilities.
+
+This module implements :class:`WebSocketRouter`, a Falcon resource that
+dispatches incoming WebSocket connections based on path templates. Helper
+functions handle template compilation and path normalization to support
+both trailing and non-trailing slashes. The router can be mounted within a
+Falcon app and used to generate URLs for registered routes.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +21,15 @@ if typing.TYPE_CHECKING:
 
 def _compile_template(template: str) -> re.Pattern[str]:
     """Compile a simple path template into a regex pattern."""
-    pattern = re.sub(r"{([^}]+)}", r"(?P<\1>[^/]+)", template.rstrip("/"))
+
+    def replace_param(match: re.Match[str]) -> str:
+        param_name = match.group(1)
+        if not param_name:
+            msg = f"Empty parameter name in template: {template}"
+            raise ValueError(msg)
+        return f"(?P<{param_name}>[^/]+)"
+
+    pattern = re.sub(r"{([^}]*)}", replace_param, template.rstrip("/"))
     pattern = f"^{pattern}/?$"
     return re.compile(pattern)
 
