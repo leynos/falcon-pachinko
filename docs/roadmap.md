@@ -11,16 +11,16 @@ This phase replaces the initial `app.add_websocket_route` mechanism with the
 more powerful and modular `WebSocketRouter`. This is the most significant
 architectural change and underpins all subsequent features.
 
-- [ ] **Deprecate the old routing API.**
+- [x] **Deprecate the old routing API.**
 
-  - [ ] Mark `app.add_websocket_route` and `app.create_websocket_resource` for
+  - [x] Mark `app.add_websocket_route` and `app.create_websocket_resource` for
     deprecation. The logic will be entirely superseded by the new router.
 
-- [ ] **Implement** `WebSocketRouter` **as a Falcon Resource.**
+- [x] **Implement** `WebSocketRouter` **as a Falcon Resource.**
 
-  - [ ] Create the new module `falcon_pachinko/router.py`.
+  - [x] Create the new module `falcon_pachinko/router.py`.
 
-  - [ ] Define the `WebSocketRouter` class, ensuring it has an
+  - [x] Define the `WebSocketRouter` class, ensuring it has an
     `on_websocket(req, ws)` responder method to make it a valid, mountable
     Falcon resource.
 
