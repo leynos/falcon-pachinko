@@ -123,7 +123,7 @@ class WebSocketRouter:
                 f"path_template '{prefix}' is not a prefix of request path '{req.path}'"
             )
             raise falcon.HTTPNotFound(description=msg)
-        subpath = req.path[len(prefix) :] if prefix else req.path
+        subpath = req.path[len(prefix):] if prefix else req.path
         subpath = subpath or "/"
 
         # Routes are tested in the order they were added. Register more
