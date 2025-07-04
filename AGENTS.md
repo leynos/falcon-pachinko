@@ -82,10 +82,9 @@ When implementing changes, adhere to the following testing procedures:
 
     - **Testing:** Passes all relevant unit and behavioral tests according to
       the guidelines above.
-    - **Linting:** Passes lint checks (`ruff check`).
-    - **Formatting:** Adheres to formatting standards (`ruff format` and
-      `ruff check --select I --fix .`).
-    - **Typechecking:** Passes type checking (`pyright` and `ty check`).
+    - **Linting:** Passes lint checks (`make lint`).
+    - **Formatting:** Adheres to formatting standards (`make fmt`).
+    - **Typechecking:** Passes type checking (`make typecheck`).
 
   - For TypeScript files:
 
@@ -98,8 +97,8 @@ When implementing changes, adhere to the following testing procedures:
 
   - For Markdown files (`.md` only):
 
-    - **Linting:** Passes lint checks (`markdownlint filename.md`).
-    - **Mermaid diagrams:** Passes validation using nixie (`nixie filename.md`)
+    - **Linting:** Passes lint checks (`make markdownlint`).
+    - **Mermaid diagrams:** Passes validation using nixie (`make nixie`)
 
 - **Committing:**
 
@@ -148,6 +147,13 @@ When implementing changes, adhere to the following testing procedures:
     pass before and after, unit tests added for new units).
   - Ensure the refactoring commit itself passes all quality gates.
 
-## Python Development Guidelines
+## Language-Specific Guidelines
 
-See \`.rules/python-\*.mdc\` for guidance on Python development.
+For Python development, refer to the detailed guidelines in the `.rules/` directory:
+
+* [Python Code Style Guidelines](.rules/python-00.mdc) - Core Python 3.13 style conventions
+* [Python Context Managers](.rules/python-context-managers.mdc) - Best practices for context managers
+* [Python Generators](.rules/python-generators.mdc) - Generator and iterator patterns
+* [Python Project Configuration](.rules/python-pyproject.mdc) - pyproject.toml and packaging
+* [Python Return Patterns](.rules/python-return.mdc) - Function return conventions
+* [Python Typing](.rules/python-typing.mdc) - Type annotation best practices
