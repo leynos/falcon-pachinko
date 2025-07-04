@@ -42,6 +42,10 @@ class WebSocketRouter:
         if kwargs is None:
             kwargs = {}
 
+        if not callable(resource):
+            msg = "resource must be callable"
+            raise TypeError(msg)
+
         factory = functools.partial(resource, *args, **kwargs)
 
         self._routes.append((path, _compile_template(path), factory))
@@ -50,7 +54,12 @@ class WebSocketRouter:
 
     def url_for(self, name: str, **params: object) -> str:
         """Return the URL path associated with ``name`` formatted with ``params``."""
-        template = self._names[name]
+        try:
+            template = self._names[name]
+        except KeyError as exc:
+            msg = f"no route registered with name {name!r}"
+            raise KeyError(msg) from exc
+
         return template.format(**params)
 
     async def on_websocket(

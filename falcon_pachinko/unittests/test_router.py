@@ -74,3 +74,20 @@ async def test_not_found_raises() -> None:
 
     with pytest.raises(falcon.HTTPNotFound):
         await router.on_websocket(req, DummyWS())
+
+
+def test_add_route_requires_callable() -> None:
+    """Non-callable resources must raise ``TypeError``."""
+    router = WebSocketRouter()
+    bad_resource = typing.cast("typing.Any", object())
+    with pytest.raises(TypeError):
+        router.add_route("/x", bad_resource)
+
+
+def test_url_for_unknown_route() -> None:
+    """Missing route names should raise a descriptive ``KeyError``."""
+    router = WebSocketRouter()
+    router.add_route("/x", DummyResource, name="x")
+
+    with pytest.raises(KeyError, match="no route registered"):
+        router.url_for("missing")
