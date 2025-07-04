@@ -126,7 +126,7 @@ sequenceDiagram
 
 Application code can also create a resource instance directly using `app.create_websocket_resource(path)`. This helper returns a new object of the class registered for `path` or raises `ValueError` if no such route exists.
 
-> **Deprecated**: Use a :class:`WebSocketRouter` and instantiate resources via its `add_route` API.
+> **Deprecated**: A :class:`WebSocketRouter` and its `add_route` API should be used to instantiate resources.
 
 ```python
 chat_resource = app.create_websocket_resource('/ws/chat/{room_name}')

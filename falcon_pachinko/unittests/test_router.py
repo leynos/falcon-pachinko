@@ -71,6 +71,10 @@ async def test_parameterized_route_and_url_for() -> None:
     await router.on_websocket(req, DummyWS())
     assert DummyResource.instances[-1].params == {"room": "42"}
 
+    with pytest.raises(KeyError) as excinfo:
+        router.url_for("room")
+    assert "room" in str(excinfo.value)
+
 
 @pytest.mark.asyncio
 async def test_trailing_and_nontrailing_slash_routes() -> None:
@@ -99,6 +103,17 @@ async def test_not_found_raises() -> None:
     router = WebSocketRouter()
     router.add_route("/ok", DummyResource)
     req = type("Req", (), {"path": "/missing"})()
+
+    with pytest.raises(falcon.HTTPNotFound):
+        await router.on_websocket(req, DummyWS())
+
+
+@pytest.mark.asyncio
+async def test_path_template_prefix_mismatch() -> None:
+    """Mismatch between ``path_template`` and request should return 404."""
+    router = WebSocketRouter()
+    router.add_route("/rooms/{room}", DummyResource)
+    req = type("Req", (), {"path": "/rooms/1", "path_template": "/api"})()
 
     with pytest.raises(falcon.HTTPNotFound):
         await router.on_websocket(req, DummyWS())

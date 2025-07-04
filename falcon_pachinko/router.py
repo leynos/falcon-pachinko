@@ -35,7 +35,14 @@ def _canonical_path(path: str) -> str:
 
 
 class WebSocketRouter:
-    """Minimal Falcon resource for routing WebSocket connections."""
+    """Route WebSocket connections to resources.
+
+    Routes are evaluated in the order they were added. If multiple patterns
+    overlap, the first match wins. Register more specific paths before more
+    general ones to control precedence. Paths are normalized so that a template
+    ``"/foo"`` matches ``"/foo"`` and ``"/foo/"`` equally. If a trailing slash is
+    included in the template, generated URLs will preserve it.
+    """
 
     def __init__(self, *, name: str | None = None) -> None:
         self._routes: list[
@@ -91,15 +98,16 @@ class WebSocketRouter:
     ) -> None:  # pragma: no cover - simple wrapper
         """Dispatch the connection to the first matching route.
 
-        Assumes that ``req.path_template`` (if present) is a prefix of
-        ``req.path``.
+        ``req.path_template`` is assumed to be a prefix of ``req.path``. If the
+        assumption fails, :class:`falcon.HTTPNotFound` is raised to signal that
+        the requested path does not map to this router's mount point.
         """
         prefix = getattr(req, "path_template", "").rstrip("/")
         if prefix and not req.path.startswith(prefix):
             msg = (
                 f"path_template '{prefix}' is not a prefix of request path '{req.path}'"
             )
-            raise ValueError(msg)
+            raise falcon.HTTPNotFound(description=msg)
         subpath = req.path[len(prefix) :] if prefix else req.path
         subpath = subpath or "/"
 
