@@ -60,27 +60,25 @@ class WebSocketRouter:
     """
 
     def __init__(self, *, name: str | None = None) -> None:
+        self._raw: list[tuple[str, str, typing.Callable[..., WebSocketResource]]] = []
         self._routes: list[
-            tuple[str, str, typing.Callable[..., WebSocketResource]]
+            tuple[re.Pattern[str], typing.Callable[..., WebSocketResource]]
         ] = []
-        self._compiled: (
-            list[tuple[re.Pattern[str], typing.Callable[..., WebSocketResource]]] | None
-        ) = None
-        self._prefix: str | None = None
+        self._mount_prefix: str = ""
         self._names: dict[str, str] = {}
         self.name = name
 
-    def _compile_routes(self, prefix: str) -> None:
-        """Compile route patterns for the given mount ``prefix``."""
-        compiled: list[
-            tuple[re.Pattern[str], typing.Callable[..., WebSocketResource]]
-        ] = []
-        for _template, canonical, factory in self._routes:
-            full = prefix.rstrip("/") + canonical if prefix else canonical
+    def mount(self, prefix: str) -> None:
+        """Compile stored routes with the given mount ``prefix``."""
+        if self._mount_prefix:
+            msg = f"router already mounted at '{self._mount_prefix}'"
+            raise RuntimeError(msg)
+
+        self._mount_prefix = prefix.rstrip("/")
+        for _template, canonical, factory in self._raw:
+            full = f"{self._mount_prefix}{canonical}"
             pattern = _compile_uri_template(full)
-            compiled.append((pattern, factory))
-        self._compiled = compiled
-        self._prefix = prefix
+            self._routes.append((pattern, factory))
 
     def add_route(
         self,
@@ -101,7 +99,7 @@ class WebSocketRouter:
 
         path = _normalize_path(path)
         canonical = _canonical_path(path)
-        if any(existing == canonical for _p, existing, _f in self._routes):
+        if any(existing == canonical for _p, existing, _f in self._raw):
             msg = f"route path {path!r} already registered"
             raise ValueError(msg)
         if name and name in self._names:
@@ -114,7 +112,11 @@ class WebSocketRouter:
 
         factory = functools.partial(resource, *args, **kwargs)
 
-        self._routes.append((path, canonical, factory))
+        self._raw.append((path, canonical, factory))
+        if self._mount_prefix:
+            full = f"{self._mount_prefix}{canonical}"
+            pattern = _compile_uri_template(full)
+            self._routes.append((pattern, factory))
         if name:
             self._names[name] = path
 
@@ -138,18 +140,16 @@ class WebSocketRouter:
         the requested path does not map to this router's mount point.
         """
         prefix = getattr(req, "path_template", "").rstrip("/")
-        if prefix and not req.path.startswith(prefix):
+        if prefix != self._mount_prefix:
             msg = (
-                f"path_template '{prefix}' is not a prefix of request path '{req.path}'"
+                f"path_template '{prefix}' does not match router mount "
+                f"'{self._mount_prefix}'"
             )
             raise falcon.HTTPNotFound(description=msg)
 
-        if self._compiled is None or self._prefix != prefix:
-            self._compile_routes(prefix)
-
         # Routes are tested in the order they were added. Register more
         # specific paths before general ones to control precedence.
-        for pattern, factory in self._compiled:
+        for pattern, factory in self._routes:
             if match := pattern.fullmatch(req.path):
                 try:
                     resource = factory()

@@ -64,6 +64,7 @@ async def test_parameterized_route_and_url_for() -> None:
     DummyResource.instances.clear()
     router = WebSocketRouter()
     router.add_route("/rooms/{room}", DummyResource, name="room")
+    router.mount("/api")
 
     # Test non-trailing slash
     assert router.url_for("room", room="abc") == "/rooms/abc"
@@ -83,6 +84,7 @@ async def test_trailing_and_nontrailing_slash_routes() -> None:
     router = WebSocketRouter()
     router.add_route("/rooms/{room}/", DummyResource, name="room_trailing")
     router.add_route("/rooms2/{room}", DummyResource, name="room_nontrailing")
+    router.mount("")
 
     # Trailing slash
     assert router.url_for("room_trailing", room="xyz") == "/rooms/xyz/"
@@ -102,6 +104,7 @@ async def test_not_found_raises() -> None:
     """Ensure unmatched paths raise HTTPNotFound."""
     router = WebSocketRouter()
     router.add_route("/ok", DummyResource)
+    router.mount("")
     req = type("Req", (), {"path": "/missing"})()
 
     with pytest.raises(falcon.HTTPNotFound):
@@ -113,6 +116,7 @@ async def test_path_template_prefix_mismatch() -> None:
     """Mismatch between ``path_template`` and request should return 404."""
     router = WebSocketRouter()
     router.add_route("/rooms/{room}", DummyResource)
+    router.mount("")
     req = type("Req", (), {"path": "/rooms/1", "path_template": "/api"})()
 
     with pytest.raises(falcon.HTTPNotFound):
@@ -124,6 +128,7 @@ async def test_on_connect_accepts_connection() -> None:
     """Ensure ws.accept() is called when on_connect returns True."""
     router = WebSocketRouter()
     router.add_route("/ok", AcceptingResource)
+    router.mount("")
     ws = DummyWS()
     called = {}
 
@@ -163,6 +168,24 @@ def test_add_route_invalid_template() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mount_compiles_existing_and_new_routes() -> None:
+    """Routes defined before and after mount should work."""
+    DummyResource.instances.clear()
+    router = WebSocketRouter()
+    router.add_route("/before/{id}", DummyResource)
+    router.mount("/api")
+    router.add_route("/after/{id}", DummyResource)
+
+    req_before = type("Req", (), {"path": "/api/before/1", "path_template": "/api"})()
+    await router.on_websocket(req_before, DummyWS())
+    assert DummyResource.instances[-1].params == {"id": "1"}
+
+    req_after = type("Req", (), {"path": "/api/after/2", "path_template": "/api"})()
+    await router.on_websocket(req_after, DummyWS())
+    assert DummyResource.instances[-1].params == {"id": "2"}
+
+
+@pytest.mark.asyncio
 async def test_overlapping_routes() -> None:
     """Ensure the first matching route is used when paths overlap."""
 
@@ -187,6 +210,7 @@ async def test_overlapping_routes() -> None:
     router = WebSocketRouter()
     router.add_route("/over/{id}", First)
     router.add_route("/over/static", Second)
+    router.mount("")
 
     req = type("Req", (), {"path": "/over/static", "path_template": ""})()
     await router.on_websocket(req, DummyWS())
@@ -199,6 +223,7 @@ def test_url_for_unknown_route() -> None:
     """Missing route names should raise a descriptive ``KeyError``."""
     router = WebSocketRouter()
     router.add_route("/x", DummyResource, name="x")
+    router.mount("")
 
     with pytest.raises(KeyError, match="no route registered"):
         router.url_for("missing")
@@ -208,6 +233,7 @@ def test_url_for_missing_params() -> None:
     """Missing params should raise ``KeyError`` with the param name."""
     router = WebSocketRouter()
     router.add_route("/rooms/{room}", DummyResource, name="room")
+    router.mount("")
 
     with pytest.raises(KeyError) as excinfo:
         router.url_for("room")
@@ -224,6 +250,7 @@ async def test_on_connect_exception_closes_ws() -> None:
 
     router = WebSocketRouter()
     router.add_route("/boom", BadResource)
+    router.mount("")
     ws = DummyWS()
     called = {}
 
