@@ -9,6 +9,7 @@ Falcon app and used to generate URLs for registered routes.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import functools
 import re
 import threading
@@ -60,11 +61,20 @@ class WebSocketRouter:
     included in the template, generated URLs will preserve it.
     """
 
+    @dc.dataclass
+    class _RawRoute:
+        template: str
+        canonical: str
+        factory: typing.Callable[..., WebSocketResource]
+
+    @dc.dataclass
+    class _CompiledRoute:
+        pattern: re.Pattern[str]
+        factory: typing.Callable[..., WebSocketResource]
+
     def __init__(self, *, name: str | None = None) -> None:
-        self._raw: list[tuple[str, str, typing.Callable[..., WebSocketResource]]] = []
-        self._routes: list[
-            tuple[re.Pattern[str], typing.Callable[..., WebSocketResource]]
-        ] = []
+        self._raw: list[WebSocketRouter._RawRoute] = []
+        self._routes: list[WebSocketRouter._CompiledRoute] = []
         self._mount_prefix: str = ""
         self._mount_lock = threading.Lock()
         self._names: dict[str, str] = {}
@@ -79,7 +89,12 @@ class WebSocketRouter:
         base = self._mount_prefix.rstrip("/")
         full = f"{base}{canonical}"
         pattern = compile_uri_template(full)
-        self._routes.append((pattern, factory))
+        for existing in self._routes:
+            if existing.pattern.pattern == pattern.pattern:
+                msg = f"route path {full!r} already registered"
+                raise ValueError(msg)
+
+        self._routes.append(WebSocketRouter._CompiledRoute(pattern, factory))
 
     def mount(self, prefix: str) -> None:
         """Compile stored routes with the given mount ``prefix``."""
@@ -95,8 +110,8 @@ class WebSocketRouter:
                 raise RuntimeError(msg)
 
             self._mount_prefix = canonical
-            for _template, canonical_path, factory in self._raw:
-                self._compile_and_store_route(canonical_path, factory)
+            for raw in self._raw:
+                self._compile_and_store_route(raw.canonical, raw.factory)
 
     def add_route(
         self,
@@ -117,7 +132,7 @@ class WebSocketRouter:
 
         path = _normalize_path(path)
         canonical = _canonical_path(path)
-        if any(existing == canonical for _p, existing, _f in self._raw):
+        if any(r.canonical == canonical for r in self._raw):
             msg = f"route path {path!r} already registered"
             raise ValueError(msg)
         if name and name in self._names:
@@ -131,7 +146,7 @@ class WebSocketRouter:
         factory = functools.partial(resource, *args, **kwargs)
 
         with self._mount_lock:
-            self._raw.append((path, canonical, factory))
+            self._raw.append(WebSocketRouter._RawRoute(path, canonical, factory))
             if self._mount_prefix:
                 self._compile_and_store_route(canonical, factory)
         if name:
@@ -167,10 +182,10 @@ class WebSocketRouter:
 
         # Routes are tested in the order they were added. Register more
         # specific paths before general ones to control precedence.
-        for pattern, factory in self._routes:
-            if match := pattern.fullmatch(req.path):
+        for route in self._routes:
+            if match := route.pattern.fullmatch(req.path):
                 try:
-                    resource = factory()
+                    resource = route.factory()
                     should_accept = await resource.on_connect(
                         req, ws, **match.groupdict()
                     )

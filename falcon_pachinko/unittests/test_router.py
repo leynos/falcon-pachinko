@@ -160,6 +160,19 @@ def test_add_route_duplicate_name_and_path() -> None:
         router.add_route("/a/", DummyResource)
 
 
+def test_add_route_duplicates_after_mount() -> None:
+    """Adding duplicates after mounting should raise ``ValueError``."""
+    router = WebSocketRouter()
+    router.add_route("/dup", DummyResource, name="dup")
+    router.mount("/api")
+
+    with pytest.raises(ValueError, match="already registered"):
+        router.add_route("/dup", DummyResource, name="other")
+
+    with pytest.raises(ValueError, match="already registered"):
+        router.add_route("/other", DummyResource, name="dup")
+
+
 def test_add_route_invalid_template() -> None:
     """Empty parameter names should raise ``ValueError``."""
     router = WebSocketRouter()
