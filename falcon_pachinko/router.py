@@ -85,7 +85,13 @@ class WebSocketRouter:
         canonical: str,
         factory: typing.Callable[..., WebSocketResource],
     ) -> None:
-        """Compile ``canonical`` with the mount prefix and store it."""
+        """Compile ``canonical`` with the mount prefix and store it.
+
+        This helper mutates :attr:`_routes` and therefore assumes the caller
+        already holds :attr:`_mount_lock`. The router relies on this lock to
+        guard all mount-related state, preventing race conditions when routes
+        are added concurrently with mounting.
+        """
         base = self._mount_prefix.rstrip("/")
         full = f"{base}{canonical}"
         pattern = compile_uri_template(full)
