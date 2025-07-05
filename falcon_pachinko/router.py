@@ -130,9 +130,10 @@ class WebSocketRouter:
 
         factory = functools.partial(resource, *args, **kwargs)
 
-        self._raw.append((path, canonical, factory))
-        if self._mount_prefix:
-            self._compile_and_store_route(canonical, factory)
+        with self._mount_lock:
+            self._raw.append((path, canonical, factory))
+            if self._mount_prefix:
+                self._compile_and_store_route(canonical, factory)
         if name:
             self._names[name] = path
 
@@ -155,6 +156,7 @@ class WebSocketRouter:
         assumption fails, :class:`falcon.HTTPNotFound` is raised to signal that
         the requested path does not map to this router's mount point.
         """
+        # Handle missing or empty path_template by defaulting to root "/"
         prefix = getattr(req, "path_template", "").rstrip("/") or "/"
         if prefix != self._mount_prefix:
             msg = (
