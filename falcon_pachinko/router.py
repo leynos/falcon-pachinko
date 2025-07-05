@@ -20,7 +20,7 @@ if typing.TYPE_CHECKING:
     from .resource import WebSocketLike, WebSocketResource
 
 
-def _compile_uri_template(template: str) -> re.Pattern[str]:
+def compile_uri_template(template: str) -> re.Pattern[str]:
     """Compile a simple URI template into a regex pattern."""
 
     def replace_param(match: re.Match[str]) -> str:
@@ -78,7 +78,7 @@ class WebSocketRouter:
         """Compile ``canonical`` with the mount prefix and store it."""
         base = self._mount_prefix.rstrip("/")
         full = f"{base}{canonical}"
-        pattern = _compile_uri_template(full)
+        pattern = compile_uri_template(full)
         self._routes.append((pattern, factory))
 
     def mount(self, prefix: str) -> None:
@@ -126,7 +126,7 @@ class WebSocketRouter:
 
         # Compile once to validate the template. The prefix is applied lazily
         # upon the first request since it may not yet be known at this point.
-        _compile_uri_template(canonical)
+        compile_uri_template(canonical)
 
         factory = functools.partial(resource, *args, **kwargs)
 
