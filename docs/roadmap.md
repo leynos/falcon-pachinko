@@ -24,7 +24,7 @@ architectural change and underpins all subsequent features.
     `on_websocket(req, ws)` responder method to make it a valid, mountable
     Falcon resource.
 
-  - [ ] Implement the router's internal path-matching logic, leveraging
+  - [x] Implement the router's internal path-matching logic, leveraging
     `falcon.routing.compile_uri_template` to handle routes relative to its mount
     point.
 

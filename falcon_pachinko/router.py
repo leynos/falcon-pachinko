@@ -19,8 +19,8 @@ if typing.TYPE_CHECKING:
     from .resource import WebSocketLike, WebSocketResource
 
 
-def _compile_template(template: str) -> re.Pattern[str]:
-    """Compile a simple path template into a regex pattern."""
+def _compile_uri_template(template: str) -> re.Pattern[str]:
+    """Compile a simple URI template into a regex pattern."""
 
     def replace_param(match: re.Match[str]) -> str:
         param_name = match.group(1)
@@ -61,10 +61,26 @@ class WebSocketRouter:
 
     def __init__(self, *, name: str | None = None) -> None:
         self._routes: list[
-            tuple[str, re.Pattern[str], typing.Callable[..., WebSocketResource]]
+            tuple[str, str, typing.Callable[..., WebSocketResource]]
         ] = []
+        self._compiled: (
+            list[tuple[re.Pattern[str], typing.Callable[..., WebSocketResource]]] | None
+        ) = None
+        self._prefix: str | None = None
         self._names: dict[str, str] = {}
         self.name = name
+
+    def _compile_routes(self, prefix: str) -> None:
+        """Compile route patterns for the given mount ``prefix``."""
+        compiled: list[
+            tuple[re.Pattern[str], typing.Callable[..., WebSocketResource]]
+        ] = []
+        for _template, canonical, factory in self._routes:
+            full = prefix.rstrip("/") + canonical if prefix else canonical
+            pattern = _compile_uri_template(full)
+            compiled.append((pattern, factory))
+        self._compiled = compiled
+        self._prefix = prefix
 
     def add_route(
         self,
@@ -85,16 +101,20 @@ class WebSocketRouter:
 
         path = _normalize_path(path)
         canonical = _canonical_path(path)
-        if any(existing == canonical for existing, _p, _f in self._routes):
+        if any(existing == canonical for _p, existing, _f in self._routes):
             msg = f"route path {path!r} already registered"
             raise ValueError(msg)
         if name and name in self._names:
             msg = f"route name {name!r} already registered"
             raise ValueError(msg)
 
+        # Compile once to validate the template. The prefix is applied lazily
+        # upon the first request since it may not yet be known at this point.
+        _compile_uri_template(canonical)
+
         factory = functools.partial(resource, *args, **kwargs)
 
-        self._routes.append((path, _compile_template(canonical), factory))
+        self._routes.append((path, canonical, factory))
         if name:
             self._names[name] = path
 
@@ -123,13 +143,14 @@ class WebSocketRouter:
                 f"path_template '{prefix}' is not a prefix of request path '{req.path}'"
             )
             raise falcon.HTTPNotFound(description=msg)
-        subpath = req.path[len(prefix) :] if prefix else req.path
-        subpath = subpath or "/"
+
+        if self._compiled is None or self._prefix != prefix:
+            self._compile_routes(prefix)
 
         # Routes are tested in the order they were added. Register more
         # specific paths before general ones to control precedence.
-        for _template, pattern, factory in self._routes:
-            if match := pattern.fullmatch(subpath):
+        for pattern, factory in self._compiled:
+            if match := pattern.fullmatch(req.path):
                 try:
                     resource = factory()
                     should_accept = await resource.on_connect(
