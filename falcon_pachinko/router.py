@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import functools
 import re
+import threading
 import typing
 
 import falcon
@@ -65,20 +66,37 @@ class WebSocketRouter:
             tuple[re.Pattern[str], typing.Callable[..., WebSocketResource]]
         ] = []
         self._mount_prefix: str = ""
+        self._mount_lock = threading.Lock()
         self._names: dict[str, str] = {}
         self.name = name
 
+    def _compile_and_store_route(
+        self,
+        canonical: str,
+        factory: typing.Callable[..., WebSocketResource],
+    ) -> None:
+        """Compile ``canonical`` with the mount prefix and store it."""
+        base = self._mount_prefix.rstrip("/")
+        full = f"{base}{canonical}"
+        pattern = _compile_uri_template(full)
+        self._routes.append((pattern, factory))
+
     def mount(self, prefix: str) -> None:
         """Compile stored routes with the given mount ``prefix``."""
-        if self._mount_prefix:
-            msg = f"router already mounted at '{self._mount_prefix}'"
-            raise RuntimeError(msg)
+        if not prefix or not prefix.startswith("/"):
+            msg = "prefix must be a non-empty string starting with '/'"
+            raise ValueError(msg)
 
-        self._mount_prefix = prefix.rstrip("/")
-        for _template, canonical, factory in self._raw:
-            full = f"{self._mount_prefix}{canonical}"
-            pattern = _compile_uri_template(full)
-            self._routes.append((pattern, factory))
+        canonical = prefix.rstrip("/") or "/"
+
+        with self._mount_lock:
+            if self._mount_prefix:
+                msg = f"router already mounted at '{self._mount_prefix}'"
+                raise RuntimeError(msg)
+
+            self._mount_prefix = canonical
+            for _template, canonical_path, factory in self._raw:
+                self._compile_and_store_route(canonical_path, factory)
 
     def add_route(
         self,
@@ -114,9 +132,7 @@ class WebSocketRouter:
 
         self._raw.append((path, canonical, factory))
         if self._mount_prefix:
-            full = f"{self._mount_prefix}{canonical}"
-            pattern = _compile_uri_template(full)
-            self._routes.append((pattern, factory))
+            self._compile_and_store_route(canonical, factory)
         if name:
             self._names[name] = path
 
@@ -139,7 +155,7 @@ class WebSocketRouter:
         assumption fails, :class:`falcon.HTTPNotFound` is raised to signal that
         the requested path does not map to this router's mount point.
         """
-        prefix = getattr(req, "path_template", "").rstrip("/")
+        prefix = getattr(req, "path_template", "").rstrip("/") or "/"
         if prefix != self._mount_prefix:
             msg = (
                 f"path_template '{prefix}' does not match router mount "

@@ -84,7 +84,7 @@ async def test_trailing_and_nontrailing_slash_routes() -> None:
     router = WebSocketRouter()
     router.add_route("/rooms/{room}/", DummyResource, name="room_trailing")
     router.add_route("/rooms2/{room}", DummyResource, name="room_nontrailing")
-    router.mount("")
+    router.mount("/")
 
     # Trailing slash
     assert router.url_for("room_trailing", room="xyz") == "/rooms/xyz/"
@@ -104,7 +104,7 @@ async def test_not_found_raises() -> None:
     """Ensure unmatched paths raise HTTPNotFound."""
     router = WebSocketRouter()
     router.add_route("/ok", DummyResource)
-    router.mount("")
+    router.mount("/")
     req = type("Req", (), {"path": "/missing"})()
 
     with pytest.raises(falcon.HTTPNotFound):
@@ -116,7 +116,7 @@ async def test_path_template_prefix_mismatch() -> None:
     """Mismatch between ``path_template`` and request should return 404."""
     router = WebSocketRouter()
     router.add_route("/rooms/{room}", DummyResource)
-    router.mount("")
+    router.mount("/")
     req = type("Req", (), {"path": "/rooms/1", "path_template": "/api"})()
 
     with pytest.raises(falcon.HTTPNotFound):
@@ -128,7 +128,7 @@ async def test_on_connect_accepts_connection() -> None:
     """Ensure ws.accept() is called when on_connect returns True."""
     router = WebSocketRouter()
     router.add_route("/ok", AcceptingResource)
-    router.mount("")
+    router.mount("/")
     ws = DummyWS()
     called = {}
 
@@ -185,6 +185,28 @@ async def test_mount_compiles_existing_and_new_routes() -> None:
     assert DummyResource.instances[-1].params == {"id": "2"}
 
 
+def test_mount_twice_raises_error() -> None:
+    """Attempting to mount twice should raise RuntimeError."""
+    router = WebSocketRouter()
+    router.mount("/api")
+    with pytest.raises(RuntimeError, match="already mounted"):
+        router.mount("/v2")
+
+
+@pytest.mark.asyncio
+async def test_mount_with_empty_vs_slash_prefix() -> None:
+    """Validate behavior between empty and slash prefixes."""
+    router_slash = WebSocketRouter()
+    router_slash.add_route("/x", AcceptingResource)
+    router_slash.mount("/")
+    req = type("Req", (), {"path": "/x", "path_template": "/"})()
+    await router_slash.on_websocket(req, DummyWS())
+
+    router_empty = WebSocketRouter()
+    with pytest.raises(ValueError, match="prefix"):
+        router_empty.mount("")
+
+
 @pytest.mark.asyncio
 async def test_overlapping_routes() -> None:
     """Ensure the first matching route is used when paths overlap."""
@@ -210,7 +232,7 @@ async def test_overlapping_routes() -> None:
     router = WebSocketRouter()
     router.add_route("/over/{id}", First)
     router.add_route("/over/static", Second)
-    router.mount("")
+    router.mount("/")
 
     req = type("Req", (), {"path": "/over/static", "path_template": ""})()
     await router.on_websocket(req, DummyWS())
@@ -223,7 +245,7 @@ def test_url_for_unknown_route() -> None:
     """Missing route names should raise a descriptive ``KeyError``."""
     router = WebSocketRouter()
     router.add_route("/x", DummyResource, name="x")
-    router.mount("")
+    router.mount("/")
 
     with pytest.raises(KeyError, match="no route registered"):
         router.url_for("missing")
@@ -233,7 +255,7 @@ def test_url_for_missing_params() -> None:
     """Missing params should raise ``KeyError`` with the param name."""
     router = WebSocketRouter()
     router.add_route("/rooms/{room}", DummyResource, name="room")
-    router.mount("")
+    router.mount("/")
 
     with pytest.raises(KeyError) as excinfo:
         router.url_for("room")
@@ -250,7 +272,7 @@ async def test_on_connect_exception_closes_ws() -> None:
 
     router = WebSocketRouter()
     router.add_route("/boom", BadResource)
-    router.mount("")
+    router.mount("/")
     ws = DummyWS()
     called = {}
 
