@@ -83,8 +83,8 @@ class WebSocketRouter:
 
     def mount(self, prefix: str) -> None:
         """Compile stored routes with the given mount ``prefix``."""
-        if not prefix or not prefix.startswith("/"):
-            msg = "prefix must be a non-empty string starting with '/'"
+        if prefix and not prefix.startswith("/"):
+            msg = "prefix must start with '/'"
             raise ValueError(msg)
 
         canonical = prefix.rstrip("/") or "/"

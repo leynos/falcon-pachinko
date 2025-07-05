@@ -203,8 +203,10 @@ async def test_mount_with_empty_vs_slash_prefix() -> None:
     await router_slash.on_websocket(req, DummyWS())
 
     router_empty = WebSocketRouter()
-    with pytest.raises(ValueError, match="prefix"):
-        router_empty.mount("")
+    router_empty.add_route("/y", AcceptingResource)
+    router_empty.mount("")
+    req_empty = type("Req", (), {"path": "/y", "path_template": ""})()
+    await router_empty.on_websocket(req_empty, DummyWS())
 
 
 @pytest.mark.asyncio
