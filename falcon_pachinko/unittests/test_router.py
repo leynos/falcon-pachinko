@@ -334,6 +334,61 @@ async def test_resource_init_args_kwargs() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resource_missing_init_args() -> None:
+    """Invalid or missing init args should raise ``TypeError`` and close the WS."""
+
+    class NeedsArgs(WebSocketResource):
+        def __init__(self, value: int) -> None:
+            self.value = value
+
+        async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            return False
+
+    router = WebSocketRouter()
+    router.add_route("/w", NeedsArgs)
+    router.mount("/")
+    ws = DummyWS()
+    closed: dict[str, object] = {}
+
+    async def close(code: int = 1000) -> None:  # pragma: no cover - simple stub
+        closed["closed"] = code
+
+    typing.cast("typing.Any", ws).close = close
+    req = type("Req", (), {"path": "/w", "path_template": ""})()
+
+    with pytest.raises(TypeError):
+        await router.on_websocket(req, ws)
+
+    assert closed.get("closed") == 1000
+
+
+@pytest.mark.asyncio
+async def test_resource_unexpected_init_kwargs() -> None:
+    """Unexpected kwargs should raise ``TypeError`` and close the WS."""
+
+    class NoKwargs(WebSocketResource):
+        async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            return False
+
+    router = WebSocketRouter()
+    router.add_route("/x", NoKwargs, kwargs={"oops": 1})
+    router.mount("/")
+    ws = DummyWS()
+    closed: dict[str, object] = {}
+
+    async def close(code: int = 1000) -> None:  # pragma: no cover - simple stub
+        closed["closed"] = code
+
+    typing.cast("typing.Any", ws).close = close
+    req = type("Req", (), {"path": "/x", "path_template": ""})()
+
+    with pytest.raises(TypeError):
+        await router.on_websocket(req, ws)
+
+    assert closed.get("closed") == 1000
+
+
+@pytest.mark.asyncio
 async def test_add_route_accepts_factory() -> None:
     """Verify that callable factories may be used as route targets."""
     created: dict[str, object] = {}
