@@ -752,6 +752,26 @@ The `WebSocketRouter` must resolve these composite paths. A trie (prefix tree) i
 
 A critical aspect is **context passing**. The router must facilitate passing state from parent to child. A robust implementation would involve the router instantiating the entire resource chain, allowing parent resources to pass relevant state (or `self`) into the constructors of their children.
 
+```mermaid
+sequenceDiagram
+    participant Client
+    participant FalconRequest as Falcon Request
+    participant WebSocketRouter
+    participant ResourceFactory
+
+    Client->>FalconRequest: Initiates WebSocket request
+    FalconRequest->>WebSocketRouter: on_websocket(req, ws)
+    WebSocketRouter->>WebSocketRouter: Check req.path_template == _mount_prefix
+    WebSocketRouter->>WebSocketRouter: Match full request path against compiled routes
+    alt Match found
+        WebSocketRouter->>ResourceFactory: Instantiate resource
+        ResourceFactory-->>WebSocketRouter: Resource instance
+        WebSocketRouter->>ResourceFactory: Call resource handler
+    else No match
+        WebSocketRouter->>FalconRequest: Raise 404
+    end
+```
+
 ### 5.3. High-Performance Schema-Driven Dispatch with `msgspec`
 
 This proposal elevates the dispatch mechanism using `msgspec` and its support for tagged unions. This moves from simple dispatch to a declarative, schema-driven approach.
