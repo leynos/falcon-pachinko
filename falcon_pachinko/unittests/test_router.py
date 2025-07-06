@@ -40,6 +40,34 @@ class AcceptingResource(WebSocketResource):
         return True
 
 
+async def _expect_close(
+    resource: type[WebSocketResource],
+    *,
+    path: str,
+    expected_exc: type[BaseException],
+    args: tuple | None = None,
+    kwargs: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Invoke a route expecting an exception and closed connection."""
+    router = WebSocketRouter()
+    router.add_route(path, resource, args=args or (), kwargs=kwargs)
+    router.mount("/")
+
+    ws = DummyWS()
+    closed: dict[str, object] = {}
+
+    async def close(code: int = 1000) -> None:  # pragma: no cover - simple stub
+        closed["closed"] = code
+
+    typing.cast("typing.Any", ws).close = close
+    req = type("Req", (), {"path": path, "path_template": ""})()
+
+    with pytest.raises(expected_exc):
+        await router.on_websocket(req, ws)
+
+    return closed
+
+
 def test_router_is_resource() -> None:
     """Verify the router exposes a valid ``on_websocket`` responder."""
     router = WebSocketRouter()
@@ -286,22 +314,9 @@ async def test_on_connect_exception_closes_ws() -> None:
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
             raise RuntimeError("boom")
 
-    router = WebSocketRouter()
-    router.add_route("/boom", BadResource)
-    router.mount("/")
-    ws = DummyWS()
-    called = {}
+    closed = await _expect_close(BadResource, path="/boom", expected_exc=RuntimeError)
 
-    async def close(code: int = 1000) -> None:  # pragma: no cover - simple stub
-        called["closed"] = code
-
-    typing.cast("typing.Any", ws).close = close
-
-    req = type("Req", (), {"path": "/boom"})()
-    with pytest.raises(RuntimeError):
-        await router.on_websocket(req, ws)
-
-    assert called.get("closed") == 1000
+    assert closed.get("closed") == 1000
 
 
 @pytest.mark.asyncio
@@ -344,20 +359,7 @@ async def test_resource_missing_init_args() -> None:
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
             return False
 
-    router = WebSocketRouter()
-    router.add_route("/w", NeedsArgs)
-    router.mount("/")
-    ws = DummyWS()
-    closed: dict[str, object] = {}
-
-    async def close(code: int = 1000) -> None:  # pragma: no cover - simple stub
-        closed["closed"] = code
-
-    typing.cast("typing.Any", ws).close = close
-    req = type("Req", (), {"path": "/w", "path_template": ""})()
-
-    with pytest.raises(TypeError):
-        await router.on_websocket(req, ws)
+    closed = await _expect_close(NeedsArgs, path="/w", expected_exc=TypeError)
 
     assert closed.get("closed") == 1000
 
@@ -370,20 +372,9 @@ async def test_resource_unexpected_init_kwargs() -> None:
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
             return False
 
-    router = WebSocketRouter()
-    router.add_route("/x", NoKwargs, kwargs={"oops": 1})
-    router.mount("/")
-    ws = DummyWS()
-    closed: dict[str, object] = {}
-
-    async def close(code: int = 1000) -> None:  # pragma: no cover - simple stub
-        closed["closed"] = code
-
-    typing.cast("typing.Any", ws).close = close
-    req = type("Req", (), {"path": "/x", "path_template": ""})()
-
-    with pytest.raises(TypeError):
-        await router.on_websocket(req, ws)
+    closed = await _expect_close(
+        NoKwargs, path="/x", expected_exc=TypeError, kwargs={"oops": 1}
+    )
 
     assert closed.get("closed") == 1000
 
