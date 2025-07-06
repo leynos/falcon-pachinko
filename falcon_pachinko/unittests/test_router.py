@@ -6,6 +6,7 @@ import inspect
 import typing
 
 import falcon
+import falcon.asgi
 import pytest
 
 from falcon_pachinko import WebSocketResource, WebSocketRouter
@@ -301,3 +302,74 @@ async def test_on_connect_exception_closes_ws() -> None:
         await router.on_websocket(req, ws)
 
     assert called.get("closed") == 1000
+
+
+@pytest.mark.asyncio
+async def test_resource_init_args_kwargs() -> None:
+    """Ensure ``add_route`` forwards init args and kwargs."""
+
+    class ParamResource(WebSocketResource):
+        instances: typing.ClassVar[list[ParamResource]] = []
+
+        def __init__(self, foo: str, *, bar: int) -> None:
+            self.foo = foo
+            self.bar = bar
+            ParamResource.instances.append(self)
+
+        async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            self.params = params
+            return False
+
+    router = WebSocketRouter()
+    router.add_route(
+        "/p/{id}", ParamResource, args=("hey",), kwargs={"bar": 5}, name="p"
+    )
+    router.mount("/")
+
+    req = type("Req", (), {"path": "/p/1", "path_template": ""})()
+    await router.on_websocket(req, DummyWS())
+    inst = ParamResource.instances[-1]
+    assert inst.foo == "hey"
+    assert inst.bar == 5
+
+
+@pytest.mark.asyncio
+async def test_add_route_accepts_factory() -> None:
+    """Verify that callable factories may be used as route targets."""
+    created: dict[str, object] = {}
+
+    class FactoryResource(WebSocketResource):
+        def __init__(self, value: int) -> None:
+            created["init"] = value
+
+        async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            created["params"] = params
+            return False
+
+    def factory(value: int) -> FactoryResource:
+        return FactoryResource(value)
+
+    router = WebSocketRouter()
+    router.add_route("/f/{id}", factory, args=(7,), name="factory")
+    router.mount("/")
+
+    req = type("Req", (), {"path": "/f/5", "path_template": ""})()
+    await router.on_websocket(req, DummyWS())
+
+    assert created == {"init": 7, "params": {"id": "5"}}
+
+
+@pytest.mark.asyncio
+async def test_router_mount_on_app() -> None:
+    """Verify routers work when mounted on a Falcon ``App``."""
+    DummyResource.instances.clear()
+    router = WebSocketRouter()
+    router.add_route("/rooms/{room}", DummyResource, name="room")
+    router.mount("/ws")
+
+    app = falcon.asgi.App()
+    app.add_route("/ws", router)
+
+    req = type("Req", (), {"path": "/ws/rooms/42", "path_template": "/ws"})()
+    await router.on_websocket(req, DummyWS())
+    assert DummyResource.instances[-1].params == {"room": "42"}
