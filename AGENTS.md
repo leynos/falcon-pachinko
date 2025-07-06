@@ -149,11 +149,17 @@ When implementing changes, adhere to the following testing procedures:
 
 ## Language-Specific Guidelines
 
-For Python development, refer to the detailed guidelines in the `.rules/` directory:
+For Python development, refer to the detailed guidelines in the `.rules/`
+directory:
 
-* [Python Code Style Guidelines](.rules/python-00.mdc) - Core Python 3.13 style conventions
-* [Python Context Managers](.rules/python-context-managers.mdc) - Best practices for context managers
-* [Python Generators](.rules/python-generators.mdc) - Generator and iterator patterns
-* [Python Project Configuration](.rules/python-pyproject.mdc) - pyproject.toml and packaging
-* [Python Return Patterns](.rules/python-return.mdc) - Function return conventions
-* [Python Typing](.rules/python-typing.mdc) - Type annotation best practices
+- [Python Code Style Guidelines](.rules/python-00.mdc) - Core Python 3.13 style
+  conventions
+- [Python Context Managers](.rules/python-context-managers.mdc) - Best practices
+  for context managers
+- [Python Generators](.rules/python-generators.mdc) - Generator and iterator
+  patterns
+- [Python Project Configuration](.rules/python-pyproject.mdc) - pyproject.toml
+  and packaging
+- [Python Return Patterns](.rules/python-return.mdc) - Function return
+  conventions
+- [Python Typing](.rules/python-typing.mdc) - Type annotation best practices
