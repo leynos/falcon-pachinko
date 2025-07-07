@@ -57,13 +57,13 @@ composable patterns.
 
 - [ ] **Integrate** `msgspec` **for Schema-Driven Dispatch.**
 
-  - [ ] Refactor the `WebSocketResource` dispatch loop to prioritize the
+  - [x] Refactor the `WebSocketResource` dispatch loop to prioritize the
     `schema` attribute (a `msgspec` tagged union).
 
-  - [ ] Implement the logic to decode messages against the schema and route to
+  - [x] Implement the logic to decode messages against the schema and route to
     handlers based on the message tag.
 
-  - [ ] Make the `@handles_message("type")` decorator the canonical, preferred
+  - [x] Make the `@handles_message("type")` decorator the canonical, preferred
     way to register a handler.
 
   - [ ] Implement the `on_{tag}` naming convention as a best-effort convenience,

@@ -8,6 +8,7 @@ import inspect
 import typing
 
 import msgspec
+import msgspec.inspect as msgspec_inspect
 import msgspec.json as msgspec_json
 
 if typing.TYPE_CHECKING:
@@ -316,9 +317,17 @@ def handles_message(
 
 
 class WebSocketResource:
-    """Base class for WebSocket handlers."""
+    """Base class for WebSocket handlers.
+
+    Subclasses may optionally define a :attr:`schema` attribute referencing a
+    :func:`typing.Union` of :class:`msgspec.Struct` types. When provided,
+    incoming messages are decoded using this tagged union and dispatched based
+    on the message tag. This enables high-performance, schema-driven routing
+    without additional boilerplate.
+    """
 
     handlers: typing.ClassVar[dict[str, tuple[Handler, type | None]]]
+    schema: type | None = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Initialize and merge handler mappings for subclasses."""
@@ -431,11 +440,11 @@ class WebSocketResource:
 
         Dispatches the message to the appropriate handler based on its type.
 
-        Attempts to decode the message as a JSON envelope containing a message
-        type and optional payload. If decoding or payload validation fails, or
-        if no handler is registered for the message type, the message is passed
-        to the fallback ``on_message`` method. Otherwise, the registered handler
-        is invoked with the converted payload.
+        If :attr:`schema` is defined, ``raw`` is decoded using the tagged union
+        and routed by the resulting message's ``tag``. Otherwise, the message is
+        interpreted as a JSON envelope with ``type`` and optional ``payload``
+        fields. Any decoding failure or missing handler results in a call to
+        :meth:`on_message`.
 
         Parameters
         ----------
@@ -444,6 +453,24 @@ class WebSocketResource:
         raw : str or bytes
             The raw message to process and dispatch
         """
+        if self.schema is not None:
+            try:
+                message = msgspec_json.decode(raw, type=self.schema)
+            except (msgspec.DecodeError, msgspec.ValidationError):
+                await self.on_message(ws, raw)
+                return
+
+            info = msgspec_inspect.type_info(type(message))
+            tag = typing.cast("msgspec_inspect.StructType", info).tag
+            entry = self.__class__.handlers.get(tag)
+            if not entry:
+                await self.on_message(ws, raw)
+                return
+
+            handler, _ = entry
+            await handler(self, ws, message)
+            return
+
         try:
             envelope = msgspec_json.decode(raw, type=_Envelope)
         except msgspec.DecodeError:

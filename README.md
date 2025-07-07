@@ -17,8 +17,10 @@ for the full design rationale.
   lifecycle hooks.
 - Message payloads are parsed into `msgspec.Struct` classes for speed and type
   safety.
-- `@handles_message("type")` dispatches incoming JSON messages to specific
-  handler methods.
+- Define a `schema` union of tagged `msgspec.Struct` types to enable automatic
+  dispatch based on the message tag.
+- Use the canonical `@handles_message("type")` decorator to register message
+  handlers.
 - `WebSocketConnectionManager` tracks connections, manages rooms, and lets
   workers broadcast messages.
 - Background tasks register via `app.add_websocket_worker` and interact with the
