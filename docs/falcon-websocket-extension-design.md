@@ -79,7 +79,7 @@ within an endpoint remains a manual task for the developer.
 Django Channels extends Django to handle WebSockets and other protocols beyond
 HTTP, built on ASGI.[^5] It introduces concepts like `Consumers` (analogous to
 Django views but for WebSockets and other protocols) which handle the lifecycle
-of a connection (e.g., `connect`, `disconnect`, `receive`).[^7] Routing is managed
+of a connection (e.g., `connect`, `disconnect`, `receive`).[^6] Routing is managed
 by `ProtocolTypeRouter` (to distinguish between HTTP, WebSocket, etc.) and
 `URLRouter` (for path-based routing to consumers).[^5]
 A key feature of Channels is
@@ -91,23 +91,23 @@ more heavyweight solution than what is typically sought for a Falcon extension.
 
 ### 2.4. FastAPI
 
-FastAPI, built on Starlette, leverages Starlette's WebSocket capabilities.[^8] It
-provides a decorator, `@app.websocket("/ws")`, to define WebSocket endpoints.[^8]
+FastAPI, built on Starlette, leverages Starlette's WebSocket capabilities.[^7] It
+provides a decorator, `@app.websocket("/ws")`, to define WebSocket endpoints.[^7]
 Similar to Falcon and Starlette's basic function endpoints, this decorator
 typically maps a path to a single asynchronous function that manages the entire
 WebSocket connection lifecycle, including accepting the connection, receiving
-messages in a loop, and sending responses.[^8] Message dispatch based on content
+messages in a loop, and sending responses.[^7] Message dispatch based on content
 within this function is a manual implementation detail.
 
 ### 2.5. `websockets` Library
 
 The `websockets` library is a focused Python library for building WebSocket
-servers and clients, emphasizing correctness, simplicity, and performance.[^10] It
+servers and clients, emphasizing correctness, simplicity, and performance.[^8] It
 is built on `asyncio` and provides a coroutine-based API. While excellent for
 implementing the WebSocket protocol itself (e.g., `serve` for servers, `connect`
 for clients), it is not a web framework extension and does not offer
 higher-level routing or integration with framework components like Falcon's
-resources or request objects.[^10] Its primary goal is protocol implementation
+resources or request objects.[^8] Its primary goal is protocol implementation
 rather than framework-level application structure.
 
 ### 2.6. Gap Analysis and Opportunity
@@ -369,6 +369,7 @@ when their containing class is created:
 
 ```python
 import functools
+from types import MappingProxyType
 from typing import Callable, Dict, Any
 
 class _MessageHandlerDescriptor:
@@ -386,7 +387,9 @@ class _MessageHandlerDescriptor:
         self.name = name
 
         parent_registry = getattr(owner, "_message_handlers", {})
-        # copy to ensure each class gets its own isolated registry
+        # Each class must get its own registry; otherwise subclasses would
+        # mutate the parent's handler map and cause cross-talk across the
+        # hierarchy.
         registry: Dict[str, Callable] = dict(parent_registry)
         if self.msg_type in registry:
             raise RuntimeError(
@@ -394,6 +397,10 @@ class _MessageHandlerDescriptor:
             )
         registry[self.msg_type] = self.func
         owner._message_handlers = registry
+        # Freeze the parent registry to guard against accidental mutation.
+        base = owner.__bases__[0]
+        if hasattr(base, "_message_handlers"):
+            base._message_handlers = MappingProxyType(parent_registry)
 
     def __get__(self, instance: Any, owner: type | None = None) -> Callable:
         return self.func.__get__(instance, owner or self.owner)
@@ -1425,6 +1432,6 @@ traditional API development and emerging real-time use cases.
 [^3]: <https://www.starlette.io>
 [^4]: <https://www.starlette.io/websockets/>
 [^5]: <https://channels.readthedocs.io>
-[^7]: <https://channels.readthedocs.io/en/stable/topics/consumers.html>
-[^8]: <https://fastapi.tiangolo.com/advanced/websockets/>
-[^10]: <https://websockets.readthedocs.io>
+[^6]: <https://channels.readthedocs.io/en/stable/topics/consumers.html>
+[^7]: <https://fastapi.tiangolo.com/advanced/websockets/>
+[^8]: <https://websockets.readthedocs.io>
