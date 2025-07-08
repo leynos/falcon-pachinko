@@ -562,27 +562,22 @@ failures.
 
 ### 3.9. API Overview
 
-The following table summarizes the key components of the proposed
-Falcon-Pachinko API and their analogies to Falcon's HTTP mechanisms, where
-applicable. This serves as a quick reference to understand the main abstractions
-and their intended use. This API structure is designed to be both powerful
-enough for complex | Component | Key Elements | Purpose | Falcon Analogy | |
---------- | ------------ | ------- | -------------- | | Application Setup |
-`falcon_pachinko.install(app)` | Initializes shared WebSocket components such as
-the connection manager. | App-level extensions | | Route Definition |
-`app.add_websocket_route()` and `WebSocketRouter.add_route()` | Maps a URI path
-to a `WebSocketResource`. | `app.add_route()` | | Resource Class |
-`falcon_pachinko.WebSocketResource` | Handles connections and messages for a
-given route. | Falcon HTTP `Resource` | | Connection Lifecycle | `on_connect()`,
-`on_disconnect()` | Setup and teardown hooks for each connection. |
-Request/response middleware | | Message Handling (Typed) | `@handles_message()`
-and `on_{type}` | Routes incoming JSON messages by type. | `on_get`, `on_post`,
-etc. | | Message Handling (Generic) | `on_unhandled()` | Fallback for
-unrecognized or non-JSON messages. | N/A | | Background Worker Integration |
-`WorkerController`, `@app.lifespan` | Manages long-running tasks within the ASGI
-lifecycle. | Custom patterns | | Connection Management (Global) |
-`app.ws_connection_manager` | Tracks connections and enables broadcasting. | N/A
-| applications and intuitive for developers accustomed to Falcon. |
+The following table summarizes the key components of the proposed API and their
+relation to Falcon's HTTP concepts:
+
+| Component                                                         | Key Elements                                                      | Purpose                                                           | Falcon Analogy           |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------ |
+| Application Setup                                                 | `falcon_pachinko.install(app)`                                    | Initialize shared WebSocket components (e.g. connection manager). | App-level extension      |
+| Route Definition                                                  | `app.add_websocket_route()`, `WebSocketRouter.add_route()`        | Map a URI path to a `WebSocketResource`.                          | `app.add_route()`        |
+| Resource Class                                                    | `falcon_pachinko.WebSocketResource`                               | Handle connections and messages for a given route.                | HTTP `Resource`          |
+| Connection Lifecycle                                              | `on_connect()`, `on_disconnect()`                                 | Setup / teardown hooks per connection.                            | Middleware hooks         |
+| Message Handling (typed)                                          | `@handles_message()`, `on_{type}`                                 | Route JSON messages by type.                                      | `on_get`, `on_post`, …   |
+| Message Handling (generic fallback)                               | `on_unhandled()`                                                  | Fallback for unrecognised or non-JSON messages.                   | —                        |
+| Background Worker Integration                                     | `WorkerController`, `@app.lifespan`                               | Manage long-running tasks within ASGI lifespan.                   | Custom patterns          |
+| Connection Management (global)                                    | `app.ws_connection_manager`                                       | Track connections & enable broadcasting.                          | —                        |
+
+This API structure is designed to be both powerful for complex applications and
+intuitive for developers accustomed to Falcon.
 
 ## 4. Illustrative Usecase: Real-time Chat Application
 
@@ -943,6 +938,8 @@ erDiagram
     }
 ```
 
+<!-- markdownlint-disable MD013 -->
+
 ```mermaid
 classDiagram
     class WebSocketRouter {
@@ -950,7 +947,6 @@ classDiagram
         - _names: dict[str, str]
         - name: str | None
         + __init__(name: str | None = None)
-        <!-- markdownlint-disable-next-line MD013 -->
         + add_route(path: str, resource: type[WebSocketResource] | Callable[..., WebSocketResource], name: str | None = None, args: tuple = (), kwargs: dict | None = None)
         + url_for(name: str, **params: object) str
         + on_websocket(req: falcon.Request, ws: WebSocketLike)
@@ -966,7 +962,10 @@ classDiagram
     WebSocketRouter ..> falcon.Request : uses
     WebSocketResource ..> WebSocketLike : uses
     WebSocketResource ..> falcon.Request : uses
+
 ```
+
+<!-- markdownlint-enable MD013 -->
 
 ### 5.2. Composable Architecture: Nested Resources
 
