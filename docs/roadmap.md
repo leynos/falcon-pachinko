@@ -28,25 +28,25 @@ architectural change and underpins all subsequent features.
     `falcon.routing.compile_uri_template` to handle routes relative to its mount
     point.
 
-- [ ] **Implement the** `WebSocketRouter.add_route()` **API.**
+- [x] **Implement the** `WebSocketRouter.add_route()` **API.**
 
-  - [ ] The method must accept a relative path, a name for URL reversal, and the
+  - [x] The method must accept a relative path, a name for URL reversal, and the
     target resource.
 
-  - [ ] Add support for both `WebSocketResource` classes and callable factories
+  - [x] Add support for both `WebSocketResource` classes and callable factories
     as route targets, mirroring Falcon's HTTP routing flexibility.
 
-  - [ ] Add support for passing `*args` and `**kwargs` during route definition
+  - [x] Add support for passing `*args` and `**kwargs` during route definition
     for resource initialization.
 
-  - [ ] Implement `router.url_for(name, **params)` for reverse URL generation.
+  - [x] Implement `router.url_for(name, **params)` for reverse URL generation.
 
-- [ ] **Update Core Tests.**
+- [x] **Update Core Tests.**
 
-  - [ ] Write new integration tests to verify that a `WebSocketRouter` can be
+  - [x] Write new integration tests to verify that a `WebSocketRouter` can be
     mounted on a Falcon `App`.
 
-  - [ ] Test that connections to routes defined on the router correctly
+  - [x] Test that connections to routes defined on the router correctly
     instantiate the associated resource with the correct path parameters and
     initialization arguments.
 

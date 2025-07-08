@@ -192,6 +192,7 @@ class _HandlesMessageDescriptor:
         """
         self.message_type = message_type
         self.func = func
+        self.payload_type = _get_payload_type(func)
         functools.update_wrapper(self, func)  # pyright: ignore[reportArgumentType]
         self.owner: type | None = None
         self.name: str | None = None
@@ -235,12 +236,10 @@ class _HandlesMessageDescriptor:
             )
             raise RuntimeError(msg)
 
-        payload_type = _get_payload_type(self.func)
-
         typed_owner.add_handler(
             self.message_type,
             self.func,
-            payload_type=payload_type,
+            payload_type=self.payload_type,
         )
 
     def __get__(

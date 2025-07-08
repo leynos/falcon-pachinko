@@ -562,22 +562,24 @@ failures.
 
 ### 3.9. API Overview
 
-The following table summarizes the key components of the proposed API and their
-relation to Falcon's HTTP concepts:
+The following table summarizes the key components of the proposed
+Falcon-Pachinko API and their analogies to Falcon's HTTP mechanisms, where
+applicable. This serves as a quick reference to understand the main abstractions
+and their intended use. This API structure is designed to be both powerful
+enough for complex applications and intuitive for developers accustomed to
+Falcon.
 
-| Component                                                         | Key Elements                                                      | Purpose                                                           | Falcon Analogy           |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------ |
-| Application Setup                                                 | `falcon_pachinko.install(app)`                                    | Initialize shared WebSocket components (e.g. connection manager). | App-level extension      |
-| Route Definition                                                  | `app.add_websocket_route()`, `WebSocketRouter.add_route()`        | Map a URI path to a `WebSocketResource`.                          | `app.add_route()`        |
-| Resource Class                                                    | `falcon_pachinko.WebSocketResource`                               | Handle connections and messages for a given route.                | HTTP `Resource`          |
-| Connection Lifecycle                                              | `on_connect()`, `on_disconnect()`                                 | Setup / teardown hooks per connection.                            | Middleware hooks         |
-| Message Handling (typed)                                          | `@handles_message()`, `on_{type}`                                 | Route JSON messages by type.                                      | `on_get`, `on_post`, …   |
-| Message Handling (generic fallback)                               | `on_unhandled()`                                                  | Fallback for unrecognised or non-JSON messages.                   | —                        |
-| Background Worker Integration                                     | `WorkerController`, `@app.lifespan`                               | Manage long-running tasks within ASGI lifespan.                   | Custom patterns          |
-| Connection Management (global)                                    | `app.ws_connection_manager`                                       | Track connections & enable broadcasting.                          | —                        |
+| Component                      | Key Elements                                                  | Purpose                                                                 | Falcon Analogy              |
+| ------------------------------ | ------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------- |
+| Application Setup              | `falcon_pachinko.install(app)`                                | Initializes shared WebSocket components such as the connection manager. | App-level extensions        |
+| Route Definition               | `app.add_websocket_route()` and `WebSocketRouter.add_route()` | Maps a URI path to a `WebSocketResource`.                               | `app.add_route()`           |
+| Resource Class                 | `falcon_pachinko.WebSocketResource`                           | Handles connections and messages for a given route.                     | Falcon HTTP `Resource`      |
+| Connection Lifecycle           | `on_connect()`, `on_disconnect()`                             | Setup and teardown hooks for each connection.                           | Request/response middleware |
+| Message Handling (Typed)       | `@handles_message()` and `on_{type}`                          | Routes incoming JSON messages by type.                                  | `on_get`, `on_post`, etc.   |
+| Message Handling (Generic)     | `on_unhandled()`                                              | Fallback for unrecognized or non-JSON messages.                         | N/A                         |
+| Background Worker Integration  | `WorkerController`, `@app.lifespan`                           | Manages long-running tasks within the ASGI lifecycle.                   | Custom patterns             |
+| Connection Management (Global) | `app.ws_connection_manager`                                   | Tracks connections and enables broadcasting.                            | N/A                         |
 
-This API structure is designed to be both powerful for complex applications and
-intuitive for developers accustomed to Falcon.
 
 ## 4. Illustrative Usecase: Real-time Chat Application
 
@@ -1013,6 +1015,26 @@ A critical aspect is **context passing**. The router must facilitate passing
 state from parent to child. A robust implementation would involve the router
 instantiating the entire resource chain, allowing parent resources to pass
 relevant state (or `self`) into the constructors of their children.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant FalconRequest as Falcon Request
+    participant WebSocketRouter
+    participant ResourceFactory
+
+    Client->>FalconRequest: Initiates WebSocket request
+    FalconRequest->>WebSocketRouter: on_websocket(req, ws)
+    WebSocketRouter->>WebSocketRouter: Check req.path_template == _mount_prefix
+    WebSocketRouter->>WebSocketRouter: Match full request path against compiled routes
+    alt Match found
+        WebSocketRouter->>ResourceFactory: Instantiate resource
+        ResourceFactory-->>WebSocketRouter: Resource instance
+        WebSocketRouter->>ResourceFactory: Call resource handler
+    else No match
+        WebSocketRouter->>FalconRequest: Raise 404
+    end
+```
 
 ### 5.3. High-Performance Schema-Driven Dispatch with `msgspec`
 
