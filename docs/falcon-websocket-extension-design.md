@@ -4,9 +4,9 @@
 
 The Falcon Web Framework is recognized for its performance, reliability, and
 minimalist design, making it a popular choice for building RESTful APIs and web
-application backends in Python.1 While Falcon provides foundational support for
+application backends in Python.[^1] While Falcon provides foundational support for
 WebSocket connections through its ASGI (Asynchronous Server Gateway Interface)
-integration 2, it currently lacks a higher-level abstraction for routing and
+integration[^2], it currently lacks a higher-level abstraction for routing and
 handling WebSocket messages in a manner analogous to its well-regarded HTTP
 routing and request handling mechanisms. This limitation often requires
 developers to implement custom dispatch logic within a single WebSocket handler,
@@ -41,17 +41,17 @@ patterns and potential areas for improvement.
 ### 2.1. Falcon's Native WebSocket Capabilities
 
 Falcon's support for WebSockets is built upon the ASGI WebSocket Specification
-and is available in its ASGI applications.2 Developers can add WebSocket support
+and is available in its ASGI applications.[^2] Developers can add WebSocket support
 to a route by implementing an `async def on_websocket(self, req, websocket)`
-responder method within a resource class.1 This method is invoked when a
+responder method within a resource class.[^1] This method is invoked when a
 WebSocket handshake request is successfully routed.
 
 The `falcon.asgi.WebSocket` object provided to this responder offers methods for
 managing the connection lifecycle, such as `accept()`, `close()`,
-`receive_text()`, `receive_data()`, `send_text()`, and `send_data()`.2 Falcon
+`receive_text()`, `receive_data()`, `send_text()`, and `send_data()`. [^2] Falcon
 also handles events like lost connections by raising a `WebSocketDisconnected`
 exception. Middleware components and media handlers can be used to augment
-WebSocket flows, similar to regular HTTP requests.2
+WebSocket flows, similar to regular HTTP requests.[^2]
 
 However, Falcon's native support routes an entire WebSocket connection to a
 single `on_websocket` handler. For applications requiring dispatch based on
@@ -64,49 +64,50 @@ conditional structures that are difficult to maintain and test.
 
 Starlette, a lightweight ASGI framework, provides robust WebSocket support. It
 uses `WebSocketRoute` for defining WebSocket endpoints, which can be an `async`
-function or an ASGI class like `WebSocketEndpoint`.3 The `WebSocketEndpoint`
+function or an ASGI class like `WebSocketEndpoint`.[^3] The `WebSocketEndpoint`
 class typically offers methods like `on_connect`, `on_receive`, and
 `on_disconnect` to handle different phases of the WebSocket lifecycle, although
 the specifics of `WebSocketEndpoint` are not fully detailed in the reviewed
-material.3 The `starlette.websockets.WebSocket` class itself provides
+material.[^3] The `starlette.websockets.WebSocket` class itself provides
 comprehensive methods for interaction, including `accept()`, `close()`, various
 `send_*` and `receive_*` methods (for text, bytes, JSON), and iterators for
-messages.4 Starlette's routing is path-based; message content-based dispatch
+messages.[^4] Starlette's routing is path-based; message content-based dispatch
 within an endpoint remains a manual task for the developer.
 
 ### 2.3. Django Channels
 
 Django Channels extends Django to handle WebSockets and other protocols beyond
-HTTP, built on ASGI.5 It introduces concepts like `Consumers` (analogous to
+HTTP, built on ASGI.[^5] It introduces concepts like `Consumers` (analogous to
 Django views but for WebSockets and other protocols) which handle the lifecycle
-of a connection (e.g., `connect`, `disconnect`, `receive`).7 Routing is managed
+of a connection (e.g., `connect`, `disconnect`, `receive`).[^6] Routing is managed
 by `ProtocolTypeRouter` (to distinguish between HTTP, WebSocket, etc.) and
-`URLRouter` (for path-based routing to consumers).5 A key feature of Channels is
+`URLRouter` (for path-based routing to consumers).[^5]
+A key feature of Channels is
 the "channel layer," an abstraction for inter-process communication (often
 backed by Redis), allowing different parts of an application, including
-background tasks, to send messages to WebSockets.5 While powerful, Django
+background tasks, to send messages to WebSockets.[^5] While powerful, Django
 Channels is a comprehensive system deeply integrated with Django, representing a
 more heavyweight solution than what is typically sought for a Falcon extension.
 
 ### 2.4. FastAPI
 
-FastAPI, built on Starlette, leverages Starlette's WebSocket capabilities.8 It
-provides a decorator, `@app.websocket("/ws")`, to define WebSocket endpoints.8
+FastAPI, built on Starlette, leverages Starlette's WebSocket capabilities.[^7] It
+provides a decorator, `@app.websocket("/ws")`, to define WebSocket endpoints.[^7]
 Similar to Falcon and Starlette's basic function endpoints, this decorator
 typically maps a path to a single asynchronous function that manages the entire
 WebSocket connection lifecycle, including accepting the connection, receiving
-messages in a loop, and sending responses.8 Message dispatch based on content
+messages in a loop, and sending responses.[^7] Message dispatch based on content
 within this function is a manual implementation detail.
 
 ### 2.5. `websockets` Library
 
 The `websockets` library is a focused Python library for building WebSocket
-servers and clients, emphasizing correctness, simplicity, and performance.10 It
+servers and clients, emphasizing correctness, simplicity, and performance.[^8] It
 is built on `asyncio` and provides a coroutine-based API. While excellent for
 implementing the WebSocket protocol itself (e.g., `serve` for servers, `connect`
 for clients), it is not a web framework extension and does not offer
 higher-level routing or integration with framework components like Falcon's
-resources or request objects.10 Its primary goal is protocol implementation
+resources or request objects.[^8] Its primary goal is protocol implementation
 rather than framework-level application structure.
 
 ### 2.6. Gap Analysis and Opportunity
@@ -145,7 +146,7 @@ ensuring the extension remains lightweight.
 ### 3.1. Core Principles
 
 - **Leverage Falcon's ASGI Foundation**: The extension will build upon Falcon's
-  existing `falcon.asgi.App` and `falcon.asgi.WebSocket` components 1, ensuring
+  existing `falcon.asgi.App` and `falcon.asgi.WebSocket` components[^1], ensuring
   seamless integration with the ASGI ecosystem.
 
 - **Consistency with Falcon HTTP API**: The patterns for defining routes and
@@ -368,6 +369,7 @@ when their containing class is created:
 
 ```python
 import functools
+from types import MappingProxyType
 from typing import Callable, Dict, Any
 
 class _MessageHandlerDescriptor:
@@ -384,13 +386,21 @@ class _MessageHandlerDescriptor:
         self.owner = owner
         self.name = name
 
-        registry: Dict[str, Callable] = getattr(owner, "_message_handlers", {})
+        parent_registry = getattr(owner, "_message_handlers", {})
+        # Each class must get its own registry; otherwise subclasses would
+        # mutate the parent's handler map and cause cross-talk across the
+        # hierarchy.
+        registry: Dict[str, Callable] = dict(parent_registry)
         if self.msg_type in registry:
             raise RuntimeError(
                 f"Duplicate handler for message type {self.msg_type!r} on {owner.__qualname__}"
             )
         registry[self.msg_type] = self.func
         owner._message_handlers = registry
+        # Freeze the parent registry to guard against accidental mutation.
+        base = owner.__bases__[0]
+        if hasattr(base, "_message_handlers"):
+            base._message_handlers = MappingProxyType(parent_registry)
 
     def __get__(self, instance: Any, owner: type | None = None) -> Callable:
         return self.func.__get__(instance, owner or self.owner)
@@ -579,7 +589,6 @@ Falcon.
 | Message Handling (Generic)     | `on_unhandled()`                                              | Fallback for unrecognized or non-JSON messages.                         | N/A                         |
 | Background Worker Integration  | `WorkerController`, `@app.lifespan`                           | Manages long-running tasks within the ASGI lifecycle.                   | Custom patterns             |
 | Connection Management (Global) | `app.ws_connection_manager`                                   | Tracks connections and enables broadcasting.                            | N/A                         |
-
 
 ## 4. Illustrative Usecase: Real-time Chat Application
 
@@ -1208,7 +1217,7 @@ based on the negotiated subprotocol.
 Investigating support for WebSocket compression extensions (RFC 7692, e.g.,
 `permessage-deflate`) could improve bandwidth efficiency. Falcon's
 `WebSocket.accept()` method does not currently list explicit parameters for
-negotiating compression extensions.2 This would likely depend on the
+negotiating compression extensions.[^2] This would likely depend on the
 capabilities of the underlying ASGI server (e.g., Uvicorn, Daphne) and might
 require lower-level access to the ASGI connection scope or specific ASGI
 extensions.
@@ -1249,7 +1258,7 @@ pluggable, allowing different backend implementations. For example:
 
 To aid developers in creating robust WebSocket applications, dedicated testing
 utilities would be highly beneficial. These could be similar to Falcon's
-`falcon.testing` module for HTTP or Django Channels' `WebsocketCommunicator`.5
+`falcon.testing` module for HTTP or Django Channels' `WebsocketCommunicator`.[^5]
 Such utilities would allow developers to:
 
 - Simulate a WebSocket client connecting to a `WebSocketResource`.
@@ -1378,7 +1387,7 @@ The Falcon-Pachinko extension, as designed, offers several benefits:
 - **Adherence to Least Surprise**: The design aims to be intuitive and
   predictable for those familiar with Falcon. The design endeavors to strike a
   balance, introducing powerful new capabilities while respecting Falcon's
-  characteristic minimalism and performance focus.1 The objective is for these
+  characteristic minimalism and performance focus.[^1] The objective is for these
   features to feel like a natural and lean augmentation of the framework.
 
 ### 7.3. Meeting User Requirements
@@ -1417,3 +1426,12 @@ applicability, attracting developers who require first-class real-time features
 within a high-performance Python framework. This, in turn, could foster a larger
 and more diverse Falcon community and ecosystem, centered around both
 traditional API development and emerging real-time use cases.
+
+[^1]: <https://falcon.readthedocs.io>
+[^2]: <https://asgi.readthedocs.io>
+[^3]: <https://www.starlette.io>
+[^4]: <https://www.starlette.io/websockets/>
+[^5]: <https://channels.readthedocs.io>
+[^6]: <https://channels.readthedocs.io/en/stable/topics/consumers.html>
+[^7]: <https://fastapi.tiangolo.com/advanced/websockets/>
+[^8]: <https://websockets.readthedocs.io>
