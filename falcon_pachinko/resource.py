@@ -327,6 +327,7 @@ class WebSocketResource:
     """
 
     handlers: typing.ClassVar[dict[str, tuple[Handler, type | None]]]
+    _struct_handlers: typing.ClassVar[dict[type, tuple[Handler, type | None]]] = {}
     schema: type | None = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
@@ -338,6 +339,7 @@ class WebSocketResource:
         handlers.update(existing)
         cls._apply_overrides(handlers)
         cls.handlers = handlers
+        cls._init_schema_registry()
 
     @classmethod
     def _collect_base_handlers(
@@ -365,6 +367,27 @@ class WebSocketResource:
             if handler.__name__ in shadowed:
                 new_handler = typing.cast("Handler", cls.__dict__[handler.__name__])
                 handlers[msg_type] = (new_handler, payload_type)
+
+    @classmethod
+    def _init_schema_registry(cls) -> None:
+        """Validate :attr:`schema` and build a struct-to-handler map."""
+        cls._struct_handlers = {}
+
+        schema = getattr(cls, "schema", None)
+        if schema is None:
+            return
+
+        types = typing.get_args(schema) or (schema,)
+        for t in types:
+            if not (inspect.isclass(t) and issubclass(t, msgspec.Struct)):
+                raise TypeError("schema must contain only msgspec.Struct types")  # noqa: TRY003
+            info = msgspec_inspect.type_info(t)
+            if typing.cast("msgspec_inspect.StructType", info).tag is None:
+                raise TypeError("schema Struct types must define a tag")  # noqa: TRY003
+
+        for handler, payload_type in cls.handlers.values():
+            if payload_type is not None and issubclass(payload_type, msgspec.Struct):
+                cls._struct_handlers[payload_type] = (handler, payload_type)
 
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
@@ -436,12 +459,10 @@ class WebSocketResource:
         cls.handlers[message_type] = (handler, payload_type)
 
     async def dispatch(self, ws: WebSocketLike, raw: str | bytes) -> None:
-        """Process an incoming raw WebSocket message and dispatch it to the handler.
+        """Process an incoming raw WebSocket message and dispatch it.
 
-        Dispatches the message to the appropriate handler based on its type.
-
-        If :attr:`schema` is defined, ``raw`` is decoded using the tagged union
-        and routed by the resulting message's ``tag``. Otherwise, the message is
+        If :attr:`schema` is defined, ``raw`` is decoded using that schema and
+        routed based on the resulting message's type. Otherwise, the message is
         interpreted as a JSON envelope with ``type`` and optional ``payload``
         fields. Any decoding failure or missing handler results in a call to
         :meth:`on_message`.
@@ -454,23 +475,30 @@ class WebSocketResource:
             The raw message to process and dispatch
         """
         if self.schema is not None:
-            try:
-                message = msgspec_json.decode(raw, type=self.schema)
-            except (msgspec.DecodeError, msgspec.ValidationError):
-                await self.on_message(ws, raw)
-                return
+            await self._dispatch_with_schema(ws, raw)
+        else:
+            await self._dispatch_with_envelope(ws, raw)
 
-            info = msgspec_inspect.type_info(type(message))
-            tag = typing.cast("msgspec_inspect.StructType", info).tag
-            entry = self.__class__.handlers.get(tag)
-            if not entry:
-                await self.on_message(ws, raw)
-                return
-
-            handler, _ = entry
-            await handler(self, ws, message)
+    async def _dispatch_with_schema(self, ws: WebSocketLike, raw: str | bytes) -> None:
+        """Decode and dispatch ``raw`` using :attr:`schema`."""
+        try:
+            message = msgspec_json.decode(raw, type=self.schema)
+        except (msgspec.DecodeError, msgspec.ValidationError):
+            await self.on_message(ws, raw)
             return
 
+        entry = self.__class__._struct_handlers.get(type(message))
+        if not entry:
+            await self.on_message(ws, raw)
+            return
+
+        handler, _ = entry
+        await handler(self, ws, message)
+
+    async def _dispatch_with_envelope(
+        self, ws: WebSocketLike, raw: str | bytes
+    ) -> None:
+        """Decode and dispatch ``raw`` using the envelope format."""
         try:
             envelope = msgspec_json.decode(raw, type=_Envelope)
         except msgspec.DecodeError:
@@ -487,8 +515,7 @@ class WebSocketResource:
         if payload_type is not None and payload is not None:
             try:
                 payload = typing.cast(
-                    "typing.Any",
-                    msgspec.convert(payload, type=payload_type),
+                    "typing.Any", msgspec.convert(payload, type=payload_type)
                 )
             except (msgspec.ValidationError, TypeError):
                 await self.on_message(ws, raw)

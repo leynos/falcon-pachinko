@@ -73,3 +73,18 @@ async def test_schema_decode_error_calls_fallback() -> None:
     r = SchemaResource()
     await r.dispatch(DummyWS(), b"not json")
     assert r.events == [("raw", b"not json")]
+
+
+def test_invalid_schema_type_raises() -> None:
+    """Only tagged msgspec.Struct types are allowed in ``schema``."""
+
+    class Good(msgspec.Struct, tag="good"):
+        pass
+
+    class Bad:
+        pass
+
+    with pytest.raises(TypeError):
+
+        class BadResource(WebSocketResource):
+            schema = Good | Bad
