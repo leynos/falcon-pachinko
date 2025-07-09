@@ -378,13 +378,28 @@ class WebSocketResource:
             return
 
         types = typing.get_args(schema) or (schema,)
+        cls._validate_schema_types(types)
+        cls._validate_struct_tags(types)
+        cls._build_struct_handlers_map()
+
+    @classmethod
+    def _validate_schema_types(cls, types: tuple[type, ...]) -> None:
+        """Ensure all schema types are :class:`msgspec.Struct`."""
         for t in types:
             if not (inspect.isclass(t) and issubclass(t, msgspec.Struct)):
                 raise TypeError("schema must contain only msgspec.Struct types")  # noqa: TRY003
+
+    @classmethod
+    def _validate_struct_tags(cls, types: tuple[type, ...]) -> None:
+        """Ensure all struct types define a tag."""
+        for t in types:
             info = msgspec_inspect.type_info(t)
             if typing.cast("msgspec_inspect.StructType", info).tag is None:
                 raise TypeError("schema Struct types must define a tag")  # noqa: TRY003
 
+    @classmethod
+    def _build_struct_handlers_map(cls) -> None:
+        """Create mapping of struct types to handlers."""
         for handler, payload_type in cls.handlers.values():
             if payload_type is not None and issubclass(payload_type, msgspec.Struct):
                 cls._struct_handlers[payload_type] = (handler, payload_type)
