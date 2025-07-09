@@ -88,3 +88,21 @@ def test_invalid_schema_type_raises() -> None:
 
         class BadResource(WebSocketResource):
             schema = Good | Bad
+
+
+def test_duplicate_payload_type_raises() -> None:
+    """Handlers with the same payload type should not be allowed."""
+
+    class Payload(msgspec.Struct, tag="dup"):
+        val: int
+
+    with pytest.raises(ValueError, match="Duplicate payload type"):
+
+        class BadResource(WebSocketResource):
+            schema = Payload
+
+            @handles_message("a")
+            async def h1(self, ws: WebSocketLike, payload: Payload) -> None: ...
+
+            @handles_message("b")
+            async def h2(self, ws: WebSocketLike, payload: Payload) -> None: ...
