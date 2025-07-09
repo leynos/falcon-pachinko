@@ -370,35 +370,30 @@ class WebSocketResource:
 
     @classmethod
     def _init_schema_registry(cls) -> None:
-        """Validate :attr:`schema` and build a struct-to-handler map."""
+        """Validate :attr:`schema` and populate the struct handler map."""
         cls._struct_handlers = {}
 
         schema = getattr(cls, "schema", None)
         if schema is None:
             return
 
-        types = typing.get_args(schema) or (schema,)
-        cls._validate_schema_types(types)
-        cls._validate_struct_tags(types)
-        cls._build_struct_handlers_map()
+        cls._validate_schema_types(schema)
+        cls._populate_struct_handlers()
 
     @classmethod
-    def _validate_schema_types(cls, types: tuple[type, ...]) -> None:
-        """Ensure all schema types are :class:`msgspec.Struct`."""
+    def _validate_schema_types(cls, schema: type) -> None:
+        """Ensure all schema types are :class:`msgspec.Struct` with tags."""
+        types = typing.get_args(schema) or (schema,)
         for t in types:
             if not (inspect.isclass(t) and issubclass(t, msgspec.Struct)):
                 raise TypeError("schema must contain only msgspec.Struct types")  # noqa: TRY003
 
-    @classmethod
-    def _validate_struct_tags(cls, types: tuple[type, ...]) -> None:
-        """Ensure all struct types define a tag."""
-        for t in types:
             info = msgspec_inspect.type_info(t)
             if typing.cast("msgspec_inspect.StructType", info).tag is None:
                 raise TypeError("schema Struct types must define a tag")  # noqa: TRY003
 
     @classmethod
-    def _build_struct_handlers_map(cls) -> None:
+    def _populate_struct_handlers(cls) -> None:
         """Create mapping of struct types to handlers."""
         for handler, payload_type in cls.handlers.values():
             if payload_type is not None and issubclass(payload_type, msgspec.Struct):
