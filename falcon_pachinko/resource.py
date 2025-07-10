@@ -15,6 +15,16 @@ if typing.TYPE_CHECKING:
     import falcon
 
 
+def _duplicate_payload_type_msg(
+    payload_type: type, handler_name: str | None = None
+) -> str:
+    """Return a detailed error message for duplicate payload types."""
+    msg = f"Duplicate payload type in handlers: {payload_type!r}"
+    if handler_name:
+        msg += f" (handler: {handler_name})"
+    return msg
+
+
 class HandlerSignatureError(TypeError):
     """Raised when a handler function has an invalid signature.
 
@@ -396,8 +406,15 @@ class WebSocketResource:
     def _populate_struct_handlers(cls) -> None:
         """Create mapping of struct types to handlers."""
         for handler, payload_type in cls.handlers.values():
-            if payload_type is not None and issubclass(payload_type, msgspec.Struct):
-                cls._struct_handlers[payload_type] = (handler, payload_type)
+            if payload_type is None or not issubclass(payload_type, msgspec.Struct):
+                continue
+
+            existing = cls._struct_handlers.get(payload_type)
+            if existing is not None:
+                raise ValueError(
+                    _duplicate_payload_type_msg(payload_type, handler.__qualname__)
+                )
+            cls._struct_handlers[payload_type] = (handler, payload_type)
 
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
