@@ -15,7 +15,14 @@ if typing.TYPE_CHECKING:
     import falcon
 
 
-_DUPLICATE_PAYLOAD_TYPE_MSG = "Duplicate payload type in handlers"
+def _duplicate_payload_type_msg(
+    payload_type: type, handler_name: str | None = None
+) -> str:
+    """Return a detailed error message for duplicate payload types."""
+    msg = f"Duplicate payload type in handlers: {payload_type!r}"
+    if handler_name:
+        msg += f" (handler: {handler_name})"
+    return msg
 
 
 class HandlerSignatureError(TypeError):
@@ -409,7 +416,9 @@ class WebSocketResource:
 
             existing = cls._struct_handlers.get(payload_type)
             if existing is not None:
-                raise ValueError(_DUPLICATE_PAYLOAD_TYPE_MSG)
+                raise ValueError(
+                    _duplicate_payload_type_msg(payload_type, handler.__qualname__)
+                )
             cls._struct_handlers[payload_type] = (handler, payload_type)
 
     async def on_connect(

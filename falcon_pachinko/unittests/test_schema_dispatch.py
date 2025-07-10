@@ -96,7 +96,7 @@ def test_duplicate_payload_type_raises() -> None:
     class Payload(msgspec.Struct, tag="dup"):
         val: int
 
-    with pytest.raises(ValueError, match="Duplicate payload type"):
+    with pytest.raises(ValueError, match="Duplicate payload type") as exc:
 
         class BadResource(WebSocketResource):
             schema = Payload
@@ -106,3 +106,6 @@ def test_duplicate_payload_type_raises() -> None:
 
             @handles_message("b")
             async def h2(self, ws: WebSocketLike, payload: Payload) -> None: ...
+
+    assert "Payload" in str(exc.value)
+    assert "BadResource.h2" in str(exc.value)
