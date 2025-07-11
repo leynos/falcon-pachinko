@@ -66,7 +66,7 @@ composable patterns.
   - [x] Make the `@handles_message("type")` decorator the canonical, preferred
     way to register a handler.
 
-  - [ ] Implement the `on_{tag}` naming convention as a best-effort convenience,
+  - [x] Implement the `on_{tag}` naming convention as a best-effort convenience,
     including the `CamelCase` to `snake_case` conversion.
 
   - [ ] Document `msgspec`'s default strictness (no extra fields) and expose a
