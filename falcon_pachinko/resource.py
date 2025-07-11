@@ -5,6 +5,7 @@ from __future__ import annotations
 import collections.abc as cabc
 import functools
 import inspect
+import re
 import typing
 
 import msgspec
@@ -23,6 +24,14 @@ def _duplicate_payload_type_msg(
     if handler_name:
         msg += f" (handler: {handler_name})"
     return msg
+
+
+def _to_snake_case(name: str) -> str:
+    """Best-effort conversion of ``name`` to ``snake_case``."""
+    name = name.replace("-", "_")
+    s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+    s2 = re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1)
+    return s2.lower()
 
 
 class HandlerSignatureError(TypeError):
@@ -416,6 +425,21 @@ class WebSocketResource:
                 )
             cls._struct_handlers[payload_type] = (handler, payload_type)
 
+    def _find_conventional_handler(
+        self, tag: str
+    ) -> tuple[Handler, type | None] | None:
+        """Return a handler matching ``on_{tag}`` if present."""
+        name = f"on_{_to_snake_case(tag)}"
+        func = getattr(self.__class__, name, None)
+        if func is None or not inspect.iscoroutinefunction(func):
+            return None
+        try:
+            payload_type = _get_payload_type(typing.cast("Handler", func))
+        except (HandlerSignatureError, HandlerNotAsyncError, SignatureInspectionError):
+            return None
+
+        return typing.cast("Handler", func), payload_type
+
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
@@ -516,7 +540,14 @@ class WebSocketResource:
 
         entry = self.__class__._struct_handlers.get(type(message))
         if not entry:
-            await self.on_message(ws, raw)
+            info = msgspec_inspect.type_info(type(message))
+            tag = typing.cast("msgspec_inspect.StructType", info).tag
+            conv = self._find_conventional_handler(tag)
+            if conv is None:
+                await self.on_message(ws, raw)
+                return
+            handler, _ = conv
+            await handler(self, ws, message)
             return
 
         handler, _ = entry
@@ -534,7 +565,22 @@ class WebSocketResource:
 
         entry = self.__class__.handlers.get(envelope.type)
         if not entry:
-            await self.on_message(ws, raw)
+            conv = self._find_conventional_handler(envelope.type)
+            if conv is None:
+                await self.on_message(ws, raw)
+                return
+
+            handler, payload_type = conv
+            payload: typing.Any = envelope.payload
+            if payload_type is not None and payload is not None:
+                try:
+                    payload = typing.cast(
+                        "typing.Any", msgspec.convert(payload, type=payload_type)
+                    )
+                except (msgspec.ValidationError, TypeError):
+                    await self.on_message(ws, raw)
+                    return
+            await handler(self, ws, payload)
             return
 
         handler, payload_type = entry
