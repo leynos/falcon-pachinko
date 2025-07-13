@@ -559,6 +559,26 @@ class WebSocketResource:
         handler, _ = entry
         await handler(self, ws, message)
 
+    async def _convert_and_invoke_handler(
+        self,
+        ws: WebSocketLike,
+        raw: str | bytes,
+        handler: Handler,
+        payload_type: type | None,
+        payload: object,
+    ) -> None:
+        """Convert ``payload`` to ``payload_type`` and call ``handler``."""
+        if payload_type is not None and payload is not None:
+            try:
+                payload = typing.cast(
+                    "typing.Any", msgspec.convert(payload, type=payload_type)
+                )
+            except msgspec.ValidationError:
+                await self.on_message(ws, raw)
+                return
+
+        await handler(self, ws, payload)
+
     async def _dispatch_with_envelope(
         self, ws: WebSocketLike, raw: str | bytes
     ) -> None:
@@ -569,34 +589,15 @@ class WebSocketResource:
             await self.on_message(ws, raw)
             return
 
-        entry = self.__class__.handlers.get(envelope.type)
-        if not entry:
-            conv = self._find_conventional_handler(envelope.type)
-            if conv is None:
-                await self.on_message(ws, raw)
-                return
+        handler_entry = self.__class__.handlers.get(envelope.type)
+        if handler_entry is None:
+            handler_entry = self._find_conventional_handler(envelope.type)
 
-            handler, payload_type = conv
-            payload: typing.Any = envelope.payload
-            if payload_type is not None and payload is not None:
-                try:
-                    payload = typing.cast(
-                        "typing.Any", msgspec.convert(payload, type=payload_type)
-                    )
-                except msgspec.ValidationError:
-                    await self.on_message(ws, raw)
-                    return
-            await handler(self, ws, payload)
+        if handler_entry is None:
+            await self.on_message(ws, raw)
             return
 
-        handler, payload_type = entry
-        payload: typing.Any = envelope.payload
-        if payload_type is not None and payload is not None:
-            try:
-                payload = typing.cast(
-                    "typing.Any", msgspec.convert(payload, type=payload_type)
-                )
-            except msgspec.ValidationError:
-                await self.on_message(ws, raw)
-                return
-        await handler(self, ws, payload)
+        handler, payload_type = handler_entry
+        await self._convert_and_invoke_handler(
+            ws, raw, handler, payload_type, envelope.payload
+        )
