@@ -151,6 +151,24 @@ class CamelResource(WebSocketResource):
         self.messages.append(payload.text)
 
 
+class SyncHandlerResource(WebSocketResource):
+    """Resource with a synchronous ``on_{tag}`` handler."""
+
+    def __init__(self) -> None:
+        self.seen: list[typing.Any] = []
+        self.fallback: list[str | bytes] = []
+
+    def on_sync(
+        self, ws: WebSocketLike, payload: object
+    ) -> None:  # pragma: no cover - ignored by dispatch
+        """Ignore synchronous handler used for testing."""
+        self.seen.append(payload)
+
+    async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record fallback messages."""
+        self.fallback.append(message)
+
+
 @pytest.mark.asyncio
 async def test_dispatch_calls_registered_handler() -> None:
     """Test that dispatching a message with a registered type calls the handler."""
@@ -244,3 +262,14 @@ async def test_on_tag_camel_case() -> None:
     raw = msgspec_json.encode(CamelResource.SendMessage(text="hi"))
     await r.dispatch(DummyWS(), raw)
     assert r.messages == ["hi"]
+
+
+@pytest.mark.asyncio
+async def test_sync_handler_ignored_and_fallback_behavior() -> None:
+    """Synchronous ``on_{tag}`` handlers are ignored by dispatch."""
+    r = SyncHandlerResource()
+    raw = msgspec_json.encode({"type": "sync", "payload": {"val": 1}})
+    await r.dispatch(DummyWS(), raw)
+    # The sync handler should not be called
+    assert r.seen == []
+    assert r.fallback == [raw]

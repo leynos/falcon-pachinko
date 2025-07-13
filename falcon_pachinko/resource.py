@@ -27,11 +27,17 @@ def _duplicate_payload_type_msg(
 
 
 def _to_snake_case(name: str) -> str:
-    """Best-effort conversion of ``name`` to ``snake_case``."""
-    name = name.replace("-", "_")
-    s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
-    s2 = re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1)
-    return s2.lower()
+    """Convert ``name`` to ``snake_case`` as best we can."""
+    # Normalize separators to underscores first (e.g., dashes or spaces).
+    name = re.sub(r"[^0-9a-zA-Z]+", "_", name)
+
+    # ``sendHTTPMessage`` -> ``send_HTTPMessage``
+    name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", name)
+
+    # ``send_HTTPMessage`` -> ``send_HTTP_Message`` and finally to ``send_http_message``
+    name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+
+    return name.lower()
 
 
 class HandlerSignatureError(TypeError):
@@ -577,7 +583,7 @@ class WebSocketResource:
                     payload = typing.cast(
                         "typing.Any", msgspec.convert(payload, type=payload_type)
                     )
-                except (msgspec.ValidationError, TypeError):
+                except msgspec.ValidationError:
                     await self.on_message(ws, raw)
                     return
             await handler(self, ws, payload)
@@ -590,7 +596,7 @@ class WebSocketResource:
                 payload = typing.cast(
                     "typing.Any", msgspec.convert(payload, type=payload_type)
                 )
-            except (msgspec.ValidationError, TypeError):
+            except msgspec.ValidationError:
                 await self.on_message(ws, raw)
                 return
         await handler(self, ws, payload)
