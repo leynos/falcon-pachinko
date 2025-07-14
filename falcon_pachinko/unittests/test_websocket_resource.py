@@ -122,6 +122,53 @@ async def raw_handler(self: RawResource, ws: WebSocketLike, payload: object) -> 
 RawResource.add_handler("raw", raw_handler, payload_type=None)
 
 
+class ConventionalResource(WebSocketResource):
+    """Resource used to test ``on_{tag}`` dispatch."""
+
+    def __init__(self) -> None:
+        self.seen: list[typing.Any] = []
+
+    async def on_echo(self, ws: WebSocketLike, payload: object) -> None:
+        """Record ``payload`` from ``echo`` messages."""
+        self.seen.append(payload)
+
+
+class CamelResource(WebSocketResource):
+    """Resource testing CamelCase tag conversion."""
+
+    class SendMessage(msgspec.Struct, tag="sendMessage"):
+        """Payload for a send message."""
+
+        text: str
+
+    schema = SendMessage
+
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    async def on_send_message(self, ws: WebSocketLike, payload: SendMessage) -> None:
+        """Record ``payload`` text from ``sendMessage`` messages."""
+        self.messages.append(payload.text)
+
+
+class SyncHandlerResource(WebSocketResource):
+    """Resource with a synchronous ``on_{tag}`` handler."""
+
+    def __init__(self) -> None:
+        self.seen: list[typing.Any] = []
+        self.fallback: list[str | bytes] = []
+
+    def on_sync(
+        self, ws: WebSocketLike, payload: object
+    ) -> None:  # pragma: no cover - ignored by dispatch
+        """Ignore synchronous handler used for testing."""
+        self.seen.append(payload)
+
+    async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record fallback messages."""
+        self.fallback.append(message)
+
+
 @pytest.mark.asyncio
 async def test_dispatch_calls_registered_handler() -> None:
     """Test that dispatching a message with a registered type calls the handler."""
@@ -197,3 +244,32 @@ async def test_invalid_payload_calls_fallback() -> None:
     await r.dispatch(DummyWS(), raw)
     assert r.fallback == [raw]
     assert not r.seen
+
+
+@pytest.mark.asyncio
+async def test_on_tag_dispatch_envelope() -> None:
+    """Messages with matching ``on_{tag}`` handlers are dispatched."""
+    r = ConventionalResource()
+    raw = msgspec_json.encode({"type": "echo", "payload": {"x": 1}})
+    await r.dispatch(DummyWS(), raw)
+    assert r.seen == [{"x": 1}]
+
+
+@pytest.mark.asyncio
+async def test_on_tag_camel_case() -> None:
+    """CamelCase tags are converted to snake_case."""
+    r = CamelResource()
+    raw = msgspec_json.encode(CamelResource.SendMessage(text="hi"))
+    await r.dispatch(DummyWS(), raw)
+    assert r.messages == ["hi"]
+
+
+@pytest.mark.asyncio
+async def test_sync_handler_ignored_and_fallback_behavior() -> None:
+    """Synchronous ``on_{tag}`` handlers are ignored by dispatch."""
+    r = SyncHandlerResource()
+    raw = msgspec_json.encode({"type": "sync", "payload": {"val": 1}})
+    await r.dispatch(DummyWS(), raw)
+    # The sync handler should not be called
+    assert r.seen == []
+    assert r.fallback == [raw]
