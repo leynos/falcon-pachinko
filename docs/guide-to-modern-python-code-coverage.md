@@ -7,8 +7,8 @@ reliability is paramount. Code coverage, a metric that quantifies the proportion
 of a codebase exercised by automated tests, stands as a cornerstone of robust
 testing strategies.1 By illuminating untested code segments, developers and
 maintainers can strategically fortify test suites, thereby enhancing confidence
-in software correctness and stability. This guide delves into a powerful triad
-of tools—Slipcover, Pytest, and CodeScene—to establish an efficient and
+in software correctness and stability. This guide delves into a powerful
+triad of tools—Slipcover, Pytest, and CodeScene—to establish an efficient and
 insightful code coverage analysis workflow, particularly within a Continuous
 Integration/Continuous Deployment (CI/CD) pipeline using GitHub Actions.
 
@@ -35,12 +35,14 @@ Automating this process with **GitHub Actions** will allow for seamless
 integration into the development lifecycle, providing timely feedback and
 fostering a culture of continuous quality assessment.
 
+<!-- markdownlint-disable MD032 -->
+
 ## 2. Core Tooling: Slipcover for Coverage Collection
 
-Slipcover distinguishes itself with its remarkable speed, achieved through a C++
-extension that instruments Python bytecode "just in time" (JIT), immediately
-before execution.1 This minimizes the overhead typically associated with
-coverage data collection.
+Slipcover distinguishes itself with its remarkable speed, achieved through an
+extension written in C++ that instruments Python bytecode "just in time" (JIT).
+This approach minimizes the overhead typically associated with coverage data
+collection and keeps execution speeds high.1
 
 ### 2.1. Key Features of Slipcover
 
@@ -72,15 +74,11 @@ Slipcover can execute Python scripts or modules directly:
 
 - **Running a script**:
 
-  ```bash
-  slipcover your_script.py
-  ```
+  `bash slipcover your_script.py`
 
 - **Running a module** (similar to `python -m`):
 
-  ```bash
-  slipcover -m your_package.your_module
-  ```
+  `bash slipcover -m your_package.your_module`
 
 By default, Slipcover prints a summary report to the console. For integration
 with other tools, specific report formats are essential:
@@ -88,22 +86,16 @@ with other tools, specific report formats are essential:
 - **Cobertura XML Report**: Vital for tools like CodeScene and other CI/CD
   integrations. Use the `--out` option:
 
-  ```bash
-  slipcover --out coverage.xml your_script.py
-  ```
+  `bash slipcover --out coverage.xml your_script.py`
 
 - **JSON Report**: For detailed programmatic access to coverage data:
 
-  ```bash
-  slipcover --json your_script.py > coverage.json
-  ```
+  `bash slipcover --json your_script.py > coverage.json`
 
 - **Branch Coverage**: To enable branch coverage analysis, add the `--branch`
   flag:
 
-  ```bash
-  slipcover --branch --out coverage.xml your_script.py
-  ```
+  `bash slipcover --branch --out coverage.xml your_script.py`
 
 ### 2.4. Focusing Coverage with `--source` and `--omit`
 
@@ -159,12 +151,12 @@ ensure that:
 1. Each forked child process independently collects coverage data for the tests
    it executes.
 
-2. This data is temporarily stored.
+1. This data is temporarily stored.
 
-3. Upon completion of all tests, the main Slipcover process aggregates the
+1. Upon completion of all tests, the main Slipcover process aggregates the
    coverage data from all child processes into a single, unified dataset.
 
-4. The final coverage report is generated from this aggregated data.
+1. The final coverage report is generated from this aggregated data.
 
 **Practical Guide to Using Slipcover with** `pytest-forked`**:**
 
@@ -176,35 +168,29 @@ ensure that:
 
    - `pytest-forked`
 
-   ```bash
-   pip install --upgrade slipcover pytest pytest-forked
-   ```
+   `bash pip install --upgrade slipcover pytest pytest-forked`
 
    *Note:* `pytest-forked` *relies on the* `fork()` *system call, making it
    suitable for Unix-like systems (Linux, macOS).*
 
-2. Command Invocation:
+1. Command Invocation:
 
    Add the --forked flag to your Pytest arguments when running through
    Slipcover.
 
-   ```bash
-   python -m slipcover \
-     --source=./my_app_src \
-     --omit="*/tests/*,*/venv/*" \
-     --branch \
-     --out coverage.xml \
-     -m pytest --forked -v tests/
-   ```
+   ````bash python -m slipcover \ --source=./my_app_src \ --omit="*/tests/*,*/
+   venv/*" \ --branch \ --out coverage.xml \ -m pytest --forked -v tests/ ```
 
    Slipcover will automatically handle the collection and aggregation of
    coverage data from the forked processes.
 
+   ````
+
 ### 3.3. Understanding `pytest-xdist` for Parallelism
 
-`pytest-xdist` is another popular Pytest plugin that enables running tests in
-parallel across multiple CPUs or even multiple machines, significantly speeding
-up test suite execution. It works by spawning worker processes, with a
+`pytest-xdist` is another popular Pytest plugin that enables running tests
+in parallel across multiple CPUs or even multiple machines, significantly
+speeding up test suite execution. It works by spawning worker processes, with a
 controller process managing the distribution of tests.5
 
 Current Slipcover Support Status for pytest-xdist:
@@ -258,7 +244,7 @@ format that Slipcover generates.2
      On-Premises). CodeScene needs to be aware of your Git repository to
      correctly associate uploaded coverage data.3
 
-2. **API Token Generation and Secure Storage**:
+1. **API Token Generation and Secure Storage**:
 
    - Generate an API token from your CodeScene account. This token is used to
      authenticate uploads.12
@@ -279,23 +265,21 @@ data.11
   The tool can be installed using a script provided by CodeScene. In a GitHub
   Actions workflow, you might add a step like:
 
-  ```yaml
+  ````yaml
   - name: Install CodeScene Coverage CLI
-    run: curl https://downloads.codescene.io/enterprise/cli/install-cs-coverage-tool.sh | bash -s -- -y
-  ```
+    run: curl https://downloads.codescene.io/enterprise/cli/install-cs-coverage-
+    tool.sh | bash -s -- -y ```
 
   11
+
+  ````
 
 - Command Structure and Options:
 
   The basic command to upload a Cobertura XML file is:
 
-  ```bash
-  cs-coverage upload \
-    --format "cobertura" \
-    --metric "line-coverage" \
-    "path/to/your/coverage.xml"
-  ```
+  ````bash cs-coverage upload \ --format "cobertura" \ --metric "line-coverage"
+  \ "path/to/your/coverage.xml" ```
 
   11
 
@@ -307,22 +291,21 @@ data.11
   - `"path/to/your/coverage.xml"`: The path to the Slipcover-generated Cobertura
     XML file.
 
+  ````
+
 - Authentication:
 
   The cs-coverage tool uses an environment variable CS_ACCESS_TOKEN for
   authentication. Ensure this variable is set with your CodeScene API token in
   the environment where the command is run.11 In GitHub Actions:
 
-  ```yaml
-  env:
-    CS_ACCESS_TOKEN: ${{ secrets.CODESCENE_API_TOKEN }}
-  ```
+  `yaml env: CS_ACCESS_TOKEN: ${{ secrets.CODESCENE_API_TOKEN }}`
 
 - Alternative: Scripted REST API:
 
   While the cs-coverage CLI is preferred for its simplicity and official
-  support, CodeScene also offers a REST API for more direct interaction. This
-  involves a two-step process: a POST request with metadata (commit SHA,
+  support, CodeScene also offers a REST API for more direct interaction.
+  This involves a two-step process: a POST request with metadata (commit SHA,
   repository URL, format, etc.) to get an upload reference, followed by a PUT
   request with the compressed (gzipped) coverage file.12 The CLI tool abstracts
   these complexities.
@@ -365,8 +348,8 @@ A typical workflow would:
 
 ### 5.2. Step-by-Step Workflow Configuration
 
-Here's an example structure for your workflow file (e.g.,
-`.github/workflows/coverage_analysis.yml`):
+Here's an example structure for your workflow file (e.g., `.github/workflows/
+coverage_analysis.yml`):
 
 ```yaml
 name: Python Code Coverage Analysis
@@ -460,12 +443,12 @@ After a successful workflow run:
 
 1. Navigate to your project in CodeScene.
 
-2. Check the "Code Coverage" section or related views (often linked with
+1. Check the "Code Coverage" section or related views (often linked with
    Hotspots).
 
-3. Verify that the data reflects the latest commit and seems accurate.
+1. Verify that the data reflects the latest commit and seems accurate.
 
-4. Remember that a new CodeScene analysis might be needed for the data to appear
+1. Remember that a new CodeScene analysis might be needed for the data to appear
    on the dashboard.10
 
 ### 6.2. Common Troubleshooting Tips
@@ -537,6 +520,6 @@ While Slipcover's support for `pytest-xdist` is a current limitation to monitor
 `pytest-forked` already provides a strong solution for many projects needing
 test isolation. By adopting and refining the practices outlined in this guide,
 development teams can foster a proactive approach to code quality, reduce
-technical debt, and deliver more dependable software. Continuously refer to the
-official documentation of each tool, as they evolve and introduce new
+technical debt, and deliver more dependable software. Continuously refer to
+the official documentation of each tool, as they evolve and introduce new
 capabilities.

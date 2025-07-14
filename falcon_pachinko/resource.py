@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections.abc as cabc
+import dataclasses as dc
 import functools
 import inspect
 import re
@@ -14,6 +15,14 @@ import msgspec.json as msgspec_json
 
 if typing.TYPE_CHECKING:
     import falcon
+
+
+@dc.dataclass(frozen=True)
+class HandlerInfo:
+    """Information about a message handler and its payload type."""
+
+    handler: Handler
+    payload_type: type | None
 
 
 def _duplicate_payload_type_msg(
@@ -563,11 +572,11 @@ class WebSocketResource:
         self,
         ws: WebSocketLike,
         raw: str | bytes,
-        handler: Handler,
-        payload_type: type | None,
+        handler_info: HandlerInfo,
         payload: object,
     ) -> None:
-        """Convert ``payload`` to ``payload_type`` and call ``handler``."""
+        """Convert ``payload`` to the handler's type and invoke it."""
+        payload_type = handler_info.payload_type
         if payload_type is not None and payload is not None:
             try:
                 payload = typing.cast(
@@ -577,7 +586,7 @@ class WebSocketResource:
                 await self.on_message(ws, raw)
                 return
 
-        await handler(self, ws, payload)
+        await handler_info.handler(self, ws, payload)
 
     async def _dispatch_with_envelope(
         self, ws: WebSocketLike, raw: str | bytes
@@ -599,5 +608,5 @@ class WebSocketResource:
 
         handler, payload_type = handler_entry
         await self._convert_and_invoke_handler(
-            ws, raw, handler, payload_type, envelope.payload
+            ws, raw, HandlerInfo(handler, payload_type), envelope.payload
         )
