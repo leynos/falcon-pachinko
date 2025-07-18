@@ -1,9 +1,9 @@
 # Falcon-Pachinko: Updated Development Roadmap
 
-This roadmap outlines the implementation tasks for the Falcon-Pachinko extension
-based on the revised, composable architecture detailed in the main design
-document. It supersedes the previous roadmap and reflects a pivot towards a more
-robust, scalable, and Falcon-idiomatic system.
+This roadmap outlines the implementation tasks for the Falcon-Pachinko
+extension based on the revised, composable architecture detailed in the main
+design document. It supersedes the previous roadmap and reflects a pivot
+towards a more robust, scalable, and Falcon-idiomatic system.
 
 ## Phase 1: Foundational Composable Router
 
@@ -25,8 +25,8 @@ architectural change and underpins all subsequent features.
     Falcon resource.
 
   - [x] Implement the router's internal path-matching logic, leveraging
-    `falcon.routing.compile_uri_template` to handle routes relative to its mount
-    point.
+    `falcon.routing.compile_uri_template` to handle routes relative to its
+    mount point.
 
 - [x] **Implement the** `WebSocketRouter.add_route()` **API.**
 
@@ -143,13 +143,13 @@ applications.
 - [ ] **Design and Implement Dependency Injection.**
 
   - [ ] Formalize and implement a strategy for injecting shared services into
-    ephemeral `WebSocketResource` instances. This will likely involve allowing a
-    DI container or factory to be provided to the `WebSocketRouter`.
+    ephemeral `WebSocketResource` instances. This will likely involve allowing
+    a DI container or factory to be provided to the `WebSocketRouter`.
 
 ## Phase 5: Testing, Documentation, and Examples
 
-This is an ongoing process, but it will be finalized in this phase to ensure the
-library is ready for use.
+This is an ongoing process, but it will be finalized in this phase to ensure
+the library is ready for use.
 
 - [ ] **Develop Comprehensive Testing Utilities.**
 

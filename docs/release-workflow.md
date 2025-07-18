@@ -1,9 +1,9 @@
 # Release Workflow
 
-The release workflow builds and publishes a pure Python wheel. Binary wheels for
-specific architectures are no longer produced. The cross-platform `build` job in
-`.github/workflows/release.yml` was disabled to avoid unnecessary maintenance,
-since the project contains no C or Rust code.
+The release workflow builds and publishes a pure Python wheel. Binary wheels
+for specific architectures are no longer produced. The cross-platform `build`
+job in `.github/workflows/release.yml` was disabled to avoid unnecessary
+maintenance, since the project contains no C or Rust code.
 
 The process runs automatically when a git tag matching `v*.*.*` is pushed. For
 example:
