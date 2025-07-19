@@ -481,8 +481,16 @@ class WebSocketResource:
         payload_type: type,
     ) -> bool:
         """Return ``True`` if strict validation of extra fields is required."""
+        return self._requires_strict_validation(
+            payload, payload_type, strict=handler_info.strict
+        )
+
+    def _requires_strict_validation(
+        self, payload: object, payload_type: type, *, strict: bool
+    ) -> bool:
+        """Return ``True`` when ``payload`` needs strict validation."""
         return (
-            handler_info.strict
+            strict
             and isinstance(payload, dict)
             and issubclass(payload_type, msgspec.Struct)
         )
@@ -491,18 +499,16 @@ class WebSocketResource:
         self, payload: object, payload_type: type, *, strict: bool
     ) -> None:
         """Raise if ``payload`` contains unknown fields in strict mode."""
-        if (
-            strict
-            and isinstance(payload, dict)
-            and issubclass(payload_type, msgspec.Struct)
-        ):
+        if self._requires_strict_validation(payload, payload_type, strict=strict):
             info = msgspec_inspect.type_info(payload_type)
             allowed = {
                 f.name for f in typing.cast("msgspec_inspect.StructType", info).fields
             }
-            extra = set(payload) - allowed
+            extra = set(typing.cast("dict[str, typing.Any]", payload)) - allowed
             if extra:
-                _raise_unknown_fields(extra, payload)
+                _raise_unknown_fields(
+                    extra, typing.cast("dict[str, typing.Any]", payload)
+                )
 
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
