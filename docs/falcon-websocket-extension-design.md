@@ -4,30 +4,32 @@
 
 The Falcon Web Framework is recognized for its performance, reliability, and
 minimalist design, making it a popular choice for building RESTful APIs and web
-application backends in Python.[^1] While Falcon provides foundational support for
-WebSocket connections through its ASGI (Asynchronous Server Gateway Interface)
-integration[^2], it currently lacks a higher-level abstraction for routing and
-handling WebSocket messages in a manner analogous to its well-regarded HTTP
-routing and request handling mechanisms. This limitation often requires
-developers to implement custom dispatch logic within a single WebSocket handler,
-which can become complex for applications with rich real-time interaction.
+application backends in Python.[^1] While Falcon provides foundational support
+for WebSocket connections through its ASGI (Asynchronous Server Gateway
+Interface) integration[^2], it currently lacks a higher-level abstraction for
+routing and handling WebSocket messages in a manner analogous to its
+well-regarded HTTP routing and request handling mechanisms. This limitation
+often requires developers to implement custom dispatch logic within a single
+WebSocket handler, which can become complex for applications with rich
+real-time interaction.
 
 This report presents a design proposal for an extension library, tentatively
-named "Falcon-Pachinko," aimed at addressing this gap. The proposed library will
-provide a structured and Falcon-idiomatic approach to routing WebSocket messages
-based on their content (e.g., a 'type' field in a JSON payload) and managing
-WebSocket connections. Furthermore, it will include a mechanism for associating
-background workers (such as pollers or publish/subscribe event handlers) with
-active WebSocket connections to facilitate server-initiated updates to clients.
+named "Falcon-Pachinko," aimed at addressing this gap. The proposed library
+will provide a structured and Falcon-idiomatic approach to routing WebSocket
+messages based on their content (e.g., a 'type' field in a JSON payload) and
+managing WebSocket connections. Furthermore, it will include a mechanism for
+associating background workers (such as pollers or publish/subscribe event
+handlers) with active WebSocket connections to facilitate server-initiated
+updates to clients.
 
-The design prioritizes leveraging Falcon's existing capabilities and adhering to
-its core principles, particularly the principle of least surprise for developers
-already familiar with Falcon's HTTP paradigm. The AsyncAPI document, as
-specified in the use case, will be treated as a design artifact informing the
-structure of messages and interactions, rather than being directly consumed by
-the library at runtime. This document will first survey existing solutions and
-identify the specific needs addressed by the proposed extension. It will then
-detail the core components and API of Falcon-Pachinko, followed by an
+The design prioritizes leveraging Falcon's existing capabilities and adhering
+to its core principles, particularly the principle of least surprise for
+developers already familiar with Falcon's HTTP paradigm. The AsyncAPI document,
+as specified in the use case, will be treated as a design artifact informing
+the structure of messages and interactions, rather than being directly consumed
+by the library at runtime. This document will first survey existing solutions
+and identify the specific needs addressed by the proposed extension. It will
+then detail the core components and API of Falcon-Pachinko, followed by an
 illustrative use case. Finally, potential future enhancements and conclusions
 will be discussed.
 
@@ -41,22 +43,23 @@ patterns and potential areas for improvement.
 ### 2.1. Falcon's Native WebSocket Capabilities
 
 Falcon's support for WebSockets is built upon the ASGI WebSocket Specification
-and is available in its ASGI applications.[^2] Developers can add WebSocket support
-to a route by implementing an `async def on_websocket(self, req, websocket)`
-responder method within a resource class.[^1] This method is invoked when a
-WebSocket handshake request is successfully routed.
+and is available in its ASGI applications.[^2] Developers can add WebSocket
+support to a route by implementing an
+`async def on_websocket(self, req, websocket)` responder method within a
+resource class.[^1] This method is invoked when a WebSocket handshake request
+is successfully routed.
 
-The `falcon.asgi.WebSocket` object provided to this responder offers methods for
-managing the connection lifecycle, such as `accept()`, `close()`,
-`receive_text()`, `receive_data()`, `send_text()`, and `send_data()`. [^2] Falcon
-also handles events like lost connections by raising a `WebSocketDisconnected`
-exception. Middleware components and media handlers can be used to augment
-WebSocket flows, similar to regular HTTP requests.[^2]
+The `falcon.asgi.WebSocket` object provided to this responder offers methods
+for managing the connection lifecycle, such as `accept()`, `close()`,
+`receive_text()`, `receive_data()`, `send_text()`, and `send_data()`. [^2]
+Falcon also handles events like lost connections by raising a
+`WebSocketDisconnected` exception. Middleware components and media handlers can
+be used to augment WebSocket flows, similar to regular HTTP requests.[^2]
 
 However, Falcon's native support routes an entire WebSocket connection to a
 single `on_websocket` handler. For applications requiring dispatch based on
-incoming message types (e.g., in a chat application with different commands like
-'send_message', 'user_typing', etc.), developers must implement this logic
+incoming message types (e.g., in a chat application with different commands
+like 'send_message', 'user_typing', etc.), developers must implement this logic
 manually within the `on_websocket` method. This can lead to large, complex
 conditional structures that are difficult to maintain and test.
 
@@ -79,33 +82,33 @@ within an endpoint remains a manual task for the developer.
 Django Channels extends Django to handle WebSockets and other protocols beyond
 HTTP, built on ASGI.[^5] It introduces concepts like `Consumers` (analogous to
 Django views but for WebSockets and other protocols) which handle the lifecycle
-of a connection (e.g., `connect`, `disconnect`, `receive`).[^6] Routing is managed
-by `ProtocolTypeRouter` (to distinguish between HTTP, WebSocket, etc.) and
-`URLRouter` (for path-based routing to consumers).[^5]
-A key feature of Channels is
-the "channel layer," an abstraction for inter-process communication (often
-backed by Redis), allowing different parts of an application, including
+of a connection (e.g., `connect`, `disconnect`, `receive`).[^6] Routing is
+managed by `ProtocolTypeRouter` (to distinguish between HTTP, WebSocket, etc.)
+and `URLRouter` (for path-based routing to consumers).[^5] A key feature of
+Channels is the "channel layer," an abstraction for inter-process communication
+(often backed by Redis), allowing different parts of an application, including
 background tasks, to send messages to WebSockets.[^5] While powerful, Django
-Channels is a comprehensive system deeply integrated with Django, representing a
-more heavyweight solution than what is typically sought for a Falcon extension.
+Channels is a comprehensive system deeply integrated with Django, representing
+a more heavyweight solution than what is typically sought for a Falcon
+extension.
 
 ### 2.4. FastAPI
 
-FastAPI, built on Starlette, leverages Starlette's WebSocket capabilities.[^7] It
-provides a decorator, `@app.websocket("/ws")`, to define WebSocket endpoints.[^7]
-Similar to Falcon and Starlette's basic function endpoints, this decorator
-typically maps a path to a single asynchronous function that manages the entire
-WebSocket connection lifecycle, including accepting the connection, receiving
-messages in a loop, and sending responses.[^7] Message dispatch based on content
-within this function is a manual implementation detail.
+FastAPI, built on Starlette, leverages Starlette's WebSocket capabilities.[^7]
+It provides a decorator, `@app.websocket("/ws")`, to define WebSocket
+endpoints.[^7] Similar to Falcon and Starlette's basic function endpoints, this
+decorator typically maps a path to a single asynchronous function that manages
+the entire WebSocket connection lifecycle, including accepting the connection,
+receiving messages in a loop, and sending responses.[^7] Message dispatch based
+on content within this function is a manual implementation detail.
 
 ### 2.5. `websockets` Library
 
 The `websockets` library is a focused Python library for building WebSocket
-servers and clients, emphasizing correctness, simplicity, and performance.[^8] It
-is built on `asyncio` and provides a coroutine-based API. While excellent for
-implementing the WebSocket protocol itself (e.g., `serve` for servers, `connect`
-for clients), it is not a web framework extension and does not offer
+servers and clients, emphasizing correctness, simplicity, and performance.[^8]
+It is built on `asyncio` and provides a coroutine-based API. While excellent
+for implementing the WebSocket protocol itself (e.g., `serve` for servers,
+`connect` for clients), it is not a web framework extension and does not offer
 higher-level routing or integration with framework components like Falcon's
 resources or request objects.[^8] Its primary goal is protocol implementation
 rather than framework-level application structure.
@@ -146,8 +149,8 @@ ensuring the extension remains lightweight.
 ### 3.1. Core Principles
 
 - **Leverage Falcon's ASGI Foundation**: The extension will build upon Falcon's
-  existing `falcon.asgi.App` and `falcon.asgi.WebSocket` components[^1], ensuring
-  seamless integration with the ASGI ecosystem.
+  existing `falcon.asgi.App` and `falcon.asgi.WebSocket` components[^1],
+  ensuring seamless integration with the ASGI ecosystem.
 
 - **Consistency with Falcon HTTP API**: The patterns for defining routes and
   resource handlers for WebSockets will closely mirror those used for HTTP,
@@ -165,8 +168,8 @@ ensuring the extension remains lightweight.
 The extension will revolve around three primary components:
 
 1. `WebSocketResource`: A base class that developers will inherit from to create
-   WebSocket handlers. This class will provide lifecycle methods and a mechanism
-   for dispatching incoming messages to specific handler methods.
+   WebSocket handlers. This class will provide lifecycle methods and a
+   mechanism for dispatching incoming messages to specific handler methods.
 
 2. **Message Dispatcher**: Integrated within the `WebSocketResource`, this
    mechanism will route incoming messages (assumed to be structured, e.g., JSON
@@ -193,13 +196,13 @@ falcon_pachinko.install(app) # This would initialize and attach app.ws_connectio
 
 This `install` function would instantiate the `WebSocketConnectionManager` and
 make it accessible via the application instance (e.g.,
-`app.ws_connection_manager`), allowing other parts of the application, including
-background workers, to access it.
+`app.ws_connection_manager`), allowing other parts of the application,
+including background workers, to access it.
 
 ### 3.4. Routing WebSocket Connections
 
-Analogous to Falcon's HTTP routing (`app.add_route()`), the extension originally
-provided `app.add_websocket_route()` to associate a URL path with a
+Analogous to Falcon's HTTP routing (`app.add_route()`), the extension
+originally provided `app.add_websocket_route()` to associate a URL path with a
 `WebSocketResource`.
 
 > **Deprecated**: Use :meth:`falcon_pachinko.router.WebSocketRouter.add_route`
@@ -275,28 +278,29 @@ logic.
 - **Lifecycle Methods**:
 
   - `async def on_connect(self, req, ws, **params) -> bool`: WebSocket
-    connection is established and routed to this resource. `req` is the standard
-    Falcon `Request` object associated with the initial HTTP upgrade request,
-    and `ws` is a `WebSocketLike` **connection**. The protocol defines the
-    minimal `send_media`, `accept`, and `close` methods needed by the resource.
-    `params` will contain any path parameters from the route. It returns `True`
-    to accept the connection or `False` to reject it. If `False` is returned,
-    the library will handle sending an appropriate closing handshake (e.g., HTTP
-    403 or a custom code if supported by an extension like WebSocket Denial
-    Response 12). This boolean return abstracts the direct `await ws.accept()`
-    or `await ws.close()` call, simplifying the resource method to focus on
-    connection logic rather than raw ASGI mechanics. This design aligns with
-    Falcon's higher-level approach for HTTP handlers, where the framework
-    manages response sending.
+    connection is established and routed to this resource. `req` is the
+    standard Falcon `Request` object associated with the initial HTTP upgrade
+    request, and `ws` is a `WebSocketLike` **connection**. The protocol defines
+    the minimal `send_media`, `accept`, and `close` methods needed by the
+    resource. `params` will contain any path parameters from the route. It
+    returns `True` to accept the connection or `False` to reject it. If `False`
+    is returned, the library will handle sending an appropriate closing
+    handshake (e.g., HTTP 403 or a custom code if supported by an extension
+    like WebSocket Denial Response 12). This boolean return abstracts the
+    direct `await ws.accept()` or `await ws.close()` call, simplifying the
+    resource method to focus on connection logic rather than raw ASGI
+    mechanics. This design aligns with Falcon's higher-level approach for HTTP
+    handlers, where the framework manages response sending.
 
   - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: Called
-    when the WebSocket connection is closed, either by the client or the server.
-    `close_code` provides the WebSocket close code.
+    when the WebSocket connection is closed, either by the client or the
+    server. `close_code` provides the WebSocket close code.
 
-  - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str, bytes])`:
-    A fallback handler for messages that are not dispatched by the more specific
-    message handlers. This can be used for raw text/binary data or messages that
-    don't conform to the expected structured format.
+  - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str, bytes])`
+    :
+    A fallback handler for messages that are not dispatched by the more
+    specific message handlers. This can be used for raw text/binary data or
+    messages that don't conform to the expected structured format.
 
 - State Management:
 
@@ -312,8 +316,8 @@ logic.
 ### 3.6. Message Handling and Dispatch
 
 A key feature of Falcon-Pachinko is its ability to dispatch incoming WebSocket
-messages to specific handler methods within the `WebSocketResource`. This avoids
-a monolithic receive loop with extensive conditional logic.
+messages to specific handler methods within the `WebSocketResource`. This
+avoids a monolithic receive loop with extensive conditional logic.
 
 - **Message Format Assumption**: The dispatch mechanism assumes messages are
   JSON objects containing a 'type' field that acts as a discriminator, for
@@ -328,7 +332,7 @@ a monolithic receive loop with extensive conditional logic.
      `@handles_message` decorator should be used. This is the preferred method
      as it is not subject to potential ambiguities with non-standard tag names.
 
-  2. **By Convention (Convenience)**: As a convenience, a handler can be defined
+  1. **By Convention (Convenience)**: As a convenience, a handler can be defined
      by creating a method named `on_{type_discriminator}`. The framework will
      attempt to convert `CamelCase` and `grazingCamelCase` discriminators to
      `snake_case` to form the method name (e.g., a message with
@@ -425,8 +429,8 @@ backend interface to support both single-process and distributed deployments.
 
   - **Awaitable Operations**: All methods that perform I/O (e.g.,
     `broadcast_to_room`, `send_to_connection`) will be coroutines (`async def`)
-    and will propagate exceptions. This ensures that network failures or backend
-    errors are not silent.
+    and will propagate exceptions. This ensures that network failures or
+    backend errors are not silent.
 
   - **Async Iterators**: For bulk operations, the manager will expose async
     iterators, making them highly composable.
@@ -567,17 +571,17 @@ async def lifespan(app_instance):
 
 This pattern eliminates the need for a bespoke worker registry, making the
 entire process explicit and testable. Unhandled exceptions in
-`announcement_worker` will propagate and terminate the server, preventing silent
-failures.
+`announcement_worker` will propagate and terminate the server, preventing
+silent failures.
 
 ### 3.9. API Overview
 
 The following table summarizes the key components of the proposed
 Falcon-Pachinko API and their analogies to Falcon's HTTP mechanisms, where
-applicable. This serves as a quick reference to understand the main abstractions
-and their intended use. This API structure is designed to be both powerful
-enough for complex applications and intuitive for developers accustomed to
-Falcon.
+applicable. This serves as a quick reference to understand the main
+abstractions and their intended use. This API structure is designed to be both
+powerful enough for complex applications and intuitive for developers
+accustomed to Falcon.
 
 | Component                      | Key Elements                                                  | Purpose                                                                 | Falcon Analogy              |
 | ------------------------------ | ------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------- |
@@ -593,8 +597,8 @@ Falcon.
 ## 4. Illustrative Usecase: Real-time Chat Application
 
 To demonstrate the practical application and ergonomics of the proposed
-Falcon-Pachinko extension, this section outlines its use in building a real-time
-chat application.
+Falcon-Pachinko extension, this section outlines its use in building a
+real-time chat application.
 
 ### 4.1. Scenario Overview
 
@@ -617,13 +621,15 @@ structures. For example:
 
 - Server to Client:
 
-  - `{"type": "serverNewMessage", "payload": {"user": "Alice", "text": "Hello everyone!"}}`
+  - `{"type": "serverNewMessage", "payload": {"user": "Alice", "text": "Hello
+    everyone!"}}`
 
   - `{"type": "serverUserJoined", "payload": {"user": "Bob"}}`
 
   - `{"type": "serverUserLeft", "payload": {"user": "Alice"}}`
 
-  - `{"type": "serverUserTyping", "payload": {"user": "Charlie", "isTyping": true}}`
+  - `{"type": "serverUserTyping", "payload": {"user": "Charlie", "isTyping":
+    true}}`
 
 ### 4.2. Defining the Chat WebSocket Resource
 
@@ -786,8 +792,9 @@ A JavaScript client would interact as follows:
 
    ```
 
-This illustrative use case shows how Falcon-Pachinko can provide a comprehensive
-and developer-friendly solution for building real-time applications on Falcon.
+This illustrative use case shows how Falcon-Pachinko can provide a
+comprehensive and developer-friendly solution for building real-time
+applications on Falcon.
 
 ## 5. Advanced Proposal: Composable and Schema-Driven WebSocket Routing
 
@@ -832,16 +839,16 @@ classDiagram
 
 ### 5.1. The `WebSocketRouter` as a Composable Falcon Resource
 
-To provide a cleaner separation of concerns and a more powerful, composable API,
-this proposal treats the `WebSocketRouter` as a standard Falcon resource. This
-allows routers to be mounted on the main application, enabling the creation of
-modular, hierarchical WebSocket APIs.
+To provide a cleaner separation of concerns and a more powerful, composable
+API, this proposal treats the `WebSocketRouter` as a standard Falcon resource.
+This allows routers to be mounted on the main application, enabling the
+creation of modular, hierarchical WebSocket APIs.
 
 #### 5.1.1. Mounting the Router
 
 Instead of assigning a router to a special application attribute, it is mounted
-at a URL prefix using Falcon's standard `app.add_route()` method. This makes the
-`WebSocketRouter` a first-class citizen in Falcon's routing tree.
+at a URL prefix using Falcon's standard `app.add_route()` method. This makes
+the `WebSocketRouter` a first-class citizen in Falcon's routing tree.
 
 ```python
 import falcon.asgi
@@ -871,12 +878,12 @@ sub-routes. These paths are *relative* to the router's mount point.
 - **Resource Factories**: To mirror Falcon's flexibility, `add_route` will
   accept not only `WebSocketResource` subclasses but also **callable
   factories**. A factory is any callable that accepts the same arguments as a
-  resource's constructor and returns a resource instance. This keeps the barrier
-  to entry low for simple, functional use cases.
+  resource's constructor and returns a resource instance. This keeps the
+  barrier to entry low for simple, functional use cases.
 
 - **Resource Initialization**: The method accepts `*args` and `**kwargs` to be
-  passed to the resource's constructor (or factory), allowing for route-specific
-  configuration.
+  passed to the resource's constructor (or factory), allowing for
+  route-specific configuration.
 
 - **URL Reversal**: To discourage hard-coding paths, the router will provide a
   `url_for(name, **params)` helper to generate URLs for its routes, similar to
@@ -903,9 +910,9 @@ app.add_route('/ws/chat', chat_router)
 ```
 
 The router is responsible for matching the incoming connection URI against its
-registered routes, parsing any path parameters (like `{room_id}`), instantiating
-the correct `WebSocketResource` with its specific initialization arguments, and
-handing off control of the connection.
+registered routes, parsing any path parameters (like `{room_id}`),
+instantiating the correct `WebSocketResource` with its specific initialization
+arguments, and handing off control of the connection.
 
 #### 5.1.3. Router Flow and Structure
 
@@ -980,9 +987,9 @@ classDiagram
 
 ### 5.2. Composable Architecture: Nested Resources
 
-To facilitate the creation of modular and hierarchical applications, this design
-introduces the concept of nested resources via an `add_subroute` method on a
-resource instance. This allows developers to organize complex, related
+To facilitate the creation of modular and hierarchical applications, this
+design introduces the concept of nested resources via an `add_subroute` method
+on a resource instance. This allows developers to organize complex, related
 functionality into distinct, reusable classes.
 
 #### 5.2.1. The `add_subroute` Mechanism
@@ -1014,11 +1021,11 @@ router.add_route('/projects/{project_id}', ProjectResource)
 
 The `WebSocketRouter` must resolve these composite paths. A trie (prefix tree)
 is the natural data structure for this task. When resolving a path like
-`/projects/123/tasks`, the router would first match `/projects/{project_id}` and
-instantiate `ProjectResource`, passing it the `project_id`. The
+`/projects/123/tasks`, the router would first match `/projects/{project_id}`
+and instantiate `ProjectResource`, passing it the `project_id`. The
 `ProjectResource` constructor would then call `add_subroute`, registering
-`TasksResource`. The router would then match the `tasks` segment and instantiate
-`TasksResource`.
+`TasksResource`. The router would then match the `tasks` segment and
+instantiate `TasksResource`.
 
 A critical aspect is **context passing**. The router must facilitate passing
 state from parent to child. A robust implementation would involve the router
@@ -1053,8 +1060,8 @@ schema-driven approach.
 
 #### 5.3.1. Declaring Message Schemas
 
-A resource defines its message schema using a `typing.Union` of `msgspec.Struct`
-types, where each `Struct` represents a distinct message.
+A resource defines its message schema using a `typing.Union` of
+`msgspec.Struct` types, where each `Struct` represents a distinct message.
 
 ```python
 import msgspec
@@ -1138,9 +1145,9 @@ flexible, multi-layered hook system is proposed.
 #### 5.4.2. Lifecycle Events and Execution Order
 
 The hooks correspond to the WebSocket lifecycle: `before_connect`,
-`after_connect`, `before_receive`, `after_receive`, and `before_disconnect`. The
-execution order follows a layered, "onion-style" model for any given event, as
-illustrated below.
+`after_connect`, `before_receive`, `after_receive`, and `before_disconnect`.
+The execution order follows a layered, "onion-style" model for any given event,
+as illustrated below.
 
 ```mermaid
 flowchart TD
@@ -1177,15 +1184,16 @@ connection attempt immediately.
 #### 5.5.1. Stateful Per-Connection Resources and Dependency Injection
 
 This design solidifies the paradigm of a **stateful, per-connection resource
-instance**, a shift from Falcon's traditional stateless HTTP model. The resource
-instance itself becomes the container for connection-specific state. This raises
-a critical architectural question: how do these ephemeral resource instances get
-access to long-lived, shared services (like database connection pools)?
+instance**, a shift from Falcon's traditional stateless HTTP model. The
+resource instance itself becomes the container for connection-specific state.
+This raises a critical architectural question: how do these ephemeral resource
+instances get access to long-lived, shared services (like database connection
+pools)?
 
 A formal **dependency injection (DI)** strategy is therefore a necessary
-component of this proposal. This could be achieved by allowing a DI container or
-a resource factory to be passed to the `WebSocketRouter`, which would then be
-responsible for injecting dependencies into resource constructors.
+component of this proposal. This could be achieved by allowing a DI container
+or a resource factory to be passed to the `WebSocketRouter`, which would then
+be responsible for injecting dependencies into resource constructors.
 
 #### 5.5.2. Enabling a "Schema-First" Workflow
 
@@ -1194,8 +1202,8 @@ powerful **"Schema-First"** development workflow. Teams can define their API
 contract in an `asyncapi.yaml` file, use tooling to generate `msgspec.Struct`
 classes and resource skeletons, and then implement the business logic. The
 framework, at runtime, uses these same schemas to enforce the contract,
-preventing drift between implementation and documentation. This is a significant
-strategic advantage.
+preventing drift between implementation and documentation. This is a
+significant strategic advantage.
 
 ## 6. Future Considerations and Potential Enhancements
 
@@ -1209,8 +1217,8 @@ The current design focuses on basic subprotocol acceptance via the
 `falcon.asgi.WebSocket.accept(subprotocol=...)` method, which could be exposed
 in `on_connect`. Future versions could explore more structured ways to handle
 different subprotocols, perhaps allowing `WebSocketResource` subclasses to
-specialize in particular subprotocols or offering mechanisms to select a handler
-based on the negotiated subprotocol.
+specialize in particular subprotocols or offering mechanisms to select a
+handler based on the negotiated subprotocol.
 
 ### 6.2. Compression Extensions
 
@@ -1247,19 +1255,19 @@ pluggable, allowing different backend implementations. For example:
 
 - An implementation using a message bus like Redis Pub/Sub (similar to Django
   Channels' channel layer 5) would enable inter-process communication, allowing
-  a message published on one instance to be delivered to WebSockets connected to
-  other instances. Designing the `WebSocketConnectionManager` with a clear
-  interface (e.g., an Abstract Base Class) from the outset would facilitate this
-  evolution, allowing the library to start simple but provide a clear upgrade
-  path for distributed deployments without requiring a fundamental rewrite of
-  the application logic that interacts with the manager.
+  a message published on one instance to be delivered to WebSockets connected
+  to other instances. Designing the `WebSocketConnectionManager` with a clear
+  interface (e.g., an Abstract Base Class) from the outset would facilitate
+  this evolution, allowing the library to start simple but provide a clear
+  upgrade path for distributed deployments without requiring a fundamental
+  rewrite of the application logic that interacts with the manager.
 
 ### 6.5. Testing Utilities
 
 To aid developers in creating robust WebSocket applications, dedicated testing
 utilities would be highly beneficial. These could be similar to Falcon's
-`falcon.testing` module for HTTP or Django Channels' `WebsocketCommunicator`.[^5]
-Such utilities would allow developers to:
+`falcon.testing` module for HTTP or Django Channels'
+`WebsocketCommunicator`.[^5] Such utilities would allow developers to:
 
 - Simulate a WebSocket client connecting to a `WebSocketResource`.
 
@@ -1270,8 +1278,8 @@ Such utilities would allow developers to:
 - Test connection lifecycle events (`on_connect`, `on_disconnect`). The
   provision of comprehensive testing tools is critical for library adoption and
   for enabling developers to build reliable real-time systems, which can
-  otherwise be complex to test. Proactively considering these utilities enhances
-  the library's completeness and professional appeal.
+  otherwise be complex to test. Proactively considering these utilities
+  enhances the library's completeness and professional appeal.
 
 An initial API could include a `WebSocketSimulator` class that mimics a client
 connection using Falcon's ASGI test harness. The simulator would operate as an
@@ -1387,8 +1395,8 @@ The Falcon-Pachinko extension, as designed, offers several benefits:
 - **Adherence to Least Surprise**: The design aims to be intuitive and
   predictable for those familiar with Falcon. The design endeavors to strike a
   balance, introducing powerful new capabilities while respecting Falcon's
-  characteristic minimalism and performance focus.[^1] The objective is for these
-  features to feel like a natural and lean augmentation of the framework.
+  characteristic minimalism and performance focus.[^1] The objective is for
+  these features to feel like a natural and lean augmentation of the framework.
 
 ### 7.3. Meeting User Requirements
 
@@ -1396,8 +1404,8 @@ The proposed design directly addresses the key requirements of the initial
 query:
 
 - **Analogous Routing and Handling**: The mountable `WebSocketRouter` and
-  `WebSocketResource` with its dispatch mechanisms provide a system analogous to
-  Falcon's HTTP routing and responders.
+  `WebSocketResource` with its dispatch mechanisms provide a system analogous
+  to Falcon's HTTP routing and responders.
 
 - **Background Worker Mechanism**: The `WorkerController` and lifespan
   integration provide a standard, robust mechanism for background tasks.
@@ -1423,8 +1431,8 @@ and performance they expect from Falcon for HTTP APIs.
 
 The successful development and adoption of this library could broaden Falcon's
 applicability, attracting developers who require first-class real-time features
-within a high-performance Python framework. This, in turn, could foster a larger
-and more diverse Falcon community and ecosystem, centered around both
+within a high-performance Python framework. This, in turn, could foster a
+larger and more diverse Falcon community and ecosystem, centered around both
 traditional API development and emerging real-time use cases.
 
 [^1]: <https://falcon.readthedocs.io>

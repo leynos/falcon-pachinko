@@ -3,14 +3,15 @@
 ## Slipcover, Pytest, and CodeScene Integration
 
 In the dynamic landscape of software development, ensuring code quality and
-reliability is paramount. Code coverage, a metric that quantifies the proportion
-of a codebase exercised by automated tests, stands as a cornerstone of robust
-testing strategies.1 By illuminating untested code segments, developers and
-maintainers can strategically fortify test suites, thereby enhancing confidence
-in software correctness and stability. This guide delves into a powerful
-triad of tools—Slipcover, Pytest, and CodeScene—to establish an efficient and
-insightful code coverage analysis workflow, particularly within a Continuous
-Integration/Continuous Deployment (CI/CD) pipeline using GitHub Actions.
+reliability is paramount. Code coverage, a metric that quantifies the
+proportion of a codebase exercised by automated tests, stands as a cornerstone
+of robust testing strategies.1 By illuminating untested code segments,
+developers and maintainers can strategically fortify test suites, thereby
+enhancing confidence in software correctness and stability. This guide delves
+into a powerful triad of tools—Slipcover, Pytest, and CodeScene—to establish an
+efficient and insightful code coverage analysis workflow, particularly within a
+Continuous Integration/Continuous Deployment (CI/CD) pipeline using GitHub
+Actions.
 
 ## 1. Introduction to the Tooling Ecosystem
 
@@ -22,8 +23,9 @@ Our journey to superior code coverage analysis involves three key players:
   times.1
 
 - **Pytest**: A mature, feature-rich Python testing framework favored for its
-  simplicity and extensibility. We'll explore how to use Pytest effectively with
-  Slipcover, including considerations for test isolation using `pytest-forked`.
+  simplicity and extensibility. We'll explore how to use Pytest effectively
+  with Slipcover, including considerations for test isolation using
+  `pytest-forked`.
 
 - **CodeScene**: An advanced code analysis platform that goes beyond raw
   coverage percentages. CodeScene contextualizes coverage data with insights
@@ -59,8 +61,8 @@ collection and keeps execution speeds high.1
 
 ### 2.2. Installation
 
-Slipcover can be installed from the Python Package Index (PyPI) using pip. A C++
-compiler is required on the system to build its native extension module.1
+Slipcover can be installed from the Python Package Index (PyPI) using pip. A
+C++ compiler is required on the system to build its native extension module.1
 
 ```bash
 pip install slipcover
@@ -151,12 +153,12 @@ ensure that:
 1. Each forked child process independently collects coverage data for the tests
    it executes.
 
-1. This data is temporarily stored.
+2. This data is temporarily stored.
 
-1. Upon completion of all tests, the main Slipcover process aggregates the
+3. Upon completion of all tests, the main Slipcover process aggregates the
    coverage data from all child processes into a single, unified dataset.
 
-1. The final coverage report is generated from this aggregated data.
+4. The final coverage report is generated from this aggregated data.
 
 **Practical Guide to Using Slipcover with** `pytest-forked`**:**
 
@@ -173,7 +175,7 @@ ensure that:
    *Note:* `pytest-forked` *relies on the* `fork()` *system call, making it
    suitable for Unix-like systems (Linux, macOS).*
 
-1. Command Invocation:
+2. Command Invocation:
 
    Add the --forked flag to your Pytest arguments when running through
    Slipcover.
@@ -188,9 +190,9 @@ ensure that:
 
 ### 3.3. Understanding `pytest-xdist` for Parallelism
 
-`pytest-xdist` is another popular Pytest plugin that enables running tests
-in parallel across multiple CPUs or even multiple machines, significantly
-speeding up test suite execution. It works by spawning worker processes, with a
+`pytest-xdist` is another popular Pytest plugin that enables running tests in
+parallel across multiple CPUs or even multiple machines, significantly speeding
+up test suite execution. It works by spawning worker processes, with a
 controller process managing the distribution of tests.5
 
 Current Slipcover Support Status for pytest-xdist:
@@ -216,8 +218,8 @@ Developers needing `pytest-xdist`'s parallelism must currently choose between:
 
 ## 4. Advanced Analysis with CodeScene
 
-CodeScene elevates coverage analysis by providing deep, contextual insights.9 It
-helps answer not just "what percentage is covered?" but "is the
+CodeScene elevates coverage analysis by providing deep, contextual insights.9
+It helps answer not just "what percentage is covered?" but "is the
 
 *right* code covered effectively?"
 
@@ -244,7 +246,7 @@ format that Slipcover generates.2
      On-Premises). CodeScene needs to be aware of your Git repository to
      correctly associate uploaded coverage data.3
 
-1. **API Token Generation and Secure Storage**:
+2. **API Token Generation and Secure Storage**:
 
    - Generate an API token from your CodeScene account. This token is used to
      authenticate uploads.12
@@ -304,8 +306,8 @@ data.11
 - Alternative: Scripted REST API:
 
   While the cs-coverage CLI is preferred for its simplicity and official
-  support, CodeScene also offers a REST API for more direct interaction.
-  This involves a two-step process: a POST request with metadata (commit SHA,
+  support, CodeScene also offers a REST API for more direct interaction. This
+  involves a two-step process: a POST request with metadata (commit SHA,
   repository URL, format, etc.) to get an upload reference, followed by a PUT
   request with the compressed (gzipped) coverage file.12 The CLI tool abstracts
   these complexities.
@@ -330,8 +332,8 @@ data.11
   file is used.
 
 - **Analysis Trigger**: Uploaded coverage data usually becomes visible in the
-  Project Dashboard after CodeScene executes a new analysis for the project that
-  includes the relevant commit.
+  Project Dashboard after CodeScene executes a new analysis for the project
+  that includes the relevant commit.
 
 ## 5. Automating with GitHub Actions
 
@@ -348,8 +350,8 @@ A typical workflow would:
 
 ### 5.2. Step-by-Step Workflow Configuration
 
-Here's an example structure for your workflow file (e.g., `.github/workflows/
-coverage_analysis.yml`):
+Here's an example structure for your workflow file (e.g.,
+`.github/workflows/ coverage_analysis.yml`):
 
 ```yaml
 name: Python Code Coverage Analysis
@@ -443,12 +445,12 @@ After a successful workflow run:
 
 1. Navigate to your project in CodeScene.
 
-1. Check the "Code Coverage" section or related views (often linked with
+2. Check the "Code Coverage" section or related views (often linked with
    Hotspots).
 
-1. Verify that the data reflects the latest commit and seems accurate.
+3. Verify that the data reflects the latest commit and seems accurate.
 
-1. Remember that a new CodeScene analysis might be needed for the data to appear
+4. Remember that a new CodeScene analysis might be needed for the data to appear
    on the dashboard.10
 
 ### 6.2. Common Troubleshooting Tips
@@ -474,8 +476,8 @@ After a successful workflow run:
 ### 6.3. Best Practices
 
 - **Precise Slipcover Scope**: Diligently use `--source` and `--omit` to ensure
-  Slipcover measures only your application code. This leads to more accurate and
-  actionable insights.1
+  Slipcover measures only your application code. This leads to more accurate
+  and actionable insights.1
 
 - **Conditional Workflow Execution**: Consider running the full CodeScene upload
   only on pushes to main/default branches or on pull requests targeting these
@@ -520,6 +522,6 @@ While Slipcover's support for `pytest-xdist` is a current limitation to monitor
 `pytest-forked` already provides a strong solution for many projects needing
 test isolation. By adopting and refining the practices outlined in this guide,
 development teams can foster a proactive approach to code quality, reduce
-technical debt, and deliver more dependable software. Continuously refer to
-the official documentation of each tool, as they evolve and introduce new
+technical debt, and deliver more dependable software. Continuously refer to the
+official documentation of each tool, as they evolve and introduce new
 capabilities.

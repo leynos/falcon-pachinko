@@ -6,7 +6,7 @@ approach to asynchronous WebSocket routing and background worker integration.
 
 See
 [docs/falcon-websocket-extension-design.md](docs/falcon-websocket-extension-design.md)
-for the full design rationale.
+ for the full design rationale.
 
 ## Key features
 
