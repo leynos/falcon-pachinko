@@ -474,7 +474,6 @@ class WebSocketResource:
 
         return HandlerInfo(typing.cast("Handler", func), payload_type, strict=True)
 
-
     def _requires_strict_validation(
         self, payload: object, payload_type: type, *, strict: bool
     ) -> bool:
