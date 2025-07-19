@@ -491,13 +491,14 @@ class WebSocketResource:
         self, payload: object, payload_type: type, *, strict: bool
     ) -> None:
         """Raise if ``payload`` contains unknown fields in strict mode."""
-        if strict and isinstance(payload, dict) and issubclass(
-            payload_type, msgspec.Struct
+        if (
+            strict
+            and isinstance(payload, dict)
+            and issubclass(payload_type, msgspec.Struct)
         ):
             info = msgspec_inspect.type_info(payload_type)
             allowed = {
-                f.name
-                for f in typing.cast("msgspec_inspect.StructType", info).fields
+                f.name for f in typing.cast("msgspec_inspect.StructType", info).fields
             }
             extra = set(payload) - allowed
             if extra:
