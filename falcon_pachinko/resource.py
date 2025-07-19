@@ -474,6 +474,35 @@ class WebSocketResource:
 
         return HandlerInfo(typing.cast("Handler", func), payload_type, strict=True)
 
+    def _should_validate_extra_fields(
+        self,
+        handler_info: HandlerInfo,
+        payload: object,
+        payload_type: type,
+    ) -> bool:
+        """Return ``True`` if strict validation of extra fields is required."""
+        return (
+            handler_info.strict
+            and isinstance(payload, dict)
+            and issubclass(payload_type, msgspec.Struct)
+        )
+
+    def _validate_strict_payload(
+        self, payload: object, payload_type: type, *, strict: bool
+    ) -> None:
+        """Raise if ``payload`` contains unknown fields in strict mode."""
+        if strict and isinstance(payload, dict) and issubclass(
+            payload_type, msgspec.Struct
+        ):
+            info = msgspec_inspect.type_info(payload_type)
+            allowed = {
+                f.name
+                for f in typing.cast("msgspec_inspect.StructType", info).fields
+            }
+            extra = set(payload) - allowed
+            if extra:
+                _raise_unknown_fields(extra, payload)
+
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
@@ -601,19 +630,14 @@ class WebSocketResource:
         payload_type = handler_info.payload_type
         if payload_type is not None and payload is not None:
             try:
-                if (
-                    handler_info.strict
-                    and isinstance(payload, dict)
-                    and issubclass(payload_type, msgspec.Struct)
+                if self._should_validate_extra_fields(
+                    handler_info,
+                    payload,
+                    payload_type,
                 ):
-                    info = msgspec_inspect.type_info(payload_type)
-                    allowed = {
-                        f.name
-                        for f in typing.cast("msgspec_inspect.StructType", info).fields
-                    }
-                    extra = set(payload) - allowed
-                    if extra:
-                        _raise_unknown_fields(extra, payload)
+                    self._validate_strict_payload(
+                        payload, payload_type, strict=handler_info.strict
+                    )
 
                 payload = typing.cast(
                     "typing.Any",
