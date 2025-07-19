@@ -36,11 +36,33 @@ def _duplicate_payload_type_msg(
     return msg
 
 
-def _raise_unknown_fields(extra_fields: set[str], payload: dict | None = None) -> None:
-    """Raise a validation error for unknown fields."""
+def _raise_unknown_fields(
+    extra_fields: set[str],
+    payload: dict | None = None,
+    *,
+    include_payload: bool = False,
+) -> None:
+    """Raise a validation error for unknown fields.
+
+    Parameters
+    ----------
+    extra_fields : set[str]
+        Names of the unexpected fields.
+    payload : dict or None, optional
+        The original payload. Only included in the error message when
+        ``include_payload`` is ``True``.
+    include_payload : bool, optional
+        Include a sanitized snippet of the payload in the error message. The
+        snippet is truncated to avoid leaking sensitive data. Defaults to
+        ``False``.
+    """
     details = f"Unknown fields in payload: {sorted(extra_fields)}"
-    if payload is not None:
-        details += f" -> {payload}"
+    if include_payload and payload is not None:
+        snippet = str(payload)
+        if len(snippet) > 200:
+            snippet = snippet[:197] + "..."
+        details += f" -> {snippet}"
+
     raise msgspec.ValidationError(details)
 
 
@@ -495,9 +517,7 @@ class WebSocketResource:
             }
             extra = set(typing.cast("dict[str, typing.Any]", payload)) - allowed
             if extra:
-                _raise_unknown_fields(
-                    extra, typing.cast("dict[str, typing.Any]", payload)
-                )
+                _raise_unknown_fields(extra)
 
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
