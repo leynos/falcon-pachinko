@@ -474,16 +474,6 @@ class WebSocketResource:
 
         return HandlerInfo(typing.cast("Handler", func), payload_type, strict=True)
 
-    def _should_validate_extra_fields(
-        self,
-        handler_info: HandlerInfo,
-        payload: object,
-        payload_type: type,
-    ) -> bool:
-        """Return ``True`` if strict validation of extra fields is required."""
-        return self._requires_strict_validation(
-            payload, payload_type, strict=handler_info.strict
-        )
 
     def _requires_strict_validation(
         self, payload: object, payload_type: type, *, strict: bool
@@ -637,10 +627,8 @@ class WebSocketResource:
         payload_type = handler_info.payload_type
         if payload_type is not None and payload is not None:
             try:
-                if self._should_validate_extra_fields(
-                    handler_info,
-                    payload,
-                    payload_type,
+                if self._requires_strict_validation(
+                    payload, payload_type, strict=handler_info.strict
                 ):
                     self._validate_strict_payload(
                         payload, payload_type, strict=handler_info.strict
