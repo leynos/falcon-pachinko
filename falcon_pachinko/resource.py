@@ -36,9 +36,12 @@ def _duplicate_payload_type_msg(
     return msg
 
 
-def _raise_unknown_fields() -> None:
+def _raise_unknown_fields(extra_fields: set[str], payload: dict | None = None) -> None:
     """Raise a validation error for unknown fields."""
-    raise msgspec.ValidationError
+    details = f"Unknown fields in payload: {sorted(extra_fields)}"
+    if payload is not None:
+        details += f" -> {payload}"
+    raise msgspec.ValidationError(details)
 
 
 def _to_snake_case(name: str) -> str:
@@ -610,7 +613,7 @@ class WebSocketResource:
                     }
                     extra = set(payload) - allowed
                     if extra:
-                        _raise_unknown_fields()
+                        _raise_unknown_fields(extra, payload)
 
                 payload = typing.cast(
                     "typing.Any",
