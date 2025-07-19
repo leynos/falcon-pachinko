@@ -23,6 +23,7 @@ class HandlerInfo:
 
     handler: Handler
     payload_type: type | None
+    strict: bool = True
 
 
 def _duplicate_payload_type_msg(
@@ -33,6 +34,11 @@ def _duplicate_payload_type_msg(
     if handler_name:
         msg += f" (handler: {handler_name})"
     return msg
+
+
+def _raise_unknown_fields() -> None:
+    """Raise a validation error for unknown fields."""
+    raise msgspec.ValidationError
 
 
 def _to_snake_case(name: str) -> str:
@@ -208,7 +214,9 @@ def _get_payload_type(func: Handler) -> type | None:
 class _HandlesMessageDescriptor:
     """Register a method as a message handler on its class."""
 
-    def __init__(self, message_type: str, func: Handler) -> None:
+    def __init__(
+        self, message_type: str, func: Handler, *, strict: bool = True
+    ) -> None:
         """Store metadata about a message handler.
 
         Parameters
@@ -228,6 +236,7 @@ class _HandlesMessageDescriptor:
         self.message_type = message_type
         self.func = func
         self.payload_type = _get_payload_type(func)
+        self.strict = strict
         functools.update_wrapper(self, func)  # pyright: ignore[reportArgumentType]
         self.owner: type | None = None
         self.name: str | None = None
@@ -275,6 +284,7 @@ class _HandlesMessageDescriptor:
             self.message_type,
             self.func,
             payload_type=self.payload_type,
+            strict=self.strict,
         )
 
     def __get__(
@@ -309,6 +319,8 @@ class _HandlesMessageDescriptor:
 
 def handles_message(
     message_type: str,
+    *,
+    strict: bool = True,
 ) -> cabc.Callable[[Handler], _HandlesMessageDescriptor]:
     """Create a decorator to mark a method as a WebSocket message handler.
 
@@ -345,7 +357,7 @@ def handles_message(
     """
 
     def decorator(func: Handler) -> _HandlesMessageDescriptor:
-        return _HandlesMessageDescriptor(message_type, func)
+        return _HandlesMessageDescriptor(message_type, func, strict=strict)
 
     return decorator
 
@@ -360,8 +372,8 @@ class WebSocketResource:
     without additional boilerplate.
     """
 
-    handlers: typing.ClassVar[dict[str, tuple[Handler, type | None]]]
-    _struct_handlers: typing.ClassVar[dict[type, tuple[Handler, type | None]]] = {}
+    handlers: typing.ClassVar[dict[str, HandlerInfo]]
+    _struct_handlers: typing.ClassVar[dict[type, HandlerInfo]] = {}
     schema: type | None = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
@@ -378,9 +390,9 @@ class WebSocketResource:
     @classmethod
     def _collect_base_handlers(
         cls,
-    ) -> dict[str, tuple[Handler, type | None]]:
+    ) -> dict[str, HandlerInfo]:
         """Gather handler mappings from base classes."""
-        combined: dict[str, tuple[Handler, type | None]] = {}
+        combined: dict[str, HandlerInfo] = {}
         for base in cls.__mro__[1:]:
             base_handlers = getattr(base, "handlers", None)
             if base_handlers:
@@ -388,7 +400,7 @@ class WebSocketResource:
         return combined
 
     @classmethod
-    def _apply_overrides(cls, handlers: dict[str, tuple[Handler, type | None]]) -> None:
+    def _apply_overrides(cls, handlers: dict[str, HandlerInfo]) -> None:
         """Update ``handlers`` when methods are overridden in ``cls``."""
         shadowed = {
             name
@@ -397,10 +409,14 @@ class WebSocketResource:
             and inspect.iscoroutinefunction(obj)
         }
 
-        for msg_type, (handler, payload_type) in list(handlers.items()):
-            if handler.__name__ in shadowed:
-                new_handler = typing.cast("Handler", cls.__dict__[handler.__name__])
-                handlers[msg_type] = (new_handler, payload_type)
+        for msg_type, info in list(handlers.items()):
+            if info.handler.__name__ in shadowed:
+                new_handler = typing.cast(
+                    "Handler", cls.__dict__[info.handler.__name__]
+                )
+                handlers[msg_type] = HandlerInfo(
+                    new_handler, info.payload_type, info.strict
+                )
 
     @classmethod
     def _init_schema_registry(cls) -> None:
@@ -429,7 +445,9 @@ class WebSocketResource:
     @classmethod
     def _populate_struct_handlers(cls) -> None:
         """Create mapping of struct types to handlers."""
-        for handler, payload_type in cls.handlers.values():
+        for info in cls.handlers.values():
+            handler = info.handler
+            payload_type = info.payload_type
             if payload_type is None or not issubclass(payload_type, msgspec.Struct):
                 continue
 
@@ -438,11 +456,9 @@ class WebSocketResource:
                 raise ValueError(
                     _duplicate_payload_type_msg(payload_type, handler.__qualname__)
                 )
-            cls._struct_handlers[payload_type] = (handler, payload_type)
+            cls._struct_handlers[payload_type] = info
 
-    def _find_conventional_handler(
-        self, tag: str
-    ) -> tuple[Handler, type | None] | None:
+    def _find_conventional_handler(self, tag: str) -> HandlerInfo | None:
         """Return a handler matching ``on_{tag}`` if present."""
         name = f"on_{_to_snake_case(tag)}"
         func = getattr(self.__class__, name, None)
@@ -453,7 +469,7 @@ class WebSocketResource:
         except (HandlerSignatureError, HandlerNotAsyncError, SignatureInspectionError):
             return None
 
-        return typing.cast("Handler", func), payload_type
+        return HandlerInfo(typing.cast("Handler", func), payload_type, strict=True)
 
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
@@ -505,7 +521,12 @@ class WebSocketResource:
 
     @classmethod
     def add_handler(
-        cls, message_type: str, handler: Handler, *, payload_type: type | None = None
+        cls,
+        message_type: str,
+        handler: Handler,
+        *,
+        payload_type: type | None = None,
+        strict: bool = True,
     ) -> None:
         """Register a handler function for a specific message type.
 
@@ -522,7 +543,7 @@ class WebSocketResource:
         payload_type : type or None, optional
             The payload type for automatic validation and conversion, by default None
         """
-        cls.handlers[message_type] = (handler, payload_type)
+        cls.handlers[message_type] = HandlerInfo(handler, payload_type, strict)
 
     async def dispatch(self, ws: WebSocketLike, raw: str | bytes) -> None:
         """Process an incoming raw WebSocket message and dispatch it.
@@ -561,12 +582,10 @@ class WebSocketResource:
             if conv is None:
                 await self.on_message(ws, raw)
                 return
-            handler, _ = conv
-            await handler(self, ws, message)
+            await self._convert_and_invoke_handler(ws, raw, conv, message)
             return
 
-        handler, _ = entry
-        await handler(self, ws, message)
+        await self._convert_and_invoke_handler(ws, raw, entry, message)
 
     async def _convert_and_invoke_handler(
         self,
@@ -579,8 +598,27 @@ class WebSocketResource:
         payload_type = handler_info.payload_type
         if payload_type is not None and payload is not None:
             try:
+                if (
+                    handler_info.strict
+                    and isinstance(payload, dict)
+                    and issubclass(payload_type, msgspec.Struct)
+                ):
+                    info = msgspec_inspect.type_info(payload_type)
+                    allowed = {
+                        f.name
+                        for f in typing.cast("msgspec_inspect.StructType", info).fields
+                    }
+                    extra = set(payload) - allowed
+                    if extra:
+                        _raise_unknown_fields()
+
                 payload = typing.cast(
-                    "typing.Any", msgspec.convert(payload, type=payload_type)
+                    "typing.Any",
+                    msgspec.convert(
+                        payload,
+                        type=payload_type,
+                        strict=handler_info.strict,
+                    ),
                 )
             except msgspec.ValidationError:
                 await self.on_message(ws, raw)
@@ -606,7 +644,4 @@ class WebSocketResource:
             await self.on_message(ws, raw)
             return
 
-        handler, payload_type = handler_entry
-        await self._convert_and_invoke_handler(
-            ws, raw, HandlerInfo(handler, payload_type), envelope.payload
-        )
+        await self._convert_and_invoke_handler(ws, raw, handler_entry, envelope.payload)

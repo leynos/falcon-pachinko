@@ -8,7 +8,7 @@ import msgspec
 import msgspec.json as msgspec_json
 import pytest
 
-from falcon_pachinko import WebSocketLike, WebSocketResource
+from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
 from falcon_pachinko.unittests.helpers import DummyWS
 
 
@@ -16,6 +16,12 @@ class EchoPayload(msgspec.Struct):
     """A simple message payload structure for testing echo messages."""
 
     text: str
+
+
+class ExtraPayload(msgspec.Struct):
+    """Payload used to test strict vs lenient conversion."""
+
+    val: int
 
 
 class EchoResource(WebSocketResource):
@@ -169,6 +175,40 @@ class SyncHandlerResource(WebSocketResource):
         self.fallback.append(message)
 
 
+class StrictResource(WebSocketResource):
+    """Resource with strict payload conversion (default)."""
+
+    def __init__(self) -> None:
+        self.seen: list[int] = []
+        self.fallback: list[str | bytes] = []
+
+    async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record messages that fail validation."""
+        self.fallback.append(message)
+
+    @handles_message("extra")
+    async def handle_extra(self, ws: WebSocketLike, payload: ExtraPayload) -> None:
+        """Record validated payload values."""
+        self.seen.append(payload.val)
+
+
+class LenientResource(WebSocketResource):
+    """Resource with lenient payload conversion (allows extra fields)."""
+
+    def __init__(self) -> None:
+        self.seen: list[int] = []
+        self.fallback: list[str | bytes] = []
+
+    async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record messages that fail validation."""
+        self.fallback.append(message)
+
+    @handles_message("extra", strict=False)
+    async def handle_extra(self, ws: WebSocketLike, payload: ExtraPayload) -> None:
+        """Record validated payload values."""
+        self.seen.append(payload.val)
+
+
 @pytest.mark.asyncio
 async def test_dispatch_calls_registered_handler() -> None:
     """Test that dispatching a message with a registered type calls the handler."""
@@ -244,6 +284,26 @@ async def test_invalid_payload_calls_fallback() -> None:
     await r.dispatch(DummyWS(), raw)
     assert r.fallback == [raw]
     assert not r.seen
+
+
+@pytest.mark.asyncio
+async def test_extra_fields_strict_true_calls_fallback() -> None:
+    """Extra fields trigger fallback when strict is True."""
+    r = StrictResource()
+    raw = msgspec_json.encode({"type": "extra", "payload": {"val": 1, "extra": 2}})
+    await r.dispatch(DummyWS(), raw)
+    assert r.fallback == [raw]
+    assert not r.seen
+
+
+@pytest.mark.asyncio
+async def test_extra_fields_strict_false_processed() -> None:
+    """Extra fields are ignored when strict=False."""
+    r = LenientResource()
+    raw = msgspec_json.encode({"type": "extra", "payload": {"val": 3, "extra": 4}})
+    await r.dispatch(DummyWS(), raw)
+    assert r.seen == [3]
+    assert not r.fallback
 
 
 @pytest.mark.asyncio

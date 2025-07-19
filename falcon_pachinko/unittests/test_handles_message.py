@@ -231,4 +231,4 @@ def test_unresolved_annotation_is_ignored() -> None:
             """
             ...
 
-    assert UnknownAnnoResource.handlers["unknown"][1] is None
+    assert UnknownAnnoResource.handlers["unknown"].payload_type is None
