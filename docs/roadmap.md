@@ -69,7 +69,7 @@ composable patterns.
   - [x] Implement the `on_{tag}` naming convention as a best-effort convenience,
     including the `CamelCase` to `snake_case` conversion.
 
-  - [ ] Document `msgspec`'s default strictness (no extra fields) and expose a
+  - [x] Document `msgspec`'s default strictness (no extra fields) and expose a
     `strict=False` option on the decorator.
 
 - [ ] **Refine Resource API and State Management.**

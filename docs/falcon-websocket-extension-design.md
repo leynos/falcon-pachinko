@@ -296,7 +296,8 @@ logic.
     when the WebSocket connection is closed, either by the client or the
     server. `close_code` provides the WebSocket close code.
 
-  - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str, bytes])`
+  - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str,
+    bytes])`
     :
     A fallback handler for messages that are not dispatched by the more
     specific message handlers. This can be used for raw text/binary data or
@@ -361,10 +362,14 @@ avoids a monolithic receive loop with extensive conditional logic.
   handler's `payload` parameter is type-annotated with a `msgspec.Struct`, the
   library will perform high-performance validation and deserialization. By
   default, `msgspec` forbids extra fields in the payload. This strictness is a
-  feature for ensuring contract adherence. The library will document this
-  behaviour clearly and may expose an option like
-  `@handles_message("type", strict=False)` to relax this for specific handlers
-  if required.
+  feature for ensuring contract adherence. Falcon-Pachinko exposes a ``strict``
+  option on ``@handles_message`` to relax this behaviour when needed:
+
+  ```python
+  @handles_message("type", strict=False)
+  async def on_type(self, ws, payload: SomeStruct) -> None:
+      ...
+  ```
 
 #### 3.6.1. Descriptor Implementation of `handles_message`
 
