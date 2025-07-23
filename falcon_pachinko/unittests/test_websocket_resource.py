@@ -353,3 +353,12 @@ async def test_state_custom_mapping_supported() -> None:
     r.state = custom
     r.state["count"] += 1
     assert custom["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_state_is_unique_per_instance() -> None:
+    """Resource instances do not share state by default."""
+    r1 = EchoResource()
+    r2 = EchoResource()
+    r1.state["foo"] = "bar"
+    assert "foo" not in r2.state

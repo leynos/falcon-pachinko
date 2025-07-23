@@ -260,44 +260,40 @@ format that Slipcover generates.2
 
 CodeScene provides a dedicated command-line tool, the **CodeScene Coverage CLI
 (**`cs-coverage`**)**, which is the recommended method for uploading coverage
-data.11
+data.
 
 - Installation of cs-coverage:
 
   The tool can be installed using a script provided by CodeScene. In a GitHub
   Actions workflow, you might add a step like:
 
-  ```yaml
-  - name: Install CodeScene Coverage CLI
-    run: curl https://downloads.codescene.io/enterprise/cli/install-cs-coverage-
-    tool.sh | bash -s -- -y ```
-
-```11
+```yaml
+- name: Install CodeScene Coverage CLI
+  run: curl https://downloads.codescene.io/enterprise/cli/install-cs-coverage-tool.sh | bash -s -- -y
+```
 
 - Command Structure and Options:
 
   The basic command to upload a Cobertura XML file is:
 
-  ````bash cs-coverage upload \ --format "cobertura" \ --metric "line-coverage"
-  \ "path/to/your/coverage.xml" ```
+```bash
+cs-coverage upload \
+  --format "cobertura" \
+  --metric "line-coverage" \
+  "path/to/your/coverage.xml"
+```
 
-  11
-
-  - `--format "cobertura"`: Specifies the input file format.
-
-  - `--metric "line-coverage"`: Specifies the type of coverage metric being
-    uploaded (line coverage is supported for Cobertura by `cs-coverage` 11).
-
-  - `"path/to/your/coverage.xml"`: The path to the Slipcover-generated Cobertura
-    XML file.
-
-  ```
+- `--format "cobertura"`: Specifies the input file format.
+- `--metric "line-coverage"`: Specifies the type of coverage metric being
+  uploaded (line coverage is supported for Cobertura by `cs-coverage`).
+- `"path/to/your/coverage.xml"`: The path to the Slipcover-generated Cobertura
+  XML file.
 
 - Authentication:
 
   The cs-coverage tool uses an environment variable CS_ACCESS_TOKEN for
   authentication. Ensure this variable is set with your CodeScene API token in
-  the environment where the command is run.11 In GitHub Actions:
+  the environment where the command is run. In GitHub Actions:
 
   `yaml env: CS_ACCESS_TOKEN: ${{ secrets.CODESCENE_API_TOKEN }}`
 
@@ -311,8 +307,6 @@ data.11
   these complexities.
 
 ### 4.4. Key Considerations for CodeScene Data
-
-10
 
 - **Commit Association**: CodeScene uses the commit SHA and repository URL to
   link coverage data to the correct version of your codebase. Ensure this
@@ -354,55 +348,43 @@ Here's an example structure for your workflow file (e.g.,
 ```yaml
 name: Python Code Coverage Analysis
 
-on:
-  push:
-    branches: [ main ] # Or your default branch
-  pull_request:
-    branches: [ main ] # Or your default branch
+on: push: branches: [ main ] # Or your default branch pull_request: branches: [
+main ] # Or your default branch
 
-jobs:
-  build-test-analyze:
-    runs-on: ubuntu-latest
-    steps:
+jobs: build-test-analyze: runs-on: ubuntu-latest steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x' # Specify your project's Python version
+        uses: actions/setup-python@v5 with: python-version: '3.x' # Specify
+        your project's Python version
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install slipcover pytest pytest-forked
+        run: | python -m pip install --upgrade pip pip install slipcover pytest
+        pytest-forked
           # Install other project dependencies (e.g., from requirements.txt)
           # pip install -r requirements.txt
 
       - name: Install CodeScene Coverage CLI
-        run: curl https://downloads.codescene.io/enterprise/cli/install-cs-coverage-tool.sh | bash -s -- -y
+        run: curl
+        https://downloads.codescene.io/enterprise/cli/install-cs-coverage-tool.sh
+         | bash -s -- -y
 
       - name: Run tests with Slipcover and generate Cobertura report
-        run: |
-          python -m slipcover \
-            --source=./your_project_src  # Adjust to your source directory
-            --omit="*/tests/*,*/venv/*" \
-            --branch \
-            --out coverage.xml \
-            -m pytest --forked -v tests/  # Adjust test path and Pytest args
+        run: | python -m slipcover \
+        --source=./your_project_src  # Adjust to your source directory
+        --omit="*/tests/*,*/venv/*" \
+        --branch \
+        --out coverage.xml \
+        -m pytest --forked -v tests/  # Adjust test path and Pytest args
 
       - name: Upload Coverage Report to CodeScene
-        env:
-          CS_ACCESS_TOKEN: ${{ secrets.CODESCENE_API_TOKEN }}
-        run: |
-          if [! -f coverage.xml ]; then
-            echo "coverage.xml not found!"
-            exit 1
-          fi
-          cs-coverage upload \
-            --format "cobertura" \
-            --metric "line-coverage" \
-            coverage.xml
+        env: CS_ACCESS_TOKEN: ${{ secrets.CODESCENE_API_TOKEN }} run: | if [!
+        -f coverage.xml ]; then echo "coverage.xml not found!" exit 1 fi
+        cs-coverage upload \
+        --format "cobertura" \
+        --metric "line-coverage" \
+        coverage.xml
 ```
 
 **Important Notes for the Workflow:**
@@ -421,15 +403,12 @@ one option that can parse Cobertura XML files.13
 
 ```yaml
       - name: Post Coverage Summary Comment
-        if: github.event_name == 'pull_request'
-        uses: irongut/CodeCoverageSummary@v1.3.0
-        with:
-          filename: coverage.xml # Action uses the uncompressed XML
-          badge: true
-          fail_below_min: false # Or true, with appropriate thresholds
-          format: 'markdown'
-          output: 'both' # To console and as PR comment
-          thresholds: '60 80' # Example: red <60%, yellow <80%, green >=80%
+        if: github.event_name == 'pull_request' uses:
+        irongut/CodeCoverageSummary@v1.3.0 with: filename: coverage.xml #
+        Action uses the uncompressed XML badge: true fail_below_min: false # Or
+        true, with appropriate thresholds format: 'markdown' output: 'both' #
+        To console and as PR comment thresholds: '60 80' # Example: red <60%,
+        yellow <80%, green >=80%
 ```
 
 This provides a quick glance at coverage changes directly in the PR,
