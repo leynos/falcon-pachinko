@@ -40,7 +40,7 @@ class EchoResource(WebSocketResource):
         self.seen: list[typing.Any] = []
         self.fallback: list[typing.Any] = []
 
-    async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Handle messages that do not match any registered handler.
 
         Handles messages that do not match any registered handler by appending
@@ -90,7 +90,7 @@ class RawResource(WebSocketResource):
         """
         self.received: list[typing.Any] = []
 
-    async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Handle incoming messages by appending them to the received list.
 
         This method acts as a fallback for messages that do not match any
@@ -170,7 +170,7 @@ class SyncHandlerResource(WebSocketResource):
         """Ignore synchronous handler used for testing."""
         self.seen.append(payload)
 
-    async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Record fallback messages."""
         self.fallback.append(message)
 
@@ -182,7 +182,7 @@ class StrictResource(WebSocketResource):
         self.seen: list[int] = []
         self.fallback: list[str | bytes] = []
 
-    async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Record messages that fail validation."""
         self.fallback.append(message)
 
@@ -199,7 +199,7 @@ class LenientResource(WebSocketResource):
         self.seen: list[int] = []
         self.fallback: list[str | bytes] = []
 
-    async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Record messages that fail validation."""
         self.fallback.append(message)
 
