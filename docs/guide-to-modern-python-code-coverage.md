@@ -186,7 +186,7 @@ ensure that:
    Slipcover will automatically handle the collection and aggregation of
    coverage data from the forked processes.
 
-   ````
+   ```
 
 ### 3.3. Understanding `pytest-xdist` for Parallelism
 
@@ -267,14 +267,12 @@ data.11
   The tool can be installed using a script provided by CodeScene. In a GitHub
   Actions workflow, you might add a step like:
 
-  ````yaml
+  ```yaml
   - name: Install CodeScene Coverage CLI
     run: curl https://downloads.codescene.io/enterprise/cli/install-cs-coverage-
     tool.sh | bash -s -- -y ```
 
-  11
-
-  ````
+```11
 
 - Command Structure and Options:
 
@@ -293,7 +291,7 @@ data.11
   - `"path/to/your/coverage.xml"`: The path to the Slipcover-generated Cobertura
     XML file.
 
-  ````
+  ```
 
 - Authentication:
 
