@@ -44,7 +44,7 @@ class SchemaResource(WebSocketResource):
         """Record leave events."""
         self.events.append(("leave", payload.room))
 
-    async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Record fallback messages."""
         self.events.append(("raw", message))
 

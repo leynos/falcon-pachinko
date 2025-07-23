@@ -74,7 +74,7 @@ composable patterns.
 
 - [ ] **Refine Resource API and State Management.**
 
-  - [ ] Rename the fallback handler method from `on_message` to `on_unhandled`
+  - [x] Rename the fallback handler method from `on_message` to `on_unhandled`
     to avoid ambiguity.
 
   - [ ] Implement the `self.state` attribute on `WebSocketResource` as a

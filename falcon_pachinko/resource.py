@@ -553,11 +553,12 @@ class WebSocketResource:
             The close code indicating the reason for disconnection
         """
 
-    async def on_message(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Handle incoming WebSocket messages that do not match any registered handler.
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Handle incoming messages that don't match any handler.
 
-        Called when a message cannot be decoded or its type is unrecognized.
-        Override to implement custom fallback behavior for such messages.
+        This method acts as a catch-all for messages that fail decoding or do
+        not map to a registered handler. Override it to implement custom
+        fallback behaviour for such cases.
 
         Parameters
         ----------
@@ -600,7 +601,7 @@ class WebSocketResource:
         routed based on the resulting message's type. Otherwise, the message is
         interpreted as a JSON envelope with ``type`` and optional ``payload``
         fields. Any decoding failure or missing handler results in a call to
-        :meth:`on_message`.
+        :meth:`on_unhandled`.
 
         Parameters
         ----------
@@ -619,7 +620,7 @@ class WebSocketResource:
         try:
             message = msgspec_json.decode(raw, type=self.schema)
         except (msgspec.DecodeError, msgspec.ValidationError):
-            await self.on_message(ws, raw)
+            await self.on_unhandled(ws, raw)
             return
 
         entry = self.__class__._struct_handlers.get(type(message))
@@ -628,7 +629,7 @@ class WebSocketResource:
             tag = typing.cast("msgspec_inspect.StructType", info).tag
             conv = self._find_conventional_handler(tag)
             if conv is None:
-                await self.on_message(ws, raw)
+                await self.on_unhandled(ws, raw)
                 return
             await self._convert_and_invoke_handler(ws, raw, conv, message)
             return
@@ -662,7 +663,7 @@ class WebSocketResource:
                     ),
                 )
             except msgspec.ValidationError:
-                await self.on_message(ws, raw)
+                await self.on_unhandled(ws, raw)
                 return
 
         await handler_info.handler(self, ws, payload)
@@ -674,7 +675,7 @@ class WebSocketResource:
         try:
             envelope = msgspec_json.decode(raw, type=_Envelope)
         except msgspec.DecodeError:
-            await self.on_message(ws, raw)
+            await self.on_unhandled(ws, raw)
             return
 
         handler_entry = self.__class__.handlers.get(envelope.type)
@@ -682,7 +683,7 @@ class WebSocketResource:
             handler_entry = self._find_conventional_handler(envelope.type)
 
         if handler_entry is None:
-            await self.on_message(ws, raw)
+            await self.on_unhandled(ws, raw)
             return
 
         await self._convert_and_invoke_handler(ws, raw, handler_entry, envelope.payload)
