@@ -5,7 +5,7 @@ from __future__ import annotations
 import typing
 
 import msgspec
-import msgspec.json as msgspec_json
+import msgspec.json as msjson
 import pytest
 
 from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
@@ -213,7 +213,7 @@ class LenientResource(WebSocketResource):
 async def test_dispatch_calls_registered_handler() -> None:
     """Test that dispatching a message with a registered type calls the handler."""
     r = EchoResource()
-    raw = msgspec_json.encode({"type": "echo", "payload": {"text": "hi"}})
+    raw = msjson.encode({"type": "echo", "payload": {"text": "hi"}})
     await r.dispatch(DummyWS(), raw)
     assert r.seen == ["hi"]
     assert not r.fallback
@@ -228,7 +228,7 @@ async def test_dispatch_unknown_type_calls_fallback() -> None:
     EchoResource, the raw message is appended to the resource's fallback list.
     """
     r = EchoResource()
-    raw = msgspec_json.encode({"type": "unknown", "payload": {"text": "oops"}})
+    raw = msjson.encode({"type": "unknown", "payload": {"text": "oops"}})
     await r.dispatch(DummyWS(), raw)
     assert r.fallback == [raw]
 
@@ -238,7 +238,7 @@ async def test_handler_shared_across_instances() -> None:
     """Test that handlers are shared across instances of the same resource class."""
     r1 = EchoResource()
     r2 = EchoResource()
-    raw = msgspec_json.encode({"type": "echo", "payload": {"text": "hey"}})
+    raw = msjson.encode({"type": "echo", "payload": {"text": "hey"}})
     await r1.dispatch(DummyWS(), raw)
     await r2.dispatch(DummyWS(), raw)
     assert r1.seen == ["hey"]
@@ -265,7 +265,7 @@ async def test_payload_type_none_passes_raw(payload: object, expected: object) -
     msg: dict[str, typing.Any] = {"type": "raw"}
     if payload != "MISSING":
         msg["payload"] = payload
-    raw = msgspec_json.encode(msg)
+    raw = msjson.encode(msg)
     await r.dispatch(DummyWS(), raw)
     assert r.received == [expected]
 
@@ -280,7 +280,7 @@ async def test_invalid_payload_calls_fallback() -> None:
     handler.
     """
     r = EchoResource()
-    raw = msgspec_json.encode({"type": "echo", "payload": {"text": 42}})
+    raw = msjson.encode({"type": "echo", "payload": {"text": 42}})
     await r.dispatch(DummyWS(), raw)
     assert r.fallback == [raw]
     assert not r.seen
@@ -290,7 +290,7 @@ async def test_invalid_payload_calls_fallback() -> None:
 async def test_extra_fields_strict_true_calls_fallback() -> None:
     """Extra fields trigger fallback when strict is True."""
     r = StrictResource()
-    raw = msgspec_json.encode({"type": "extra", "payload": {"val": 1, "extra": 2}})
+    raw = msjson.encode({"type": "extra", "payload": {"val": 1, "extra": 2}})
     await r.dispatch(DummyWS(), raw)
     assert r.fallback == [raw]
     assert not r.seen
@@ -300,7 +300,7 @@ async def test_extra_fields_strict_true_calls_fallback() -> None:
 async def test_extra_fields_strict_false_processed() -> None:
     """Extra fields are ignored when strict=False."""
     r = LenientResource()
-    raw = msgspec_json.encode({"type": "extra", "payload": {"val": 3, "extra": 4}})
+    raw = msjson.encode({"type": "extra", "payload": {"val": 3, "extra": 4}})
     await r.dispatch(DummyWS(), raw)
     assert r.seen == [3]
     assert not r.fallback
@@ -310,7 +310,7 @@ async def test_extra_fields_strict_false_processed() -> None:
 async def test_on_tag_dispatch_envelope() -> None:
     """Messages with matching ``on_{tag}`` handlers are dispatched."""
     r = ConventionalResource()
-    raw = msgspec_json.encode({"type": "echo", "payload": {"x": 1}})
+    raw = msjson.encode({"type": "echo", "payload": {"x": 1}})
     await r.dispatch(DummyWS(), raw)
     assert r.seen == [{"x": 1}]
 
@@ -319,7 +319,7 @@ async def test_on_tag_dispatch_envelope() -> None:
 async def test_on_tag_camel_case() -> None:
     """CamelCase tags are converted to snake_case."""
     r = CamelResource()
-    raw = msgspec_json.encode(CamelResource.SendMessage(text="hi"))
+    raw = msjson.encode(CamelResource.SendMessage(text="hi"))
     await r.dispatch(DummyWS(), raw)
     assert r.messages == ["hi"]
 
@@ -328,7 +328,7 @@ async def test_on_tag_camel_case() -> None:
 async def test_sync_handler_ignored_and_fallback_behavior() -> None:
     """Synchronous ``on_{tag}`` handlers are ignored by dispatch."""
     r = SyncHandlerResource()
-    raw = msgspec_json.encode({"type": "sync", "payload": {"val": 1}})
+    raw = msjson.encode({"type": "sync", "payload": {"val": 1}})
     await r.dispatch(DummyWS(), raw)
     # The sync handler should not be called
     assert r.seen == []

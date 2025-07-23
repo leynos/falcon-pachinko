@@ -14,7 +14,7 @@ cover various scenarios including:
 from __future__ import annotations
 
 import msgspec
-import msgspec.json as msgspec_json
+import msgspec.json as msjson
 import pytest
 
 from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
@@ -58,7 +58,7 @@ async def test_decorator_registers_handler() -> None:
     3. The payload is properly deserialized and passed to the handler
     """
     r = DecoratedResource()
-    raw = msgspec_json.encode({"type": "ping", "payload": {"text": "hi"}})
+    raw = msjson.encode({"type": "ping", "payload": {"text": "hi"}})
     await r.dispatch(DummyWS(), raw)
     assert r.seen == ["hi"]
 
@@ -184,8 +184,8 @@ async def test_handlers_inherited() -> None:
     4. Method overrides without decoration still work as handlers
     """
     r = ChildResource()
-    await r.dispatch(DummyWS(), msgspec_json.encode({"type": "parent"}))
-    await r.dispatch(DummyWS(), msgspec_json.encode({"type": "child"}))
+    await r.dispatch(DummyWS(), msjson.encode({"type": "parent"}))
+    await r.dispatch(DummyWS(), msjson.encode({"type": "child"}))
     assert r.invoked == ["parent", "child"]
 
 
@@ -198,7 +198,7 @@ async def test_decorated_override() -> None:
     precedence over the parent's handler.
     """
     r = DecoratedOverride()
-    await r.dispatch(DummyWS(), msgspec_json.encode({"type": "parent"}))
+    await r.dispatch(DummyWS(), msjson.encode({"type": "parent"}))
     assert r.invoked == "decorated"
 
 

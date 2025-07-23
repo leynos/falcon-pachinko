@@ -11,7 +11,7 @@ import typing
 
 import msgspec
 import msgspec.inspect as msgspec_inspect
-import msgspec.json as msgspec_json
+import msgspec.json as msjson
 
 if typing.TYPE_CHECKING:
     import falcon
@@ -617,7 +617,7 @@ class WebSocketResource:
     async def _dispatch_with_schema(self, ws: WebSocketLike, raw: str | bytes) -> None:
         """Decode and dispatch ``raw`` using :attr:`schema`."""
         try:
-            message = msgspec_json.decode(raw, type=self.schema)
+            message = msjson.decode(raw, type=self.schema)
         except (msgspec.DecodeError, msgspec.ValidationError):
             await self.on_message(ws, raw)
             return
@@ -672,7 +672,7 @@ class WebSocketResource:
     ) -> None:
         """Decode and dispatch ``raw`` using the envelope format."""
         try:
-            envelope = msgspec_json.decode(raw, type=_Envelope)
+            envelope = msjson.decode(raw, type=_Envelope)
         except msgspec.DecodeError:
             await self.on_message(ws, raw)
             return

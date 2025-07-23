@@ -3,7 +3,7 @@
 import typing
 
 import msgspec
-import msgspec.json as msgspec_json
+import msgspec.json as msjson
 import pytest
 
 from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
@@ -53,8 +53,8 @@ class SchemaResource(WebSocketResource):
 async def test_schema_dispatch_to_handlers() -> None:
     """Messages matching the schema are routed to decorated handlers."""
     r = SchemaResource()
-    await r.dispatch(DummyWS(), msgspec_json.encode(Join(room="a")))
-    await r.dispatch(DummyWS(), msgspec_json.encode(Leave(room="b")))
+    await r.dispatch(DummyWS(), msjson.encode(Join(room="a")))
+    await r.dispatch(DummyWS(), msjson.encode(Leave(room="b")))
     assert r.events == [("join", "a"), ("leave", "b")]
 
 
@@ -62,7 +62,7 @@ async def test_schema_dispatch_to_handlers() -> None:
 async def test_schema_unknown_tag_calls_fallback() -> None:
     """Unknown tags invoke the fallback handler with the raw message."""
     r = SchemaResource()
-    raw = msgspec_json.encode({"type": "oops", "room": "x"})
+    raw = msjson.encode({"type": "oops", "room": "x"})
     await r.dispatch(DummyWS(), raw)
     assert r.events == [("raw", raw)]
 
