@@ -14,8 +14,7 @@ See
   classes, mirroring Falcon's HTTP routing. Initialization parameters can be
   supplied, so one resource class supports multiple configurations.
 - `WebSocketResource` provides `on_connect`, `on_disconnect`, and
-   `on_unhandled`
-   lifecycle hooks.
+   `on_unhandled` lifecycle hooks.
 - Message payloads are parsed into `msgspec.Struct` classes for speed and type
   safety.
 - Define a `schema` union of tagged `msgspec.Struct` types to enable automatic

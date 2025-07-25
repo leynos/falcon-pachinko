@@ -333,3 +333,32 @@ async def test_sync_handler_ignored_and_fallback_behavior() -> None:
     # The sync handler should not be called
     assert r.seen == []
     assert r.fallback == [raw]
+
+
+@pytest.mark.asyncio
+async def test_state_defaults_to_empty_dict() -> None:
+    """Each resource instance starts with an empty state mapping."""
+    r = EchoResource()
+    assert isinstance(r.state, dict)
+    assert not r.state
+    r.state["foo"] = "bar"
+    assert r.state["foo"] == "bar"
+
+
+@pytest.mark.asyncio
+async def test_state_custom_mapping_supported() -> None:
+    """The state attribute can be swapped for any mutable mapping."""
+    r = EchoResource()
+    custom: dict[str, int] = {"count": 1}
+    r.state = custom
+    r.state["count"] += 1
+    assert custom["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_state_is_unique_per_instance() -> None:
+    """Resource instances do not share state by default."""
+    r1 = EchoResource()
+    r2 = EchoResource()
+    r1.state["foo"] = "bar"
+    assert "foo" not in r2.state

@@ -77,7 +77,7 @@ composable patterns.
   - [x] Rename the fallback handler method from `on_message` to `on_unhandled`
     to avoid ambiguity.
 
-  - [ ] Implement the `self.state` attribute on `WebSocketResource` as a
+  - [x] Implement the `self.state` attribute on `WebSocketResource` as a
     swappable, dict-like proxy to facilitate external session stores. Provide
     guidance on this pattern for high-concurrency scenarios.
 

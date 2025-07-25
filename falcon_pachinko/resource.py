@@ -401,6 +401,25 @@ class WebSocketResource:
     _struct_handlers: typing.ClassVar[dict[type, HandlerInfo]] = {}
     schema: type | None = None
 
+    @property
+    def state(self) -> cabc.MutableMapping[str, typing.Any]:
+        """Per-connection state mapping.
+
+        The default implementation lazily creates an in-memory ``dict`` so
+        subclasses aren't required to call ``super().__init__``. Assign any
+        ``MutableMapping`` to swap in an external session store. The default
+        ``dict`` is not thread-safe; replace it with a concurrent mapping when
+        sharing resources across threads.
+        """
+        if not hasattr(self, "_state"):
+            self._state = {}
+
+        return self._state
+
+    @state.setter
+    def state(self, mapping: cabc.MutableMapping[str, typing.Any]) -> None:
+        self._state = mapping
+
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Initialize and merge handler mappings for subclasses."""
         super().__init_subclass__(**kwargs)

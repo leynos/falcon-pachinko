@@ -312,7 +312,9 @@ logic.
   the resource's self.state attribute will be a swappable, dictionary-like
   proxy. Developers can replace it with a proxy to an external session store
   (e.g., a Redis hash or an in-memory LRU cache) to manage state efficiently at
-  scale.
+  scale. The property lazily creates a plain ``dict`` but can be reassigned to
+  a thread-safe mapping backed by Redis or another store when operating at high
+  concurrency.
 
 ### 3.6. Message Handling and Dispatch
 
