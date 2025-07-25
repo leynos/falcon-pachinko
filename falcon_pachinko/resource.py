@@ -418,6 +418,9 @@ class WebSocketResource:
 
     @state.setter
     def state(self, mapping: cabc.MutableMapping[str, typing.Any]) -> None:
+        if not isinstance(mapping, cabc.MutableMapping):
+            msg = f"state must be a MutableMapping, got {type(mapping).__name__}"
+            raise TypeError(msg)
         self._state = mapping
 
     def __init_subclass__(cls, **kwargs: object) -> None:
