@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import typing
 
 import msgspec
@@ -370,3 +371,14 @@ async def test_state_rejects_non_mapping() -> None:
     r = EchoResource()
     with pytest.raises(TypeError):
         r.state = 123  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_state_accepts_mapping_subclass() -> None:
+    """Valid ``MutableMapping`` subclasses are accepted."""
+    r = EchoResource()
+    custom = collections.defaultdict(int)
+    r.state = custom
+    assert r.state is custom
+    r.state["count"] += 1
+    assert custom["count"] == 1
