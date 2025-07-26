@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import typing
 
 import msgspec
@@ -362,3 +363,22 @@ async def test_state_is_unique_per_instance() -> None:
     r2 = EchoResource()
     r1.state["foo"] = "bar"
     assert "foo" not in r2.state
+
+
+@pytest.mark.asyncio
+async def test_state_rejects_non_mapping() -> None:
+    """Assigning non-mapping to ``state`` raises ``TypeError``."""
+    r = EchoResource()
+    with pytest.raises(TypeError):
+        r.state = 123  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_state_accepts_mapping_subclass() -> None:
+    """Valid ``MutableMapping`` subclasses are accepted."""
+    r = EchoResource()
+    custom = collections.defaultdict(int)
+    r.state = custom
+    assert r.state is custom
+    r.state["count"] += 1
+    assert custom["count"] == 1

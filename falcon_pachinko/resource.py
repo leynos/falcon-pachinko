@@ -407,9 +407,11 @@ class WebSocketResource:
 
         The default implementation lazily creates an in-memory ``dict`` so
         subclasses aren't required to call ``super().__init__``. Assign any
-        ``MutableMapping`` to swap in an external session store. The default
+        mapping-like object to swap in an external session store. The default
         ``dict`` is not thread-safe; replace it with a concurrent mapping when
         sharing resources across threads.
+
+        Assigning a non-mapping will raise ``TypeError``.
         """
         if not hasattr(self, "_state"):
             self._state = {}
@@ -418,6 +420,13 @@ class WebSocketResource:
 
     @state.setter
     def state(self, mapping: cabc.MutableMapping[str, typing.Any]) -> None:
+        required_methods = ("__getitem__", "__setitem__", "__iter__")
+        if not all(hasattr(mapping, method) for method in required_methods):
+            msg = (
+                "state must be a mapping-like object implementing "
+                f"{required_methods}, got {type(mapping).__name__}"
+            )
+            raise TypeError(msg)
         self._state = mapping
 
     def __init_subclass__(cls, **kwargs: object) -> None:
