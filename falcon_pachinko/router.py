@@ -36,6 +36,21 @@ def compile_uri_template(template: str) -> re.Pattern[str]:
     return re.compile(pattern)
 
 
+def _compile_prefix_template(template: str) -> re.Pattern[str]:
+    """Compile ``template`` to match a path prefix."""
+
+    def replace_param(match: re.Match[str]) -> str:
+        param_name = match.group(1)
+        if not param_name:
+            msg = f"Empty parameter name in template: {template}"
+            raise ValueError(msg)
+        return f"(?P<{param_name}>[^/]+)"
+
+    pattern = re.sub(r"{([^}]*)}", replace_param, template.rstrip("/"))
+    pattern = f"^{pattern}(?:/|$)"
+    return re.compile(pattern)
+
+
 def _normalize_path(path: str) -> str:
     """Ensure the path has a leading slash."""
     if not path.startswith("/"):
@@ -69,6 +84,7 @@ class WebSocketRouter:
 
     @dc.dataclass
     class _CompiledRoute:
+        prefix: re.Pattern[str]
         pattern: re.Pattern[str]
         factory: typing.Callable[..., WebSocketResource]
 
@@ -95,12 +111,13 @@ class WebSocketRouter:
         base = self._mount_prefix.rstrip("/")
         full = f"{base}{canonical}"
         pattern = compile_uri_template(full)
+        prefix = _compile_prefix_template(full)
         for existing in self._routes:
             if existing.pattern.pattern == pattern.pattern:
                 msg = f"route path {full!r} already registered"
                 raise ValueError(msg)
 
-        self._routes.append(WebSocketRouter._CompiledRoute(pattern, factory))
+        self._routes.append(WebSocketRouter._CompiledRoute(prefix, pattern, factory))
 
     def mount(self, prefix: str) -> None:
         """Compile stored routes with the given mount ``prefix``."""
@@ -189,21 +206,54 @@ class WebSocketRouter:
         # Routes are tested in the order they were added. Register more
         # specific paths before general ones to control precedence.
         for route in self._routes:
-            if match := route.pattern.fullmatch(req.path):
-                try:
-                    resource = route.factory()
-                    should_accept = await resource.on_connect(
-                        req, ws, **match.groupdict()
-                    )
-                except Exception:
-                    await ws.close()
-                    raise
+            if not (match := route.prefix.match(req.path)):
+                continue
 
-                if not should_accept:
-                    await ws.close()
-                    return
+            params = match.groupdict()
+            remaining = req.path[match.end() :]
+            if remaining and not remaining.startswith("/"):
+                remaining = "/" + remaining
 
-                await ws.accept()
+            try:
+                resource = route.factory()
+                resource, remaining, params = self._resolve_subroutes(
+                    resource, remaining, params
+                )
+
+                if remaining not in ("", "/"):
+                    continue
+
+                should_accept = await resource.on_connect(req, ws, **params)
+            except Exception:
+                await ws.close()
+                raise
+
+            if not should_accept:
+                await ws.close()
                 return
 
+            await ws.accept()
+            return
+
         raise falcon.HTTPNotFound
+
+    def _resolve_subroutes(
+        self,
+        resource: WebSocketResource,
+        path: str,
+        params: dict[str, str],
+    ) -> tuple[WebSocketResource, str, dict[str, str]]:
+        """Traverse ``resource`` subroutes matching ``path``."""
+        while path not in ("", "/"):
+            subroutes = getattr(resource, "_subroutes", [])
+            for pattern, factory in subroutes:
+                match = pattern.match(path)
+                if match:
+                    resource = factory()
+                    params.update(match.groupdict())
+                    path = path[match.end() :]
+                    break
+            else:
+                return resource, path, params
+
+        return resource, path, params

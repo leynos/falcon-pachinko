@@ -8,7 +8,7 @@ license = { text = "ISC" }
 dependencies = ["msgspec>=0.18", "falcon"]
 
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio", "ruff", "pyright[nodejs]"]
+dev = ["pytest", "pytest-asyncio", "pytest-bdd", "ruff", "pyright[nodejs]"]
 examples = ["aiosqlite", "uvicorn", "websocket-client"]
 
 [tool.pyright]

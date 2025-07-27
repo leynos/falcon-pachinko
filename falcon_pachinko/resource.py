@@ -401,6 +401,39 @@ class WebSocketResource:
     _struct_handlers: typing.ClassVar[dict[type, HandlerInfo]] = {}
     schema: type | None = None
 
+    def add_subroute(
+        self,
+        path: str,
+        resource: type[WebSocketResource] | cabc.Callable[..., WebSocketResource],
+        *,
+        args: tuple[typing.Any, ...] = (),
+        kwargs: dict[str, typing.Any] | None = None,
+    ) -> None:
+        """Register ``resource`` to handle a nested ``path``."""
+        if kwargs is None:
+            kwargs = {}
+
+        if not callable(resource):
+            msg = "resource must be callable"
+            raise TypeError(msg)
+
+        from .router import _canonical_path, _compile_prefix_template
+
+        canonical = _canonical_path(path)
+        pattern = _compile_prefix_template(canonical)
+
+        factory = functools.partial(resource, *args, **kwargs)
+
+        subroutes: list[tuple[re.Pattern[str], cabc.Callable[..., WebSocketResource]]]
+        subroutes = getattr(self, "_subroutes", [])
+        for existing, _ in subroutes:
+            if existing.pattern == pattern.pattern:
+                msg = f"subroute path {path!r} already registered"
+                raise ValueError(msg)
+
+        subroutes.append((pattern, factory))
+        self._subroutes = subroutes
+
     @property
     def state(self) -> cabc.MutableMapping[str, typing.Any]:
         """Per-connection state mapping.

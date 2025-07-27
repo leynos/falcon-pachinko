@@ -1,0 +1,100 @@
+"""Behavioural tests for nested subroutes."""
+
+from __future__ import annotations
+
+import asyncio
+import typing
+
+import falcon
+import pytest
+from pytest_bdd import given, scenario, then, when
+
+from falcon_pachinko import WebSocketResource, WebSocketRouter
+from falcon_pachinko.unittests.helpers import DummyWS
+
+
+@scenario("features/nested_resource.feature", "Connect to nested child resource")
+def test_connect_to_nested_child_resource() -> None:
+    """Scenario: Connect to nested child resource."""
+
+
+@scenario("features/nested_resource.feature", "Unmatched nested path returns 404")
+def test_unmatched_nested_path_returns_404() -> None:
+    """Scenario: Unmatched nested path returns 404."""
+
+
+@pytest.fixture
+def context() -> dict[str, typing.Any]:
+    """Scenario-scoped context object."""
+    return {}
+
+
+class ChildResource(WebSocketResource):
+    """Record connection parameters."""
+
+    instances: typing.ClassVar[list[ChildResource]] = []
+
+    def __init__(self) -> None:
+        """Track instances for assertions."""
+        ChildResource.instances.append(self)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Store params and refuse the connection."""
+        self.params = params
+        return False
+
+
+class ParentResource(WebSocketResource):
+    """Resource that mounts ``ChildResource``."""
+
+    def __init__(self) -> None:
+        """Register the child subroute."""
+        self.add_subroute("child", ChildResource)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Store params for later inspection."""
+        self.params = params
+        return False
+
+
+@given("a router with a nested child resource")
+def setup_router(context: dict[str, typing.Any]) -> None:
+    """Prepare router and clear previous instances."""
+    ChildResource.instances.clear()
+    router = WebSocketRouter()
+    router.add_route("/parents/{pid}", ParentResource)
+    router.mount("/")
+    context["router"] = router
+
+
+@when('a client connects to "/parents/42/child"')
+def connect_child(context: dict[str, typing.Any]) -> None:
+    """Simulate connecting to the child path."""
+    router: WebSocketRouter = context["router"]
+    ws = DummyWS()
+    req = type("Req", (), {"path": "/parents/42/child", "path_template": ""})()
+    asyncio.run(router.on_websocket(req, ws))
+
+
+@when('a client connects to "/parents/42/missing"')
+def connect_missing(context: dict[str, typing.Any]) -> None:
+    """Attempt connection to an invalid path."""
+    router: WebSocketRouter = context["router"]
+    ws = DummyWS()
+    req = type("Req", (), {"path": "/parents/42/missing", "path_template": ""})()
+    try:
+        asyncio.run(router.on_websocket(req, ws))
+    except falcon.HTTPNotFound as exc:
+        context["exception"] = exc
+
+
+@then('the child resource should receive params {"pid": "42"}')
+def assert_child_params() -> None:
+    """Verify child resource captured parent parameter."""
+    assert ChildResource.instances[-1].params == {"pid": "42"}
+
+
+@then("HTTPNotFound should be raised")
+def assert_not_found(context: dict[str, typing.Any]) -> None:
+    """Ensure ``HTTPNotFound`` was raised."""
+    assert isinstance(context.get("exception"), falcon.HTTPNotFound)
