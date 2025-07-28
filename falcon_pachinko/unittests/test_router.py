@@ -419,3 +419,29 @@ async def test_router_mount_on_app() -> None:
     req = type("Req", (), {"path": "/ws/rooms/42", "path_template": "/ws"})()
     await router.on_websocket(req, DummyWS())
     assert DummyResource.instances[-1].params == {"room": "42"}
+
+
+@pytest.mark.asyncio
+async def test_try_route_handled() -> None:
+    """_try_route should return True when the path matches."""
+    router = WebSocketRouter()
+    router.add_route("/ok", AcceptingResource)
+    router.mount("/")
+    route = router._routes[0]
+
+    req = type("Req", (), {"path": "/ok", "path_template": "/"})()
+    handled = await router._try_route(route, req, DummyWS())
+    assert handled is True
+
+
+@pytest.mark.asyncio
+async def test_try_route_not_handled() -> None:
+    """_try_route should return False for unmatched paths."""
+    router = WebSocketRouter()
+    router.add_route("/ok", AcceptingResource)
+    router.mount("/")
+    route = router._routes[0]
+
+    req = type("Req", (), {"path": "/oops", "path_template": "/"})()
+    handled = await router._try_route(route, req, DummyWS())
+    assert handled is False

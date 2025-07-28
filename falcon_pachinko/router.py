@@ -207,36 +207,44 @@ class WebSocketRouter:
         # Routes are tested in the order they were added. Register more
         # specific paths before general ones to control precedence.
         for route in self._routes:
-            if not (match := route.prefix.match(req.path)):
-                continue
-
-            params = match.groupdict()
-            remaining = req.path[match.end() :]
-            if remaining and not remaining.startswith("/"):
-                remaining = "/" + remaining
-
-            try:
-                resource = route.factory()
-                resource, remaining, params = self._resolve_subroutes(
-                    resource, remaining, params
-                )
-
-                if remaining not in ("", "/"):
-                    continue
-
-                should_accept = await resource.on_connect(req, ws, **params)
-            except Exception:
-                await ws.close()
-                raise
-
-            if not should_accept:
-                await ws.close()
+            if await self._try_route(route, req, ws):
                 return
 
-            await ws.accept()
-            return
-
         raise falcon.HTTPNotFound
+
+    async def _try_route(
+        self, route: _CompiledRoute, req: falcon.Request, ws: WebSocketLike
+    ) -> bool:
+        """Attempt to handle ``req`` using ``route``."""
+        match = route.prefix.match(req.path)
+        if not match:
+            return False
+
+        params = match.groupdict()
+        remaining = req.path[match.end() :]
+        if remaining and not remaining.startswith("/"):
+            remaining = "/" + remaining
+
+        try:
+            resource = route.factory()
+            resource, remaining, params = self._resolve_subroutes(
+                resource, remaining, params
+            )
+
+            if remaining not in ("", "/"):
+                return False
+
+            should_accept = await resource.on_connect(req, ws, **params)
+        except Exception:
+            await ws.close()
+            raise
+
+        if not should_accept:
+            await ws.close()
+            return True
+
+        await ws.accept()
+        return True
 
     def _resolve_subroutes(
         self,
