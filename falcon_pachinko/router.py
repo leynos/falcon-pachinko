@@ -22,34 +22,34 @@ if typing.TYPE_CHECKING:
     from .resource import WebSocketResource
 
 
+def _replace_param_in_template(match: re.Match[str], template: str) -> str:
+    """Return a regex group for ``match`` ensuring the param is non-empty."""
+    param_name = match.group(1)
+    if not param_name:
+        msg = f"Empty parameter name in template: {template}"
+        raise ValueError(msg)
+    return f"(?P<{param_name}>[^/]+)"
+
+
+def _compile_template_with_suffix(template: str, suffix: str) -> re.Pattern[str]:
+    """Compile ``template`` with ``suffix`` appended."""
+    pattern = re.sub(
+        r"{([^}]*)}",
+        functools.partial(_replace_param_in_template, template=template),
+        template.rstrip("/"),
+    )
+    pattern = f"^{pattern}{suffix}"
+    return re.compile(pattern)
+
+
 def compile_uri_template(template: str) -> re.Pattern[str]:
     """Compile a simple URI template into a regex pattern."""
-
-    def replace_param(match: re.Match[str]) -> str:
-        param_name = match.group(1)
-        if not param_name:
-            msg = f"Empty parameter name in template: {template}"
-            raise ValueError(msg)
-        return f"(?P<{param_name}>[^/]+)"
-
-    pattern = re.sub(r"{([^}]*)}", replace_param, template.rstrip("/"))
-    pattern = f"^{pattern}/?$"
-    return re.compile(pattern)
+    return _compile_template_with_suffix(template, "/?$")
 
 
 def _compile_prefix_template(template: str) -> re.Pattern[str]:
     """Compile ``template`` to match a path prefix."""
-
-    def replace_param(match: re.Match[str]) -> str:
-        param_name = match.group(1)
-        if not param_name:
-            msg = f"Empty parameter name in template: {template}"
-            raise ValueError(msg)
-        return f"(?P<{param_name}>[^/]+)"
-
-    pattern = re.sub(r"{([^}]*)}", replace_param, template.rstrip("/"))
-    pattern = f"^{pattern}(?:/|$)"
-    return re.compile(pattern)
+    return _compile_template_with_suffix(template, "(?:/|$)")
 
 
 def _normalize_path(path: str) -> str:
