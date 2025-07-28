@@ -18,7 +18,8 @@ import typing
 import falcon
 
 if typing.TYPE_CHECKING:
-    from .resource import WebSocketLike, WebSocketResource
+    from .protocols import WebSocketLike
+    from .resource import WebSocketResource
 
 
 def compile_uri_template(template: str) -> re.Pattern[str]:
