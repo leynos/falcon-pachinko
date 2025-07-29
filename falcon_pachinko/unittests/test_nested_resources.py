@@ -59,3 +59,10 @@ async def test_nested_subroute_not_found() -> None:
     req = type("Req", (), {"path": "/parent/1/oops", "path_template": ""})()
     with pytest.raises(falcon.HTTPNotFound):
         await router.on_websocket(req, DummyWS())
+
+
+def test_add_subroute_invalid_resource() -> None:
+    """add_subroute must reject non-callables."""
+    r = WebSocketResource()
+    with pytest.raises(TypeError):
+        r.add_subroute("child", typing.cast("typing.Any", object()))

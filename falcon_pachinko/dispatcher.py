@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
 import inspect
 import typing
 
@@ -30,6 +31,17 @@ class Envelope(msgspec.Struct, frozen=True):
     payload: typing.Any | None = None
 
 
+@dc.dataclass
+class HandlerInvocationContext:
+    """Context for invoking a message handler."""
+
+    resource: WebSocketResource
+    ws: WebSocketLike
+    raw: str | bytes
+    handler_info: HandlerInfo
+    payload: object
+
+
 def find_conventional_handler(
     resource: WebSocketResource, tag: str
 ) -> HandlerInfo | None:
@@ -45,31 +57,30 @@ def find_conventional_handler(
     return HandlerInfo(typing.cast("Handler", func), payload_type, strict=True)
 
 
-async def convert_and_invoke_handler(
-    resource: WebSocketResource,
-    ws: WebSocketLike,
-    raw: str | bytes,
-    handler_info: HandlerInfo,
-    payload: object,
-) -> None:
+async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
     """Convert ``payload`` to the handler's type and invoke it."""
-    payload_type = handler_info.payload_type
+    payload_type = context.handler_info.payload_type
+    payload = context.payload
     if payload_type is not None and payload is not None:
         try:
             if requires_strict_validation(
-                payload, payload_type, strict=handler_info.strict
+                payload, payload_type, strict=context.handler_info.strict
             ):
                 validate_strict_payload(
-                    payload, payload_type, strict=handler_info.strict
+                    payload, payload_type, strict=context.handler_info.strict
                 )
             payload = typing.cast(
                 "typing.Any",
-                msgspec.convert(payload, type=payload_type, strict=handler_info.strict),
+                msgspec.convert(
+                    payload,
+                    type=payload_type,
+                    strict=context.handler_info.strict,
+                ),
             )
         except msgspec.ValidationError:
-            await resource.on_unhandled(ws, raw)
+            await context.resource.on_unhandled(context.ws, context.raw)
             return
-    await handler_info.handler(resource, ws, payload)
+    await context.handler_info.handler(context.resource, context.ws, payload)
 
 
 async def dispatch(
@@ -100,10 +111,12 @@ async def dispatch_with_schema(
         if conv is None:
             await resource.on_unhandled(ws, raw)
             return
-        await convert_and_invoke_handler(resource, ws, raw, conv, message)
+        ctx = HandlerInvocationContext(resource, ws, raw, conv, message)
+        await convert_and_invoke_handler(ctx)
         return
 
-    await convert_and_invoke_handler(resource, ws, raw, entry, message)
+    ctx = HandlerInvocationContext(resource, ws, raw, entry, message)
+    await convert_and_invoke_handler(ctx)
 
 
 async def dispatch_with_envelope(
@@ -124,4 +137,5 @@ async def dispatch_with_envelope(
         await resource.on_unhandled(ws, raw)
         return
 
-    await convert_and_invoke_handler(resource, ws, raw, handler_entry, envelope.payload)
+    ctx = HandlerInvocationContext(resource, ws, raw, handler_entry, envelope.payload)
+    await convert_and_invoke_handler(ctx)

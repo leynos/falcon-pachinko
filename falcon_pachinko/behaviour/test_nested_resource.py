@@ -23,6 +23,11 @@ def test_unmatched_nested_path_returns_404() -> None:
     """Scenario: Unmatched nested path returns 404."""
 
 
+@scenario("features/nested_resource.feature", "Connect to deeply nested grandchild")
+def test_connect_to_grandchild() -> None:
+    """Scenario: Connect to deeply nested grandchild."""
+
+
 @pytest.fixture
 def context() -> dict[str, typing.Any]:
     """Scenario-scoped context object."""
@@ -37,9 +42,24 @@ class ChildResource(WebSocketResource):
     def __init__(self) -> None:
         """Track instances for assertions."""
         ChildResource.instances.append(self)
+        self.add_subroute("{cid}/grandchild", GrandchildResource)
 
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
         """Store params and refuse the connection."""
+        self.params = params
+        return False
+
+
+class GrandchildResource(WebSocketResource):
+    """Record grandchild connection parameters."""
+
+    instances: typing.ClassVar[list[GrandchildResource]] = []
+
+    def __init__(self) -> None:
+        GrandchildResource.instances.append(self)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Record params and refuse connection."""
         self.params = params
         return False
 
@@ -61,6 +81,7 @@ class ParentResource(WebSocketResource):
 def setup_router(context: dict[str, typing.Any]) -> None:
     """Prepare router and clear previous instances."""
     ChildResource.instances.clear()
+    GrandchildResource.instances.clear()
     router = WebSocketRouter()
     router.add_route("/parents/{pid}", ParentResource)
     router.mount("/")
@@ -88,6 +109,17 @@ def connect_missing(context: dict[str, typing.Any]) -> None:
         context["exception"] = exc
 
 
+@when('a client connects to "/parents/42/child/99/grandchild"')
+def connect_grandchild(context: dict[str, typing.Any]) -> None:
+    """Simulate connecting to a grandchild path."""
+    router: WebSocketRouter = context["router"]
+    ws = DummyWS()
+    req = type(
+        "Req", (), {"path": "/parents/42/child/99/grandchild", "path_template": ""}
+    )()
+    asyncio.run(router.on_websocket(req, ws))
+
+
 @then('the child resource should receive params {"pid": "42"}')
 def assert_child_params() -> None:
     """Verify child resource captured parent parameter."""
@@ -98,3 +130,9 @@ def assert_child_params() -> None:
 def assert_not_found(context: dict[str, typing.Any]) -> None:
     """Ensure ``HTTPNotFound`` was raised."""
     assert isinstance(context.get("exception"), falcon.HTTPNotFound)
+
+
+@then('the grandchild resource should capture params {"pid": "42", "cid": "99"}')
+def assert_grandchild_params() -> None:
+    """Verify grandchild resource captured all params."""
+    assert GrandchildResource.instances[-1].params == {"pid": "42", "cid": "99"}

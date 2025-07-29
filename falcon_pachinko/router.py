@@ -256,11 +256,12 @@ class WebSocketRouter:
         while path not in ("", "/"):
             subroutes = getattr(resource, "_subroutes", [])
             for pattern, factory in subroutes:
-                match = pattern.match(path)
-                if match:
+                if match := pattern.match(path):
                     resource = factory()
-                    params.update(match.groupdict())
+                    params |= match.groupdict()
                     path = path[match.end() :]
+                    if path and not path.startswith("/"):
+                        path = f"/{path}"
                     break
             else:
                 return resource, path, params
