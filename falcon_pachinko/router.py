@@ -216,40 +216,25 @@ class WebSocketRouter:
         self, route: _CompiledRoute, req: falcon.Request, ws: WebSocketLike
     ) -> bool:
         """Attempt to handle ``req`` using ``route``."""
-        match = route.prefix.match(req.path)
-        if not match:
+        result = self._validate_and_normalize_path(route, req)
+        if result is None:
             return False
-
-        params = match.groupdict()
-        remaining = req.path[match.end() :]
-        if remaining and not remaining.startswith("/"):
-            normalized = self._normalize_path_remaining(remaining, match)
-            if normalized is None:
-                return False
-            remaining = normalized
+        params, remaining = result
 
         try:
-            resource = route.factory()
-            resolved, remaining, params = self._resolve_subroutes(
-                resource, remaining, params
+            base_resource = route.factory()
+            resolution = self._resolve_resource_and_path(
+                base_resource, remaining, params
             )
-            if remaining not in ("", "/"):
+            if resolution is None:
                 return False
-            if resolved is resource and not route.pattern.fullmatch(req.path):
+            resource, remaining, params = resolution
+            if resource is base_resource and not route.pattern.fullmatch(req.path):
                 return False
-            resource = resolved
-
-            should_accept = await resource.on_connect(req, ws, **params)
+            return await self._handle_websocket_connection(resource, req, ws, params)
         except Exception:
             await ws.close()
             raise
-
-        if not should_accept:
-            await ws.close()
-            return True
-
-        await ws.accept()
-        return True
 
     def _normalize_path_remaining(
         self, remaining: str, match: re.Match[str]
@@ -292,3 +277,46 @@ class WebSocketRouter:
             params |= new_params
 
         return resource, path, params
+
+    def _validate_and_normalize_path(
+        self, route: _CompiledRoute, req: falcon.Request
+    ) -> tuple[dict[str, str], str] | None:
+        """Return params and remaining path or ``None`` if invalid."""
+        if not (match := route.prefix.match(req.path)):
+            return None
+        params = match.groupdict()
+        remaining = req.path[match.end() :]
+        if remaining and not remaining.startswith("/"):
+            remaining = self._normalize_path_remaining(remaining, match)
+            if remaining is None:
+                return None
+        return params, remaining
+
+    def _resolve_resource_and_path(
+        self,
+        resource: WebSocketResource,
+        remaining: str,
+        params: dict[str, str],
+    ) -> tuple[WebSocketResource, str, dict[str, str]] | None:
+        """Return resolved resource and path or ``None`` if invalid."""
+        resolved, remaining, params = self._resolve_subroutes(
+            resource, remaining, params
+        )
+        if remaining not in ("", "/"):
+            return None
+        return resolved, remaining, params
+
+    async def _handle_websocket_connection(
+        self,
+        resource: WebSocketResource,
+        req: falcon.Request,
+        ws: WebSocketLike,
+        params: dict[str, str],
+    ) -> bool:
+        """Accept or close ``ws`` based on ``resource`` decision."""
+        should_accept = await resource.on_connect(req, ws, **params)
+        if not should_accept:
+            await ws.close()
+            return True
+        await ws.accept()
+        return True
