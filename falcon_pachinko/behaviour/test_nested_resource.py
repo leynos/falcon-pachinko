@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import typing
+from types import SimpleNamespace
 
 import falcon
 import pytest
@@ -93,7 +94,9 @@ def connect_child(context: dict[str, typing.Any]) -> None:
     """Simulate connecting to the child path."""
     router: WebSocketRouter = context["router"]
     ws = DummyWS()
-    req = type("Req", (), {"path": "/parents/42/child", "path_template": ""})()
+    req = typing.cast(
+        "falcon.Request", SimpleNamespace(path="/parents/42/child", path_template="")
+    )
     asyncio.run(router.on_websocket(req, ws))
 
 
@@ -102,7 +105,9 @@ def connect_missing(context: dict[str, typing.Any]) -> None:
     """Attempt connection to an invalid path."""
     router: WebSocketRouter = context["router"]
     ws = DummyWS()
-    req = type("Req", (), {"path": "/parents/42/missing", "path_template": ""})()
+    req = typing.cast(
+        "falcon.Request", SimpleNamespace(path="/parents/42/missing", path_template="")
+    )
     try:
         asyncio.run(router.on_websocket(req, ws))
     except falcon.HTTPNotFound as exc:
@@ -114,9 +119,13 @@ def connect_grandchild(context: dict[str, typing.Any]) -> None:
     """Simulate connecting to a grandchild path."""
     router: WebSocketRouter = context["router"]
     ws = DummyWS()
-    req = type(
-        "Req", (), {"path": "/parents/42/child/99/grandchild", "path_template": ""}
-    )()
+    req = typing.cast(
+        "falcon.Request",
+        SimpleNamespace(
+            path="/parents/42/child/99/grandchild",
+            path_template="",
+        ),
+    )
     asyncio.run(router.on_websocket(req, ws))
 
 

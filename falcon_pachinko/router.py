@@ -222,20 +222,23 @@ class WebSocketRouter:
 
         params = match.groupdict()
         remaining = req.path[match.end() :]
-        if remaining and not remaining.startswith("/"):
-            if match.group(0).endswith("/"):
-                remaining = f"/{remaining}"
-            else:
-                return False
+        if (
+            remaining
+            and not remaining.startswith("/")
+            and (remaining := self._normalize_path_remaining(remaining, match)) is None
+        ):
+            return False
 
         try:
             resource = route.factory()
-            resource, remaining, params = self._resolve_subroutes(
+            resolved, remaining, params = self._resolve_subroutes(
                 resource, remaining, params
             )
-
             if remaining not in ("", "/"):
                 return False
+            if resolved is resource and not route.pattern.fullmatch(req.path):
+                return False
+            resource = resolved
 
             should_accept = await resource.on_connect(req, ws, **params)
         except Exception:

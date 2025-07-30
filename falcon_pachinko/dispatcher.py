@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import inspect
+import logging
 import typing
 
 import msgspec
@@ -18,6 +19,8 @@ from .exceptions import (
 from .handlers import Handler, HandlerInfo, get_payload_type
 from .schema import requires_strict_validation, validate_strict_payload
 from .utils import to_snake_case
+
+logger = logging.getLogger(__name__)
 
 if typing.TYPE_CHECKING:  # pragma: no cover - type hints only
     from .protocols import WebSocketLike
@@ -52,7 +55,12 @@ def find_conventional_handler(
         return None
     try:
         payload_type = get_payload_type(typing.cast("Handler", func))
-    except (HandlerSignatureError, HandlerNotAsyncError, SignatureInspectionError):
+    except (
+        HandlerSignatureError,
+        HandlerNotAsyncError,
+        SignatureInspectionError,
+    ) as exc:
+        logger.debug("Handler %s invalid: %s", name, exc)
         return None
     return HandlerInfo(typing.cast("Handler", func), payload_type, strict=True)
 

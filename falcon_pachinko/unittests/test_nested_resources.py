@@ -1,6 +1,7 @@
 """Tests for nested resource composition."""
 
 import typing
+from types import SimpleNamespace
 
 import falcon
 import pytest
@@ -44,7 +45,10 @@ async def test_nested_subroute_params() -> None:
     router = WebSocketRouter()
     router.add_route("/parent/{pid}", Parent)
     router.mount("/")
-    req = type("Req", (), {"path": "/parent/1/child/2", "path_template": ""})()
+    req = typing.cast(
+        "falcon.Request",
+        SimpleNamespace(path="/parent/1/child/2", path_template=""),
+    )
     await router.on_websocket(req, DummyWS())
 
     assert Child.instances[-1].params == {"pid": "1", "cid": "2"}
@@ -56,7 +60,10 @@ async def test_nested_subroute_not_found() -> None:
     router = WebSocketRouter()
     router.add_route("/parent/{pid}", Parent)
     router.mount("/")
-    req = type("Req", (), {"path": "/parent/1/oops", "path_template": ""})()
+    req = typing.cast(
+        "falcon.Request",
+        SimpleNamespace(path="/parent/1/oops", path_template=""),
+    )
     with pytest.raises(falcon.HTTPNotFound):
         await router.on_websocket(req, DummyWS())
 
@@ -67,7 +74,10 @@ async def test_nested_subroute_malformed_path() -> None:
     router = WebSocketRouter()
     router.add_route("/parent/{pid}", Parent)
     router.mount("/")
-    req = type("Req", (), {"path": "/parent/1child/2", "path_template": ""})()
+    req = typing.cast(
+        "falcon.Request",
+        SimpleNamespace(path="/parent/1child/2", path_template=""),
+    )
     with pytest.raises(falcon.HTTPNotFound):
         await router.on_websocket(req, DummyWS())
 
