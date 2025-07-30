@@ -55,28 +55,22 @@ async def test_nested_subroute_params() -> None:
 
 
 @pytest.mark.asyncio
-async def test_nested_subroute_not_found() -> None:
-    """Unmatched nested path should raise HTTPNotFound."""
+@pytest.mark.parametrize(
+    ("path", "description"),
+    [
+        ("/parent/1/oops", "Unmatched nested path should raise HTTPNotFound"),
+        ("/parent/1child/2", "Missing slash between segments should not match"),
+    ],
+    ids=["unmatched_path", "malformed_path"],
+)
+async def test_nested_subroute_not_found(path: str, description: str) -> None:
+    """Test cases where nested routes should raise HTTPNotFound."""
     router = WebSocketRouter()
     router.add_route("/parent/{pid}", Parent)
     router.mount("/")
     req = typing.cast(
         "falcon.Request",
-        SimpleNamespace(path="/parent/1/oops", path_template=""),
-    )
-    with pytest.raises(falcon.HTTPNotFound):
-        await router.on_websocket(req, DummyWS())
-
-
-@pytest.mark.asyncio
-async def test_nested_subroute_malformed_path() -> None:
-    """Missing slash between segments should not match."""
-    router = WebSocketRouter()
-    router.add_route("/parent/{pid}", Parent)
-    router.mount("/")
-    req = typing.cast(
-        "falcon.Request",
-        SimpleNamespace(path="/parent/1child/2", path_template=""),
+        SimpleNamespace(path=path, path_template=""),
     )
     with pytest.raises(falcon.HTTPNotFound):
         await router.on_websocket(req, DummyWS())

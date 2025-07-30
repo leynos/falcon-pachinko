@@ -222,12 +222,11 @@ class WebSocketRouter:
 
         params = match.groupdict()
         remaining = req.path[match.end() :]
-        if (
-            remaining
-            and not remaining.startswith("/")
-            and (remaining := self._normalize_path_remaining(remaining, match)) is None
-        ):
-            return False
+        if remaining and not remaining.startswith("/"):
+            normalized = self._normalize_path_remaining(remaining, match)
+            if normalized is None:
+                return False
+            remaining = normalized
 
         try:
             resource = route.factory()

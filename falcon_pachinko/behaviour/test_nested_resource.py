@@ -89,44 +89,41 @@ def setup_router(context: dict[str, typing.Any]) -> None:
     context["router"] = router
 
 
+def _simulate_connection(
+    context: dict[str, typing.Any],
+    path: str,
+    *,
+    capture_exceptions: bool = False,
+) -> None:
+    """Simulate a WebSocket connection."""
+    router: WebSocketRouter = context["router"]
+    ws = DummyWS()
+    req = typing.cast("falcon.Request", SimpleNamespace(path=path, path_template=""))
+    if capture_exceptions:
+        try:
+            asyncio.run(router.on_websocket(req, ws))
+        except falcon.HTTPNotFound as exc:
+            context["exception"] = exc
+    else:
+        asyncio.run(router.on_websocket(req, ws))
+
+
 @when('a client connects to "/parents/42/child"')
 def connect_child(context: dict[str, typing.Any]) -> None:
     """Simulate connecting to the child path."""
-    router: WebSocketRouter = context["router"]
-    ws = DummyWS()
-    req = typing.cast(
-        "falcon.Request", SimpleNamespace(path="/parents/42/child", path_template="")
-    )
-    asyncio.run(router.on_websocket(req, ws))
+    _simulate_connection(context, "/parents/42/child")
 
 
 @when('a client connects to "/parents/42/missing"')
 def connect_missing(context: dict[str, typing.Any]) -> None:
     """Attempt connection to an invalid path."""
-    router: WebSocketRouter = context["router"]
-    ws = DummyWS()
-    req = typing.cast(
-        "falcon.Request", SimpleNamespace(path="/parents/42/missing", path_template="")
-    )
-    try:
-        asyncio.run(router.on_websocket(req, ws))
-    except falcon.HTTPNotFound as exc:
-        context["exception"] = exc
+    _simulate_connection(context, "/parents/42/missing", capture_exceptions=True)
 
 
 @when('a client connects to "/parents/42/child/99/grandchild"')
 def connect_grandchild(context: dict[str, typing.Any]) -> None:
     """Simulate connecting to a grandchild path."""
-    router: WebSocketRouter = context["router"]
-    ws = DummyWS()
-    req = typing.cast(
-        "falcon.Request",
-        SimpleNamespace(
-            path="/parents/42/child/99/grandchild",
-            path_template="",
-        ),
-    )
-    asyncio.run(router.on_websocket(req, ws))
+    _simulate_connection(context, "/parents/42/child/99/grandchild")
 
 
 @then('the child resource should receive params {"pid": "42"}')
