@@ -249,6 +249,16 @@ class WebSocketRouter:
         await ws.accept()
         return True
 
+    def _normalize_path_remaining(
+        self, remaining: str, match: re.Match[str]
+    ) -> str | None:
+        """Normalize ``remaining`` or return ``None`` if invalid."""
+        if not remaining or remaining.startswith("/"):
+            return remaining
+        if match.group(0).endswith("/"):
+            return f"/{remaining}"
+        return None
+
     def _try_subroute_match(
         self, resource: WebSocketResource, path: str
     ) -> tuple[WebSocketResource, str, dict[str, str]] | None:
@@ -256,11 +266,10 @@ class WebSocketRouter:
         for pattern, factory in getattr(resource, "_subroutes", []):
             if match := pattern.match(path):
                 remaining = path[match.end() :]
-                if remaining and not remaining.startswith("/"):
-                    if match.group(0).endswith("/"):
-                        remaining = f"/{remaining}"
-                    else:
-                        return None
+                if (
+                    remaining := self._normalize_path_remaining(remaining, match)
+                ) is None:
+                    return None
                 new_resource = factory()
                 params = match.groupdict()
                 return new_resource, remaining, params
