@@ -61,6 +61,17 @@ async def test_nested_subroute_not_found() -> None:
         await router.on_websocket(req, DummyWS())
 
 
+@pytest.mark.asyncio
+async def test_nested_subroute_malformed_path() -> None:
+    """Missing slash between segments should not match."""
+    router = WebSocketRouter()
+    router.add_route("/parent/{pid}", Parent)
+    router.mount("/")
+    req = type("Req", (), {"path": "/parent/1child/2", "path_template": ""})()
+    with pytest.raises(falcon.HTTPNotFound):
+        await router.on_websocket(req, DummyWS())
+
+
 def test_add_subroute_invalid_resource() -> None:
     """add_subroute must reject non-callables."""
     r = WebSocketResource()

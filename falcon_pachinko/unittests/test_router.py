@@ -445,3 +445,15 @@ async def test_try_route_not_handled() -> None:
     req = type("Req", (), {"path": "/oops", "path_template": "/"})()
     handled = await router._try_route(route, req, DummyWS())
     assert handled is False
+
+
+@pytest.mark.asyncio
+async def test_malformed_remaining_path_not_matched() -> None:
+    """Paths without a slash after the prefix should not match."""
+    router = WebSocketRouter()
+    router.add_route("/rooms/{room}", AcceptingResource)
+    router.mount("/")
+
+    req = type("Req", (), {"path": "/rooms42", "path_template": "/"})()
+    with pytest.raises(falcon.HTTPNotFound):
+        await router.on_websocket(req, DummyWS())

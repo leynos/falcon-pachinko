@@ -223,7 +223,10 @@ class WebSocketRouter:
         params = match.groupdict()
         remaining = req.path[match.end() :]
         if remaining and not remaining.startswith("/"):
-            remaining = "/" + remaining
+            if match.group(0).endswith("/"):
+                remaining = f"/{remaining}"
+            else:
+                return False
 
         try:
             resource = route.factory()
@@ -246,6 +249,23 @@ class WebSocketRouter:
         await ws.accept()
         return True
 
+    def _try_subroute_match(
+        self, resource: WebSocketResource, path: str
+    ) -> tuple[WebSocketResource, str, dict[str, str]] | None:
+        """Return matched subroute components or ``None``."""
+        for pattern, factory in getattr(resource, "_subroutes", []):
+            if match := pattern.match(path):
+                remaining = path[match.end() :]
+                if remaining and not remaining.startswith("/"):
+                    if match.group(0).endswith("/"):
+                        remaining = f"/{remaining}"
+                    else:
+                        return None
+                new_resource = factory()
+                params = match.groupdict()
+                return new_resource, remaining, params
+        return None
+
     def _resolve_subroutes(
         self,
         resource: WebSocketResource,
@@ -254,16 +274,10 @@ class WebSocketRouter:
     ) -> tuple[WebSocketResource, str, dict[str, str]]:
         """Traverse ``resource`` subroutes matching ``path``."""
         while path not in ("", "/"):
-            subroutes = getattr(resource, "_subroutes", [])
-            for pattern, factory in subroutes:
-                if match := pattern.match(path):
-                    resource = factory()
-                    params |= match.groupdict()
-                    path = path[match.end() :]
-                    if path and not path.startswith("/"):
-                        path = f"/{path}"
-                    break
-            else:
-                return resource, path, params
+            result = self._try_subroute_match(resource, path)
+            if result is None:
+                break
+            resource, path, new_params = result
+            params |= new_params
 
         return resource, path, params

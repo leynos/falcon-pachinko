@@ -34,7 +34,12 @@ class WebSocketResource:
         args: tuple[typing.Any, ...] = (),
         kwargs: dict[str, typing.Any] | None = None,
     ) -> None:
-        """Register ``resource`` to handle a nested ``path``."""
+        """Register ``resource`` to handle a nested ``path``.
+
+        This method mutates the instance's ``_subroutes`` list. Resource
+        instances are expected to be per-connection objects and must not be
+        shared across threads.
+        """
         if kwargs is None:
             kwargs = {}
         if not callable(resource):
