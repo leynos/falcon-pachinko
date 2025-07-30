@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from .resource import WebSocketLike, WebSocketResource, handles_message
+from .handlers import handles_message
+from .protocols import WebSocketLike
+from .resource import WebSocketResource
 from .router import WebSocketRouter
 from .websocket import WebSocketConnectionManager, install
 

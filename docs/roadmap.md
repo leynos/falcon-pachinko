@@ -81,12 +81,12 @@ composable patterns.
     swappable, dict-like proxy to facilitate external session stores. Provide
     guidance on this pattern for high-concurrency scenarios.
 
-- [ ] **Implement Nested Resource Composition.**
+- [x] **Implement Nested Resource Composition.**
 
-  - [ ] Add the `add_subroute(path, resource, ...)` method to
+  - [x] Add the `add_subroute(path, resource, ...)` method to
     `WebSocketResource`.
 
-  - [ ] Enhance the `WebSocketRouter`'s matching logic to handle multi-level
+  - [x] Enhance the `WebSocketRouter`'s matching logic to handle multi-level
     nested paths.
 
   - [ ] Design and implement a robust context-passing mechanism for parent

@@ -18,22 +18,38 @@ import typing
 import falcon
 
 if typing.TYPE_CHECKING:
-    from .resource import WebSocketLike, WebSocketResource
+    from .protocols import WebSocketLike
+    from .resource import WebSocketResource
+
+
+def _replace_param_in_template(match: re.Match[str], template: str) -> str:
+    """Return a regex group for ``match`` ensuring the param is non-empty."""
+    param_name = match.group(1)
+    if not param_name:
+        msg = f"Empty parameter name in template: {template}"
+        raise ValueError(msg)
+    return f"(?P<{param_name}>[^/]+)"
+
+
+def _compile_template_with_suffix(template: str, suffix: str) -> re.Pattern[str]:
+    """Compile ``template`` with ``suffix`` appended."""
+    pattern = re.sub(
+        r"{([^}]*)}",
+        functools.partial(_replace_param_in_template, template=template),
+        template.rstrip("/"),
+    )
+    pattern = f"^{pattern}{suffix}"
+    return re.compile(pattern)
 
 
 def compile_uri_template(template: str) -> re.Pattern[str]:
     """Compile a simple URI template into a regex pattern."""
+    return _compile_template_with_suffix(template, "/?$")
 
-    def replace_param(match: re.Match[str]) -> str:
-        param_name = match.group(1)
-        if not param_name:
-            msg = f"Empty parameter name in template: {template}"
-            raise ValueError(msg)
-        return f"(?P<{param_name}>[^/]+)"
 
-    pattern = re.sub(r"{([^}]*)}", replace_param, template.rstrip("/"))
-    pattern = f"^{pattern}/?$"
-    return re.compile(pattern)
+def _compile_prefix_template(template: str) -> re.Pattern[str]:
+    """Compile ``template`` to match a path prefix."""
+    return _compile_template_with_suffix(template, "(?:/|$)")
 
 
 def _normalize_path(path: str) -> str:
@@ -69,6 +85,7 @@ class WebSocketRouter:
 
     @dc.dataclass
     class _CompiledRoute:
+        prefix: re.Pattern[str]
         pattern: re.Pattern[str]
         factory: typing.Callable[..., WebSocketResource]
 
@@ -95,12 +112,13 @@ class WebSocketRouter:
         base = self._mount_prefix.rstrip("/")
         full = f"{base}{canonical}"
         pattern = compile_uri_template(full)
+        prefix = _compile_prefix_template(full)
         for existing in self._routes:
             if existing.pattern.pattern == pattern.pattern:
                 msg = f"route path {full!r} already registered"
                 raise ValueError(msg)
 
-        self._routes.append(WebSocketRouter._CompiledRoute(pattern, factory))
+        self._routes.append(WebSocketRouter._CompiledRoute(prefix, pattern, factory))
 
     def mount(self, prefix: str) -> None:
         """Compile stored routes with the given mount ``prefix``."""
@@ -189,21 +207,116 @@ class WebSocketRouter:
         # Routes are tested in the order they were added. Register more
         # specific paths before general ones to control precedence.
         for route in self._routes:
-            if match := route.pattern.fullmatch(req.path):
-                try:
-                    resource = route.factory()
-                    should_accept = await resource.on_connect(
-                        req, ws, **match.groupdict()
-                    )
-                except Exception:
-                    await ws.close()
-                    raise
-
-                if not should_accept:
-                    await ws.close()
-                    return
-
-                await ws.accept()
+            if await self._try_route(route, req, ws):
                 return
 
         raise falcon.HTTPNotFound
+
+    async def _try_route(
+        self, route: _CompiledRoute, req: falcon.Request, ws: WebSocketLike
+    ) -> bool:
+        """Attempt to handle ``req`` using ``route``."""
+        result = self._validate_and_normalize_path(route, req)
+        if result is None:
+            return False
+        params, remaining = result
+
+        try:
+            base_resource = route.factory()
+            resolution = self._resolve_resource_and_path(
+                base_resource, remaining, params
+            )
+            if resolution is None:
+                return False
+            resource, remaining, params = resolution
+            if resource is base_resource and not route.pattern.fullmatch(req.path):
+                return False
+            return await self._handle_websocket_connection(resource, req, ws, params)
+        except Exception:
+            await ws.close()
+            raise
+
+    def _normalize_path_remaining(
+        self, remaining: str, match: re.Match[str]
+    ) -> str | None:
+        """Normalize ``remaining`` or return ``None`` if invalid."""
+        if not remaining or remaining.startswith("/"):
+            return remaining
+        if match.group(0).endswith("/"):
+            return f"/{remaining}"
+        return None
+
+    def _try_subroute_match(
+        self, resource: WebSocketResource, path: str
+    ) -> tuple[WebSocketResource, str, dict[str, str]] | None:
+        """Return matched subroute components or ``None``."""
+        for pattern, factory in getattr(resource, "_subroutes", []):
+            if match := pattern.match(path):
+                remaining = path[match.end() :]
+                if (
+                    remaining := self._normalize_path_remaining(remaining, match)
+                ) is None:
+                    return None
+                new_resource = factory()
+                params = match.groupdict()
+                return new_resource, remaining, params
+        return None
+
+    def _resolve_subroutes(
+        self,
+        resource: WebSocketResource,
+        path: str,
+        params: dict[str, str],
+    ) -> tuple[WebSocketResource, str, dict[str, str]]:
+        """Traverse ``resource`` subroutes matching ``path``."""
+        while path not in ("", "/"):
+            result = self._try_subroute_match(resource, path)
+            if result is None:
+                break
+            resource, path, new_params = result
+            params |= new_params
+
+        return resource, path, params
+
+    def _validate_and_normalize_path(
+        self, route: _CompiledRoute, req: falcon.Request
+    ) -> tuple[dict[str, str], str] | None:
+        """Return params and remaining path or ``None`` if invalid."""
+        if not (match := route.prefix.match(req.path)):
+            return None
+        params = match.groupdict()
+        remaining = req.path[match.end() :]
+        if remaining and not remaining.startswith("/"):
+            remaining = self._normalize_path_remaining(remaining, match)
+            if remaining is None:
+                return None
+        return params, remaining
+
+    def _resolve_resource_and_path(
+        self,
+        resource: WebSocketResource,
+        remaining: str,
+        params: dict[str, str],
+    ) -> tuple[WebSocketResource, str, dict[str, str]] | None:
+        """Return resolved resource and path or ``None`` if invalid."""
+        resolved, remaining, params = self._resolve_subroutes(
+            resource, remaining, params
+        )
+        if remaining not in ("", "/"):
+            return None
+        return resolved, remaining, params
+
+    async def _handle_websocket_connection(
+        self,
+        resource: WebSocketResource,
+        req: falcon.Request,
+        ws: WebSocketLike,
+        params: dict[str, str],
+    ) -> bool:
+        """Accept or close ``ws`` based on ``resource`` decision."""
+        should_accept = await resource.on_connect(req, ws, **params)
+        if not should_accept:
+            await ws.close()
+            return True
+        await ws.accept()
+        return True
