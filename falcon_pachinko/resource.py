@@ -1,4 +1,13 @@
-"""WebSocket resource handling and message dispatching."""
+"""WebSocket resource handling and message dispatching functionality.
+
+This module provides the :class:`WebSocketResource` base class used to
+implement WebSocket handlers. Subclasses may optionally define a
+``schema`` attribute referencing a :func:`typing.Union` of
+``msgspec.Struct`` types. When present, incoming messages are decoded
+according to this tagged union and dispatched based on the message tag,
+enabling high-performance, schema-driven routing without extra
+boilerplate.
+"""
 
 from __future__ import annotations
 
@@ -20,7 +29,14 @@ from .schema import populate_struct_handlers, validate_schema_types
 
 
 class WebSocketResource:
-    """Base class for WebSocket handlers."""
+    """Base class for WebSocket handlers.
+
+    Subclasses may optionally define a :attr:`schema` attribute referencing a
+    :func:`typing.Union` of :class:`msgspec.Struct` types. When provided,
+    incoming messages are decoded using this tagged union and dispatched based
+    on the message tag. This enables high-performance, schema-driven routing
+    without additional boilerplate.
+    """
 
     handlers: typing.ClassVar[dict[str, HandlerInfo]]
     _struct_handlers: typing.ClassVar[dict[type, HandlerInfo]] = {}
@@ -127,14 +143,52 @@ class WebSocketResource:
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
-        """Accept or reject the connection after handshake."""
+        """Decide whether the connection should be accepted after handshake.
+
+        Called after the WebSocket handshake is complete to determine
+        acceptance.
+
+        Parameters
+        ----------
+        req : falcon.Request
+            The incoming HTTP request associated with the WebSocket handshake
+        ws : WebSocketLike
+            The WebSocket connection object
+        **params : object
+            Additional parameters relevant to the connection
+
+        Returns
+        -------
+        bool
+            ``True`` to accept the WebSocket connection; ``False`` to reject it
+        """
         return True
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
-        """Handle cleanup when the connection closes."""
+        """Handle cleanup or custom logic when the connection is closed.
+
+        Parameters
+        ----------
+        ws : WebSocketLike
+            The WebSocket connection instance
+        close_code : int
+            The close code indicating the reason for disconnection
+        """
 
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Fallback handler for unrecognized messages."""
+        """Handle incoming messages that don't match any handler.
+
+        This method acts as a catch-all for messages that fail decoding or do
+        not map to a registered handler. Override it to implement custom
+        fallback behaviour for such cases.
+
+        Parameters
+        ----------
+        ws : WebSocketLike
+            The WebSocket connection instance
+        message : str or bytes
+            The raw message received
+        """
 
     @classmethod
     def add_handler(
