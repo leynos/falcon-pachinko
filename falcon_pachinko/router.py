@@ -242,9 +242,7 @@ class WebSocketRouter:
         """Normalize ``remaining`` or return ``None`` if invalid."""
         if not remaining or remaining.startswith("/"):
             return remaining
-        if match.group(0).endswith("/"):
-            return f"/{remaining}"
-        return None
+        return f"/{remaining}" if match.group(0).endswith("/") else None
 
     def _try_subroute_match(
         self, resource: WebSocketResource, path: str
@@ -302,9 +300,7 @@ class WebSocketRouter:
         resolved, remaining, params = self._resolve_subroutes(
             resource, remaining, params
         )
-        if remaining not in ("", "/"):
-            return None
-        return resolved, remaining, params
+        return None if remaining not in ("", "/") else (resolved, remaining, params)
 
     async def _handle_websocket_connection(
         self,
