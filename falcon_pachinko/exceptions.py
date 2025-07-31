@@ -22,3 +22,9 @@ class SignatureInspectionError(RuntimeError):
 
     def __init__(self, func_qualname: str) -> None:
         super().__init__(f"Cannot inspect signature for handler {func_qualname}")
+
+
+class DuplicateHandlerRegistrationError(RuntimeError):
+    """Raised when a message handler is registered more than once."""
+
+    pass

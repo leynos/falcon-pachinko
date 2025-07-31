@@ -17,7 +17,15 @@ import msgspec
 import msgspec.json as msjson
 import pytest
 
-from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
+from falcon_pachinko import (
+    WebSocketLike,
+    WebSocketResource,
+    handles_message,
+)
+from falcon_pachinko.exceptions import (
+    DuplicateHandlerRegistrationError,
+    HandlerSignatureError,
+)
 from falcon_pachinko.unittests.helpers import DummyWS
 
 
@@ -69,7 +77,7 @@ def test_duplicate_handler_raises() -> None:
     This test ensures that attempting to register multiple handlers for the same
     message type results in a RuntimeError with an appropriate error message.
     """
-    with pytest.raises(RuntimeError, match="Duplicate handler"):
+    with pytest.raises(DuplicateHandlerRegistrationError, match="Duplicate handler"):
 
         class BadResource(WebSocketResource):  # pyright: ignore[reportUnusedClass]
             @handles_message("dup")
@@ -90,6 +98,20 @@ def test_missing_payload_param_raises() -> None:
         class BadSig(WebSocketResource):  # pyright: ignore[reportUnusedClass]
             @handles_message("oops")  # pyright: ignore[reportArgumentType]
             async def bad(self, ws: WebSocketLike) -> None: ...
+
+
+def test_ambiguous_payload_param_raises() -> None:
+    """Handler with multiple annotated params should raise an error."""
+    with pytest.raises(HandlerSignatureError):
+
+        class Ambiguous(WebSocketResource):  # pyright: ignore[reportUnusedClass]
+            @handles_message("amb")
+            async def bad(
+                self,
+                ws: WebSocketLike,
+                first: int,
+                second: str,
+            ) -> None: ...
 
 
 class ParentResource(WebSocketResource):

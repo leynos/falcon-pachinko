@@ -215,7 +215,24 @@ class WebSocketRouter:
     async def _try_route(
         self, route: _CompiledRoute, req: falcon.Request, ws: WebSocketLike
     ) -> bool:
-        """Attempt to handle ``req`` using ``route``."""
+        """Attempt to handle ``req`` using ``route``.
+
+        The routing sequence is as follows:
+
+        1. :meth:`_validate_and_normalize_path` ensures ``req.path`` matches the
+           route's prefix and returns any captured parameters plus the remaining
+           path.
+        2. A base resource instance is created from the route's factory.
+        3. :meth:`_resolve_resource_and_path` walks any nested subroutes on the
+           base resource using the remaining path, merging parameters at each
+           level.
+        4. If a final resource and empty path are resolved, control is passed to
+           :meth:`_handle_websocket_connection` which accepts or closes the
+           connection via the resource's ``on_connect`` method.
+
+        The method returns ``True`` if the request was handled by this route,
+        ``False`` otherwise.
+        """
         result = self._validate_and_normalize_path(route, req)
         if result is None:
             return False
