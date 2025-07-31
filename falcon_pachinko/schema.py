@@ -64,6 +64,5 @@ def validate_strict_payload(
         allowed = {
             f.name for f in typing.cast("msgspec_inspect.StructType", info).fields
         }
-        extra = set(typing.cast("dict[str, typing.Any]", payload)) - allowed
-        if extra:
+        if extra := set(typing.cast("dict[str, typing.Any]", payload)) - allowed:
             raise_unknown_fields(extra)

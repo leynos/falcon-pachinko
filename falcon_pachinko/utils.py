@@ -28,7 +28,7 @@ def raise_unknown_fields(
     if include_payload and payload is not None:
         snippet = str(payload)
         if len(snippet) > 200:
-            snippet = snippet[:197] + "..."
+            snippet = f"{snippet[:197]}..."
         details += f" -> {snippet}"
     raise msgspec.ValidationError(details)
 
