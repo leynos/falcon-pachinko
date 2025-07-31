@@ -14,3 +14,8 @@ Feature: Nested resource composition
     Given a router with a nested child resource
     When a client connects to "/parents/42/child/99/grandchild"
     Then the grandchild resource should capture params {"pid": "42", "cid": "99"}
+
+  Scenario: Parameter shadowing overrides parent value
+    Given a router with parameter shadowing resources
+    When a client connects to "/shadow/1/2"
+    Then the shadow child resource should capture params {"pid": "2"}

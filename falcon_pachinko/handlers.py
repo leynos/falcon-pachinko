@@ -12,6 +12,7 @@ if typing.TYPE_CHECKING:
     from .resource import WebSocketResource
 
 from .exceptions import (
+    DuplicateHandlerRegistrationError,
     HandlerNotAsyncError,
     HandlerSignatureError,
     SignatureInspectionError,
@@ -42,9 +43,17 @@ def select_payload_param(
 
     payload_param = sig.parameters.get("payload")
     if payload_param is None:
-        for candidate in params[2:]:
-            if candidate.annotation is not inspect.Signature.empty:
-                return candidate
+        annotated_candidates = [
+            c for c in params[2:] if c.annotation is not inspect.Signature.empty
+        ]
+        if len(annotated_candidates) > 1:
+            msg = (
+                f"Ambiguous payload parameter in handler '{func_name}': "
+                "multiple annotated parameters found after the first two."
+            )
+            raise HandlerSignatureError(msg)
+        if len(annotated_candidates) == 1:
+            return annotated_candidates[0]
         payload_param = params[2]
     return payload_param
 
@@ -95,7 +104,7 @@ class _HandlesMessageDescriptor:
                 f"Duplicate handler for message type {self.message_type!r} "
                 f"on {owner.__qualname__}"
             )
-            raise RuntimeError(msg)
+            raise DuplicateHandlerRegistrationError(msg)
 
         typed_owner.add_handler(
             self.message_type,

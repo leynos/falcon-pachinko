@@ -29,6 +29,14 @@ def test_connect_to_grandchild() -> None:
     """Scenario: Connect to deeply nested grandchild."""
 
 
+@scenario(
+    "features/nested_resource.feature",
+    "Parameter shadowing overrides parent value",
+)
+def test_parameter_shadowing() -> None:
+    """Scenario: Parameter shadowing overrides parent value."""
+
+
 @pytest.fixture
 def context() -> dict[str, typing.Any]:
     """Scenario-scoped context object."""
@@ -78,6 +86,34 @@ class ParentResource(WebSocketResource):
         return False
 
 
+class ShadowChildResource(WebSocketResource):
+    """Child resource used to test parameter shadowing."""
+
+    instances: typing.ClassVar[list[ShadowChildResource]] = []
+
+    def __init__(self) -> None:
+        """Track instance creation for assertions."""
+        ShadowChildResource.instances.append(self)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Record params and refuse the connection."""
+        self.params = params
+        return False
+
+
+class ShadowParentResource(WebSocketResource):
+    """Parent resource that declares same-named parameter on subroute."""
+
+    def __init__(self) -> None:
+        """Register subroute with matching parameter name."""
+        self.add_subroute("{pid}", ShadowChildResource)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Record params for later inspection."""
+        self.params = params
+        return False
+
+
 @given("a router with a nested child resource")
 def setup_router(context: dict[str, typing.Any]) -> None:
     """Prepare router and clear previous instances."""
@@ -85,6 +121,16 @@ def setup_router(context: dict[str, typing.Any]) -> None:
     GrandchildResource.instances.clear()
     router = WebSocketRouter()
     router.add_route("/parents/{pid}", ParentResource)
+    router.mount("/")
+    context["router"] = router
+
+
+@given("a router with parameter shadowing resources")
+def setup_shadow_router(context: dict[str, typing.Any]) -> None:
+    """Prepare router for parameter shadowing scenario."""
+    ShadowChildResource.instances.clear()
+    router = WebSocketRouter()
+    router.add_route("/shadow/{pid}", ShadowParentResource)
     router.mount("/")
     context["router"] = router
 
@@ -126,6 +172,12 @@ def connect_grandchild(context: dict[str, typing.Any]) -> None:
     _simulate_connection(context, "/parents/42/child/99/grandchild")
 
 
+@when('a client connects to "/shadow/1/2"')
+def connect_shadow_child(context: dict[str, typing.Any]) -> None:
+    """Connect to the shadow child path."""
+    _simulate_connection(context, "/shadow/1/2")
+
+
 @then('the child resource should receive params {"pid": "42"}')
 def assert_child_params() -> None:
     """Verify child resource captured parent parameter."""
@@ -142,3 +194,9 @@ def assert_not_found(context: dict[str, typing.Any]) -> None:
 def assert_grandchild_params() -> None:
     """Verify grandchild resource captured all params."""
     assert GrandchildResource.instances[-1].params == {"pid": "42", "cid": "99"}
+
+
+@then('the shadow child resource should capture params {"pid": "2"}')
+def assert_shadow_child_params() -> None:
+    """Verify that child parameter overrides the parent's value."""
+    assert ShadowChildResource.instances[-1].params == {"pid": "2"}
