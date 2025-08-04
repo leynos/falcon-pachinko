@@ -50,3 +50,38 @@ async def test_stop_propagates_worker_exception() -> None:
     await asyncio.sleep(0)  # Let the task run and fail
     with pytest.raises(RuntimeError, match="boom"):
         await controller.stop()
+
+
+@pytest.mark.asyncio
+async def test_start_twice_errors_and_restart_allowed() -> None:
+    """Starting twice without stopping raises, but restart after stop is OK."""
+    controller = WorkerController()
+
+    async def noop() -> None:
+        await asyncio.sleep(0)
+
+    await controller.start(noop)
+    with pytest.raises(RuntimeError):
+        await controller.start(noop)
+    await controller.stop()
+
+    # Controller can be restarted after a clean stop
+    await controller.start(noop)
+    await controller.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_is_idempotent() -> None:
+    """Calling stop multiple times should be a no-op after the first."""
+    controller = WorkerController()
+
+    async def sleeper() -> None:
+        await asyncio.sleep(0)
+
+    # Stop before start should not error
+    await controller.stop()
+
+    await controller.start(sleeper)
+    await controller.stop()
+    # Second stop call should return immediately
+    await controller.stop()

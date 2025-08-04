@@ -19,7 +19,13 @@ class WorkerController:
         self._stack: AsyncExitStack | None = None
 
     async def start(self, *workers: WorkerFn, **context: object) -> None:
-        """Schedule *workers* as tasks, injecting shared *context*."""
+        """Schedule *workers* as tasks, injecting shared *context*.
+        Raises ``RuntimeError`` if already started.
+        """
+        if self._tasks:
+            msg = "WorkerController is already started"
+            raise RuntimeError(msg)
+
         self._stack = AsyncExitStack()
         await self._stack.__aenter__()
 
@@ -28,22 +34,46 @@ class WorkerController:
             self._tasks.append(task)
 
     async def stop(self) -> None:
-        """Cancel worker tasks and propagate the first exception, if any."""
-        error: Exception | None = None
-        for t in self._tasks:
-            t.cancel()
-        await asyncio.gather(*self._tasks, return_exceptions=True)
-        for t in self._tasks:
-            try:
-                exc = t.exception()
-            except asyncio.CancelledError:
-                continue
-            if exc and error is None:
-                error = exc
-        if self._stack:
-            await self._stack.__aexit__(None, None, None)
+        """Cancel worker tasks and propagate the first exception, if any.
+        The controller may be stopped multiple times; subsequent calls will
+        return immediately.
+        """
+        if not self._tasks:
+            return
+
+        self._cancel_all_tasks()
+        await self._wait_for_tasks()
+        error = self._collect_first_exception()
+        await self._cleanup_stack()
+        self._tasks.clear()
         if error:
             raise error
+
+    def _cancel_all_tasks(self) -> None:
+        """Request cancellation for all running worker tasks."""
+        for task in self._tasks:
+            task.cancel()
+
+    async def _wait_for_tasks(self) -> None:
+        """Wait for all worker tasks to finish after cancellation."""
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+
+    def _collect_first_exception(self) -> Exception | None:
+        """Return the first non-cancellation exception from workers, if any."""
+        for task in self._tasks:
+            try:
+                exc = task.exception()
+            except asyncio.CancelledError:
+                continue
+            if exc:
+                return exc
+        return None
+
+    async def _cleanup_stack(self) -> None:
+        """Exit the internal AsyncExitStack, if any."""
+        if self._stack:
+            await self._stack.__aexit__(None, None, None)
+            self._stack = None
 
 
 def worker(fn: WorkerFn) -> WorkerFn:
