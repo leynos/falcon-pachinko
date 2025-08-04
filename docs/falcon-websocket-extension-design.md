@@ -1073,6 +1073,16 @@ globals.
    arguments for the next child. The default implementation returns `{}`, so
    resources opt in to sharing.
 
+   ```python
+   def get_child_context(self) -> dict[str, object]:
+       """Return kwargs to be forwarded to the immediate child resource."""
+       return {}
+   ```
+
+   A concrete signature signals that callers can rely on a plain dict and
+   keeps the hook symmetric with Falcon's HTTP-style `get_child_scope()`
+   patterns.
+
 2. **Shared state object**
 
    Pass the same connection-scoped `state` proxy down the chain. The router
@@ -1083,9 +1093,10 @@ globals.
 
    For each path segment the router will:
 
-   - Instantiate the parent with path parameters and any static init args.
+   - Instantiate the parent with path parameters and static init args.
    - Invoke `get_child_context()` to obtain context for the child.
-   - Instantiate the child, merging path params with the context kwargs.
+   - Instantiate the child, merging path params with the context
+     kwargs.
    - Propagate the shared `state` proxy.
 
 4. **Convenience API**

@@ -90,7 +90,9 @@ composable patterns.
     nested paths.
 
   - [ ] Design and implement a robust context-passing mechanism for parent
-    resources to inject state into child resources.
+    resources to inject state into child resources (see
+    [§5.2.3](falcon-websocket-extension-design.md#523-context-passing-for-
+    nested-resources)).
 
     - [ ] Add an overridable `get_child_context()` hook on
       `WebSocketResource` so parents can explicitly share data with the next
