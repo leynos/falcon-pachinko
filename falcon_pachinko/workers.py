@@ -34,13 +34,7 @@ class WorkerController:
             self._tasks.append(task)
 
     async def stop(self) -> None:
-        """Cancel worker tasks and propagate the first exception, if any.
-        The controller may be stopped multiple times; subsequent calls will
-        return immediately.
-        """
-        if not self._tasks:
-            return
-
+        """Cancel worker tasks and propagate the first exception, if any."""
         self._cancel_all_tasks()
         await self._wait_for_tasks()
         error = self._collect_first_exception()
@@ -50,16 +44,16 @@ class WorkerController:
             raise error
 
     def _cancel_all_tasks(self) -> None:
-        """Request cancellation for all running worker tasks."""
+        """Cancel all running worker tasks."""
         for task in self._tasks:
             task.cancel()
 
     async def _wait_for_tasks(self) -> None:
-        """Wait for all worker tasks to finish after cancellation."""
+        """Wait for all tasks to complete, ignoring exceptions."""
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
     def _collect_first_exception(self) -> Exception | None:
-        """Return the first non-cancellation exception from workers, if any."""
+        """Collect the first non-cancellation exception from completed tasks."""
         for task in self._tasks:
             try:
                 exc = task.exception()
@@ -70,10 +64,9 @@ class WorkerController:
         return None
 
     async def _cleanup_stack(self) -> None:
-        """Exit the internal AsyncExitStack, if any."""
+        """Clean up the async context stack."""
         if self._stack:
             await self._stack.__aexit__(None, None, None)
-            self._stack = None
 
 
 def worker(fn: WorkerFn) -> WorkerFn:
