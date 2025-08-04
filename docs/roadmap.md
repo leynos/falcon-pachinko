@@ -97,14 +97,14 @@ composable patterns.
 This phase implements the redesigned, ASGI-native background worker system and
 finalizes the connection manager API.
 
-- [ ] **Implement Lifespan-Based Worker Management.**
+- [x] **Implement Lifespan-Based Worker Management.**
 
-  - [ ] Create the new `falcon_pachinko/workers.py` module.
+  - [x] Create the new `falcon_pachinko/workers.py` module.
 
-  - [ ] Implement the `WorkerController` class with its `start()` and `stop()`
+  - [x] Implement the `WorkerController` class with its `start()` and `stop()`
     methods.
 
-  - [ ] Implement the optional `@worker` decorator for clarity.
+  - [x] Implement the optional `@worker` decorator for clarity.
 
   - [ ] Update all examples and documentation to use the `@app.lifespan` pattern
     for managing workers, completely removing the old `add_websocket_worker`
