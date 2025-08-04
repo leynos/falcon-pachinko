@@ -92,6 +92,25 @@ composable patterns.
   - [ ] Design and implement a robust context-passing mechanism for parent
     resources to inject state into child resources.
 
+    - [ ] Add an overridable `get_child_context()` hook on
+      `WebSocketResource` so parents can explicitly share data with the next
+      child in the chain.
+
+    - [ ] Propagate a shared, connection-scoped `state` proxy unless a parent
+      provides an alternative via `get_child_context()`.
+
+    - [ ] Update `WebSocketRouter` to instantiate resources sequentially,
+      merging path params with parent-supplied context and passing along the
+      shared `state`.
+
+    - [ ] Enhance `add_subroute()` to record child factories and static
+      arguments while retaining a reference to the parent for router
+      composition.
+
+    - [ ] Provide documentation and tests, such as injecting a `project`
+      object into `TasksResource` and verifying modifications to shared
+      `state`.
+
 ## Phase 3: Lifespan Workers and Connection Management
 
 This phase implements the redesigned, ASGI-native background worker system and

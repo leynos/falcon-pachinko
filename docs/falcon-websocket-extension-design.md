@@ -1059,6 +1059,47 @@ sequenceDiagram
     end
 ```
 
+#### 5.2.3. Context-Passing for Nested Resources
+
+Explicit context handoff keeps nested resources predictable and mirrors
+Falcon's philosophy of avoiding hidden state. Each parent resource controls
+what data flows to its children, allowing shared state without resorting to
+globals.
+
+1. **Per-resource context provider**
+
+   Add an overridable `get_child_context()` method to `WebSocketResource`. The
+   router calls this hook after instantiating the parent to obtain keyword
+   arguments for the next child. The default implementation returns `{}`, so
+   resources opt in to sharing.
+
+2. **Shared state object**
+
+   Pass the same connection-scoped `state` proxy down the chain. The router
+   sets `child.state = parent.state` unless the parent supplies an alternative
+   via `get_child_context()`.
+
+3. **Router chain instantiation**
+
+   For each path segment the router will:
+
+   - Instantiate the parent with path parameters and any static init args.
+   - Invoke `get_child_context()` to obtain context for the child.
+   - Instantiate the child, merging path params with the context kwargs.
+   - Propagate the shared `state` proxy.
+
+4. **Convenience API**
+
+   `add_subroute()` records the child factory along with any static
+   positional/keyword args and retains a reference to the parent. This enables
+   the router to look up subroutes while composing the resource chain.
+
+5. **Testing and docs**
+
+   Provide examples where a parent loads a `project` object and injects it into
+   `TasksResource`, verifying that the child receives the object and both
+   modify the shared `state`.
+
 ### 5.3. High-Performance Schema-Driven Dispatch with `msgspec`
 
 This proposal elevates the dispatch mechanism using `msgspec` and its support
