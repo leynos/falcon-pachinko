@@ -1059,6 +1059,90 @@ sequenceDiagram
     end
 ```
 
+#### 5.2.3. Context-Passing for Nested Resources
+
+Explicit context handoff keeps nested resources predictable and mirrors
+Falcon's philosophy of avoiding hidden state. Each parent resource controls
+what data flows to its children, allowing shared state without resorting to
+globals.
+
+1. **Per-resource context provider**
+
+   Add an overridable `get_child_context()` method to `WebSocketResource`. The
+   router calls this hook after instantiating the parent to obtain keyword
+   arguments for the next child. The default implementation returns `{}`, so
+   resources opt in to sharing.
+
+   ```python
+   def get_child_context(self) -> dict[str, object]:
+       """Return kwargs to be forwarded to the immediate child resource."""
+       return {}
+   ```
+
+   A concrete signature signals that callers can rely on a plain dict and
+   keeps the hook symmetric with Falcon's HTTP-style `get_child_scope()`
+   patterns.
+
+2. **Shared state object**
+
+   Pass the same connection-scoped `state` proxy down the chain. The router
+   sets `child.state = parent.state` unless the parent supplies an alternative
+   via `get_child_context()`.
+
+3. **Router chain instantiation**
+
+   For each path segment the router will:
+
+   - Instantiate the parent with path parameters and static init args.
+   - Invoke `get_child_context()` to obtain context for the child.
+   - Instantiate the child, merging path params with the context
+     kwargs.
+   - Propagate the shared `state` proxy.
+
+4. **Convenience API**
+
+   `add_subroute()` records the child factory along with any static
+   positional/keyword args and retains a reference to the parent. This enables
+   the router to look up subroutes while composing the resource chain.
+
+5. **Testing and docs**
+
+   Provide examples where a parent loads a `project` object and injects it into
+   `TasksResource`, verifying that the child receives the object and both
+   modify the shared `state`.
+
+   The relationships and runtime behavior are illustrated below.
+
+   ```mermaid
+   classDiagram
+       class WebSocketResource {
+           +get_child_context() kwargs
+           state
+       }
+       class WebSocketRouter {
+           +instantiate_resource_chain(path_segments, path_params, static_args)
+           +add_subroute(child_factory, *args, **kwargs)
+       }
+       WebSocketResource <|-- ParentResource
+       WebSocketResource <|-- ChildResource
+       WebSocketRouter o-- WebSocketResource : instantiates
+       ParentResource o-- ChildResource : add_subroute
+       ParentResource --> ChildResource : get_child_context()
+       ParentResource --> ChildResource : state (shared)
+   ```
+
+   ```mermaid
+   sequenceDiagram
+       participant Router as WebSocketRouter
+       participant Parent as ParentResource
+       participant Child as ChildResource
+       Router->>Parent: Instantiate with path params, static args
+       Router->>Parent: get_child_context()
+       Parent-->>Router: context kwargs
+       Router->>Child: Instantiate with path params + context kwargs
+       Router->>Child: Set child.state = parent.state (unless overridden)
+   ```
+
 ### 5.3. High-Performance Schema-Driven Dispatch with `msgspec`
 
 This proposal elevates the dispatch mechanism using `msgspec` and its support
