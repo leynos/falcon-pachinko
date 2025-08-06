@@ -1111,6 +1111,38 @@ globals.
    `TasksResource`, verifying that the child receives the object and both
    modify the shared `state`.
 
+   The relationships and runtime behavior are illustrated below.
+
+   ```mermaid
+   classDiagram
+       class WebSocketResource {
+           +get_child_context() kwargs
+           state
+       }
+       class WebSocketRouter {
+           +instantiate_resource_chain(path_segments, path_params, static_args)
+           +add_subroute(child_factory, *args, **kwargs)
+       }
+       WebSocketResource <|-- ParentResource
+       WebSocketResource <|-- ChildResource
+       WebSocketRouter o-- WebSocketResource : instantiates
+       ParentResource o-- ChildResource : add_subroute
+       ParentResource --> ChildResource : get_child_context()
+       ParentResource --> ChildResource : state (shared)
+   ```
+
+   ```mermaid
+   sequenceDiagram
+       participant Router as WebSocketRouter
+       participant Parent as ParentResource
+       participant Child as ChildResource
+       Router->>Parent: Instantiate with path params, static args
+       Router->>Parent: get_child_context()
+       Parent-->>Router: context kwargs
+       Router->>Child: Instantiate with path params + context kwargs
+       Router->>Child: Set child.state = parent.state (unless overridden)
+   ```
+
 ### 5.3. High-Performance Schema-Driven Dispatch with `msgspec`
 
 This proposal elevates the dispatch mechanism using `msgspec` and its support

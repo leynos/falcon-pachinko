@@ -95,23 +95,25 @@ composable patterns.
     nested-resources)).
 
     - [ ] Add an overridable `get_child_context()` hook on
-      `WebSocketResource` so parents can explicitly share data with the next
+      `WebSocketResource`¹ so parents can explicitly share data with the next
       child in the chain.
 
     - [ ] Propagate a shared, connection-scoped `state` proxy unless a parent
-      provides an alternative via `get_child_context()`.
+      provides an alternative via `get_child_context()`¹.
 
     - [ ] Update `WebSocketRouter` to instantiate resources sequentially,
       merging path params with parent-supplied context and passing along the
-      shared `state`.
+      shared `state`¹.
 
     - [ ] Enhance `add_subroute()` to record child factories and static
       arguments while retaining a reference to the parent for router
-      composition.
+      composition¹.
 
     - [ ] Provide documentation and tests, such as injecting a `project`
       object into `TasksResource` and verifying modifications to shared
-      `state`.
+      `state`¹.
+
+[¹](falcon-websocket-extension-design.md#523-context-passing-for-nested-resources)
 
 ## Phase 3: Lifespan Workers and Connection Management
 
