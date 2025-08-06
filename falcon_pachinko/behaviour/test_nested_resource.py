@@ -37,6 +37,14 @@ def test_parameter_shadowing() -> None:
     """Scenario: Parameter shadowing overrides parent value."""
 
 
+@scenario(
+    "features/nested_resource.feature",
+    "Parent passes context to child resource",
+)
+def test_parent_context_passing() -> None:
+    """Scenario: Parent passes context to child resource."""
+
+
 @pytest.fixture
 def context() -> dict[str, typing.Any]:
     """Scenario-scoped context object."""
@@ -114,6 +122,43 @@ class ShadowParentResource(WebSocketResource):
         return False
 
 
+class CtxChildResource(WebSocketResource):
+    """Child resource that records injected project and shared state."""
+
+    instances: typing.ClassVar[list[CtxChildResource]] = []
+
+    def __init__(self, project: str) -> None:
+        """Track project and instance for assertions."""
+        self.project = project
+        CtxChildResource.instances.append(self)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Record participation in connection."""
+        self.state["child"] = True
+        return False
+
+
+class CtxParentResource(WebSocketResource):
+    """Parent resource that injects context into its child."""
+
+    instances: typing.ClassVar[list[CtxParentResource]] = []
+
+    def __init__(self) -> None:
+        """Register child, track instance, and seed state."""
+        self.project = "acme"
+        self.state["parent"] = True
+        self.add_subroute("child", CtxChildResource)
+        CtxParentResource.instances.append(self)
+
+    def get_child_context(self) -> dict[str, object]:
+        """Provide constructor kwargs for child resource."""
+        return {"project": self.project}
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """No-op connect handler for tests."""
+        return False
+
+
 @given("a router with a nested child resource")
 def setup_router(context: dict[str, typing.Any]) -> None:
     """Prepare router and clear previous instances."""
@@ -131,6 +176,17 @@ def setup_shadow_router(context: dict[str, typing.Any]) -> None:
     ShadowChildResource.instances.clear()
     router = WebSocketRouter()
     router.add_route("/shadow/{pid}", ShadowParentResource)
+    router.mount("/")
+    context["router"] = router
+
+
+@given("a router with context-passing resources")
+def setup_context_router(context: dict[str, typing.Any]) -> None:
+    """Prepare router for context-passing scenario."""
+    CtxChildResource.instances.clear()
+    CtxParentResource.instances.clear()
+    router = WebSocketRouter()
+    router.add_route("/ctx", CtxParentResource)
     router.mount("/")
     context["router"] = router
 
@@ -178,6 +234,12 @@ def connect_shadow_child(context: dict[str, typing.Any]) -> None:
     _simulate_connection(context, "/shadow/1/2")
 
 
+@when('a client connects to "/ctx/child"')
+def connect_ctx_child(context: dict[str, typing.Any]) -> None:
+    """Connect to the context child path."""
+    _simulate_connection(context, "/ctx/child")
+
+
 @then('the child resource should receive params {"pid": "42"}')
 def assert_child_params() -> None:
     """Verify child resource captured parent parameter."""
@@ -200,3 +262,18 @@ def assert_grandchild_params() -> None:
 def assert_shadow_child_params() -> None:
     """Verify that child parameter overrides the parent's value."""
     assert ShadowChildResource.instances[-1].params == {"pid": "2"}
+
+
+@then('the context child resource should receive project "acme"')
+def assert_ctx_child_project() -> None:
+    """Ensure child received injected project."""
+    assert CtxChildResource.instances[-1].project == "acme"
+
+
+@then("the shared state should contain flags from both resources")
+def assert_ctx_shared_state() -> None:
+    """Verify that parent and child share connection state."""
+    parent = CtxParentResource.instances[-1]
+    child = CtxChildResource.instances[-1]
+    assert child.state is parent.state
+    assert child.state == {"parent": True, "child": True}

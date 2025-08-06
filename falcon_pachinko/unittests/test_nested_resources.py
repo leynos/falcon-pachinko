@@ -81,3 +81,61 @@ def test_add_subroute_invalid_resource() -> None:
     r = WebSocketResource()
     with pytest.raises(TypeError):
         r.add_subroute("child", typing.cast("typing.Any", object()))
+
+
+class ContextChild(WebSocketResource):
+    """Resource that receives context from its parent."""
+
+    instances: typing.ClassVar[list["ContextChild"]] = []
+
+    def __init__(self, project: str) -> None:
+        """Record project and track instance."""
+        self.project = project
+        ContextChild.instances.append(self)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Mark that the child handled the connection."""
+        self.state["child"] = True
+        return False
+
+
+class ContextParent(WebSocketResource):
+    """Parent that injects context and shares state."""
+
+    instances: typing.ClassVar[list["ContextParent"]] = []
+
+    def __init__(self) -> None:
+        """Register child subroute, track instance, and seed state."""
+        self.project = "acme"
+        self.state["parent"] = True
+        self.add_subroute("child", ContextChild)
+        ContextParent.instances.append(self)
+
+    def get_child_context(self) -> dict[str, object]:
+        """Provide constructor kwargs for the child."""
+        return {"project": self.project}
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """No-op connect handler for tests."""
+        return False
+
+
+@pytest.mark.asyncio
+async def test_context_passed_and_state_shared() -> None:
+    """Parent-supplied context and state propagate to the child."""
+    ContextChild.instances.clear()
+    ContextParent.instances.clear()
+    router = WebSocketRouter()
+    router.add_route("/ctx", ContextParent)
+    router.mount("/")
+    req = typing.cast(
+        "falcon.Request",
+        SimpleNamespace(path="/ctx/child", path_template=""),
+    )
+    await router.on_websocket(req, DummyWS())
+
+    parent = ContextParent.instances[-1]
+    child = ContextChild.instances[-1]
+    assert child.project == "acme"
+    assert child.state is parent.state
+    assert child.state == {"parent": True, "child": True}

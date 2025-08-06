@@ -272,7 +272,10 @@ class WebSocketRouter:
                     remaining := self._normalize_path_remaining(remaining, match)
                 ) is None:
                     return None
-                new_resource = factory()
+                context = resource.get_child_context()
+                child_kwargs = {k: v for k, v in context.items() if k != "state"}
+                new_resource = factory(**child_kwargs)
+                new_resource.state = context.get("state", resource.state)
                 params = match.groupdict()
                 return new_resource, remaining, params
         return None
