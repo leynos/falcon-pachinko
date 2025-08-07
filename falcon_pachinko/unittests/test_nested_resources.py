@@ -139,3 +139,59 @@ async def test_context_passed_and_state_shared() -> None:
     assert child.project == "acme"
     assert child.state is parent.state
     assert child.state == {"parent": True, "child": True}
+
+
+class InjectedChild(WebSocketResource):
+    """Resource that mutates its own state."""
+
+    instances: typing.ClassVar[list["InjectedChild"]] = []
+
+    def __init__(self) -> None:
+        """Track instances for inspection."""
+        InjectedChild.instances.append(self)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Mark that the child handled the connection."""
+        self.state["child"] = True
+        return False
+
+
+class InjectingParent(WebSocketResource):
+    """Parent that injects custom state into the child."""
+
+    instances: typing.ClassVar[list["InjectingParent"]] = []
+
+    def __init__(self) -> None:
+        """Register child subroute and seed parent state."""
+        self.state["parent"] = True
+        self.add_subroute("child", InjectedChild)
+        InjectingParent.instances.append(self)
+
+    def get_child_context(self) -> dict[str, object]:
+        """Provide a fresh state mapping for the child."""
+        return {"state": {"injected": True}}
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """No-op connect handler for tests."""
+        return False
+
+
+@pytest.mark.asyncio
+async def test_state_injected_via_context() -> None:
+    """Explicit state injection should override the parent's state."""
+    InjectedChild.instances.clear()
+    InjectingParent.instances.clear()
+    router = WebSocketRouter()
+    router.add_route("/inj", InjectingParent)
+    router.mount("/")
+    req = typing.cast(
+        "falcon.Request",
+        SimpleNamespace(path="/inj/child", path_template=""),
+    )
+    await router.on_websocket(req, DummyWS())
+
+    parent = InjectingParent.instances[-1]
+    child = InjectedChild.instances[-1]
+    assert child.state is not parent.state
+    assert child.state == {"injected": True, "child": True}
+    assert parent.state == {"parent": True}
