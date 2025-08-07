@@ -81,3 +81,119 @@ def test_add_subroute_invalid_resource() -> None:
     r = WebSocketResource()
     with pytest.raises(TypeError):
         r.add_subroute("child", typing.cast("typing.Any", object()))
+
+
+class ContextChild(WebSocketResource):
+    """Resource that receives context from its parent."""
+
+    instances: typing.ClassVar[list["ContextChild"]] = []
+
+    def __init__(self, project: str) -> None:
+        """Record project and track instance."""
+        self.project = project
+        ContextChild.instances.append(self)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Mark that the child handled the connection."""
+        self.state["child"] = True
+        return False
+
+
+class ContextParent(WebSocketResource):
+    """Parent that injects context and shares state."""
+
+    instances: typing.ClassVar[list["ContextParent"]] = []
+
+    def __init__(self) -> None:
+        """Register child subroute, track instance, and seed state."""
+        self.project = "acme"
+        self.state["parent"] = True
+        self.add_subroute("child", ContextChild)
+        ContextParent.instances.append(self)
+
+    def get_child_context(self) -> dict[str, object]:
+        """Provide constructor kwargs for the child."""
+        return {"project": self.project}
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """No-op connect handler for tests."""
+        return False
+
+
+async def _setup_and_run_nested_test(
+    child_class: type[typing.Any],
+    parent_class: type[typing.Any],
+    route_path: str,
+    request_path: str,
+) -> tuple[typing.Any, typing.Any]:
+    """Execute nested resource flow and return created instances."""
+    child_class.instances.clear()
+    parent_class.instances.clear()
+    router = WebSocketRouter()
+    router.add_route(route_path, parent_class)
+    router.mount("/")
+    req = typing.cast(
+        "falcon.Request",
+        SimpleNamespace(path=request_path, path_template=""),
+    )
+    await router.on_websocket(req, DummyWS())
+    parent = parent_class.instances[-1]
+    child = child_class.instances[-1]
+    return parent, child
+
+
+@pytest.mark.asyncio
+async def test_context_passed_and_state_shared() -> None:
+    """Parent-supplied context and state propagate to the child."""
+    parent, child = await _setup_and_run_nested_test(
+        ContextChild, ContextParent, "/ctx", "/ctx/child"
+    )
+    assert child.project == "acme"
+    assert child.state is parent.state
+    assert child.state == {"parent": True, "child": True}
+
+
+class InjectedChild(WebSocketResource):
+    """Resource that mutates its own state."""
+
+    instances: typing.ClassVar[list["InjectedChild"]] = []
+
+    def __init__(self) -> None:
+        """Track instances for inspection."""
+        InjectedChild.instances.append(self)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Mark that the child handled the connection."""
+        self.state["child"] = True
+        return False
+
+
+class InjectingParent(WebSocketResource):
+    """Parent that injects custom state into the child."""
+
+    instances: typing.ClassVar[list["InjectingParent"]] = []
+
+    def __init__(self) -> None:
+        """Register child subroute and seed parent state."""
+        self.state["parent"] = True
+        self.add_subroute("child", InjectedChild)
+        InjectingParent.instances.append(self)
+
+    def get_child_context(self) -> dict[str, object]:
+        """Provide a fresh state mapping for the child."""
+        return {"state": {"injected": True}}
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """No-op connect handler for tests."""
+        return False
+
+
+@pytest.mark.asyncio
+async def test_state_injected_via_context() -> None:
+    """Explicit state injection should override the parent's state."""
+    parent, child = await _setup_and_run_nested_test(
+        InjectedChild, InjectingParent, "/inj", "/inj/child"
+    )
+    assert child.state is not parent.state
+    assert child.state == {"injected": True, "child": True}
+    assert parent.state == {"parent": True}

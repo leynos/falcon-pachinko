@@ -19,3 +19,9 @@ Feature: Nested resource composition
     Given a router with parameter shadowing resources
     When a client connects to "/shadow/1/2"
     Then the shadow child resource should capture params {"pid": "2"}
+
+  Scenario: Parent passes context to child resource
+    Given a router with context-passing resources
+    When a client connects to "/ctx/child"
+    Then the context child resource should receive project "acme"
+    And the shared state should contain flags from both resources

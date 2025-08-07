@@ -89,27 +89,27 @@ composable patterns.
   - [x] Enhance the `WebSocketRouter`'s matching logic to handle multi-level
     nested paths.
 
-  - [ ] Design and implement a robust context-passing mechanism for parent
+  - [x] Design and implement a robust context-passing mechanism for parent
     resources to inject state into child resources (see
-    [§5.2.3](falcon-websocket-extension-design.md#523-context-passing-for-
-    nested-resources)).
+    [§5.2.3](falcon-websocket-extension-design.md#523-context-passing-for- nested-resources)
+     ).
 
-    - [ ] Add an overridable `get_child_context()` hook on
+    - [x] Add an overridable `get_child_context()` hook on
       `WebSocketResource`¹ so parents can explicitly share data with the next
       child in the chain.
 
-    - [ ] Propagate a shared, connection-scoped `state` proxy unless a parent
+    - [x] Propagate a shared, connection-scoped `state` proxy unless a parent
       provides an alternative via `get_child_context()`¹.
 
-    - [ ] Update `WebSocketRouter` to instantiate resources sequentially,
+    - [x] Update `WebSocketRouter` to instantiate resources sequentially,
       merging path params with parent-supplied context and passing along the
       shared `state`¹.
 
-    - [ ] Enhance `add_subroute()` to record child factories and static
+    - [x] Enhance `add_subroute()` to record child factories and static
       arguments while retaining a reference to the parent for router
       composition¹.
 
-    - [ ] Provide documentation and tests, such as injecting a `project`
+    - [x] Provide documentation and tests, such as injecting a `project`
       object into `TasksResource` and verifying modifications to shared
       `state`¹.
 

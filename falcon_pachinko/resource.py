@@ -77,6 +77,17 @@ class WebSocketResource:
         subroutes.append((pattern, factory))
         self._subroutes = subroutes
 
+    def get_child_context(self) -> dict[str, object]:
+        """Return kwargs to be forwarded to the next child resource.
+
+        Override this hook to explicitly share context or dependencies with a
+        nested resource. The returned mapping is applied to the child's
+        constructor. If ``state`` is included, its value will replace the
+        connection-scoped ``state`` passed to the child; otherwise, the parent
+        state is propagated automatically.
+        """
+        return {}
+
     @property
     def state(self) -> cabc.MutableMapping[str, typing.Any]:
         """Per-connection state mapping."""
