@@ -120,22 +120,34 @@ class ContextParent(WebSocketResource):
         return False
 
 
-@pytest.mark.asyncio
-async def test_context_passed_and_state_shared() -> None:
-    """Parent-supplied context and state propagate to the child."""
-    ContextChild.instances.clear()
-    ContextParent.instances.clear()
+async def _setup_and_run_nested_test(
+    child_class: type[typing.Any],
+    parent_class: type[typing.Any],
+    route_path: str,
+    request_path: str,
+) -> tuple[typing.Any, typing.Any]:
+    """Execute nested resource flow and return created instances."""
+    child_class.instances.clear()
+    parent_class.instances.clear()
     router = WebSocketRouter()
-    router.add_route("/ctx", ContextParent)
+    router.add_route(route_path, parent_class)
     router.mount("/")
     req = typing.cast(
         "falcon.Request",
-        SimpleNamespace(path="/ctx/child", path_template=""),
+        SimpleNamespace(path=request_path, path_template=""),
     )
     await router.on_websocket(req, DummyWS())
+    parent = parent_class.instances[-1]
+    child = child_class.instances[-1]
+    return parent, child
 
-    parent = ContextParent.instances[-1]
-    child = ContextChild.instances[-1]
+
+@pytest.mark.asyncio
+async def test_context_passed_and_state_shared() -> None:
+    """Parent-supplied context and state propagate to the child."""
+    parent, child = await _setup_and_run_nested_test(
+        ContextChild, ContextParent, "/ctx", "/ctx/child"
+    )
     assert child.project == "acme"
     assert child.state is parent.state
     assert child.state == {"parent": True, "child": True}
@@ -179,19 +191,9 @@ class InjectingParent(WebSocketResource):
 @pytest.mark.asyncio
 async def test_state_injected_via_context() -> None:
     """Explicit state injection should override the parent's state."""
-    InjectedChild.instances.clear()
-    InjectingParent.instances.clear()
-    router = WebSocketRouter()
-    router.add_route("/inj", InjectingParent)
-    router.mount("/")
-    req = typing.cast(
-        "falcon.Request",
-        SimpleNamespace(path="/inj/child", path_template=""),
+    parent, child = await _setup_and_run_nested_test(
+        InjectedChild, InjectingParent, "/inj", "/inj/child"
     )
-    await router.on_websocket(req, DummyWS())
-
-    parent = InjectingParent.instances[-1]
-    child = InjectedChild.instances[-1]
     assert child.state is not parent.state
     assert child.state == {"injected": True, "child": True}
     assert parent.state == {"parent": True}
