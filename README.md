@@ -47,11 +47,21 @@ from falcon_pachinko import WorkerController, worker
 controller = WorkerController()
 
 @worker
-async def heartbeat(conn_mgr):
-    while True:
-        for ws in list(conn_mgr.connections.values()):
-            await ws.send_media({"type": "ping"})
-        await asyncio.sleep(30)
+async def heartbeat(*, conn_mgr):
+    try:
+        while True:
+            # Snapshot to avoid mutation during iteration
+            conns = list(conn_mgr.connections.values())
+            if conns:
+                # Send concurrently; swallow per-connection errors
+                await asyncio.gather(
+                    *(ws.send_media({"type": "ping"}) for ws in conns),
+                    return_exceptions=True,
+                )
+            await asyncio.sleep(30)
+    except asyncio.CancelledError:
+        # Cleanly exit when controller.stop() is called
+        pass
 
 @app.lifespan
 async def lifespan(app):

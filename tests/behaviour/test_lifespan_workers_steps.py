@@ -48,39 +48,47 @@ def test_lifespan_worker() -> None:  # pragma: no cover - bdd registration
 
 
 @given("an app with a lifespan-managed worker", target_fixture="app_with_worker")
-def create_app_with_worker() -> tuple[LifespanApp, dict[str, bool]]:
+def create_app_with_worker() -> tuple[LifespanApp, dict[str, bool], asyncio.Event]:
     """Create an app that starts a worker during lifespan."""
     app = LifespanApp()
     controller = WorkerController()
     state: dict[str, bool] = {"ran": False}
+    done = asyncio.Event()
 
     @worker
-    async def run_once(*, state: dict[str, bool]) -> None:
+    async def run_once(*, state: dict[str, bool], done: asyncio.Event) -> None:
         state["ran"] = True
+        done.set()
 
     @app.lifespan
-    async def lifespan(app_instance) -> cabc.AsyncIterator[None]:  # noqa: ANN001
-        await controller.start(run_once, state=state)
+    async def lifespan(
+        app_instance: falcon.asgi.App,
+    ) -> cabc.AsyncIterator[None]:
+        await controller.start(run_once, state=state, done=done)
         yield
         await controller.stop()
 
-    return app, state
+    return app, state, done
 
 
 @when("the app lifespan is executed")
-def run_lifespan(app_with_worker: tuple[LifespanApp, dict[str, bool]]) -> None:
+def run_lifespan(
+    app_with_worker: tuple[LifespanApp, dict[str, bool], asyncio.Event],
+) -> None:
     """Run the application's lifespan context."""
-    app, _ = app_with_worker
+    app, _, done = app_with_worker
 
     async def _runner() -> None:
         async with app.lifespan_context():
-            await asyncio.sleep(0)
+            await done.wait()
 
     asyncio.run(_runner())
 
 
 @then("the worker has run")
-def worker_has_run(app_with_worker: tuple[LifespanApp, dict[str, bool]]) -> None:
+def worker_has_run(
+    app_with_worker: tuple[LifespanApp, dict[str, bool], asyncio.Event],
+) -> None:
     """Assert that the worker executed."""
-    _, state = app_with_worker
+    _, state, _ = app_with_worker
     assert state["ran"] is True

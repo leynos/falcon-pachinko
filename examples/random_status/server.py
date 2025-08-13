@@ -23,6 +23,7 @@ import aiosqlite
 import falcon.asgi
 
 from falcon_pachinko import (
+    WebSocketConnectionManager,
     WebSocketLike,
     WebSocketResource,
     WorkerController,
@@ -54,7 +55,7 @@ class StatusPayload(t.TypedDict):
 
 
 @worker
-async def random_worker(conn_mgr) -> None:  # noqa: ANN001
+async def random_worker(*, conn_mgr: WebSocketConnectionManager) -> None:
     """Periodically broadcast random numbers to all connections."""
     try:
         while True:
@@ -70,7 +71,7 @@ async def random_worker(conn_mgr) -> None:  # noqa: ANN001
 class StatusResource(WebSocketResource):
     """WebSocket resource for handling status updates."""
 
-    def __init__(self, conn_mgr) -> None:  # noqa: ANN001
+    def __init__(self, conn_mgr: WebSocketConnectionManager) -> None:
         self._conn_mgr = conn_mgr
         self._conn_id: str | None = None
 
@@ -140,12 +141,14 @@ def create_app() -> falcon.asgi.App:
     """Create and configure the Falcon ASGI application."""
     app = LifespanApp()
     install(app)
-    conn_mgr = app.ws_connection_manager  # type: ignore[attr-defined]
+    conn_mgr: WebSocketConnectionManager = app.ws_connection_manager  # type: ignore[attr-defined]
 
     controller = WorkerController()
 
     @app.lifespan
-    async def lifespan(app_instance) -> t.AsyncIterator[None]:  # noqa: ANN001
+    async def lifespan(
+        app_instance: falcon.asgi.App,
+    ) -> t.AsyncIterator[None]:
         await controller.start(random_worker, conn_mgr=conn_mgr)
         yield
         await controller.stop()
