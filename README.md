@@ -23,8 +23,8 @@ See
   handlers.
 - `WebSocketConnectionManager` tracks connections, manages rooms, and lets
   workers broadcast messages.
-- Background tasks register via `app.add_websocket_worker` and interact with the
-  connection manager.
+- Background tasks run under Falcon's ASGI lifespan via
+  `WorkerController` and the `@app.lifespan` decorator.
 
 These concepts are summarised in the design document:
 
@@ -37,6 +37,37 @@ app.add_websocket_route('/ws/chat/{room_name}', ChatRoomResource, history_size=1
 @handles_message("new_chat_message")
 async def handle_new_chat_message(self, ws, payload):
     ...
+```
+
+```python
+import asyncio
+
+from falcon_pachinko import WorkerController, worker
+
+controller = WorkerController()
+
+@worker
+async def heartbeat(*, conn_mgr):
+    try:
+        while True:
+            # Snapshot to avoid mutation during iteration
+            conns = list(conn_mgr.connections.values())
+            if conns:
+                # Send concurrently; swallow per-connection errors
+                await asyncio.gather(
+                    *(ws.send_media({"type": "ping"}) for ws in conns),
+                    return_exceptions=True,
+                )
+            await asyncio.sleep(30)
+    except asyncio.CancelledError:
+        # Cleanly exit when controller.stop() is called
+        pass
+
+@app.lifespan
+async def lifespan(app):
+    await controller.start(heartbeat, conn_mgr=app.ws_connection_manager)
+    yield
+    await controller.stop()
 ```
 
 ## Roadmap

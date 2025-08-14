@@ -129,7 +129,7 @@ finalizes the connection manager API.
 
   - [x] Implement the optional `@worker` decorator for clarity.
 
-  - [ ] Update all examples and documentation to use the `@app.lifespan` pattern
+  - [x] Update all examples and documentation to use the `@app.lifespan` pattern
     for managing workers, completely removing the old `add_websocket_worker`
     concept.
 

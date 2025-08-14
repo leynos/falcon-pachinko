@@ -29,9 +29,9 @@ after formatting.
 
 4. **Background Worker Integration** (lines 342-375)
 
-   - [ ] Expose `app.add_websocket_worker` to register asynchronous workers that
+   - [ ] Provide a `WorkerController` for registering asynchronous workers that
      use `app.ws_connection_manager`.
-   - [ ] Ensure workers can be started with the application’s lifespan events.
+   - [ ] Ensure workers are managed with the application’s lifespan events.
 
 5. **Testing Utilities**
 
