@@ -122,8 +122,8 @@ class LifespanApp(falcon.asgi.App):
         ) = None
 
     def lifespan(
-        self, fn: cabc.Callable[[falcon.asgi.App], cabc.AsyncIterator[None]]
-    ) -> cabc.Callable[[falcon.asgi.App], cl_typing.AbstractAsyncContextManager[None]]:  # type: ignore[override]
+        self, fn: cabc.Callable[[LifespanApp], cabc.AsyncIterator[None]]
+    ) -> cabc.Callable[[LifespanApp], cl_typing.AbstractAsyncContextManager[None]]:  # type: ignore[override]
         """Register a lifespan context manager."""
         manager = cl.asynccontextmanager(fn)
         self._lifespan_handler = manager
@@ -146,12 +146,13 @@ def create_app() -> falcon.asgi.App:
     controller = WorkerController()
 
     @app.lifespan
-    async def lifespan(
-        app_instance: falcon.asgi.App,
-    ) -> t.AsyncIterator[None]:
+    async def lifespan(app_instance: LifespanApp) -> t.AsyncIterator[None]:
         await controller.start(random_worker, conn_mgr=conn_mgr)
         yield
         await controller.stop()
+        # Best-effort close; swallow errors to not mask shutdown issues
+        with cl.suppress(Exception):
+            await DB.close()
 
     app.add_websocket_route("/ws", lambda: StatusResource(conn_mgr))  # type: ignore[attr-defined]
     app.add_route("/status", StatusEndpoint())
