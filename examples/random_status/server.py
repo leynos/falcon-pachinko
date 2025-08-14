@@ -20,7 +20,6 @@ import secrets
 import typing as t
 
 import aiosqlite
-import falcon.asgi
 
 from falcon_pachinko import (
     WebSocketConnectionManager,
@@ -31,10 +30,11 @@ from falcon_pachinko import (
     install,
     worker,
 )
+from tests.behaviour._lifespan import LifespanApp
 
 if t.TYPE_CHECKING:
-    import collections.abc as cabc
-    import contextlib as cl_typing
+    import falcon
+    import falcon.asgi as falcon_asgi
 
 
 async def _setup_db() -> aiosqlite.Connection:
@@ -63,8 +63,13 @@ async def random_worker(*, conn_mgr: WebSocketConnectionManager) -> None:
             await asyncio.sleep(5)
             number = secrets.randbelow(65536)
             for ws in list(conn_mgr.connections.values()):
-                with cl.suppress(ConnectionError, OSError):
+                try:
                     await ws.send_media({"type": "random", "payload": str(number)})
+                except asyncio.CancelledError:  # noqa: PERF203 - bubble up cancellation
+                    raise
+                except (ConnectionError, OSError, RuntimeError):
+                    # best-effort: drop failed connections silently in this example
+                    pass
     except asyncio.CancelledError:
         pass
 
@@ -86,7 +91,7 @@ class StatusResource(WebSocketResource):
         self._conn_id = conn_id
         return True
 
-    async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+    async def on_disconnect(self, _: WebSocketLike, close_code: int) -> None:
         """Unregister the connection on disconnect."""
         if self._conn_id:
             self._conn_mgr.connections.pop(self._conn_id, None)
@@ -118,61 +123,37 @@ class StatusEndpoint:
         resp.media = {"status": row[0] if row else None}
 
 
-class LifespanApp(falcon.asgi.App):
-    """Falcon ASGI App with a minimal lifespan decorator."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._lifespan_handler: (
-            cabc.Callable[
-                [falcon.asgi.App], cl_typing.AbstractAsyncContextManager[None]
-            ]
-            | None
-        ) = None
-
-    def lifespan(
-        self, fn: cabc.Callable[[LifespanApp], cabc.AsyncIterator[None]]
-    ) -> cabc.Callable[[LifespanApp], cl_typing.AbstractAsyncContextManager[None]]:  # type: ignore[override]
-        """Register a lifespan context manager."""
-        manager = cl.asynccontextmanager(fn)
-        self._lifespan_handler = manager
-        return manager
-
-    def lifespan_context(self) -> cl_typing.AbstractAsyncContextManager[None]:
-        """Return the registered lifespan context manager."""
-        if self._lifespan_handler is None:
-            msg = "lifespan handler not set"
-            raise RuntimeError(msg)
-        return self._lifespan_handler(self)
-
-
-def create_app() -> falcon.asgi.App:
+def create_app() -> falcon_asgi.App:
     """Create and configure the Falcon ASGI application."""
     app = LifespanApp()
     install(app)
-    conn_mgr: WebSocketConnectionManager = app.ws_connection_manager  # type: ignore[attr-defined]
+    conn_mgr = t.cast(
+        "WebSocketConnectionManager",
+        getattr(app, "ws_connection_manager"),  # noqa: B009
+    )
 
     controller = WorkerController()
 
     @app.lifespan
     async def lifespan(app_instance: LifespanApp) -> t.AsyncIterator[None]:
-        # Lazily initialize the DB on startup
         global DB
-        if DB is None:
-            DB = await _setup_db()
-
+        DB = await _setup_db()
         await controller.start(random_worker, conn_mgr=conn_mgr)
         try:
             yield
         finally:
             await controller.stop()
-            # Best-effort close; swallow errors to not mask shutdown issues
             with cl.suppress(Exception):
-                if DB is not None:
-                    await DB.close()
-                    DB = None
+                conns = list(conn_mgr.connections.values())
+                if conns:
+                    await asyncio.gather(
+                        *(ws.close() for ws in conns), return_exceptions=True
+                    )
+            if DB is not None:
+                await DB.close()
+                DB = None
 
-    app.add_websocket_route("/ws", lambda: StatusResource(conn_mgr))  # type: ignore[attr-defined]
+    getattr(app, "add_websocket_route")("/ws", lambda: StatusResource(conn_mgr))  # noqa: B009
     app.add_route("/status", StatusEndpoint())
     return app
 

@@ -4,3 +4,4 @@ Feature: Lifespan-based worker management
     Given an app with a lifespan-managed worker
     When the app lifespan is executed
     Then the worker has run
+    And the worker stops after the lifespan ends
