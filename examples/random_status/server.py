@@ -45,7 +45,8 @@ async def _setup_db() -> aiosqlite.Connection:
     return conn
 
 
-DB = asyncio.run(_setup_db())
+# Lazily initialized during startup to avoid import-time event loop work
+DB: aiosqlite.Connection | None = None
 
 
 class StatusPayload(t.TypedDict):
@@ -94,8 +95,12 @@ class StatusResource(WebSocketResource):
     async def update_status(self, ws: WebSocketLike, payload: StatusPayload) -> None:
         """Update the stored status value and acknowledge."""
         text = payload["text"]
-        await DB.execute("UPDATE status SET value=?", (text,))
-        await DB.commit()
+        conn = DB
+        if conn is None:
+            msg = "DB connection not initialized"
+            raise RuntimeError(msg)
+        await conn.execute("UPDATE status SET value=?", (text,))
+        await conn.commit()
         await ws.send_media({"type": "ack", "payload": text})
 
 
@@ -104,7 +109,11 @@ class StatusEndpoint:
 
     async def on_get(self, req: falcon.Request, resp: falcon.Response) -> None:
         """Return the current status value as JSON."""
-        async with DB.execute("SELECT value FROM status") as cursor:
+        conn = DB
+        if conn is None:
+            msg = "DB connection not initialized"
+            raise RuntimeError(msg)
+        async with conn.execute("SELECT value FROM status") as cursor:
             row = await cursor.fetchone()
         resp.media = {"status": row[0] if row else None}
 
@@ -147,12 +156,21 @@ def create_app() -> falcon.asgi.App:
 
     @app.lifespan
     async def lifespan(app_instance: LifespanApp) -> t.AsyncIterator[None]:
+        # Lazily initialize the DB on startup
+        global DB
+        if DB is None:
+            DB = await _setup_db()
+
         await controller.start(random_worker, conn_mgr=conn_mgr)
-        yield
-        await controller.stop()
-        # Best-effort close; swallow errors to not mask shutdown issues
-        with cl.suppress(Exception):
-            await DB.close()
+        try:
+            yield
+        finally:
+            await controller.stop()
+            # Best-effort close; swallow errors to not mask shutdown issues
+            with cl.suppress(Exception):
+                if DB is not None:
+                    await DB.close()
+                    DB = None
 
     app.add_websocket_route("/ws", lambda: StatusResource(conn_mgr))  # type: ignore[attr-defined]
     app.add_route("/status", StatusEndpoint())
