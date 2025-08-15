@@ -17,6 +17,9 @@ from types import MethodType
 
 from .resource import WebSocketResource
 
+if typing.TYPE_CHECKING:
+    from .protocols import WebSocketLike
+
 
 class PartialWebSocketInstallError(RuntimeError):
     """Raised when WebSocket installation is partially complete.
@@ -99,8 +102,71 @@ class WebSocketConnectionManager:
 
     def __init__(self) -> None:
         """Initialize the WebSocketConnectionManager with empty mappings."""
-        self.connections: dict[str, typing.Any] = {}
+        self.connections: dict[str, WebSocketLike] = {}
         self.rooms: dict[str, set[str]] = {}
+        self._lock = Lock()
+
+    def add_connection(self, conn_id: str, ws: WebSocketLike) -> None:
+        """Register a new WebSocket connection."""
+        with self._lock:
+            self.connections[conn_id] = ws
+
+    def remove_connection(self, conn_id: str) -> None:
+        """Remove a WebSocket connection and purge room memberships."""
+        with self._lock:
+            self.connections.pop(conn_id, None)
+            for members in self.rooms.values():
+                members.discard(conn_id)
+
+    def join_room(self, conn_id: str, room: str) -> None:
+        """Add a connection to the given room."""
+        with self._lock:
+            self.rooms.setdefault(room, set()).add(conn_id)
+
+    def leave_room(self, conn_id: str, room: str) -> None:
+        """Remove a connection from the given room."""
+        with self._lock:
+            members = self.rooms.get(room)
+            if not members:
+                return
+            members.discard(conn_id)
+            if not members:
+                self.rooms.pop(room, None)
+
+    async def send_to_connection(self, conn_id: str, data: object) -> None:
+        """Send ``data`` to a specific connection by ID."""
+        with self._lock:
+            ws = self.connections[conn_id]
+        await ws.send_media(data)
+
+    async def broadcast_to_room(
+        self,
+        room: str,
+        data: object,
+        *,
+        exclude: set[str] | None = None,
+    ) -> None:
+        """Send ``data`` to every connection in ``room``.
+
+        Parameters
+        ----------
+        room : str
+            Target room name.
+        data : object
+            Structured data to forward to each connection.
+        exclude : set[str] | None, optional
+            Connection IDs to skip.
+        """
+        with self._lock:
+            ids = list(self.rooms.get(room, set()))
+            websockets = [
+                self.connections[cid]
+                for cid in ids
+                if (not exclude or cid not in exclude) and cid in self.connections
+            ]
+
+        for ws in websockets:
+            await ws.send_media(data)
 
 
 # Public API ---------------------------------------------------------------
