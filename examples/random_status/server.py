@@ -20,6 +20,7 @@ import secrets
 import typing as t
 
 import aiosqlite
+import falcon.asgi as falcon_asgi
 
 from falcon_pachinko import (
     WebSocketConnectionManager,
@@ -30,11 +31,40 @@ from falcon_pachinko import (
     install,
     worker,
 )
-from tests.behaviour._lifespan import LifespanApp
+
+try:
+    from tests.behaviour._lifespan import LifespanApp  # type: ignore[import-not-found]
+except Exception:  # noqa: BLE001
+    import contextlib as cl
+    import typing as t
+
+    class LifespanApp(falcon_asgi.App):
+        """Falcon ASGI App with a minimal lifespan decorator (local fallback)."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self._lifespan_handler: (
+                t.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]] | None
+            ) = None
+
+        def lifespan(
+            self, fn: t.Callable[[t.Any], t.AsyncIterator[None]]
+        ) -> t.Callable[[t.Any], cl.AbstractAsyncContextManager[None]]:
+            """Register a lifespan context manager."""
+            manager = cl.asynccontextmanager(fn)
+            self._lifespan_handler = manager
+            return manager
+
+        def lifespan_context(self) -> cl.AbstractAsyncContextManager[None]:
+            """Return the registered lifespan context manager."""
+            if self._lifespan_handler is None:
+                msg = "lifespan handler not set"
+                raise RuntimeError(msg)
+            return self._lifespan_handler(self)
+
 
 if t.TYPE_CHECKING:
     import falcon
-    import falcon.asgi as falcon_asgi
 
 
 async def _setup_db() -> aiosqlite.Connection:
@@ -91,7 +121,7 @@ class StatusResource(WebSocketResource):
         self._conn_id = conn_id
         return True
 
-    async def on_disconnect(self, _: WebSocketLike, close_code: int) -> None:
+    async def on_disconnect(self, _: WebSocketLike, _close_code: int) -> None:
         """Unregister the connection on disconnect."""
         if self._conn_id:
             self._conn_mgr.connections.pop(self._conn_id, None)
@@ -153,7 +183,7 @@ def create_app() -> falcon_asgi.App:
                 await DB.close()
                 DB = None
 
-    getattr(app, "add_websocket_route")("/ws", lambda: StatusResource(conn_mgr))  # noqa: B009
+    app.add_websocket_route("/ws", lambda: StatusResource(conn_mgr))  # type: ignore[attr-defined]
     app.add_route("/status", StatusEndpoint())
     return app
 

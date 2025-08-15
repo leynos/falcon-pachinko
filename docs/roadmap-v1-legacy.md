@@ -32,7 +32,7 @@ after formatting.
     - [x] Provide a `WorkerController` for registering asynchronous workers that
       use `app.ws_connection_manager`.
     - [x] Ensure workers are managed with the application’s lifespan events.
-      (See README for a concrete example.)
+      (See examples/random_status/server.py for a concrete example.)
 
 5. **Testing Utilities**
 

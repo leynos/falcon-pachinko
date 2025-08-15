@@ -18,7 +18,7 @@ class LifespanApp(falcon.asgi.App):
     def __init__(self) -> None:
         super().__init__()
         self._lifespan_handler: (
-            t.Callable[[falcon.asgi.App], cl_typing.AbstractAsyncContextManager[None]]
+            t.Callable[[LifespanApp], cl_typing.AbstractAsyncContextManager[None]]
             | None
         ) = None
 
