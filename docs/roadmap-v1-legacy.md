@@ -29,9 +29,10 @@ after formatting.
 
 4. **Background Worker Integration** (lines 342-375)
 
-   - [ ] Provide a `WorkerController` for registering asynchronous workers that
-     use `app.ws_connection_manager`.
-   - [ ] Ensure workers are managed with the application’s lifespan events.
+    - [x] Provide a `WorkerController` for registering asynchronous workers that
+      use `app.ws_connection_manager`.
+    - [x] Ensure workers are managed with the application’s lifespan events.
+      (See examples/random_status/server.py for a concrete example.)
 
 5. **Testing Utilities**
 
