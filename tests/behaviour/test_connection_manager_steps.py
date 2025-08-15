@@ -44,14 +44,20 @@ def test_broadcast() -> None:  # pragma: no cover - bdd registration
 )
 def setup_room() -> tuple[WebSocketConnectionManager, DummyWebSocket, DummyWebSocket]:
     """Create a connection manager prepopulated with a lobby room."""
-    mgr = WebSocketConnectionManager()
-    ws1 = DummyWebSocket(messages=[])
-    ws2 = DummyWebSocket(messages=[])
-    mgr.add_connection("a", ws1)
-    mgr.add_connection("b", ws2)
-    mgr.join_room("a", "lobby")
-    mgr.join_room("b", "lobby")
-    return mgr, ws1, ws2
+
+    async def _run() -> tuple[
+        WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
+    ]:
+        mgr = WebSocketConnectionManager()
+        ws1 = DummyWebSocket(messages=[])
+        ws2 = DummyWebSocket(messages=[])
+        await mgr.add_connection("a", ws1)
+        await mgr.add_connection("b", ws2)
+        await mgr.join_room("a", "lobby")
+        await mgr.join_room("b", "lobby")
+        return mgr, ws1, ws2
+
+    return asyncio.run(_run())
 
 
 @when('a message is broadcast to room "lobby"')

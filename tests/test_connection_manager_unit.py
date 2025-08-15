@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from falcon_pachinko.websocket import WebSocketConnectionManager
+from falcon_pachinko.websocket import (
+    WebSocketConnectionManager,
+    WebSocketConnectionNotFoundError,
+)
 
 
 class DummyWebSocket:
@@ -43,7 +46,7 @@ async def test_send_to_connection_sends_message() -> None:
     """Send a message to a single connection."""
     mgr = WebSocketConnectionManager()
     ws = DummyWebSocket()
-    mgr.add_connection("a", ws)
+    await mgr.add_connection("a", ws)
 
     await mgr.send_to_connection("a", {"hello": "world"})
 
@@ -55,7 +58,7 @@ async def test_send_to_connection_propagates_error() -> None:
     """Errors raised by send_media bubble up."""
     mgr = WebSocketConnectionManager()
     ws = ErrorWebSocket()
-    mgr.add_connection("a", ws)
+    await mgr.add_connection("a", ws)
 
     with pytest.raises(RuntimeError):
         await mgr.send_to_connection("a", "ping")
@@ -67,10 +70,10 @@ async def test_broadcast_to_room_sends_to_each_member() -> None:
     mgr = WebSocketConnectionManager()
     ws1 = DummyWebSocket()
     ws2 = DummyWebSocket()
-    mgr.add_connection("a", ws1)
-    mgr.add_connection("b", ws2)
-    mgr.join_room("a", "lobby")
-    mgr.join_room("b", "lobby")
+    await mgr.add_connection("a", ws1)
+    await mgr.add_connection("b", ws2)
+    await mgr.join_room("a", "lobby")
+    await mgr.join_room("b", "lobby")
 
     await mgr.broadcast_to_room("lobby", "hi")
 
@@ -84,10 +87,36 @@ async def test_broadcast_to_room_propagates_error() -> None:
     mgr = WebSocketConnectionManager()
     ws1 = DummyWebSocket()
     ws2 = ErrorWebSocket()
-    mgr.add_connection("a", ws1)
-    mgr.add_connection("b", ws2)
-    mgr.join_room("a", "lobby")
-    mgr.join_room("b", "lobby")
+    await mgr.add_connection("a", ws1)
+    await mgr.add_connection("b", ws2)
+    await mgr.join_room("a", "lobby")
+    await mgr.join_room("b", "lobby")
 
     with pytest.raises(RuntimeError):
         await mgr.broadcast_to_room("lobby", 42)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_to_room_excludes_connections() -> None:
+    """Excluded connections do not receive the message."""
+    mgr = WebSocketConnectionManager()
+    ws1 = DummyWebSocket()
+    ws2 = DummyWebSocket()
+    await mgr.add_connection("a", ws1)
+    await mgr.add_connection("b", ws2)
+    await mgr.join_room("a", "lobby")
+    await mgr.join_room("b", "lobby")
+
+    await mgr.broadcast_to_room("lobby", "hi", exclude={"a"})
+
+    assert ws1.messages == []
+    assert ws2.messages == ["hi"]
+
+
+@pytest.mark.asyncio
+async def test_send_to_unknown_connection_raises_key_error() -> None:
+    """Sending to an unknown connection raises KeyError."""
+    mgr = WebSocketConnectionManager()
+
+    with pytest.raises(WebSocketConnectionNotFoundError):
+        await mgr.send_to_connection("a", "hi")
