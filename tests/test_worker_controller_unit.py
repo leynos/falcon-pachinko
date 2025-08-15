@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import typing
 
 import pytest
@@ -25,9 +26,11 @@ async def _sample_worker(*, flag: dict[str, bool]) -> None:
 
 
 @worker
-async def _failing_worker() -> None:
-    """Yield once before raising an error."""
+async def _failing_worker(*, ready: asyncio.Event | None = None) -> None:
+    """Await once, then signal and raise an error deterministically."""
     await asyncio.sleep(0)
+    if ready is not None:
+        ready.set()
     raise RuntimeError("boom")
 
 
@@ -38,7 +41,9 @@ async def controller() -> cabc.AsyncIterator[WorkerController]:
     try:
         yield ctrl
     finally:
-        await ctrl.stop()
+        # Avoid teardown-time errors leaking into unrelated tests
+        with contextlib.suppress(Exception):
+            await ctrl.stop()
 
 
 @pytest.mark.asyncio
@@ -78,9 +83,9 @@ async def test_exception_propagates_on_stop(
     controller: WorkerController,
 ) -> None:
     """Exceptions raised by workers should surface when stopping."""
-    await controller.start(_failing_worker)
-    # Yield twice so the worker runs past its internal sleep and raises
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    ready = asyncio.Event()
+    await controller.start(_failing_worker, ready=ready)
+    # Wait until the worker has run past its internal sleep and is about to raise
+    await ready.wait()
     with pytest.raises(RuntimeError, match="boom"):
         await controller.stop()
