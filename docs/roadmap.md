@@ -133,9 +133,9 @@ finalizes the connection manager API.
     for managing workers, completely removing the old `add_websocket_worker`
     concept.
 
-- [ ] **Finalize** `WebSocketConnectionManager` **API.**
+- [x] **Finalize** `WebSocketConnectionManager` **API.**
 
-  - [ ] Refactor all I/O methods (e.g., `broadcast_to_room`) to be `async def`
+  - [x] Refactor all I/O methods (e.g., `broadcast_to_room`) to be `async def`
     and ensure they propagate exceptions correctly.
 
   - [ ] Implement `async for` iterators (e.g., `conn_mgr.connections(room=...)`)
