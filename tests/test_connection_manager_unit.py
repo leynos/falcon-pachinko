@@ -81,18 +81,28 @@ async def test_send_to_connection_propagates_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_broadcast_to_room_sends_to_each_member(
+@pytest.mark.parametrize(
+    ("exclude", "expected_ws1", "expected_ws2"),
+    [
+        (None, ["hi"], ["hi"]),
+        ({"a"}, [], ["hi"]),
+    ],
+)
+async def test_broadcast_to_room_with_exclusion_scenarios(
     room_with_two_connections: tuple[
         WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
     ],
+    exclude: set[str] | None,
+    expected_ws1: list[str],
+    expected_ws2: list[str],
 ) -> None:
-    """Broadcast to a room sends to all connections."""
+    """Test broadcasting to room with various exclusion scenarios."""
     mgr, ws1, ws2 = room_with_two_connections
 
-    await mgr.broadcast_to_room("lobby", "hi")
+    await mgr.broadcast_to_room("lobby", "hi", exclude=exclude)
 
-    assert ws1.messages == ["hi"]
-    assert ws2.messages == ["hi"]
+    assert ws1.messages == expected_ws1
+    assert ws2.messages == expected_ws2
 
 
 @pytest.mark.asyncio
@@ -108,21 +118,6 @@ async def test_broadcast_to_room_propagates_error() -> None:
 
     with pytest.raises(RuntimeError):
         await mgr.broadcast_to_room("lobby", 42)
-
-
-@pytest.mark.asyncio
-async def test_broadcast_to_room_excludes_connections(
-    room_with_two_connections: tuple[
-        WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
-    ],
-) -> None:
-    """Excluded connections do not receive the message."""
-    mgr, ws1, ws2 = room_with_two_connections
-
-    await mgr.broadcast_to_room("lobby", "hi", exclude={"a"})
-
-    assert ws1.messages == []
-    assert ws2.messages == ["hi"]
 
 
 @pytest.mark.asyncio
