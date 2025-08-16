@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+import pytest_asyncio
 
 from falcon_pachinko.websocket import (
     WebSocketConnectionManager,
@@ -41,6 +42,21 @@ class ErrorWebSocket(DummyWebSocket):
         raise RuntimeError("boom")
 
 
+@pytest_asyncio.fixture
+async def room_with_two_connections() -> tuple[
+    WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
+]:
+    """Return a lobby with two connected websockets."""
+    mgr = WebSocketConnectionManager()
+    ws1 = DummyWebSocket()
+    ws2 = DummyWebSocket()
+    await mgr.add_connection("a", ws1)
+    await mgr.add_connection("b", ws2)
+    await mgr.join_room("a", "lobby")
+    await mgr.join_room("b", "lobby")
+    return mgr, ws1, ws2
+
+
 @pytest.mark.asyncio
 async def test_send_to_connection_sends_message() -> None:
     """Send a message to a single connection."""
@@ -65,15 +81,13 @@ async def test_send_to_connection_propagates_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_broadcast_to_room_sends_to_each_member() -> None:
+async def test_broadcast_to_room_sends_to_each_member(
+    room_with_two_connections: tuple[
+        WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
+    ],
+) -> None:
     """Broadcast to a room sends to all connections."""
-    mgr = WebSocketConnectionManager()
-    ws1 = DummyWebSocket()
-    ws2 = DummyWebSocket()
-    await mgr.add_connection("a", ws1)
-    await mgr.add_connection("b", ws2)
-    await mgr.join_room("a", "lobby")
-    await mgr.join_room("b", "lobby")
+    mgr, ws1, ws2 = room_with_two_connections
 
     await mgr.broadcast_to_room("lobby", "hi")
 
@@ -97,15 +111,13 @@ async def test_broadcast_to_room_propagates_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_broadcast_to_room_excludes_connections() -> None:
+async def test_broadcast_to_room_excludes_connections(
+    room_with_two_connections: tuple[
+        WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
+    ],
+) -> None:
     """Excluded connections do not receive the message."""
-    mgr = WebSocketConnectionManager()
-    ws1 = DummyWebSocket()
-    ws2 = DummyWebSocket()
-    await mgr.add_connection("a", ws1)
-    await mgr.add_connection("b", ws2)
-    await mgr.join_room("a", "lobby")
-    await mgr.join_room("b", "lobby")
+    mgr, ws1, ws2 = room_with_two_connections
 
     await mgr.broadcast_to_room("lobby", "hi", exclude={"a"})
 
