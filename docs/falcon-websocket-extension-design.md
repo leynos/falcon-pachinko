@@ -1079,9 +1079,8 @@ globals.
        return {}
    ```
 
-   A concrete signature signals that callers can rely on a plain dict and
-   keeps the hook symmetric with Falcon's HTTP-style `get_child_scope()`
-   patterns.
+   A concrete signature signals that callers can rely on a plain dict and keeps
+   the hook symmetric with Falcon's HTTP-style `get_child_scope()` patterns.
 
 2. **Shared state object**
 

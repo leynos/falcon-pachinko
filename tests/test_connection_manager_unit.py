@@ -121,6 +121,15 @@ async def test_broadcast_to_room_propagates_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_join_room_requires_known_connection() -> None:
+    """Joining a room with an unknown connection raises an error."""
+    mgr = WebSocketConnectionManager()
+
+    with pytest.raises(WebSocketConnectionNotFoundError):
+        await mgr.join_room("ghost", "lobby")
+
+
+@pytest.mark.asyncio
 async def test_send_to_unknown_connection_raises_key_error() -> None:
     """Sending to an unknown connection raises KeyError."""
     mgr = WebSocketConnectionManager()

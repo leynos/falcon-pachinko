@@ -104,9 +104,10 @@ class WebSocketConnectionManager:
 
     The initial implementation is an in-process store, but the class is
     designed to evolve into a pluggable backend so that distributed
-    deployments can share state. Implementations MUST be thread-safe; the
-    in-process version guards its state with an :class:`asyncio.Lock` to
-    prevent concurrent mutation within the event loop.
+    deployments can share state. Implementations MUST guard concurrent
+    access. The in-process version is task-safe within a single event loop
+    via :class:`asyncio.Lock`; using the same instance across multiple threads
+    or event loops is not supported.
     """
 
     def __init__(self) -> None:
@@ -124,12 +125,19 @@ class WebSocketConnectionManager:
         """Remove a WebSocket connection and purge room memberships."""
         async with self._lock:
             self.connections.pop(conn_id, None)
-            for members in self.rooms.values():
+            empty_rooms: list[str] = []
+            for room, members in self.rooms.items():
                 members.discard(conn_id)
+                if not members:
+                    empty_rooms.append(room)
+            for room in empty_rooms:
+                self.rooms.pop(room, None)
 
     async def join_room(self, conn_id: str, room: str) -> None:
         """Add a connection to the given room."""
         async with self._lock:
+            if conn_id not in self.connections:
+                raise WebSocketConnectionNotFoundError(conn_id)
             self.rooms.setdefault(room, set()).add(conn_id)
 
     async def leave_room(self, conn_id: str, room: str) -> None:
@@ -176,7 +184,13 @@ class WebSocketConnectionManager:
                 if (not exclude or cid not in exclude) and cid in self.connections
             ]
 
-        await asyncio.gather(*(ws.send_media(data) for ws in websockets))
+        results = await asyncio.gather(
+            *(ws.send_media(data) for ws in websockets),
+            return_exceptions=True,
+        )
+        for exc in results:
+            if isinstance(exc, Exception):
+                raise exc
 
 
 # Public API ---------------------------------------------------------------
