@@ -31,6 +31,36 @@ class DummyWebSocket:
         self.messages.append(data)
 
 
+SetupFixture = tuple[
+    WebSocketConnectionManager,
+    DummyWebSocket,
+    DummyWebSocket,
+    asyncio.AbstractEventLoop,
+]
+
+
+def _broadcast_to_lobby(setup: SetupFixture, exclude: set[str] | None = None) -> None:
+    """Broadcast a test message to the lobby."""
+    mgr, _, _, loop = setup
+    loop.run_until_complete(
+        mgr.broadcast_to_room("lobby", {"msg": "hi"}, exclude=exclude)
+    )
+
+
+def _assert_messages_received(
+    setup: SetupFixture,
+    expected_ws1: list[object],
+    expected_ws2: list[object],
+) -> None:
+    """Assert that each websocket received the expected messages."""
+    _, ws1, ws2, loop = setup
+    try:
+        assert ws1.messages == expected_ws1
+        assert ws2.messages == expected_ws2
+    finally:
+        loop.close()
+
+
 @scenario(
     "connection_manager.feature", "broadcast message to all connections in a room"
 )
@@ -50,12 +80,7 @@ def test_broadcast_with_exclusion() -> None:  # pragma: no cover - bdd registrat
     'a connection manager with two connections in room "lobby"',
     target_fixture="setup",
 )
-def setup_room() -> tuple[
-    WebSocketConnectionManager,
-    DummyWebSocket,
-    DummyWebSocket,
-    asyncio.AbstractEventLoop,
-]:
+def setup_room() -> SetupFixture:
     """Create a connection manager prepopulated with a lobby room."""
     loop = asyncio.new_event_loop()
     try:
@@ -73,66 +98,24 @@ def setup_room() -> tuple[
 
 
 @when('a message is broadcast to room "lobby"')
-def broadcast(
-    setup: tuple[
-        WebSocketConnectionManager,
-        DummyWebSocket,
-        DummyWebSocket,
-        asyncio.AbstractEventLoop,
-    ],
-) -> None:
+def broadcast(setup: SetupFixture) -> None:
     """Broadcast a test message to the lobby room."""
-    mgr, _, _, loop = setup
-    loop.run_until_complete(mgr.broadcast_to_room("lobby", {"msg": "hi"}))
+    _broadcast_to_lobby(setup)
 
 
 @when('a message is broadcast to room "lobby" excluding connection "a"')
-def broadcast_excluding(
-    setup: tuple[
-        WebSocketConnectionManager,
-        DummyWebSocket,
-        DummyWebSocket,
-        asyncio.AbstractEventLoop,
-    ],
-) -> None:
+def broadcast_excluding(setup: SetupFixture) -> None:
     """Broadcast a test message excluding connection ``a``."""
-    mgr, _, _, loop = setup
-    loop.run_until_complete(
-        mgr.broadcast_to_room("lobby", {"msg": "hi"}, exclude={"a"})
-    )
+    _broadcast_to_lobby(setup, exclude={"a"})
 
 
 @then("both connections receive that message")
-def assert_received(
-    setup: tuple[
-        WebSocketConnectionManager,
-        DummyWebSocket,
-        DummyWebSocket,
-        asyncio.AbstractEventLoop,
-    ],
-) -> None:
+def assert_received(setup: SetupFixture) -> None:
     """Assert that both connections received the broadcast."""
-    _, ws1, ws2, loop = setup
-    try:
-        assert ws1.messages == [{"msg": "hi"}]
-        assert ws2.messages == [{"msg": "hi"}]
-    finally:
-        loop.close()
+    _assert_messages_received(setup, [{"msg": "hi"}], [{"msg": "hi"}])
 
 
 @then('only connection "b" receives that message')
-def assert_received_excluding(
-    setup: tuple[
-        WebSocketConnectionManager,
-        DummyWebSocket,
-        DummyWebSocket,
-        asyncio.AbstractEventLoop,
-    ],
-) -> None:
+def assert_received_excluding(setup: SetupFixture) -> None:
     """Assert that only connection ``b`` receives the broadcast."""
-    _, ws1, ws2, loop = setup
-    try:
-        assert ws1.messages == []
-        assert ws2.messages == [{"msg": "hi"}]
-    finally:
-        loop.close()
+    _assert_messages_received(setup, [], [{"msg": "hi"}])
