@@ -288,6 +288,16 @@ async def test_invalid_payload_calls_fallback() -> None:
 
 
 @pytest.mark.asyncio
+async def test_invalid_envelope_type_calls_fallback() -> None:
+    """Non-string ``type`` fields trigger the fallback handler."""
+    r = EchoResource()
+    raw = msjson.encode({"type": 123, "payload": {"text": "hi"}})
+    await r.dispatch(DummyWS(), raw)
+    assert r.fallback == [raw]
+    assert not r.seen
+
+
+@pytest.mark.asyncio
 async def test_extra_fields_strict_true_calls_fallback() -> None:
     """Extra fields trigger fallback when strict is True."""
     r = StrictResource()

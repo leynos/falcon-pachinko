@@ -133,7 +133,7 @@ async def dispatch_with_envelope(
     """Decode and dispatch ``raw`` using the envelope format."""
     try:
         envelope = msjson.decode(raw, type=Envelope)
-    except ms.DecodeError:
+    except (ms.DecodeError, ms.ValidationError):
         await resource.on_unhandled(ws, raw)
         return
 
