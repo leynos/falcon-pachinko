@@ -344,9 +344,9 @@ avoids a monolithic receive loop with extensive conditional logic.
 
   ```python
   from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
-  import msgspec
+  import msgspec as ms
 
-  class NewChatMessage(msgspec.Struct):
+  class NewChatMessage(ms.Struct):
       text: str
 
   class ChatMessageHandler(WebSocketResource):
@@ -381,12 +381,13 @@ when their containing class is created:
 ```python
 import functools
 from types import MappingProxyType
-from typing import Callable, Dict, Any
+import typing as typ
+
 
 class _MessageHandlerDescriptor:
     """Store the original function and remember its owner class."""
 
-    def __init__(self, msg_type: str, func: Callable) -> None:
+    def __init__(self, msg_type: str, func: typ.Callable) -> None:
         self.msg_type = msg_type
         self.func = func
         functools.update_wrapper(self, func)
@@ -401,7 +402,7 @@ class _MessageHandlerDescriptor:
         # Each class must get its own registry; otherwise subclasses would
         # mutate the parent's handler map and cause cross-talk across the
         # hierarchy.
-        registry: Dict[str, Callable] = dict(parent_registry)
+        registry: dict[str, typ.Callable] = dict(parent_registry)
         if self.msg_type in registry:
             raise RuntimeError(
                 f"Duplicate handler for message type {self.msg_type!r} on {owner.__qualname__}"
@@ -413,13 +414,14 @@ class _MessageHandlerDescriptor:
         if hasattr(base, "_message_handlers"):
             base._message_handlers = MappingProxyType(parent_registry)
 
-    def __get__(self, instance: Any, owner: type | None = None) -> Callable:
+    def __get__(self, instance: typ.Any, owner: type | None = None) -> typ.Callable:
         return self.func.__get__(instance, owner or self.owner)
 
-def handles_message(msg_type: str) -> Callable[[Callable], _MessageHandlerDescriptor]:
+
+def handles_message(msg_type: str) -> typ.Callable[[typ.Callable], _MessageHandlerDescriptor]:
     """Decorator factory returning the descriptor wrapper."""
 
-    def decorator(func: Callable) -> _MessageHandlerDescriptor:
+    def decorator(func: typ.Callable) -> _MessageHandlerDescriptor:
         return _MessageHandlerDescriptor(msg_type, func)
 
     return decorator
@@ -496,20 +498,21 @@ feature.
 # pachinko/workers.py (new module)
 import asyncio
 from contextlib import AsyncExitStack
-from collections.abc import Awaitable, Callable
-from typing import Any, Final, TypeAlias
+import collections.abc as cabc
+import typing as typ
 
-WorkerFn: TypeAlias = Callable[[Any], Awaitable[None]]
+WorkerFn: typ.TypeAlias = cabc.Callable[[typ.Any], cabc.Awaitable[None]]
+
 
 class WorkerController:
     """Manages a set of long-running asyncio tasks tied to an ASGI lifespan."""
-    __slots__: Final = ("_tasks", "_stack")
+    __slots__: typ.Final = ("_tasks", "_stack")
 
     def __init__(self) -> None:
         self._tasks: list[asyncio.Task[None]] = []
         self._stack: AsyncExitStack | None = None
 
-    async def start(self, *workers: WorkerFn, **context: Any) -> None:
+    async def start(self, *workers: WorkerFn, **context: typ.Any) -> None:
         """Create and supervise tasks. *context is injected into each worker."""
         self._stack = AsyncExitStack()
         await self._stack.__aenter__()
@@ -1150,22 +1153,22 @@ schema-driven approach.
 
 #### 5.3.1. Declaring Message Schemas
 
-A resource defines its message schema using a `typing.Union` of
-`msgspec.Struct` types, where each `Struct` represents a distinct message.
+A resource defines its message schema using a `typ.Union` of
+`ms.Struct` types, where each `Struct` represents a distinct message.
 
 ```python
-import msgspec
-import typing
+import msgspec as ms
+import typing as typ
 
 # Define individual message structures
-class Join(msgspec.Struct, tag='join'):
+class Join(ms.Struct, tag='join'):
     room: str
 
-class SendMessage(msgspec.Struct, tag='sendMessage'): # Note CamelCase tag
+class SendMessage(ms.Struct, tag='sendMessage'): # Note CamelCase tag
     text: str
-    
+
 # Create a tagged union of all possible messages
-MessageUnion = typing.Union[Join, SendMessage]
+MessageUnion = typ.Union[Join, SendMessage]
 
 class ChatResource(WebSocketResource):
     # Associate the schema with the resource
