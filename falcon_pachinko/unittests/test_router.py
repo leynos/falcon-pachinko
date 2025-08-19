@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-import typing
+import typing as typ
 
 import falcon
 import falcon.asgi
@@ -14,14 +14,14 @@ from falcon_pachinko.unittests.helpers import DummyWS
 
 pytest_plugins = ["falcon_pachinko.unittests.test_app_install"]
 
-if typing.TYPE_CHECKING:
+if typ.TYPE_CHECKING:
     from falcon_pachinko.unittests.test_app_install import SupportsWebSocket
 
 
 class DummyResource(WebSocketResource):
     """Capture connection parameters for testing."""
 
-    instances: typing.ClassVar[list[DummyResource]] = []
+    instances: typ.ClassVar[list[DummyResource]] = []
 
     def __init__(self) -> None:  # pragma: no cover - simple init
         DummyResource.instances.append(self)
@@ -59,7 +59,7 @@ async def _expect_close(
     async def close(code: int = 1000) -> None:  # pragma: no cover - simple stub
         closed["closed"] = code
 
-    typing.cast("typing.Any", ws).close = close
+    typ.cast("typ.Any", ws).close = close
     req = type("Req", (), {"path": path, "path_template": ""})()
 
     with pytest.raises(expected_exc):
@@ -164,7 +164,7 @@ async def test_on_connect_accepts_connection() -> None:
     async def accept() -> None:
         called["accepted"] = True
 
-    typing.cast("typing.Any", ws).accept = accept
+    typ.cast("typ.Any", ws).accept = accept
     req = type("Req", (), {"path": "/ok"})()
     await router.on_websocket(req, ws)
     assert called.get("accepted") is True
@@ -173,7 +173,7 @@ async def test_on_connect_accepts_connection() -> None:
 def test_add_route_requires_callable() -> None:
     """Non-callable resources must raise ``TypeError``."""
     router = WebSocketRouter()
-    bad_resource = typing.cast("typing.Any", object())
+    bad_resource = typ.cast("typ.Any", object())
     with pytest.raises(TypeError):
         router.add_route("/x", bad_resource)
 
@@ -256,7 +256,7 @@ async def test_overlapping_routes() -> None:
     """Ensure the first matching route is used when paths overlap."""
 
     class First(WebSocketResource):
-        instances: typing.ClassVar[list[First]] = []
+        instances: typ.ClassVar[list[First]] = []
 
         def __init__(self) -> None:
             First.instances.append(self)
@@ -265,7 +265,7 @@ async def test_overlapping_routes() -> None:
             return False
 
     class Second(WebSocketResource):
-        instances: typing.ClassVar[list[Second]] = []
+        instances: typ.ClassVar[list[Second]] = []
 
         def __init__(self) -> None:
             Second.instances.append(self)
@@ -324,7 +324,7 @@ async def test_resource_init_args_kwargs() -> None:
     """Ensure ``add_route`` forwards init args and kwargs."""
 
     class ParamResource(WebSocketResource):
-        instances: typing.ClassVar[list[ParamResource]] = []
+        instances: typ.ClassVar[list[ParamResource]] = []
 
         def __init__(self, foo: str, *, bar: int) -> None:
             self.foo = foo

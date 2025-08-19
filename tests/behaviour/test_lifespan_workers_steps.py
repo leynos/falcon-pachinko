@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import typing as t
+import typing as typ
 
 from pytest_bdd import given, scenario, then, when
 
@@ -13,7 +13,7 @@ from tests.behaviour._lifespan import LifespanApp
 START_TIMEOUT = 2.0
 AppWithWorker = tuple[LifespanApp, dict[str, bool], asyncio.Event, asyncio.Event]
 
-if t.TYPE_CHECKING:
+if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib as cl
 import secrets
-import typing as t
+import typing as typ
 
 import aiosqlite
 import falcon.asgi as falcon_asgi
@@ -36,7 +36,7 @@ try:
     from tests.behaviour._lifespan import LifespanApp  # type: ignore[import-not-found]
 except Exception:  # noqa: BLE001
     import contextlib as cl
-    import typing as t
+    import typing as typ
 
     class LifespanApp(falcon_asgi.App):
         """Falcon ASGI App with a minimal lifespan decorator (local fallback)."""
@@ -44,12 +44,12 @@ except Exception:  # noqa: BLE001
         def __init__(self) -> None:
             super().__init__()
             self._lifespan_handler: (
-                t.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]] | None
+                typ.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]] | None
             ) = None
 
         def lifespan(
-            self, fn: t.Callable[[t.Any], t.AsyncIterator[None]]
-        ) -> t.Callable[[t.Any], cl.AbstractAsyncContextManager[None]]:
+            self, fn: typ.Callable[[typ.Any], typ.AsyncIterator[None]]
+        ) -> typ.Callable[[typ.Any], cl.AbstractAsyncContextManager[None]]:
             """Register a lifespan context manager."""
             manager = cl.asynccontextmanager(fn)
             self._lifespan_handler = manager
@@ -63,7 +63,7 @@ except Exception:  # noqa: BLE001
             return self._lifespan_handler(self)
 
 
-if t.TYPE_CHECKING:
+if typ.TYPE_CHECKING:
     import falcon
 
 
@@ -79,7 +79,7 @@ async def _setup_db() -> aiosqlite.Connection:
 DB: aiosqlite.Connection | None = None
 
 
-class StatusPayload(t.TypedDict):
+class StatusPayload(typ.TypedDict):
     """Type definition for status message payload."""
 
     text: str
@@ -157,7 +157,7 @@ def create_app() -> falcon_asgi.App:
     """Create and configure the Falcon ASGI application."""
     app = LifespanApp()
     install(app)
-    conn_mgr = t.cast(
+    conn_mgr = typ.cast(
         "WebSocketConnectionManager",
         getattr(app, "ws_connection_manager"),  # noqa: B009
     )
@@ -165,7 +165,7 @@ def create_app() -> falcon_asgi.App:
     controller = WorkerController()
 
     @app.lifespan
-    async def lifespan(app_instance: LifespanApp) -> t.AsyncIterator[None]:
+    async def lifespan(app_instance: LifespanApp) -> typ.AsyncIterator[None]:
         global DB
         DB = await _setup_db()
         await controller.start(random_worker, conn_mgr=conn_mgr)

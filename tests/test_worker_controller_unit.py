@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import typing
+import typing as typ
 
 import pytest
 import pytest_asyncio
 
 from falcon_pachinko.workers import WorkerController, worker
 
-if typing.TYPE_CHECKING:  # pragma: no cover - used only for type checking
+if typ.TYPE_CHECKING:  # pragma: no cover - used only for type checking
     import collections.abc as cabc
 
 

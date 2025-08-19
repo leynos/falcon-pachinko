@@ -7,7 +7,7 @@ and application state management.
 
 from __future__ import annotations
 
-import typing
+import typing as typ
 from threading import Lock
 
 import pytest
@@ -23,7 +23,7 @@ class DummyApp:
     pass
 
 
-class SupportsWebSocket(typing.Protocol):
+class SupportsWebSocket(typ.Protocol):
     """Protocol defining the interface for applications with WebSocket support."""
 
     ws_connection_manager: WebSocketConnectionManager
@@ -94,7 +94,7 @@ def dummy_app() -> SupportsWebSocket:
     """
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
-    return typing.cast("SupportsWebSocket", app)
+    return typ.cast("SupportsWebSocket", app)
 
 
 @pytest.fixture
@@ -245,8 +245,8 @@ def test_route_specific_init_args(dummy_app: SupportsWebSocket) -> None:
     dummy_app.add_websocket_route("/one", ConfigResource, 1)
     dummy_app.add_websocket_route("/two", ConfigResource, 2)
 
-    r1 = typing.cast("ConfigResource", dummy_app.create_websocket_resource("/one"))
-    r2 = typing.cast("ConfigResource", dummy_app.create_websocket_resource("/two"))
+    r1 = typ.cast("ConfigResource", dummy_app.create_websocket_resource("/one"))
+    r2 = typ.cast("ConfigResource", dummy_app.create_websocket_resource("/two"))
 
     assert r1.value == 1
     assert r2.value == 2

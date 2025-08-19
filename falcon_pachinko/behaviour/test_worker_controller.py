@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import typing
+import typing as typ
 
 import pytest
 from pytest_bdd import given, scenario, then, when
@@ -17,13 +17,13 @@ def test_run_worker() -> None:
 
 
 @pytest.fixture
-def context() -> dict[str, typing.Any]:
+def context() -> dict[str, typ.Any]:
     """Scenario-scoped context."""
     return {}
 
 
 @given("a logging worker")
-def given_logging_worker(context: dict[str, typing.Any]) -> None:
+def given_logging_worker(context: dict[str, typ.Any]) -> None:
     """Define a worker that appends to a log."""
     log: list[str] = []
 
@@ -37,7 +37,7 @@ def given_logging_worker(context: dict[str, typing.Any]) -> None:
 
 
 @when("the worker controller starts and then stops it")
-def when_run_worker(context: dict[str, typing.Any]) -> None:
+def when_run_worker(context: dict[str, typ.Any]) -> None:
     """Run the worker briefly under the controller."""
     controller = WorkerController()
     log = context["log"]
@@ -52,6 +52,6 @@ def when_run_worker(context: dict[str, typing.Any]) -> None:
 
 
 @then("the log should contain at least one entry")
-def then_log_not_empty(context: dict[str, typing.Any]) -> None:
+def then_log_not_empty(context: dict[str, typ.Any]) -> None:
     """Verify the worker executed."""
     assert context["log"]

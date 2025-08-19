@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import collections
-import typing
+import typing as typ
 
-import msgspec
+import msgspec as ms
 import msgspec.json as msjson
 import pytest
 
@@ -13,13 +13,13 @@ from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
 from falcon_pachinko.unittests.helpers import DummyWS
 
 
-class EchoPayload(msgspec.Struct):
+class EchoPayload(ms.Struct):
     """A simple message payload structure for testing echo messages."""
 
     text: str
 
 
-class ExtraPayload(msgspec.Struct):
+class ExtraPayload(ms.Struct):
     """Payload used to test strict vs lenient conversion."""
 
     val: int
@@ -38,8 +38,8 @@ class EchoResource(WebSocketResource):
         `fallback` list records messages that do not match any registered handler
         or fail payload validation.
         """
-        self.seen: list[typing.Any] = []
-        self.fallback: list[typing.Any] = []
+        self.seen: list[typ.Any] = []
+        self.fallback: list[typ.Any] = []
 
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Handle messages that do not match any registered handler.
@@ -89,7 +89,7 @@ class RawResource(WebSocketResource):
         Initializes the RawResource instance with an empty list to store received
         messages or payloads.
         """
-        self.received: list[typing.Any] = []
+        self.received: list[typ.Any] = []
 
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Handle incoming messages by appending them to the received list.
@@ -119,7 +119,7 @@ async def raw_handler(self: RawResource, ws: WebSocketLike, payload: object) -> 
         The resource instance
     ws : WebSocketLike
         The WebSocket connection instance
-    payload : typing.Any
+    payload : typ.Any
         The raw payload received with the message. Can be any type, including
         None
     """
@@ -133,7 +133,7 @@ class ConventionalResource(WebSocketResource):
     """Resource used to test ``on_{tag}`` dispatch."""
 
     def __init__(self) -> None:
-        self.seen: list[typing.Any] = []
+        self.seen: list[typ.Any] = []
 
     async def on_echo(self, ws: WebSocketLike, payload: object) -> None:
         """Record ``payload`` from ``echo`` messages."""
@@ -143,7 +143,7 @@ class ConventionalResource(WebSocketResource):
 class CamelResource(WebSocketResource):
     """Resource testing CamelCase tag conversion."""
 
-    class SendMessage(msgspec.Struct, tag="sendMessage"):
+    class SendMessage(ms.Struct, tag="sendMessage"):
         """Payload for a send message."""
 
         text: str
@@ -162,7 +162,7 @@ class SyncHandlerResource(WebSocketResource):
     """Resource with a synchronous ``on_{tag}`` handler."""
 
     def __init__(self) -> None:
-        self.seen: list[typing.Any] = []
+        self.seen: list[typ.Any] = []
         self.fallback: list[str | bytes] = []
 
     def on_sync(
@@ -263,7 +263,7 @@ async def test_payload_type_none_passes_raw(payload: object, expected: object) -
     the payload is missing.
     """
     r = RawResource()
-    msg: dict[str, typing.Any] = {"type": "raw"}
+    msg: dict[str, typ.Any] = {"type": "raw"}
     if payload != "MISSING":
         msg["payload"] = payload
     raw = msjson.encode(msg)

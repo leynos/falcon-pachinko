@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-import msgspec
+import msgspec as ms
 
 
 def duplicate_payload_type_msg(
@@ -30,7 +30,7 @@ def raise_unknown_fields(
         if len(snippet) > 200:
             snippet = f"{snippet[:197]}..."
         details += f" -> {snippet}"
-    raise msgspec.ValidationError(details)
+    raise ms.ValidationError(details)
 
 
 def to_snake_case(name: str) -> str:

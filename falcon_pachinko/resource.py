@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import functools
 import inspect
-import typing
+import typing as typ
 
-if typing.TYPE_CHECKING:  # pragma: no cover - imported for type hints
+if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints
     import collections.abc as cabc
     import re
 
@@ -38,8 +38,8 @@ class WebSocketResource:
     without additional boilerplate.
     """
 
-    handlers: typing.ClassVar[dict[str, HandlerInfo]]
-    _struct_handlers: typing.ClassVar[dict[type, HandlerInfo]] = {}
+    handlers: typ.ClassVar[dict[str, HandlerInfo]]
+    _struct_handlers: typ.ClassVar[dict[type, HandlerInfo]] = {}
     schema: type | None = None
 
     def add_subroute(
@@ -47,8 +47,8 @@ class WebSocketResource:
         path: str,
         resource: type[WebSocketResource] | cabc.Callable[..., WebSocketResource],
         *,
-        args: tuple[typing.Any, ...] = (),
-        kwargs: dict[str, typing.Any] | None = None,
+        args: tuple[typ.Any, ...] = (),
+        kwargs: dict[str, typ.Any] | None = None,
     ) -> None:
         """Register ``resource`` to handle a nested ``path``.
 
@@ -89,14 +89,14 @@ class WebSocketResource:
         return {}
 
     @property
-    def state(self) -> cabc.MutableMapping[str, typing.Any]:
+    def state(self) -> cabc.MutableMapping[str, typ.Any]:
         """Per-connection state mapping."""
         if not hasattr(self, "_state"):
             self._state = {}
         return self._state
 
     @state.setter
-    def state(self, mapping: cabc.MutableMapping[str, typing.Any]) -> None:
+    def state(self, mapping: cabc.MutableMapping[str, typ.Any]) -> None:
         required_methods = ("__getitem__", "__setitem__", "__iter__")
         if not all(hasattr(mapping, method) for method in required_methods):
             msg = (
@@ -135,9 +135,7 @@ class WebSocketResource:
         }
         for msg_type, info in list(handlers.items()):
             if info.handler.__name__ in shadowed:
-                new_handler = typing.cast(
-                    "Handler", cls.__dict__[info.handler.__name__]
-                )
+                new_handler = typ.cast("Handler", cls.__dict__[info.handler.__name__])
                 handlers[msg_type] = HandlerInfo(
                     new_handler, info.payload_type, info.strict
                 )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import typing
+import typing as typ
 from types import SimpleNamespace
 
 import falcon
@@ -46,7 +46,7 @@ def test_parent_context_passing() -> None:
 
 
 @pytest.fixture
-def context() -> dict[str, typing.Any]:
+def context() -> dict[str, typ.Any]:
     """Scenario-scoped context object."""
     return {}
 
@@ -54,7 +54,7 @@ def context() -> dict[str, typing.Any]:
 class ChildResource(WebSocketResource):
     """Record connection parameters."""
 
-    instances: typing.ClassVar[list[ChildResource]] = []
+    instances: typ.ClassVar[list[ChildResource]] = []
 
     def __init__(self) -> None:
         """Track instances for assertions."""
@@ -70,7 +70,7 @@ class ChildResource(WebSocketResource):
 class GrandchildResource(WebSocketResource):
     """Record grandchild connection parameters."""
 
-    instances: typing.ClassVar[list[GrandchildResource]] = []
+    instances: typ.ClassVar[list[GrandchildResource]] = []
 
     def __init__(self) -> None:
         GrandchildResource.instances.append(self)
@@ -97,7 +97,7 @@ class ParentResource(WebSocketResource):
 class ShadowChildResource(WebSocketResource):
     """Child resource used to test parameter shadowing."""
 
-    instances: typing.ClassVar[list[ShadowChildResource]] = []
+    instances: typ.ClassVar[list[ShadowChildResource]] = []
 
     def __init__(self) -> None:
         """Track instance creation for assertions."""
@@ -125,7 +125,7 @@ class ShadowParentResource(WebSocketResource):
 class CtxChildResource(WebSocketResource):
     """Child resource that records injected project and shared state."""
 
-    instances: typing.ClassVar[list[CtxChildResource]] = []
+    instances: typ.ClassVar[list[CtxChildResource]] = []
 
     def __init__(self, project: str) -> None:
         """Track project and instance for assertions."""
@@ -141,7 +141,7 @@ class CtxChildResource(WebSocketResource):
 class CtxParentResource(WebSocketResource):
     """Parent resource that injects context into its child."""
 
-    instances: typing.ClassVar[list[CtxParentResource]] = []
+    instances: typ.ClassVar[list[CtxParentResource]] = []
 
     def __init__(self) -> None:
         """Register child, track instance, and seed state."""
@@ -160,7 +160,7 @@ class CtxParentResource(WebSocketResource):
 
 
 @given("a router with a nested child resource")
-def setup_router(context: dict[str, typing.Any]) -> None:
+def setup_router(context: dict[str, typ.Any]) -> None:
     """Prepare router and clear previous instances."""
     ChildResource.instances.clear()
     GrandchildResource.instances.clear()
@@ -171,7 +171,7 @@ def setup_router(context: dict[str, typing.Any]) -> None:
 
 
 @given("a router with parameter shadowing resources")
-def setup_shadow_router(context: dict[str, typing.Any]) -> None:
+def setup_shadow_router(context: dict[str, typ.Any]) -> None:
     """Prepare router for parameter shadowing scenario."""
     ShadowChildResource.instances.clear()
     router = WebSocketRouter()
@@ -181,7 +181,7 @@ def setup_shadow_router(context: dict[str, typing.Any]) -> None:
 
 
 @given("a router with context-passing resources")
-def setup_context_router(context: dict[str, typing.Any]) -> None:
+def setup_context_router(context: dict[str, typ.Any]) -> None:
     """Prepare router for context-passing scenario."""
     CtxChildResource.instances.clear()
     CtxParentResource.instances.clear()
@@ -192,7 +192,7 @@ def setup_context_router(context: dict[str, typing.Any]) -> None:
 
 
 def _simulate_connection(
-    context: dict[str, typing.Any],
+    context: dict[str, typ.Any],
     path: str,
     *,
     capture_exceptions: bool = False,
@@ -200,7 +200,7 @@ def _simulate_connection(
     """Simulate a WebSocket connection."""
     router: WebSocketRouter = context["router"]
     ws = DummyWS()
-    req = typing.cast("falcon.Request", SimpleNamespace(path=path, path_template=""))
+    req = typ.cast("falcon.Request", SimpleNamespace(path=path, path_template=""))
     if capture_exceptions:
         try:
             asyncio.run(router.on_websocket(req, ws))
@@ -211,31 +211,31 @@ def _simulate_connection(
 
 
 @when('a client connects to "/parents/42/child"')
-def connect_child(context: dict[str, typing.Any]) -> None:
+def connect_child(context: dict[str, typ.Any]) -> None:
     """Simulate connecting to the child path."""
     _simulate_connection(context, "/parents/42/child")
 
 
 @when('a client connects to "/parents/42/missing"')
-def connect_missing(context: dict[str, typing.Any]) -> None:
+def connect_missing(context: dict[str, typ.Any]) -> None:
     """Attempt connection to an invalid path."""
     _simulate_connection(context, "/parents/42/missing", capture_exceptions=True)
 
 
 @when('a client connects to "/parents/42/child/99/grandchild"')
-def connect_grandchild(context: dict[str, typing.Any]) -> None:
+def connect_grandchild(context: dict[str, typ.Any]) -> None:
     """Simulate connecting to a grandchild path."""
     _simulate_connection(context, "/parents/42/child/99/grandchild")
 
 
 @when('a client connects to "/shadow/1/2"')
-def connect_shadow_child(context: dict[str, typing.Any]) -> None:
+def connect_shadow_child(context: dict[str, typ.Any]) -> None:
     """Connect to the shadow child path."""
     _simulate_connection(context, "/shadow/1/2")
 
 
 @when('a client connects to "/ctx/child"')
-def connect_ctx_child(context: dict[str, typing.Any]) -> None:
+def connect_ctx_child(context: dict[str, typ.Any]) -> None:
     """Connect to the context child path."""
     _simulate_connection(context, "/ctx/child")
 
@@ -247,7 +247,7 @@ def assert_child_params() -> None:
 
 
 @then("HTTPNotFound should be raised")
-def assert_not_found(context: dict[str, typing.Any]) -> None:
+def assert_not_found(context: dict[str, typ.Any]) -> None:
     """Ensure ``HTTPNotFound`` was raised."""
     assert isinstance(context.get("exception"), falcon.HTTPNotFound)
 

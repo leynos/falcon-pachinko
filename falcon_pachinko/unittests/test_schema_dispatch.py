@@ -1,8 +1,8 @@
 """Tests for schema-driven dispatch using msgspec tagged unions."""
 
-import typing
+import typing as typ
 
-import msgspec
+import msgspec as ms
 import msgspec.json as msjson
 import pytest
 
@@ -10,13 +10,13 @@ from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
 from falcon_pachinko.unittests.helpers import DummyWS
 
 
-class Join(msgspec.Struct, tag="join"):
+class Join(ms.Struct, tag="join"):
     """Message structure for join events."""
 
     room: str
 
 
-class Leave(msgspec.Struct, tag="leave"):
+class Leave(ms.Struct, tag="leave"):
     """Message structure for leave events."""
 
     room: str
@@ -32,7 +32,7 @@ class SchemaResource(WebSocketResource):
 
     def __init__(self) -> None:
         """Initialize with an empty events list."""
-        self.events: list[tuple[str, typing.Any]] = []
+        self.events: list[tuple[str, typ.Any]] = []
 
     @handles_message("join")
     async def handle_join(self, ws: WebSocketLike, payload: Join) -> None:
@@ -78,7 +78,7 @@ async def test_schema_decode_error_calls_fallback() -> None:
 def test_invalid_schema_type_raises() -> None:
     """Only tagged msgspec.Struct types are allowed in ``schema``."""
 
-    class Good(msgspec.Struct, tag="good"):
+    class Good(ms.Struct, tag="good"):
         pass
 
     class Bad:
@@ -93,7 +93,7 @@ def test_invalid_schema_type_raises() -> None:
 def test_duplicate_payload_type_raises() -> None:
     """Handlers with the same payload type should not be allowed."""
 
-    class Payload(msgspec.Struct, tag="dup"):
+    class Payload(ms.Struct, tag="dup"):
         val: int
 
     with pytest.raises(ValueError, match="Duplicate payload type") as exc:

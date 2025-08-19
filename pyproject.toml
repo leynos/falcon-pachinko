@@ -68,14 +68,24 @@ banned-from = [
     "collections.abc",
     "dataclasses",
     "enum",
+    "unittest.mock",
     "msgspec",
+    "msgspec.json",
 ]
 
 [tool.ruff.lint.flake8-import-conventions.aliases]
-datetime = "dt"
-dataclasses = "dc"
+altair = "alt"
+"matplotlib.pyplot" = "plt"
+numpy = "np"
+pandas = "pd"
+seaborn = "sns"
+scipy = "sp"
 "collections.abc" = "cabc"
+datetime = "dt"
+"unittest.mock" = "mock"
+msgspec = "ms"
 "msgspec.json" = "msjson"
+typing = "typ"
 
 [tool.ruff.lint.pydocstyle]
 # Enforce NumPy docstring style

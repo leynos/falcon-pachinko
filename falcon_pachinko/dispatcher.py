@@ -5,10 +5,10 @@ from __future__ import annotations
 import dataclasses as dc
 import inspect
 import logging
-import typing
+import typing as typ
 
-import msgspec
-import msgspec.inspect as msgspec_inspect
+import msgspec as ms
+import msgspec.inspect as msinspect
 import msgspec.json as msjson
 
 from .exceptions import (
@@ -22,16 +22,16 @@ from .utils import to_snake_case
 
 logger = logging.getLogger(__name__)
 
-if typing.TYPE_CHECKING:  # pragma: no cover - type hints only
+if typ.TYPE_CHECKING:  # pragma: no cover - type hints only
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
 
 
-class Envelope(msgspec.Struct, frozen=True):
+class Envelope(ms.Struct, frozen=True):
     """Simple envelope for messages without a schema."""
 
     type: str
-    payload: typing.Any | None = None
+    payload: typ.Any | None = None
 
 
 @dc.dataclass
@@ -54,7 +54,7 @@ def find_conventional_handler(
     if func is None or not inspect.iscoroutinefunction(func):
         return None
     try:
-        payload_type = get_payload_type(typing.cast("Handler", func))
+        payload_type = get_payload_type(typ.cast("Handler", func))
     except (
         HandlerSignatureError,
         HandlerNotAsyncError,
@@ -62,7 +62,7 @@ def find_conventional_handler(
     ) as exc:
         logger.debug("Handler %s invalid: %s", name, exc)
         return None
-    return HandlerInfo(typing.cast("Handler", func), payload_type, strict=True)
+    return HandlerInfo(typ.cast("Handler", func), payload_type, strict=True)
 
 
 async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
@@ -77,15 +77,15 @@ async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
                 validate_strict_payload(
                     payload, payload_type, strict=context.handler_info.strict
                 )
-            payload = typing.cast(
-                "typing.Any",
-                msgspec.convert(
+            payload = typ.cast(
+                "typ.Any",
+                ms.convert(
                     payload,
                     type=payload_type,
                     strict=context.handler_info.strict,
                 ),
             )
-        except msgspec.ValidationError:
+        except ms.ValidationError:
             await context.resource.on_unhandled(context.ws, context.raw)
             return
     await context.handler_info.handler(context.resource, context.ws, payload)
@@ -107,15 +107,15 @@ async def dispatch_with_schema(
     """Decode and dispatch ``raw`` using ``resource.schema``."""
     try:
         message = msjson.decode(raw, type=resource.schema)
-    except (msgspec.DecodeError, msgspec.ValidationError):
+    except (ms.DecodeError, ms.ValidationError):
         await resource.on_unhandled(ws, raw)
         return
 
     entry = resource.__class__._struct_handlers.get(type(message))
     if not entry:
-        info = msgspec_inspect.type_info(type(message))
-        tag_val = typing.cast("msgspec_inspect.StructType", info).tag
-        conv = find_conventional_handler(resource, typing.cast("str", tag_val))
+        info = msinspect.type_info(type(message))
+        tag_val = typ.cast("msinspect.StructType", info).tag
+        conv = find_conventional_handler(resource, typ.cast("str", tag_val))
         if conv is None:
             await resource.on_unhandled(ws, raw)
             return
@@ -133,7 +133,7 @@ async def dispatch_with_envelope(
     """Decode and dispatch ``raw`` using the envelope format."""
     try:
         envelope = msjson.decode(raw, type=Envelope)
-    except msgspec.DecodeError:
+    except ms.DecodeError:
         await resource.on_unhandled(ws, raw)
         return
 
