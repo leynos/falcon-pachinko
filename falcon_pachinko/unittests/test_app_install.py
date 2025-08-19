@@ -7,14 +7,17 @@ and application state management.
 
 from __future__ import annotations
 
+import threading
 import typing as typ
-from threading import Lock
 
 import pytest
 
 from falcon_pachinko import install
 from falcon_pachinko.resource import WebSocketResource
 from falcon_pachinko.websocket import RouteSpec, WebSocketConnectionManager
+
+# ``threading.Lock`` is a factory function, so capture the concrete lock type.
+LockType = type(threading.Lock())
 
 
 class DummyApp:
@@ -28,7 +31,7 @@ class SupportsWebSocket(typ.Protocol):
 
     ws_connection_manager: WebSocketConnectionManager
     _websocket_routes: dict[str, RouteSpec]
-    _websocket_route_lock: Lock
+    _websocket_route_lock: LockType
 
     def create_websocket_resource(self, path: str) -> object:
         """Create and return a new instance of the WebSocket resource class.
@@ -132,7 +135,7 @@ def test_install_adds_methods_and_manager(dummy_app: SupportsWebSocket) -> None:
     assert callable(app_any.add_websocket_route)
     assert callable(app_any.create_websocket_resource)
     assert hasattr(app_any, "_websocket_route_lock")
-    assert isinstance(app_any._websocket_route_lock, Lock)  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(app_any._websocket_route_lock, LockType)  # pyright: ignore[reportPrivateUsage]
 
 
 def test_add_websocket_route_registers_resource(
