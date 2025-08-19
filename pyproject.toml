@@ -85,6 +85,7 @@ datetime = "dt"
 "unittest.mock" = "mock"
 msgspec = "ms"
 "msgspec.json" = "msjson"
+"msgspec.inspect" = "msinspect"
 typing = "typ"
 
 [tool.ruff.lint.pydocstyle]
