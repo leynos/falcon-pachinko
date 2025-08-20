@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import contextlib as cl
-import typing as t
+import typing as typ
 
 import falcon.asgi
 
-if t.TYPE_CHECKING:  # pragma: no cover - typing helpers
+if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
     import collections.abc as cabc
     import contextlib as cl_typing
 
@@ -18,13 +18,13 @@ class LifespanApp(falcon.asgi.App):
     def __init__(self) -> None:
         super().__init__()
         self._lifespan_handler: (
-            t.Callable[[LifespanApp], cl_typing.AbstractAsyncContextManager[None]]
+            typ.Callable[[LifespanApp], cl_typing.AbstractAsyncContextManager[None]]
             | None
         ) = None
 
     def lifespan(
-        self, fn: t.Callable[[LifespanApp], cabc.AsyncIterator[None]]
-    ) -> t.Callable[[LifespanApp], cl_typing.AbstractAsyncContextManager[None]]:  # type: ignore[override]
+        self, fn: typ.Callable[[LifespanApp], cabc.AsyncIterator[None]]
+    ) -> typ.Callable[[LifespanApp], cl_typing.AbstractAsyncContextManager[None]]:  # type: ignore[override]
         """Register a lifespan context manager."""
         manager = cl.asynccontextmanager(fn)
         self._lifespan_handler = manager

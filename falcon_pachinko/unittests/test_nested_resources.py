@@ -1,6 +1,6 @@
 """Tests for nested resource composition."""
 
-import typing
+import typing as typ
 from types import SimpleNamespace
 
 import falcon
@@ -13,7 +13,7 @@ from falcon_pachinko.unittests.helpers import DummyWS
 class Child(WebSocketResource):
     """Capture parameters passed to ``on_connect``."""
 
-    instances: typing.ClassVar[list["Child"]] = []
+    instances: typ.ClassVar[list["Child"]] = []
 
     def __init__(self) -> None:
         """Record instance creation."""
@@ -45,7 +45,7 @@ async def test_nested_subroute_params() -> None:
     router = WebSocketRouter()
     router.add_route("/parent/{pid}", Parent)
     router.mount("/")
-    req = typing.cast(
+    req = typ.cast(
         "falcon.Request",
         SimpleNamespace(path="/parent/1/child/2", path_template=""),
     )
@@ -68,7 +68,7 @@ async def test_nested_subroute_not_found(path: str, description: str) -> None:
     router = WebSocketRouter()
     router.add_route("/parent/{pid}", Parent)
     router.mount("/")
-    req = typing.cast(
+    req = typ.cast(
         "falcon.Request",
         SimpleNamespace(path=path, path_template=""),
     )
@@ -80,13 +80,13 @@ def test_add_subroute_invalid_resource() -> None:
     """add_subroute must reject non-callables."""
     r = WebSocketResource()
     with pytest.raises(TypeError):
-        r.add_subroute("child", typing.cast("typing.Any", object()))
+        r.add_subroute("child", typ.cast("typ.Any", object()))
 
 
 class ContextChild(WebSocketResource):
     """Resource that receives context from its parent."""
 
-    instances: typing.ClassVar[list["ContextChild"]] = []
+    instances: typ.ClassVar[list["ContextChild"]] = []
 
     def __init__(self, project: str) -> None:
         """Record project and track instance."""
@@ -102,7 +102,7 @@ class ContextChild(WebSocketResource):
 class ContextParent(WebSocketResource):
     """Parent that injects context and shares state."""
 
-    instances: typing.ClassVar[list["ContextParent"]] = []
+    instances: typ.ClassVar[list["ContextParent"]] = []
 
     def __init__(self) -> None:
         """Register child subroute, track instance, and seed state."""
@@ -121,18 +121,18 @@ class ContextParent(WebSocketResource):
 
 
 async def _setup_and_run_nested_test(
-    child_class: type[typing.Any],
-    parent_class: type[typing.Any],
+    child_class: type[typ.Any],
+    parent_class: type[typ.Any],
     route_path: str,
     request_path: str,
-) -> tuple[typing.Any, typing.Any]:
+) -> tuple[typ.Any, typ.Any]:
     """Execute nested resource flow and return created instances."""
     child_class.instances.clear()
     parent_class.instances.clear()
     router = WebSocketRouter()
     router.add_route(route_path, parent_class)
     router.mount("/")
-    req = typing.cast(
+    req = typ.cast(
         "falcon.Request",
         SimpleNamespace(path=request_path, path_template=""),
     )
@@ -156,7 +156,7 @@ async def test_context_passed_and_state_shared() -> None:
 class InjectedChild(WebSocketResource):
     """Resource that mutates its own state."""
 
-    instances: typing.ClassVar[list["InjectedChild"]] = []
+    instances: typ.ClassVar[list["InjectedChild"]] = []
 
     def __init__(self) -> None:
         """Track instances for inspection."""
@@ -171,7 +171,7 @@ class InjectedChild(WebSocketResource):
 class InjectingParent(WebSocketResource):
     """Parent that injects custom state into the child."""
 
-    instances: typing.ClassVar[list["InjectingParent"]] = []
+    instances: typ.ClassVar[list["InjectingParent"]] = []
 
     def __init__(self) -> None:
         """Register child subroute and seed parent state."""

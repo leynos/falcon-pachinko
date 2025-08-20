@@ -11,14 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import typing
+import typing as typ
 import warnings
 from threading import Lock as ThreadLock
 from types import MethodType
 
 from .resource import WebSocketResource
 
-if typing.TYPE_CHECKING:
+if typ.TYPE_CHECKING:
     from .protocols import WebSocketLike
 
 
@@ -79,7 +79,7 @@ class WebSocketConnectionNotFoundError(KeyError):
         super().__init__(f"Unknown connection ID: {conn_id!r}")
 
 
-def _kwargs_factory() -> dict[str, typing.Any]:
+def _kwargs_factory() -> dict[str, typ.Any]:
     """Return a new kwargs dict with a precise type."""
     return {}
 
@@ -89,8 +89,8 @@ class RouteSpec:
     """Hold configuration for a WebSocket route."""
 
     resource_cls: type[WebSocketResource]
-    args: tuple[typing.Any, ...] = ()
-    kwargs: dict[str, typing.Any] = dc.field(default_factory=_kwargs_factory)
+    args: tuple[typ.Any, ...] = ()
+    kwargs: dict[str, typ.Any] = dc.field(default_factory=_kwargs_factory)
 
 
 class WebSocketConnectionManager:
@@ -196,7 +196,7 @@ class WebSocketConnectionManager:
 # Public API ---------------------------------------------------------------
 
 
-def install(app: typing.Any) -> None:  # noqa: ANN401
+def install(app: typ.Any) -> None:  # noqa: ANN401
     """Attach WebSocket connection management and routing utilities to the app.
 
     Initializes and binds WebSocket-related attributes and methods to the given app,
@@ -205,7 +205,7 @@ def install(app: typing.Any) -> None:  # noqa: ANN401
 
     Parameters
     ----------
-    app : typing.Any
+    app : typ.Any
         The application object to install WebSocket support on
     """
     wanted = (
@@ -314,7 +314,7 @@ def _validate_resource_cls(resource_cls: object) -> None:
 
 
 def _add_websocket_route(
-    self: typing.Any,  # noqa: ANN401
+    self: typ.Any,  # noqa: ANN401
     path: str,
     resource_cls: object,
     *init_args: object,
@@ -331,7 +331,7 @@ def _add_websocket_route(
 
     Parameters
     ----------
-    self : typing.Any
+    self : typ.Any
         The application instance
     path : str
         The WebSocket route path
@@ -355,13 +355,13 @@ def _add_websocket_route(
             raise ValueError(msg)
 
         self._websocket_routes[path] = RouteSpec(
-            typing.cast("type[WebSocketResource]", resource_cls),
+            typ.cast("type[WebSocketResource]", resource_cls),
             init_args,
             dict(init_kwargs),
         )
 
 
-def _create_websocket_resource(self: typing.Any, path: str) -> WebSocketResource:  # noqa: ANN401
+def _create_websocket_resource(self: typ.Any, path: str) -> WebSocketResource:  # noqa: ANN401
     """Instantiate and return the WebSocket resource registered for ``path``.
 
     Initialization parameters provided to :func:`add_websocket_route` are
@@ -372,7 +372,7 @@ def _create_websocket_resource(self: typing.Any, path: str) -> WebSocketResource
 
     Parameters
     ----------
-    self : typing.Any
+    self : typ.Any
         The application instance
     path : str
         The route path for which to create the resource

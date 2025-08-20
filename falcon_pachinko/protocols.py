@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import typing
+import typing as typ
 
 
-class WebSocketLike(typing.Protocol):
+class WebSocketLike(typ.Protocol):
     """Minimal interface for WebSocket connections."""
 
     async def accept(self, subprotocol: str | None = None) -> None:

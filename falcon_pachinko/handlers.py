@@ -6,9 +6,9 @@ import collections.abc as cabc
 import dataclasses as dc
 import functools
 import inspect
-import typing
+import typing as typ
 
-if typing.TYPE_CHECKING:
+if typ.TYPE_CHECKING:
     from .resource import WebSocketResource
 
 from .exceptions import (
@@ -21,7 +21,7 @@ from .protocols import WebSocketLike
 
 # Handlers accept ``self``, a ``WebSocketLike`` connection, and a decoded payload.
 # The return value is ignored.
-Handler = cabc.Callable[[typing.Any, WebSocketLike, typing.Any], cabc.Awaitable[None]]
+Handler = cabc.Callable[[typ.Any, WebSocketLike, typ.Any], cabc.Awaitable[None]]
 
 
 @dc.dataclass(frozen=True)
@@ -70,7 +70,7 @@ def get_payload_type(func: Handler) -> type | None:
 
     param = select_payload_param(sig, func_name=func.__qualname__)
     try:
-        hints: dict[str, type] = typing.get_type_hints(func)
+        hints: dict[str, type] = typ.get_type_hints(func)
     except (NameError, AttributeError):
         hints = {}
     return hints.get(param.name)
@@ -94,7 +94,7 @@ class _HandlesMessageDescriptor:
         self.owner = owner
         self.name = name
 
-        typed_owner = typing.cast("type[WebSocketResource]", owner)
+        typed_owner = typ.cast("type[WebSocketResource]", owner)
         current = typed_owner.__dict__.get("handlers")
         if current is None:
             current = {}

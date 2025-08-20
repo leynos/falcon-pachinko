@@ -13,7 +13,7 @@ cover various scenarios including:
 
 from __future__ import annotations
 
-import msgspec
+import msgspec as ms
 import msgspec.json as msjson
 import pytest
 
@@ -29,7 +29,7 @@ from falcon_pachinko.exceptions import (
 from falcon_pachinko.unittests.helpers import DummyWS
 
 
-class PingPayload(msgspec.Struct):
+class PingPayload(ms.Struct):
     """A simple message payload structure for testing ping messages."""
 
     text: str

@@ -5,14 +5,32 @@ description = "falcon-pachinko package"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "ISC" }
-dependencies = ["msgspec>=0.18", "falcon"]
+dependencies = ["msgspec>=0.18,<1", "falcon>=4,<5"]
+authors = [{ name = "Your Name", email = "you@example.com" }]
+keywords = ["falcon", "websocket", "msgspec", "asyncio"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: ISC License (ISCL)",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet :: WWW/HTTP",
+]
+urls = { "Homepage" = "https://github.com/leynos/falcon-pachinko" }
 
 [dependency-groups]
 dev = ["pytest", "pytest-asyncio", "pytest-bdd", "ruff", "pyright[nodejs]"]
 examples = ["aiosqlite", "uvicorn", "websocket-client"]
 
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "pytest-bdd", "ruff", "pyright[nodejs]"]
+examples = ["aiosqlite", "uvicorn", "websocket-client"]
+
 [tool.pyright]
-pythonVersion = "3.13"
+pythonVersion = "3.10"
 typeCheckingMode = "strict"
 include = ["falcon_pachinko"]
 
@@ -68,14 +86,21 @@ banned-from = [
     "collections.abc",
     "dataclasses",
     "enum",
+    "unittest.mock",
     "msgspec",
+    "msgspec.json",
+    "msgspec.inspect",
 ]
 
 [tool.ruff.lint.flake8-import-conventions.aliases]
-datetime = "dt"
-dataclasses = "dc"
 "collections.abc" = "cabc"
+dataclasses = "dc"
+datetime = "dt"
+"unittest.mock" = "mock"
+msgspec = "ms"
 "msgspec.json" = "msjson"
+"msgspec.inspect" = "msinspect"
+typing = "typ"
 
 [tool.ruff.lint.pydocstyle]
 # Enforce NumPy docstring style

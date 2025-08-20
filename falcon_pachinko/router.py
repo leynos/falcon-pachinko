@@ -13,11 +13,11 @@ import dataclasses as dc
 import functools
 import re
 import threading
-import typing
+import typing as typ
 
 import falcon
 
-if typing.TYPE_CHECKING:
+if typ.TYPE_CHECKING:
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
 
@@ -81,13 +81,13 @@ class WebSocketRouter:
     class _RawRoute:
         template: str
         canonical: str
-        factory: typing.Callable[..., WebSocketResource]
+        factory: typ.Callable[..., WebSocketResource]
 
     @dc.dataclass
     class _CompiledRoute:
         prefix: re.Pattern[str]
         pattern: re.Pattern[str]
-        factory: typing.Callable[..., WebSocketResource]
+        factory: typ.Callable[..., WebSocketResource]
 
     def __init__(self, *, name: str | None = None) -> None:
         self._raw: list[WebSocketRouter._RawRoute] = []
@@ -100,7 +100,7 @@ class WebSocketRouter:
     def _compile_and_store_route(
         self,
         canonical: str,
-        factory: typing.Callable[..., WebSocketResource],
+        factory: typ.Callable[..., WebSocketResource],
     ) -> None:
         """Compile ``canonical`` with the mount prefix and store it.
 
@@ -140,11 +140,11 @@ class WebSocketRouter:
     def add_route(
         self,
         path: str,
-        resource: type[WebSocketResource] | typing.Callable[..., WebSocketResource],
+        resource: type[WebSocketResource] | typ.Callable[..., WebSocketResource],
         *,
         name: str | None = None,
-        args: tuple[typing.Any, ...] = (),
-        kwargs: dict[str, typing.Any] | None = None,
+        args: tuple[typ.Any, ...] = (),
+        kwargs: dict[str, typ.Any] | None = None,
     ) -> None:
         """Register a WebSocketResource to handle ``path``."""
         if kwargs is None:

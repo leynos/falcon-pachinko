@@ -7,14 +7,17 @@ and application state management.
 
 from __future__ import annotations
 
-import typing
-from threading import Lock
+import threading
+import typing as typ
 
 import pytest
 
 from falcon_pachinko import install
 from falcon_pachinko.resource import WebSocketResource
 from falcon_pachinko.websocket import RouteSpec, WebSocketConnectionManager
+
+# ``threading.Lock`` is a factory function, so capture the concrete lock type.
+LockType = type(threading.Lock())
 
 
 class DummyApp:
@@ -23,12 +26,12 @@ class DummyApp:
     pass
 
 
-class SupportsWebSocket(typing.Protocol):
+class SupportsWebSocket(typ.Protocol):
     """Protocol defining the interface for applications with WebSocket support."""
 
     ws_connection_manager: WebSocketConnectionManager
     _websocket_routes: dict[str, RouteSpec]
-    _websocket_route_lock: Lock
+    _websocket_route_lock: LockType
 
     def create_websocket_resource(self, path: str) -> object:
         """Create and return a new instance of the WebSocket resource class.
@@ -94,7 +97,7 @@ def dummy_app() -> SupportsWebSocket:
     """
     app = DummyApp()
     install(app)  # type: ignore[arg-type]
-    return typing.cast("SupportsWebSocket", app)
+    return typ.cast("SupportsWebSocket", app)
 
 
 @pytest.fixture
@@ -132,7 +135,7 @@ def test_install_adds_methods_and_manager(dummy_app: SupportsWebSocket) -> None:
     assert callable(app_any.add_websocket_route)
     assert callable(app_any.create_websocket_resource)
     assert hasattr(app_any, "_websocket_route_lock")
-    assert isinstance(app_any._websocket_route_lock, Lock)  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(app_any._websocket_route_lock, LockType)  # pyright: ignore[reportPrivateUsage]
 
 
 def test_add_websocket_route_registers_resource(
@@ -245,8 +248,8 @@ def test_route_specific_init_args(dummy_app: SupportsWebSocket) -> None:
     dummy_app.add_websocket_route("/one", ConfigResource, 1)
     dummy_app.add_websocket_route("/two", ConfigResource, 2)
 
-    r1 = typing.cast("ConfigResource", dummy_app.create_websocket_resource("/one"))
-    r2 = typing.cast("ConfigResource", dummy_app.create_websocket_resource("/two"))
+    r1 = typ.cast("ConfigResource", dummy_app.create_websocket_resource("/one"))
+    r2 = typ.cast("ConfigResource", dummy_app.create_websocket_resource("/two"))
 
     assert r1.value == 1
     assert r2.value == 2
