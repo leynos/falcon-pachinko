@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "ISC" }
 dependencies = ["msgspec>=0.18,<1", "falcon>=4,<5"]
-authors = [{ name = "Your Name", email = "you@example.com" }]
+authors = [{ name = "Payton McIntosh", email = "pmcintosh@df12.net" }]
 keywords = ["falcon", "websocket", "msgspec", "asyncio"]
 classifiers = [
   "Development Status :: 3 - Alpha",
