@@ -136,3 +136,31 @@ async def test_send_to_unknown_connection_raises_key_error() -> None:
 
     with pytest.raises(WebSocketConnectionNotFoundError):
         await mgr.send_to_connection("a", "hi")
+
+
+@pytest.mark.asyncio
+async def test_connections_iterates_all(
+    room_with_two_connections: tuple[
+        WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
+    ],
+) -> None:
+    """Iterating without a room yields all connections."""
+    mgr, ws1, ws2 = room_with_two_connections
+
+    seen = [ws async for ws in mgr.connections()]
+
+    assert set(seen) == {ws1, ws2}
+
+
+@pytest.mark.asyncio
+async def test_connections_iterates_room_with_exclusion(
+    room_with_two_connections: tuple[
+        WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
+    ],
+) -> None:
+    """Iterating a room honours the exclusion list."""
+    mgr, _, ws2 = room_with_two_connections
+
+    seen = [ws async for ws in mgr.connections(room="lobby", exclude={"a"})]
+
+    assert seen == [ws2]

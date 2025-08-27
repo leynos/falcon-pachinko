@@ -51,7 +51,7 @@ async def heartbeat(*, conn_mgr):
     try:
         while True:
             # Snapshot to avoid mutation during iteration
-            conns = list(conn_mgr.connections.values())
+            conns = [ws async for ws in conn_mgr.connections()]
             if conns:
                 # Send concurrently; swallow per-connection errors
                 await asyncio.gather(

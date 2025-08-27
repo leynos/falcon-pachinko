@@ -112,19 +112,22 @@ class WebSocketConnectionManager:
 
     def __init__(self) -> None:
         """Initialize the WebSocketConnectionManager with empty mappings."""
-        self.connections: dict[str, WebSocketLike] = {}
+        # Track WebSocket objects by connection ID. The mapping is exposed
+        # via ``websockets`` to reserve ``connections()`` for the async
+        # iterator API.
+        self.websockets: dict[str, WebSocketLike] = {}
         self.rooms: dict[str, set[str]] = {}
         self._lock = asyncio.Lock()
 
     async def add_connection(self, conn_id: str, ws: WebSocketLike) -> None:
         """Register a new WebSocket connection."""
         async with self._lock:
-            self.connections[conn_id] = ws
+            self.websockets[conn_id] = ws
 
     async def remove_connection(self, conn_id: str) -> None:
         """Remove a WebSocket connection and purge room memberships."""
         async with self._lock:
-            self.connections.pop(conn_id, None)
+            self.websockets.pop(conn_id, None)
             empty_rooms: list[str] = []
             for room, members in self.rooms.items():
                 members.discard(conn_id)
@@ -136,7 +139,7 @@ class WebSocketConnectionManager:
     async def join_room(self, conn_id: str, room: str) -> None:
         """Add a connection to the given room."""
         async with self._lock:
-            if conn_id not in self.connections:
+            if conn_id not in self.websockets:
                 raise WebSocketConnectionNotFoundError(conn_id)
             self.rooms.setdefault(room, set()).add(conn_id)
 
@@ -153,7 +156,7 @@ class WebSocketConnectionManager:
     async def send_to_connection(self, conn_id: str, data: object) -> None:
         """Send ``data`` to a specific connection by ID."""
         async with self._lock:
-            ws = self.connections.get(conn_id)
+            ws = self.websockets.get(conn_id)
         if ws is None:
             raise WebSocketConnectionNotFoundError(conn_id)
         await ws.send_media(data)
@@ -179,9 +182,9 @@ class WebSocketConnectionManager:
         async with self._lock:
             ids = list(self.rooms.get(room, set()))
             websockets = [
-                self.connections[cid]
+                self.websockets[cid]
                 for cid in ids
-                if (not exclude or cid not in exclude) and cid in self.connections
+                if (not exclude or cid not in exclude) and cid in self.websockets
             ]
 
         results = await asyncio.gather(
@@ -191,6 +194,39 @@ class WebSocketConnectionManager:
         for exc in results:
             if isinstance(exc, Exception):
                 raise exc
+
+    async def connections(
+        self,
+        *,
+        room: str | None = None,
+        exclude: set[str] | None = None,
+    ) -> typ.AsyncIterator[WebSocketLike]:
+        """Yield websockets matching the given filters.
+
+        Parameters
+        ----------
+        room : str | None, optional
+            If provided, only yield connections that have joined this room.
+        exclude : set[str] | None, optional
+            Connection IDs to skip.
+        """
+        async with self._lock:
+            if room is None:
+                websockets = [
+                    ws
+                    for cid, ws in self.websockets.items()
+                    if not exclude or cid not in exclude
+                ]
+            else:
+                ids = list(self.rooms.get(room, set()))
+                websockets = [
+                    self.websockets[cid]
+                    for cid in ids
+                    if cid in self.websockets and (not exclude or cid not in exclude)
+                ]
+
+        for ws in websockets:
+            yield ws
 
 
 # Public API ---------------------------------------------------------------

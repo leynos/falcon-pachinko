@@ -138,7 +138,7 @@ finalizes the connection manager API.
   - [x] Refactor all I/O methods (e.g., `broadcast_to_room`) to be `async def`
     and ensure they propagate exceptions correctly.
 
-  - [ ] Implement `async for` iterators (e.g., `conn_mgr.connections(room=...)`)
+  - [x] Implement `async for` iterators (e.g., `conn_mgr.connections(room=...)`)
     for composable bulk operations.
 
   - [ ] Define the abstract backend interface (ABC) for the connection manager

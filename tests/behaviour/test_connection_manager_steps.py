@@ -61,6 +61,13 @@ def _assert_messages_received(
         loop.close()
 
 
+async def _iterate_lobby(
+    mgr: WebSocketConnectionManager,
+) -> list[DummyWebSocket]:
+    """Collect websockets yielded when iterating the lobby."""
+    return [ws async for ws in mgr.connections(room="lobby")]
+
+
 @scenario(
     "connection_manager.feature", "broadcast message to all connections in a room"
 )
@@ -74,6 +81,14 @@ def test_broadcast() -> None:  # pragma: no cover - bdd registration
 )
 def test_broadcast_with_exclusion() -> None:  # pragma: no cover - bdd registration
     """Scenario: broadcast message to a room with one connection excluded."""
+
+
+@scenario(
+    "connection_manager.feature",
+    "iterate over connections in a room",
+)
+def test_iterate_lobby() -> None:  # pragma: no cover - bdd registration
+    """Scenario: iterate over connections in a room."""
 
 
 @given(
@@ -109,6 +124,13 @@ def broadcast_excluding(setup: SetupFixture) -> None:
     _broadcast_to_lobby(setup, exclude={"a"})
 
 
+@when('we iterate over connections in room "lobby"', target_fixture="iterated")
+def iterate_lobby(setup: SetupFixture) -> list[DummyWebSocket]:
+    """Collect websockets by iterating the lobby."""
+    mgr, _, _, loop = setup
+    return loop.run_until_complete(_iterate_lobby(mgr))
+
+
 @then("both connections receive that message")
 def assert_received(setup: SetupFixture) -> None:
     """Assert that both connections received the broadcast."""
@@ -119,3 +141,14 @@ def assert_received(setup: SetupFixture) -> None:
 def assert_received_excluding(setup: SetupFixture) -> None:
     """Assert that only connection ``b`` receives the broadcast."""
     _assert_messages_received(setup, [], [{"msg": "hi"}])
+
+
+@then("both connections are yielded")
+def assert_iterated(setup: SetupFixture, iterated: list[DummyWebSocket]) -> None:
+    """Assert that iteration returned both websockets."""
+    _, ws1, ws2, loop = setup
+    try:
+        ids = {id(ws) for ws in iterated}
+        assert ids == {id(ws1), id(ws2)}
+    finally:
+        loop.close()

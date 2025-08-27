@@ -92,10 +92,11 @@ async def random_worker(*, conn_mgr: WebSocketConnectionManager) -> None:
         while True:
             await asyncio.sleep(5)
             number = secrets.randbelow(65536)
-            for ws in list(conn_mgr.connections.values()):
+            async for ws in conn_mgr.connections():
                 try:
                     await ws.send_media({"type": "random", "payload": str(number)})
-                except asyncio.CancelledError:  # noqa: PERF203 - bubble up cancellation
+                except asyncio.CancelledError:
+                    # Bubble up cancellation
                     raise
                 except (ConnectionError, OSError, RuntimeError):
                     # best-effort: drop failed connections silently in this example
@@ -117,14 +118,14 @@ class StatusResource(WebSocketResource):
         """Accept the connection and register it with the manager."""
         await ws.accept()
         conn_id = secrets.token_hex(16)
-        self._conn_mgr.connections[conn_id] = ws
+        await self._conn_mgr.add_connection(conn_id, ws)
         self._conn_id = conn_id
         return True
 
     async def on_disconnect(self, _: WebSocketLike, _close_code: int) -> None:
         """Unregister the connection on disconnect."""
         if self._conn_id:
-            self._conn_mgr.connections.pop(self._conn_id, None)
+            await self._conn_mgr.remove_connection(self._conn_id)
 
     @handles_message("status")
     async def update_status(self, ws: WebSocketLike, payload: StatusPayload) -> None:
@@ -174,7 +175,7 @@ def create_app() -> falcon_asgi.App:
         finally:
             await controller.stop()
             with cl.suppress(Exception):
-                conns = list(conn_mgr.connections.values())
+                conns = [ws async for ws in conn_mgr.connections()]
                 if conns:
                     await asyncio.gather(
                         *(ws.close() for ws in conns), return_exceptions=True
