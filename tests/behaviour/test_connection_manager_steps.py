@@ -63,9 +63,10 @@ def _assert_messages_received(
 
 async def _iterate_lobby(
     mgr: WebSocketConnectionManager,
+    exclude: set[str] | None = None,
 ) -> list[DummyWebSocket]:
     """Collect websockets yielded when iterating the lobby."""
-    return [ws async for ws in mgr.connections(room="lobby")]
+    return [ws async for ws in mgr.connections(room="lobby", exclude=exclude)]
 
 
 @scenario(
@@ -91,6 +92,22 @@ def test_iterate_lobby() -> None:  # pragma: no cover - bdd registration
     """Scenario: iterate over connections in a room."""
 
 
+@scenario(
+    "connection_manager.feature",
+    "iterate over connections in a room with one connection excluded",
+)
+def test_iterate_lobby_excluding() -> None:  # pragma: no cover - bdd registration
+    """Scenario: iterate over connections in a room with one connection excluded."""
+
+
+@scenario(
+    "connection_manager.feature",
+    "iterate over an empty room",
+)
+def test_iterate_empty_room() -> None:  # pragma: no cover - bdd registration
+    """Scenario: iterate over an empty room."""
+
+
 @given(
     'a connection manager with two connections in room "lobby"',
     target_fixture="setup",
@@ -107,6 +124,23 @@ def setup_room() -> SetupFixture:
         loop.run_until_complete(mgr.add_connection("b", ws2))
         loop.run_until_complete(mgr.join_room("a", "lobby"))
         loop.run_until_complete(mgr.join_room("b", "lobby"))
+        return mgr, ws1, ws2, loop
+    finally:
+        asyncio.set_event_loop(None)
+
+
+@given(
+    'a connection manager with no connections in room "lobby"',
+    target_fixture="setup",
+)
+def setup_empty_room() -> SetupFixture:
+    """Create a connection manager with an empty lobby room."""
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        mgr = WebSocketConnectionManager()
+        ws1 = DummyWebSocket(messages=[])
+        ws2 = DummyWebSocket(messages=[])
         return mgr, ws1, ws2, loop
     finally:
         asyncio.set_event_loop(None)
@@ -131,6 +165,16 @@ def iterate_lobby(setup: SetupFixture) -> list[DummyWebSocket]:
     return loop.run_until_complete(_iterate_lobby(mgr))
 
 
+@when(
+    'we iterate over connections in room "lobby" excluding connection "a"',
+    target_fixture="iterated",
+)
+def iterate_lobby_excluding(setup: SetupFixture) -> list[DummyWebSocket]:
+    """Collect websockets by iterating the lobby without connection ``a``."""
+    mgr, _, _, loop = setup
+    return loop.run_until_complete(_iterate_lobby(mgr, exclude={"a"}))
+
+
 @then("both connections receive that message")
 def assert_received(setup: SetupFixture) -> None:
     """Assert that both connections received the broadcast."""
@@ -150,5 +194,31 @@ def assert_iterated(setup: SetupFixture, iterated: list[DummyWebSocket]) -> None
     try:
         ids = {id(ws) for ws in iterated}
         assert ids == {id(ws1), id(ws2)}
+    finally:
+        loop.close()
+
+
+@then("only the non-excluded connection is yielded")
+def assert_iterated_excluding(
+    setup: SetupFixture, iterated: list[DummyWebSocket]
+) -> None:
+    """Assert that iteration excludes the specified websocket."""
+    _, ws1, ws2, loop = setup
+    try:
+        ids = {id(ws) for ws in iterated}
+        assert ids == {id(ws2)}
+        assert id(ws1) not in ids
+    finally:
+        loop.close()
+
+
+@then("no connections are yielded for an empty room")
+def assert_iterated_empty_room(
+    setup: SetupFixture, iterated: list[DummyWebSocket]
+) -> None:
+    """Assert that iteration over an empty room yields nothing."""
+    _, _, _, loop = setup
+    try:
+        assert iterated == []
     finally:
         loop.close()
