@@ -195,6 +195,30 @@ class WebSocketConnectionManager:
             if isinstance(exc, Exception):
                 raise exc
 
+    def _get_filtered_connection_ids(self, room: str | None) -> list[str]:
+        """Return connection IDs for all or a specific room."""
+        return (
+            list(self.websockets) if room is None else list(self.rooms.get(room, set()))
+        )
+
+    def _should_include_connection(
+        self, conn_id: str, exclude: set[str] | None
+    ) -> bool:
+        """Return ``True`` if ``conn_id`` exists and is not excluded."""
+        if conn_id not in self.websockets:
+            raise WebSocketConnectionNotFoundError(conn_id)
+        return not exclude or conn_id not in exclude
+
+    def _build_websocket_list(
+        self, connection_ids: list[str], exclude: set[str] | None
+    ) -> list[WebSocketLike]:
+        """Return websockets corresponding to ``connection_ids``."""
+        return [
+            self.websockets[cid]
+            for cid in connection_ids
+            if self._should_include_connection(cid, exclude)
+        ]
+
     async def connections(
         self,
         *,
@@ -211,19 +235,8 @@ class WebSocketConnectionManager:
             Connection IDs to skip.
         """
         async with self._lock:
-            if room is None:
-                websockets = [
-                    ws
-                    for cid, ws in self.websockets.items()
-                    if not exclude or cid not in exclude
-                ]
-            else:
-                ids = list(self.rooms.get(room, set()))
-                websockets = [
-                    self.websockets[cid]
-                    for cid in ids
-                    if cid in self.websockets and (not exclude or cid not in exclude)
-                ]
+            ids = self._get_filtered_connection_ids(room)
+            websockets = self._build_websocket_list(ids, exclude)
 
         for ws in websockets:
             yield ws
