@@ -96,11 +96,15 @@ class RouteSpec:
 class WebSocketConnectionManager:
     """Track active WebSocket connections and group them into rooms.
 
-    ``connections`` maps each connection ID to a ``falcon.asgi.WebSocket``
-    object, allowing other components of the application to send targeted
-    messages. ``rooms`` maps room names to sets of connection IDs so that
-    multiple clients can be addressed at once. A single connection may join
-    any number of rooms.
+    ``websockets`` maps each connection ID to the underlying
+    ``falcon.asgi.WebSocket`` object for server-initiated messaging. The
+    :py:meth:`connections` iterator yields a snapshot of this mapping captured
+    under an internal lock so that it can not mutate during iteration. The
+    name ``connections()`` is therefore reserved for this iterator API.
+
+    ``rooms`` maps room names to sets of connection IDs so that multiple
+    clients can be addressed at once. A single connection may join any number
+    of rooms.
 
     The initial implementation is an in-process store, but the class is
     designed to evolve into a pluggable backend so that distributed
@@ -166,7 +170,7 @@ class WebSocketConnectionManager:
         room: str,
         data: object,
         *,
-        exclude: set[str] | None = None,
+        exclude: typ.Collection[str] | None = None,
     ) -> None:
         """Send ``data`` to every connection in ``room``.
 
@@ -176,8 +180,8 @@ class WebSocketConnectionManager:
             Target room name.
         data : object
             Structured data to forward to each connection.
-        exclude : set[str] | None, optional
-            Connection IDs to skip.
+        exclude : Collection[str] | None, optional
+            Connection IDs to skip. Unknown IDs are ignored.
         """
         async with self._lock:
             ids = list(self.rooms.get(room, set()))
@@ -191,9 +195,16 @@ class WebSocketConnectionManager:
             *(ws.send_media(data) for ws in websockets),
             return_exceptions=True,
         )
-        for exc in results:
-            if isinstance(exc, Exception):
-                raise exc
+        errors = [exc for exc in results if isinstance(exc, Exception)]
+        if not errors:
+            return
+        if len(errors) == 1:
+            raise errors[0]
+        try:
+            msg = "broadcast_to_room errors"
+            raise ExceptionGroup(msg, errors)  # type: ignore[name-defined]
+        except NameError:  # pragma: no cover - fallback for older Pythons
+            raise errors[0] from None
 
     def _get_filtered_connection_ids(self, room: str | None) -> list[str]:
         """Return connection IDs for all or a specific room."""
@@ -202,7 +213,7 @@ class WebSocketConnectionManager:
         )
 
     def _should_include_connection(
-        self, conn_id: str, exclude: set[str] | None
+        self, conn_id: str, exclude: typ.Collection[str] | None
     ) -> bool:
         """Return ``True`` if ``conn_id`` exists and is not excluded."""
         if conn_id not in self.websockets:
@@ -210,7 +221,7 @@ class WebSocketConnectionManager:
         return not exclude or conn_id not in exclude
 
     def _build_websocket_list(
-        self, connection_ids: list[str], exclude: set[str] | None
+        self, connection_ids: list[str], exclude: typ.Collection[str] | None
     ) -> list[WebSocketLike]:
         """Return websockets corresponding to ``connection_ids``."""
         return [
@@ -223,15 +234,20 @@ class WebSocketConnectionManager:
         self,
         *,
         room: str | None = None,
-        exclude: set[str] | None = None,
+        exclude: typ.Collection[str] | None = None,
     ) -> typ.AsyncIterator[WebSocketLike]:
         """Yield websockets matching the given filters.
+
+        This iterator captures a snapshot under a lock so that the underlying
+        mapping can not change mid-iteration. Room membership is purged when a
+        connection disconnects; encountering an unknown ID therefore raises
+        :class:`WebSocketConnectionNotFoundError` and signals a corrupted state.
 
         Parameters
         ----------
         room : str | None, optional
             If provided, only yield connections that have joined this room.
-        exclude : set[str] | None, optional
+        exclude : Collection[str] | None, optional
             Connection IDs to skip.
         """
         async with self._lock:

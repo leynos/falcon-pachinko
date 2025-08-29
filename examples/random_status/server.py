@@ -93,16 +93,12 @@ async def random_worker(*, conn_mgr: WebSocketConnectionManager) -> None:
             await asyncio.sleep(5)
             number = secrets.randbelow(65536)
             async for ws in conn_mgr.connections():
-                try:
+                # best-effort: drop failed connections silently in this example
+                with cl.suppress(ConnectionError, OSError, RuntimeError):
                     await ws.send_media({"type": "random", "payload": str(number)})
-                except asyncio.CancelledError:
-                    # Bubble up cancellation
-                    raise
-                except (ConnectionError, OSError, RuntimeError):
-                    # best-effort: drop failed connections silently in this example
-                    pass
     except asyncio.CancelledError:
-        pass
+        # Graceful shutdown: exit on cancellation
+        return
 
 
 class StatusResource(WebSocketResource):
@@ -174,12 +170,11 @@ def create_app() -> falcon_asgi.App:
             yield
         finally:
             await controller.stop()
-            with cl.suppress(Exception):
-                conns = [ws async for ws in conn_mgr.connections()]
-                if conns:
-                    await asyncio.gather(
-                        *(ws.close() for ws in conns), return_exceptions=True
-                    )
+            conns = [ws async for ws in conn_mgr.connections()]
+            if conns:
+                await asyncio.gather(
+                    *(ws.close() for ws in conns), return_exceptions=True
+                )
             if DB is not None:
                 await DB.close()
                 DB = None

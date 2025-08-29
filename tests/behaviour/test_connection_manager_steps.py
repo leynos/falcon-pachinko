@@ -134,7 +134,10 @@ def setup_room() -> SetupFixture:
     target_fixture="setup",
 )
 def setup_empty_room() -> SetupFixture:
-    """Create a connection manager with an empty lobby room."""
+    """Create a connection manager with an empty lobby room.
+
+    Note: ``ws1``/``ws2`` are placeholders to satisfy ``SetupFixture`` shape.
+    """
     loop = asyncio.new_event_loop()
     try:
         asyncio.set_event_loop(loop)
