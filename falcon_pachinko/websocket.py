@@ -212,13 +212,28 @@ class WebSocketConnectionManager:
             list(self.websockets) if room is None else list(self.rooms.get(room, set()))
         )
 
+    def _validate_connection_exists(self, conn_id: str) -> None:
+        """Raise if ``conn_id`` is not tracked.
+
+        Room membership is maintained as connections come and go. Discovering an
+        ID without a corresponding websocket indicates stale state elsewhere, so
+        we surface this as ``WebSocketConnectionNotFoundError``.
+        """
+        if conn_id not in self.websockets:
+            raise WebSocketConnectionNotFoundError(conn_id)
+
+    def _passes_exclusion_filter(
+        self, conn_id: str, exclude: typ.Collection[str] | None
+    ) -> bool:
+        """Return ``True`` if ``conn_id`` is not excluded."""
+        return not exclude or conn_id not in exclude
+
     def _should_include_connection(
         self, conn_id: str, exclude: typ.Collection[str] | None
     ) -> bool:
         """Return ``True`` if ``conn_id`` exists and is not excluded."""
-        if conn_id not in self.websockets:
-            raise WebSocketConnectionNotFoundError(conn_id)
-        return not exclude or conn_id not in exclude
+        self._validate_connection_exists(conn_id)
+        return self._passes_exclusion_filter(conn_id, exclude)
 
     def _build_websocket_list(
         self, connection_ids: list[str], exclude: typ.Collection[str] | None
