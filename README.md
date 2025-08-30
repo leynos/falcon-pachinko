@@ -40,7 +40,7 @@ async def handle_new_chat_message(self, ws, payload):
 ```
 
 Use ``conn_mgr.connections()`` to iterate over active websockets. The iterator
-captures a snapshot under a lock so the set can not mutate while iterating.
+captures a snapshot under a lock so the set cannot mutate while iterating.
 
 ```python
 import asyncio

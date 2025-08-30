@@ -99,7 +99,7 @@ class WebSocketConnectionManager:
     ``websockets`` maps each connection ID to the underlying
     ``falcon.asgi.WebSocket`` object for server-initiated messaging. The
     :py:meth:`connections` iterator yields a snapshot of this mapping captured
-    under an internal lock so that it can not mutate during iteration. The
+    under an internal lock so that it cannot mutate during iteration. The
     name ``connections()`` is therefore reserved for this iterator API.
 
     ``rooms`` maps room names to sets of connection IDs so that multiple
@@ -126,6 +126,8 @@ class WebSocketConnectionManager:
     async def add_connection(self, conn_id: str, ws: WebSocketLike) -> None:
         """Register a new WebSocket connection."""
         async with self._lock:
+            if conn_id in self.websockets:
+                raise ValueError(f"Duplicate connection ID: {conn_id!r}")  # noqa: TRY003
             self.websockets[conn_id] = ws
 
     async def remove_connection(self, conn_id: str) -> None:
@@ -170,7 +172,7 @@ class WebSocketConnectionManager:
         room: str,
         data: object,
         *,
-        exclude: typ.Collection[str] | None = None,
+        exclude: typ.Container[str] | None = None,
     ) -> None:
         """Send ``data`` to every connection in ``room``.
 
@@ -180,16 +182,12 @@ class WebSocketConnectionManager:
             Target room name.
         data : object
             Structured data to forward to each connection.
-        exclude : Collection[str] | None, optional
+        exclude : Container[str] | None, optional
             Connection IDs to skip. Unknown IDs are ignored.
         """
         async with self._lock:
             ids = list(self.rooms.get(room, set()))
-            websockets = [
-                self.websockets[cid]
-                for cid in ids
-                if (not exclude or cid not in exclude) and cid in self.websockets
-            ]
+            websockets = self._build_websocket_list(ids, exclude, strict=False)
 
         results = await asyncio.gather(
             *(ws.send_media(data) for ws in websockets),
@@ -212,49 +210,43 @@ class WebSocketConnectionManager:
             list(self.websockets) if room is None else list(self.rooms.get(room, set()))
         )
 
-    def _validate_connection_exists(self, conn_id: str) -> None:
-        """Raise if ``conn_id`` is not tracked.
-
-        Room membership is maintained as connections come and go. Discovering an
-        ID without a corresponding websocket indicates stale state elsewhere, so
-        we surface this as ``WebSocketConnectionNotFoundError``.
-        """
-        if conn_id not in self.websockets:
-            raise WebSocketConnectionNotFoundError(conn_id)
-
-    def _passes_exclusion_filter(
-        self, conn_id: str, exclude: typ.Collection[str] | None
-    ) -> bool:
-        """Return ``True`` if ``conn_id`` is not excluded."""
-        return not exclude or conn_id not in exclude
-
     def _should_include_connection(
-        self, conn_id: str, exclude: typ.Collection[str] | None
+        self,
+        conn_id: str,
+        exclude: typ.Container[str] | None,
+        *,
+        strict: bool = True,
     ) -> bool:
-        """Return ``True`` if ``conn_id`` exists and is not excluded."""
-        self._validate_connection_exists(conn_id)
-        return self._passes_exclusion_filter(conn_id, exclude)
+        """Return True if the ID exists (or ``strict=False``) and is not excluded."""
+        exists = conn_id in self.websockets
+        if strict and not exists:
+            raise WebSocketConnectionNotFoundError(conn_id)
+        return exists and (not exclude or conn_id not in exclude)
 
     def _build_websocket_list(
-        self, connection_ids: list[str], exclude: typ.Collection[str] | None
+        self,
+        connection_ids: list[str],
+        exclude: typ.Container[str] | None,
+        *,
+        strict: bool = True,
     ) -> list[WebSocketLike]:
         """Return websockets corresponding to ``connection_ids``."""
         return [
             self.websockets[cid]
             for cid in connection_ids
-            if self._should_include_connection(cid, exclude)
+            if self._should_include_connection(cid, exclude, strict=strict)
         ]
 
     async def connections(
         self,
         *,
         room: str | None = None,
-        exclude: typ.Collection[str] | None = None,
+        exclude: typ.Container[str] | None = None,
     ) -> typ.AsyncIterator[WebSocketLike]:
         """Yield websockets matching the given filters.
 
         This iterator captures a snapshot under a lock so that the underlying
-        mapping can not change mid-iteration. Room membership is purged when a
+        mapping cannot change mid-iteration. Room membership is purged when a
         connection disconnects; encountering an unknown ID therefore raises
         :class:`WebSocketConnectionNotFoundError` and signals a corrupted state.
 
@@ -262,7 +254,7 @@ class WebSocketConnectionManager:
         ----------
         room : str | None, optional
             If provided, only yield connections that have joined this room.
-        exclude : Collection[str] | None, optional
+        exclude : Container[str] | None, optional
             Connection IDs to skip.
         """
         async with self._lock:
