@@ -172,7 +172,7 @@ class WebSocketConnectionManager:
         room: str,
         data: object,
         *,
-        exclude: typ.Container[str] | None = None,
+        exclude: typ.Collection[str] | None = None,
     ) -> None:
         """Send ``data`` to every connection in ``room``.
 
@@ -182,7 +182,7 @@ class WebSocketConnectionManager:
             Target room name.
         data : object
             Structured data to forward to each connection.
-        exclude : Container[str] | None, optional
+        exclude : Collection[str] | None, optional
             Connection IDs to skip. Unknown IDs are ignored.
         """
         async with self._lock:
@@ -213,7 +213,7 @@ class WebSocketConnectionManager:
     def _should_include_connection(
         self,
         conn_id: str,
-        exclude: typ.Container[str] | None,
+        exclude: typ.Collection[str] | None,
         *,
         strict: bool = True,
     ) -> bool:
@@ -226,7 +226,7 @@ class WebSocketConnectionManager:
     def _build_websocket_list(
         self,
         connection_ids: list[str],
-        exclude: typ.Container[str] | None,
+        exclude: typ.Collection[str] | None,
         *,
         strict: bool = True,
     ) -> list[WebSocketLike]:
@@ -241,7 +241,7 @@ class WebSocketConnectionManager:
         self,
         *,
         room: str | None = None,
-        exclude: typ.Container[str] | None = None,
+        exclude: typ.Collection[str] | None = None,
     ) -> typ.AsyncIterator[WebSocketLike]:
         """Yield websockets matching the given filters.
 
@@ -254,7 +254,7 @@ class WebSocketConnectionManager:
         ----------
         room : str | None, optional
             If provided, only yield connections that have joined this room.
-        exclude : Container[str] | None, optional
+        exclude : Collection[str] | None, optional
             Connection IDs to skip.
         """
         async with self._lock:
