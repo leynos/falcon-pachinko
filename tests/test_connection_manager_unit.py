@@ -57,6 +57,14 @@ async def room_with_two_connections() -> tuple[
     return mgr, ws1, ws2
 
 
+async def corrupt_room_membership(
+    mgr: WebSocketConnectionManager, room: str, ghost_id: str
+) -> None:
+    """Inject an unknown connection ID into a room for testing."""
+    async with mgr._lock:  # pragma: no cover - internal test helper
+        mgr.rooms.setdefault(room, set()).add(ghost_id)
+
+
 @pytest.mark.asyncio
 async def test_send_to_connection_sends_message() -> None:
     """Send a message to a single connection."""
@@ -143,7 +151,9 @@ async def test_join_room_requires_known_connection() -> None:
 
 @pytest.mark.asyncio
 async def test_send_to_unknown_connection_raises_key_error() -> None:
-    """Sending to an unknown connection raises KeyError."""
+    """Sending to an unknown connection raises
+    WebSocketConnectionNotFoundError (a KeyError subclass).
+    """
     mgr = WebSocketConnectionManager()
 
     with pytest.raises(WebSocketConnectionNotFoundError):
@@ -201,8 +211,7 @@ async def test_connections_raise_on_stale_room_member(
     """Iterating a corrupted room raises ``WebSocketConnectionNotFoundError``."""
     mgr, *_ = room_with_two_connections
 
-    async with mgr._lock:  # pragma: no cover - internal test hook
-        mgr.rooms.setdefault("lobby", set()).add("ghost")
+    await corrupt_room_membership(mgr, "lobby", "ghost")
 
     with pytest.raises(WebSocketConnectionNotFoundError):
         _ = [ws async for ws in mgr.connections(room="lobby")]

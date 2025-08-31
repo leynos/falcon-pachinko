@@ -39,8 +39,9 @@ async def handle_new_chat_message(self, ws, payload):
     ...
 ```
 
-Use ``conn_mgr.connections()`` to iterate over active websockets. The iterator
-captures a snapshot under a lock so the set cannot mutate while iterating.
+Use ``conn_mgr.connections()`` to iterate over active WebSocket connections.
+The iterator captures a snapshot under a lock and then yields it, so iteration
+occurs over an immutable snapshot.
 
 ```python
 import asyncio
