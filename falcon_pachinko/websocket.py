@@ -194,10 +194,18 @@ class WebSocketConnectionManager:
             return_exceptions=True,
         )
         errors = [exc for exc in results if isinstance(exc, Exception)]
+        self._handle_broadcast_errors(errors)
+
+    def _handle_broadcast_errors(self, errors: list[Exception]) -> None:
+        """Raise broadcast errors individually or as an aggregated group."""
         if not errors:
             return
         if len(errors) == 1:
             raise errors[0]
+        self._raise_exception_group(errors)
+
+    def _raise_exception_group(self, errors: list[Exception]) -> None:
+        """Raise ``errors`` as an :class:`ExceptionGroup` when available."""
         try:
             msg = "broadcast_to_room errors"
             raise ExceptionGroup(msg, errors)  # type: ignore[name-defined]
