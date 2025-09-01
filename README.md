@@ -39,6 +39,10 @@ async def handle_new_chat_message(self, ws, payload):
     ...
 ```
 
+Use ``conn_mgr.connections()`` to iterate over active WebSocket connections.
+The iterator captures a snapshot under a lock and then yields it, so iteration
+occurs over an immutable snapshot.
+
 ```python
 import asyncio
 
@@ -51,7 +55,7 @@ async def heartbeat(*, conn_mgr):
     try:
         while True:
             # Snapshot to avoid mutation during iteration
-            conns = list(conn_mgr.connections.values())
+            conns = [ws async for ws in conn_mgr.connections()]
             if conns:
                 # Send concurrently; swallow per-connection errors
                 await asyncio.gather(
