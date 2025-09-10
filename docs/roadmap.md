@@ -141,10 +141,10 @@ finalizes the connection manager API.
   - [x] Implement `async for` iterators (e.g., `conn_mgr.connections(room=...)`)
     for composable bulk operations.
 
-  - [ ] Define the abstract backend interface (ABC) for the connection manager
+  - [x] Define the abstract backend interface (ABC) for the connection manager
     to pave the way for future distributed backends.
 
-  - [ ] Ensure the default `InProcessBackend` correctly implements this new,
+  - [x] Ensure the default `InProcessBackend` correctly implements this new,
     robust interface.
 
 ## Phase 4: Cross-Cutting Concerns

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import typing as typ
+
 import pytest
 import pytest_asyncio
 
 from falcon_pachinko.websocket import (
+    ConnectionBackend,
+    InProcessBackend,
     WebSocketConnectionManager,
     WebSocketConnectionNotFoundError,
 )
@@ -61,8 +65,9 @@ async def corrupt_room_membership(
     mgr: WebSocketConnectionManager, room: str, ghost_id: str
 ) -> None:
     """Inject an unknown connection ID into a room for testing."""
-    async with mgr._lock:  # pragma: no cover - internal test helper
-        mgr.rooms.setdefault(room, set()).add(ghost_id)
+    backend = typ.cast("InProcessBackend", mgr._backend)
+    async with backend._lock:  # pragma: no cover - internal test helper
+        backend.rooms.setdefault(room, set()).add(ghost_id)
 
 
 @pytest.mark.asyncio
@@ -215,3 +220,10 @@ async def test_connections_raise_on_stale_room_member(
 
     with pytest.raises(WebSocketConnectionNotFoundError):
         _ = [ws async for ws in mgr.connections(room="lobby")]
+
+
+def test_default_backend_is_inprocess() -> None:
+    """Ensure the default backend is used."""
+    mgr = WebSocketConnectionManager()
+    assert isinstance(mgr._backend, InProcessBackend)
+    assert isinstance(mgr._backend, ConnectionBackend)

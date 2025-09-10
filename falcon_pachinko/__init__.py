@@ -6,10 +6,17 @@ from .handlers import handles_message
 from .protocols import WebSocketLike
 from .resource import WebSocketResource
 from .router import WebSocketRouter
-from .websocket import WebSocketConnectionManager, install
+from .websocket import (
+    ConnectionBackend,
+    InProcessBackend,
+    WebSocketConnectionManager,
+    install,
+)
 from .workers import WorkerController, worker
 
 __all__ = (
+    "ConnectionBackend",
+    "InProcessBackend",
     "WebSocketConnectionManager",
     "WebSocketLike",
     "WebSocketResource",
