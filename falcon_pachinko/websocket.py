@@ -153,8 +153,9 @@ class InProcessBackend(ConnectionBackend):
 
     @property
     def websockets(self) -> typ.Mapping[str, WebSocketLike]:
-        """Read-only mapping of connection IDs to WebSocket objects."""
-        return types.MappingProxyType(self._websockets)
+        """Read-only snapshot of connection IDs to WebSocket objects."""
+        snapshot = self._websockets.copy()
+        return types.MappingProxyType(snapshot)
 
     @property
     def rooms(self) -> typ.Mapping[str, frozenset[str]]:

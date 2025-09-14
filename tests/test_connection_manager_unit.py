@@ -222,6 +222,17 @@ async def test_connections_raise_on_stale_room_member(
         _ = [ws async for ws in mgr.connections(room="lobby")]
 
 
+@pytest.mark.asyncio
+async def test_websockets_property_returns_snapshot() -> None:
+    """Exposing websockets returns a stable snapshot."""
+    mgr = WebSocketConnectionManager()
+    ws = DummyWebSocket()
+    await mgr.add_connection("a", ws)
+    snapshot = mgr.websockets
+    await mgr.add_connection("b", DummyWebSocket())
+    assert dict(snapshot) == {"a": ws}
+
+
 def test_default_backend_is_inprocess() -> None:
     """Ensure the default backend is used."""
     mgr = WebSocketConnectionManager()
