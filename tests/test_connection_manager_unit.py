@@ -67,7 +67,7 @@ async def corrupt_room_membership(
     """Inject an unknown connection ID into a room for testing."""
     backend = typ.cast("InProcessBackend", mgr._backend)
     async with backend._lock:  # pragma: no cover - internal test helper
-        backend.rooms.setdefault(room, set()).add(ghost_id)
+        backend._rooms.setdefault(room, set()).add(ghost_id)
 
 
 @pytest.mark.asyncio

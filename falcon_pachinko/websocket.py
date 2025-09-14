@@ -12,6 +12,7 @@ from __future__ import annotations
 import abc
 import asyncio
 import dataclasses as dc
+import types
 import typing as typ
 import warnings
 from threading import Lock as ThreadLock
@@ -95,7 +96,15 @@ class RouteSpec:
 
 
 class ConnectionBackend(abc.ABC):
-    """Abstract interface for connection manager backends."""
+    """
+    Abstract interface for connection manager backends.
+
+    Thread-safety expectations:
+        Implementations of this interface are not required to be thread-safe
+        by default. Backends intended for multi-threaded or distributed use
+        must provide their own synchronization. Users should consult backend
+        documentation before relying on concurrent scenarios.
+    """
 
     @property
     @abc.abstractmethod
@@ -104,8 +113,8 @@ class ConnectionBackend(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def rooms(self) -> typ.Mapping[str, set[str]]:
-        """Mapping of room names to sets of connection IDs."""
+    def rooms(self) -> typ.Mapping[str, typ.Collection[str]]:
+        """Read-only mapping of room names to connection ID collections."""
 
     @abc.abstractmethod
     async def add_connection(self, conn_id: str, ws: WebSocketLike) -> None:
@@ -143,14 +152,15 @@ class InProcessBackend(ConnectionBackend):
         self._lock = asyncio.Lock()
 
     @property
-    def websockets(self) -> dict[str, WebSocketLike]:
-        """Return mapping of connection IDs to WebSocket objects."""
-        return self._websockets
+    def websockets(self) -> typ.Mapping[str, WebSocketLike]:
+        """Read-only mapping of connection IDs to WebSocket objects."""
+        return types.MappingProxyType(self._websockets)
 
     @property
-    def rooms(self) -> dict[str, set[str]]:
-        """Return mapping of room names to member IDs."""
-        return self._rooms
+    def rooms(self) -> typ.Mapping[str, frozenset[str]]:
+        """Read-only mapping of room names to member IDs."""
+        snapshot = {room: frozenset(ids) for room, ids in self._rooms.items()}
+        return types.MappingProxyType(snapshot)
 
     async def add_connection(self, conn_id: str, ws: WebSocketLike) -> None:
         """Register a new connection."""
@@ -229,7 +239,7 @@ class WebSocketConnectionManager:
         return self._backend.websockets
 
     @property
-    def rooms(self) -> typ.Mapping[str, set[str]]:
+    def rooms(self) -> typ.Mapping[str, typ.Collection[str]]:
         """Expose backend room membership mapping."""
         return self._backend.rooms
 
@@ -265,7 +275,8 @@ class WebSocketConnectionManager:
     ) -> None:
         """Broadcast ``data`` to members of ``room``."""
         snapshot = await self._backend.snapshot(room)
-        websockets = [ws for cid, ws in snapshot if not exclude or cid not in exclude]
+        excluded = set(exclude) if exclude else set()
+        websockets = [ws for cid, ws in snapshot if cid not in excluded]
 
         results = await asyncio.gather(
             *(ws.send_media(data) for ws in websockets),
@@ -296,8 +307,9 @@ class WebSocketConnectionManager:
     ) -> typ.AsyncIterator[WebSocketLike]:
         """Iterate over active connections matching ``room`` and ``exclude``."""
         snapshot = await self._backend.snapshot(room)
+        excluded = set(exclude) if exclude else set()
         for cid, ws in snapshot:
-            if not exclude or cid not in exclude:
+            if cid not in excluded:
                 yield ws
 
 
