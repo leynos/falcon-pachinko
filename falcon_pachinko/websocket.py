@@ -309,30 +309,63 @@ class WebSocketConnectionManager:
         excluded = set(exclude or ())
         websockets = [ws for cid, ws in snapshot if cid not in excluded]
 
+        send_fn = self._create_send_function(data, timeout)
+        errors = await self._execute_broadcast(websockets, send_fn)
+        self._handle_broadcast_errors(errors)
+
+    def _create_send_function(
+        self, data: object, timeout: float | None
+    ) -> typ.Callable[[WebSocketLike], typ.Awaitable[None]]:
+        """Return a coroutine factory for sending ``data`` with ``timeout``."""
+
         def _send(ws: WebSocketLike) -> typ.Awaitable[None]:
             send = ws.send_media(data)
             return asyncio.wait_for(send, timeout) if timeout is not None else send
 
-        errors: list[Exception] = []
+        return _send
 
+    async def _execute_broadcast(
+        self,
+        websockets: list[WebSocketLike],
+        send_fn: typ.Callable[[WebSocketLike], typ.Awaitable[None]],
+    ) -> list[Exception]:
+        """Dispatch send tasks using the best available concurrency primitive."""
         task_group_factory = getattr(asyncio, "TaskGroup", None)
         if task_group_factory is None:
-            coroutines = [_send(ws) for ws in websockets]
-            results = await asyncio.gather(*coroutines, return_exceptions=True)
-            errors.extend(exc for exc in results if isinstance(exc, Exception))
-        else:
+            return await self._broadcast_with_gather(websockets, send_fn)
+        return await self._broadcast_with_task_group(
+            websockets, send_fn, task_group_factory
+        )
 
-            async def _send_with_capture(ws: WebSocketLike) -> None:
-                try:
-                    await _send(ws)
-                except Exception as exc:  # noqa: BLE001 - aggregate all failures
-                    errors.append(exc)
+    async def _broadcast_with_task_group(
+        self,
+        websockets: list[WebSocketLike],
+        send_fn: typ.Callable[[WebSocketLike], typ.Awaitable[None]],
+        task_group_factory: typ.Callable[[], typ.AsyncContextManager[typ.Any]],
+    ) -> list[Exception]:
+        """Execute a broadcast using ``asyncio.TaskGroup`` and collect failures."""
+        errors: list[Exception] = []
 
-            async with task_group_factory() as tg:  # pragma: no branch - coverage
-                for ws in websockets:
-                    tg.create_task(_send_with_capture(ws))
+        async def _send_with_capture(ws: WebSocketLike) -> None:
+            try:
+                await send_fn(ws)
+            except Exception as exc:  # noqa: BLE001 - aggregate all failures
+                errors.append(exc)
 
-        self._handle_broadcast_errors(errors)
+        async with task_group_factory() as tg:  # pragma: no branch - coverage
+            for ws in websockets:
+                tg.create_task(_send_with_capture(ws))
+        return errors
+
+    async def _broadcast_with_gather(
+        self,
+        websockets: list[WebSocketLike],
+        send_fn: typ.Callable[[WebSocketLike], typ.Awaitable[None]],
+    ) -> list[Exception]:
+        """Execute a broadcast using ``asyncio.gather`` and collect failures."""
+        coroutines = [send_fn(ws) for ws in websockets]
+        results = await asyncio.gather(*coroutines, return_exceptions=True)
+        return [exc for exc in results if isinstance(exc, Exception)]
 
     def _handle_broadcast_errors(self, errors: list[Exception]) -> None:
         if not errors:
