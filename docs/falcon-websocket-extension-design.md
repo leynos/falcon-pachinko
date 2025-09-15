@@ -335,12 +335,20 @@ avoids a monolithic receive loop with extensive conditional logic.
      `@handles_message` decorator should be used. This is the preferred method
      as it is not subject to potential ambiguities with non-standard tag names.
 
-  1. **By Convention (Convenience)**: As a convenience, a handler can be defined
-     by creating a method named `on_{type_discriminator}`. The framework will
-     attempt to convert `CamelCase` and `grazingCamelCase` discriminators to
-     `snake_case` to form the method name (e.g., a message with
-     `"type": "userTyping"` would be dispatched to `on_user_typing`). This is
-     less robust for non-ASCII or complex (e.g., dotted) tags.
+  2. **By Convention (Convenience)**: As a convenience, a handler can be
+     defined by creating a method named `on_{type_discriminator}`. The
+     framework applies a best-effort conversion that:
+
+     - Lowercases the discriminator and converts ASCII camelCase/PascalCase to
+       `snake_case`.
+     - Replaces any non-alphanumeric characters (including non-ASCII glyphs and
+       dotted segments) with underscores.
+
+     When both a decorator registration and a convention match exist, the
+     decorator wins. Convention-based handlers always use strict payload
+     validation; opting into `strict=False` requires the decorator form.
+     Consequently, the naming convention remains best-effort and is primarily
+     suited to simple ASCII tags.
 
   ```python
   from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
@@ -440,6 +448,14 @@ backend interface to support both single-process and distributed deployments.
     `broadcast_to_room`, `send_to_connection`) will be coroutines (`async def`)
     and will propagate exceptions. This ensures that network failures or
     backend errors are not silent.
+
+  - **Bounded Broadcasts**: `broadcast_to_room` accepts an optional per-send
+    timeout (in seconds) to mitigate slow recipients. A value of ``0`` forces
+    an immediate timeout. When individual sends fail or time out, the manager
+    aggregates the exceptions, raising the original error or an
+    ``ExceptionGroup`` when multiple recipients fail. Applications should
+    choose a timeout aligned with their backpressure strategy (e.g., smaller
+    values for large rooms paired with a retry queue).
 
   - **Async Iterators**: For bulk operations, the manager will expose async
     iterators, making them highly composable.
@@ -1153,8 +1169,8 @@ schema-driven approach.
 
 #### 5.3.1. Declaring Message Schemas
 
-A resource defines its message schema using a `typ.Union` of
-`ms.Struct` types, where each `Struct` represents a distinct message.
+A resource defines its message schema using a `typ.Union` of `ms.Struct` types,
+where each `Struct` represents a distinct message.
 
 ```python
 import msgspec as ms

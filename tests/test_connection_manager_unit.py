@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import builtins
+import typing as typ
+
 import pytest
 import pytest_asyncio
 
 from falcon_pachinko.websocket import (
+    ConnectionBackend,
+    InProcessBackend,
     WebSocketConnectionManager,
     WebSocketConnectionNotFoundError,
 )
@@ -61,8 +66,9 @@ async def corrupt_room_membership(
     mgr: WebSocketConnectionManager, room: str, ghost_id: str
 ) -> None:
     """Inject an unknown connection ID into a room for testing."""
-    async with mgr._lock:  # pragma: no cover - internal test helper
-        mgr.rooms.setdefault(room, set()).add(ghost_id)
+    backend = typ.cast("InProcessBackend", mgr.backend)
+    async with backend._lock:  # pragma: no cover - internal test helper
+        backend._rooms.setdefault(room, set()).add(ghost_id)
 
 
 @pytest.mark.asyncio
@@ -141,6 +147,27 @@ async def test_broadcast_to_room_propagates_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_broadcast_to_room_aggregates_multiple_errors() -> None:
+    """Aggregates exceptions when several sends fail."""
+    mgr = WebSocketConnectionManager()
+    ws1 = ErrorWebSocket()
+    ws2 = ErrorWebSocket()
+    await mgr.add_connection("a", ws1)
+    await mgr.add_connection("b", ws2)
+    await mgr.join_room("a", "lobby")
+    await mgr.join_room("b", "lobby")
+
+    eg = getattr(builtins, "ExceptionGroup", None)
+    if eg is not None:
+        with pytest.raises(eg) as excinfo:
+            await mgr.broadcast_to_room("lobby", 42)
+        assert len(getattr(excinfo.value, "exceptions", [])) == 2
+    else:  # pragma: no cover - Python < 3.11
+        with pytest.raises(RuntimeError):
+            await mgr.broadcast_to_room("lobby", 42)
+
+
+@pytest.mark.asyncio
 async def test_join_room_requires_known_connection() -> None:
     """Joining a room with an unknown connection raises an error."""
     mgr = WebSocketConnectionManager()
@@ -203,15 +230,51 @@ async def test_connections_ignore_unknown_ids_in_exclude(
 
 
 @pytest.mark.asyncio
-async def test_connections_raise_on_stale_room_member(
+async def test_connections_skip_stale_room_member(
     room_with_two_connections: tuple[
         WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
     ],
 ) -> None:
-    """Iterating a corrupted room raises ``WebSocketConnectionNotFoundError``."""
-    mgr, *_ = room_with_two_connections
+    """Iterating a corrupted room skips ghost memberships."""
+    mgr, ws1, ws2 = room_with_two_connections
 
     await corrupt_room_membership(mgr, "lobby", "ghost")
 
-    with pytest.raises(WebSocketConnectionNotFoundError):
-        _ = [ws async for ws in mgr.connections(room="lobby")]
+    seen = [ws async for ws in mgr.connections(room="lobby")]
+
+    assert set(seen) == {ws1, ws2}
+
+
+@pytest.mark.asyncio
+async def test_broadcast_to_room_skips_stale_members(
+    room_with_two_connections: tuple[
+        WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
+    ],
+) -> None:
+    """Broadcasting ignores ghost memberships injected into the backend."""
+    mgr, ws1, ws2 = room_with_two_connections
+
+    await corrupt_room_membership(mgr, "lobby", "ghost")
+
+    await mgr.broadcast_to_room("lobby", "hi")
+
+    assert ws1.messages == ["hi"]
+    assert ws2.messages == ["hi"]
+
+
+@pytest.mark.asyncio
+async def test_websockets_property_returns_snapshot() -> None:
+    """Exposing websockets returns a stable snapshot."""
+    mgr = WebSocketConnectionManager()
+    ws = DummyWebSocket()
+    await mgr.add_connection("a", ws)
+    snapshot = mgr.websockets
+    await mgr.add_connection("b", DummyWebSocket())
+    assert dict(snapshot) == {"a": ws}
+
+
+def test_default_backend_is_inprocess() -> None:
+    """Ensure the default backend is used."""
+    mgr = WebSocketConnectionManager()
+    assert isinstance(mgr.backend, InProcessBackend)
+    assert isinstance(mgr.backend, ConnectionBackend)
