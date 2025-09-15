@@ -335,7 +335,7 @@ avoids a monolithic receive loop with extensive conditional logic.
      `@handles_message` decorator should be used. This is the preferred method
      as it is not subject to potential ambiguities with non-standard tag names.
 
-  1. **By Convention (Convenience)**: As a convenience, a handler can be defined
+  2. **By Convention (Convenience)**: As a convenience, a handler can be defined
      by creating a method named `on_{type_discriminator}`. The framework will
      attempt to convert `CamelCase` and `grazingCamelCase` discriminators to
      `snake_case` to form the method name (e.g., a message with
@@ -440,6 +440,9 @@ backend interface to support both single-process and distributed deployments.
     `broadcast_to_room`, `send_to_connection`) will be coroutines (`async def`)
     and will propagate exceptions. This ensures that network failures or
     backend errors are not silent.
+
+  - **Bounded Broadcasts**: `broadcast_to_room` accepts an optional per-send
+    timeout to mitigate slow recipients.
 
   - **Async Iterators**: For bulk operations, the manager will expose async
     iterators, making them highly composable.
@@ -1153,8 +1156,8 @@ schema-driven approach.
 
 #### 5.3.1. Declaring Message Schemas
 
-A resource defines its message schema using a `typ.Union` of
-`ms.Struct` types, where each `Struct` represents a distinct message.
+A resource defines its message schema using a `typ.Union` of `ms.Struct` types,
+where each `Struct` represents a distinct message.
 
 ```python
 import msgspec as ms

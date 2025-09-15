@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import typing as typ
 
 import pytest
@@ -65,7 +66,7 @@ async def corrupt_room_membership(
     mgr: WebSocketConnectionManager, room: str, ghost_id: str
 ) -> None:
     """Inject an unknown connection ID into a room for testing."""
-    backend = typ.cast("InProcessBackend", mgr._backend)
+    backend = typ.cast("InProcessBackend", mgr.backend)
     async with backend._lock:  # pragma: no cover - internal test helper
         backend._rooms.setdefault(room, set()).add(ghost_id)
 
@@ -143,6 +144,27 @@ async def test_broadcast_to_room_propagates_error() -> None:
 
     with pytest.raises(RuntimeError):
         await mgr.broadcast_to_room("lobby", 42)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_to_room_aggregates_multiple_errors() -> None:
+    """Aggregates exceptions when several sends fail."""
+    mgr = WebSocketConnectionManager()
+    ws1 = ErrorWebSocket()
+    ws2 = ErrorWebSocket()
+    await mgr.add_connection("a", ws1)
+    await mgr.add_connection("b", ws2)
+    await mgr.join_room("a", "lobby")
+    await mgr.join_room("b", "lobby")
+
+    eg = getattr(builtins, "ExceptionGroup", None)
+    if eg is not None:
+        with pytest.raises(eg) as excinfo:
+            await mgr.broadcast_to_room("lobby", 42)
+        assert len(getattr(excinfo.value, "exceptions", [])) == 2
+    else:  # pragma: no cover - Python < 3.11
+        with pytest.raises(RuntimeError):
+            await mgr.broadcast_to_room("lobby", 42)
 
 
 @pytest.mark.asyncio
@@ -236,5 +258,5 @@ async def test_websockets_property_returns_snapshot() -> None:
 def test_default_backend_is_inprocess() -> None:
     """Ensure the default backend is used."""
     mgr = WebSocketConnectionManager()
-    assert isinstance(mgr._backend, InProcessBackend)
-    assert isinstance(mgr._backend, ConnectionBackend)
+    assert isinstance(mgr.backend, InProcessBackend)
+    assert isinstance(mgr.backend, ConnectionBackend)

@@ -104,6 +104,11 @@ class ConnectionBackend(abc.ABC):
         by default. Backends intended for multi-threaded or distributed use
         must provide their own synchronization. Users should consult backend
         documentation before relying on concurrent scenarios.
+
+    Notes on read-only views:
+        The ``websockets`` and ``rooms`` properties are intended for
+        introspection. For safe iteration in concurrent scenarios, prefer
+        ``await snapshot(...)`` which provides a consistent point-in-time view.
     """
 
     @property
@@ -159,7 +164,11 @@ class InProcessBackend(ConnectionBackend):
 
     @property
     def rooms(self) -> typ.Mapping[str, frozenset[str]]:
-        """Read-only mapping of room names to member IDs."""
+        """Read-only snapshot of room -> member IDs.
+
+        This creates a fresh snapshot per access; for hot paths use
+        ``await snapshot(room)`` instead.
+        """
         snapshot = {room: frozenset(ids) for room, ids in self._rooms.items()}
         return types.MappingProxyType(snapshot)
 
@@ -208,7 +217,12 @@ class InProcessBackend(ConnectionBackend):
     async def snapshot(
         self, room: str | None = None
     ) -> list[tuple[str, WebSocketLike]]:
-        """Return snapshot of websockets for ``room`` or all."""
+        """Return snapshot of (conn_id, websocket) pairs for ``room`` or all.
+
+        May raise:
+            WebSocketConnectionNotFoundError
+                If a room membership references a non-existent connection.
+        """
         async with self._lock:
             if room is None:
                 items = list(self._websockets.items())
@@ -233,6 +247,11 @@ class WebSocketConnectionManager:
 
     def __init__(self, backend: ConnectionBackend | None = None) -> None:
         self._backend = backend or InProcessBackend()
+
+    @property
+    def backend(self) -> ConnectionBackend:
+        """The active backend (read-only)."""
+        return self._backend
 
     @property
     def websockets(self) -> typ.Mapping[str, WebSocketLike]:
@@ -273,14 +292,26 @@ class WebSocketConnectionManager:
         data: object,
         *,
         exclude: typ.Collection[str] | None = None,
+        timeout: float | None = None,
     ) -> None:
-        """Broadcast ``data`` to members of ``room``."""
+        """Broadcast ``data`` to members of ``room``.
+
+        Each send may be bounded by ``timeout`` seconds.
+        """
         snapshot = await self._backend.snapshot(room)
         excluded = set(exclude) if exclude else set()
         websockets = [ws for cid, ws in snapshot if cid not in excluded]
 
+        send_tasks = (
+            (
+                asyncio.wait_for(ws.send_media(data), timeout)
+                if timeout
+                else ws.send_media(data)
+            )
+            for ws in websockets
+        )
         results = await asyncio.gather(
-            *(ws.send_media(data) for ws in websockets),
+            *send_tasks,
             return_exceptions=True,
         )
         errors = [exc for exc in results if isinstance(exc, Exception)]
