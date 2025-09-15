@@ -96,8 +96,7 @@ class RouteSpec:
 
 
 class ConnectionBackend(abc.ABC):
-    """
-    Abstract interface for connection manager backends.
+    """Abstract interface for connection manager backends.
 
     Thread-safety expectations:
         Implementations of this interface are not required to be thread-safe
@@ -105,10 +104,19 @@ class ConnectionBackend(abc.ABC):
         must provide their own synchronization. Users should consult backend
         documentation before relying on concurrent scenarios.
 
-    Notes on read-only views:
+    Notes on read-only views and semantics:
         The ``websockets`` and ``rooms`` properties are intended for
-        introspection. For safe iteration in concurrent scenarios, prefer
+        introspection. They MUST expose read-only snapshots or views to avoid
+        external mutation. For safe iteration in concurrent scenarios, prefer
         ``await snapshot(...)`` which provides a consistent point-in-time view.
+
+    Operation semantics:
+        * ``add_connection`` MUST raise ``ValueError`` on duplicate IDs.
+        * ``remove_connection`` and ``leave_room`` MUST be idempotent.
+        * ``join_room`` MUST raise ``WebSocketConnectionNotFoundError`` if the
+          connection is unknown.
+        * ``snapshot`` MUST return a consistent view; backends MUST document how
+          they handle stale memberships (e.g., drop vs. raise).
     """
 
     @property
@@ -219,9 +227,7 @@ class InProcessBackend(ConnectionBackend):
     ) -> list[tuple[str, WebSocketLike]]:
         """Return snapshot of (conn_id, websocket) pairs for ``room`` or all.
 
-        May raise:
-            WebSocketConnectionNotFoundError
-                If a room membership references a non-existent connection.
+        Stale room memberships are ignored to favour eventual consistency.
         """
         async with self._lock:
             if room is None:
@@ -231,9 +237,8 @@ class InProcessBackend(ConnectionBackend):
                 items = []
                 for cid in ids:
                     ws = self._websockets.get(cid)
-                    if ws is None:
-                        raise WebSocketConnectionNotFoundError(cid)
-                    items.append((cid, ws))
+                    if ws is not None:
+                        items.append((cid, ws))
         return items
 
 
@@ -296,25 +301,37 @@ class WebSocketConnectionManager:
     ) -> None:
         """Broadcast ``data`` to members of ``room``.
 
-        Each send may be bounded by ``timeout`` seconds.
+        Each send may be bounded by ``timeout`` seconds. Failures are collected
+        and re-raised as the original exception or an ``ExceptionGroup`` when
+        multiple recipients fail.
         """
         snapshot = await self._backend.snapshot(room)
-        excluded = set(exclude) if exclude else set()
+        excluded = set(exclude or ())
         websockets = [ws for cid, ws in snapshot if cid not in excluded]
 
-        send_tasks = (
-            (
-                asyncio.wait_for(ws.send_media(data), timeout)
-                if timeout
-                else ws.send_media(data)
-            )
-            for ws in websockets
-        )
-        results = await asyncio.gather(
-            *send_tasks,
-            return_exceptions=True,
-        )
-        errors = [exc for exc in results if isinstance(exc, Exception)]
+        def _send(ws: WebSocketLike) -> typ.Awaitable[None]:
+            send = ws.send_media(data)
+            return asyncio.wait_for(send, timeout) if timeout is not None else send
+
+        errors: list[Exception] = []
+
+        task_group_factory = getattr(asyncio, "TaskGroup", None)
+        if task_group_factory is None:
+            coroutines = [_send(ws) for ws in websockets]
+            results = await asyncio.gather(*coroutines, return_exceptions=True)
+            errors.extend(exc for exc in results if isinstance(exc, Exception))
+        else:
+
+            async def _send_with_capture(ws: WebSocketLike) -> None:
+                try:
+                    await _send(ws)
+                except Exception as exc:  # noqa: BLE001 - aggregate all failures
+                    errors.append(exc)
+
+            async with task_group_factory() as tg:  # pragma: no branch - coverage
+                for ws in websockets:
+                    tg.create_task(_send_with_capture(ws))
+
         self._handle_broadcast_errors(errors)
 
     def _handle_broadcast_errors(self, errors: list[Exception]) -> None:

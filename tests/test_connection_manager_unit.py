@@ -230,18 +230,36 @@ async def test_connections_ignore_unknown_ids_in_exclude(
 
 
 @pytest.mark.asyncio
-async def test_connections_raise_on_stale_room_member(
+async def test_connections_skip_stale_room_member(
     room_with_two_connections: tuple[
         WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
     ],
 ) -> None:
-    """Iterating a corrupted room raises ``WebSocketConnectionNotFoundError``."""
-    mgr, *_ = room_with_two_connections
+    """Iterating a corrupted room skips ghost memberships."""
+    mgr, ws1, ws2 = room_with_two_connections
 
     await corrupt_room_membership(mgr, "lobby", "ghost")
 
-    with pytest.raises(WebSocketConnectionNotFoundError):
-        _ = [ws async for ws in mgr.connections(room="lobby")]
+    seen = [ws async for ws in mgr.connections(room="lobby")]
+
+    assert set(seen) == {ws1, ws2}
+
+
+@pytest.mark.asyncio
+async def test_broadcast_to_room_skips_stale_members(
+    room_with_two_connections: tuple[
+        WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
+    ],
+) -> None:
+    """Broadcasting ignores ghost memberships injected into the backend."""
+    mgr, ws1, ws2 = room_with_two_connections
+
+    await corrupt_room_membership(mgr, "lobby", "ghost")
+
+    await mgr.broadcast_to_room("lobby", "hi")
+
+    assert ws1.messages == ["hi"]
+    assert ws2.messages == ["hi"]
 
 
 @pytest.mark.asyncio
