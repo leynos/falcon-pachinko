@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .handlers import handles_message
+from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
 from .resource import WebSocketResource
 from .router import WebSocketRouter
@@ -16,6 +17,9 @@ from .workers import WorkerController, worker
 
 __all__ = (
     "ConnectionBackend",
+    "HookCollection",
+    "HookContext",
+    "HookManager",
     "InProcessBackend",
     "WebSocketConnectionManager",
     "WebSocketLike",

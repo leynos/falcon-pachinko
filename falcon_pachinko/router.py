@@ -17,6 +17,8 @@ import typing as typ
 
 import falcon
 
+from .hooks import HookCollection, HookManager
+
 if typ.TYPE_CHECKING:
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
@@ -95,6 +97,7 @@ class WebSocketRouter:
         self._mount_prefix: str = ""
         self._mount_lock = threading.Lock()
         self._names: dict[str, str] = {}
+        self.global_hooks = HookCollection()
         self.name = name
 
     def _compile_and_store_route(
@@ -240,15 +243,21 @@ class WebSocketRouter:
 
         try:
             base_resource = route.factory()
+            chain = [base_resource]
             resolution = self._resolve_resource_and_path(
-                base_resource, remaining, params
+                base_resource, remaining, params, chain
             )
             if resolution is None:
                 return False
-            resource, remaining, params = resolution
+            resource, remaining, params, chain = resolution
             if resource is base_resource and not route.pattern.fullmatch(req.path):
                 return False
-            return await self._handle_websocket_connection(resource, req, ws, params)
+            manager = HookManager(global_hooks=self.global_hooks, resources=chain)
+            for item in chain:
+                item._hook_manager = manager  # type: ignore[attr-defined]
+            return await self._handle_websocket_connection(
+                resource, req, ws, params, hook_manager=manager
+            )
         except Exception:
             await ws.close()
             raise
@@ -285,6 +294,7 @@ class WebSocketRouter:
         resource: WebSocketResource,
         path: str,
         params: dict[str, str],
+        chain: list[WebSocketResource],
     ) -> tuple[WebSocketResource, str, dict[str, str]]:
         """Traverse ``resource`` subroutes matching ``path``."""
         while path not in ("", "/"):
@@ -293,6 +303,7 @@ class WebSocketRouter:
                 break
             resource, path, new_params = result
             params |= new_params
+            chain.append(resource)
 
         return resource, path, params
 
@@ -315,12 +326,15 @@ class WebSocketRouter:
         resource: WebSocketResource,
         remaining: str,
         params: dict[str, str],
-    ) -> tuple[WebSocketResource, str, dict[str, str]] | None:
-        """Return resolved resource and path or ``None`` if invalid."""
+        chain: list[WebSocketResource],
+    ) -> tuple[WebSocketResource, str, dict[str, str], list[WebSocketResource]] | None:
+        """Return resolved resource, params, and traversal chain."""
         resolved, remaining, params = self._resolve_subroutes(
-            resource, remaining, params
+            resource, remaining, params, chain
         )
-        return None if remaining not in ("", "/") else (resolved, remaining, params)
+        if remaining not in ("", "/"):
+            return None
+        return resolved, remaining, params, chain
 
     async def _handle_websocket_connection(
         self,
@@ -328,9 +342,30 @@ class WebSocketRouter:
         req: falcon.Request,
         ws: WebSocketLike,
         params: dict[str, str],
+        *,
+        hook_manager: HookManager,
     ) -> bool:
         """Accept or close ``ws`` based on ``resource`` decision."""
-        should_accept = await resource.on_connect(req, ws, **params)
+        params_obj: dict[str, object] = {key: value for key, value in params.items()}
+        context = await hook_manager.notify_before_connect(
+            resource, req=req, ws=ws, params=params_obj
+        )
+        if context.params is None:
+            params_for_handler: dict[str, object] = params_obj
+        else:
+            params_for_handler = context.params
+        try:
+            should_accept = await resource.on_connect(req, ws, **params_for_handler)
+        except Exception as exc:
+            context.error = exc
+            context.result = False
+            context.params = params_for_handler
+            await hook_manager.notify_after_connect(context)
+            raise
+
+        context.result = bool(should_accept)
+        context.params = params_for_handler
+        await hook_manager.notify_after_connect(context)
         if not should_accept:
             await ws.close()
             return True

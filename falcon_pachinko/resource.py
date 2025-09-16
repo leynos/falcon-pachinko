@@ -25,6 +25,7 @@ if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints
 
 from .dispatcher import dispatch
 from .handlers import Handler, HandlerInfo, _HandlesMessageDescriptor
+from .hooks import HookCollection
 from .schema import populate_struct_handlers, validate_schema_types
 
 
@@ -41,6 +42,7 @@ class WebSocketResource:
     handlers: typ.ClassVar[dict[str, HandlerInfo]]
     _struct_handlers: typ.ClassVar[dict[type, HandlerInfo]] = {}
     schema: type | None = None
+    hooks: HookCollection = HookCollection()
 
     def add_subroute(
         self,
@@ -115,6 +117,7 @@ class WebSocketResource:
         cls._apply_overrides(handlers)
         cls.handlers = handlers
         cls._init_schema_registry()
+        cls.hooks = HookCollection.clone_from(getattr(cls, "hooks", None))
 
     @classmethod
     def _collect_base_handlers(cls) -> dict[str, HandlerInfo]:
@@ -213,4 +216,16 @@ class WebSocketResource:
 
     async def dispatch(self, ws: WebSocketLike, raw: str | bytes) -> None:
         """Decode ``raw`` and route it to the appropriate handler."""
-        await dispatch(self, ws, raw)
+        manager = getattr(self, "_hook_manager", None)
+        context = None
+        if manager is not None:
+            context = await manager.notify_before_receive(self, ws=ws, raw=raw)
+        try:
+            await dispatch(self, ws, raw)
+        except Exception as exc:
+            if context is not None and manager is not None:
+                context.error = exc
+                await manager.notify_after_receive(context)
+            raise
+        if context is not None and manager is not None:
+            await manager.notify_after_receive(context)

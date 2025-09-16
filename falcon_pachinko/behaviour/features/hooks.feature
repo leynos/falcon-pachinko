@@ -1,0 +1,7 @@
+Feature: Hook execution order
+  Scenario: Global and resource hooks wrap lifecycle
+    Given a router with multi-tier hooks
+    When a client connects and sends a message
+    Then the hook log should show layered connect order
+    And the hook log should show layered receive order
+    And the child resource records hook-injected params
