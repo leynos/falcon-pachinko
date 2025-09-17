@@ -36,6 +36,7 @@ def test_hookcollection_add_non_callable() -> None:
 
 def test_hookcollection_inheritance_propagates_changes() -> None:
     """Child classes observe parent hook registrations added later."""
+
     class Parent(WebSocketResource):
         pass
 

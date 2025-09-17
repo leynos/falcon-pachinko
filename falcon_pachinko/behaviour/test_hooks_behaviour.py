@@ -110,6 +110,18 @@ def context() -> dict[str, typ.Any]:
     return {}
 
 
+def _assert_event_sequence(
+    context: dict[str, typ.Any],
+    start_idx: int,
+    end_idx: int | None,
+    expected_events: list[str],
+) -> None:
+    """Helper function to validate event sequence ordering."""  # noqa: D401
+    events: list[str] = context["events"]
+    actual_slice = events[start_idx:] if end_idx is None else events[start_idx:end_idx]
+    assert actual_slice == expected_events
+
+
 @given("a router with multi-tier hooks")
 def given_router(context: dict[str, typ.Any]) -> None:
     """Prepare a router with global and resource hooks."""
@@ -173,30 +185,38 @@ def when_client_connects_with_error(context: dict[str, typ.Any]) -> None:
 @then("the hook log should show layered connect order")
 def then_connect_order(context: dict[str, typ.Any]) -> None:
     """Validate connect hook execution ordering."""
-    events: list[str] = context["events"]
-    assert events[:6] == [
-        "global.before_connect",
-        "parent.before_connect",
-        "child.before_connect",
-        "child.after_connect",
-        "parent.after_connect",
-        "global.after_connect",
-    ]
+    _assert_event_sequence(
+        context,
+        0,
+        6,
+        [
+            "global.before_connect",
+            "parent.before_connect",
+            "child.before_connect",
+            "child.after_connect",
+            "parent.after_connect",
+            "global.after_connect",
+        ],
+    )
 
 
 @then("the hook log should show layered receive order")
 def then_receive_order(context: dict[str, typ.Any]) -> None:
     """Validate receive hook execution ordering."""
-    events: list[str] = context["events"]
-    assert events[6:] == [
-        "global.before_receive",
-        "parent.before_receive",
-        "child.before_receive",
-        "handler.child",
-        "child.after_receive",
-        "parent.after_receive",
-        "global.after_receive",
-    ]
+    _assert_event_sequence(
+        context,
+        6,
+        None,
+        [
+            "global.before_receive",
+            "parent.before_receive",
+            "child.before_receive",
+            "handler.child",
+            "child.after_receive",
+            "parent.after_receive",
+            "global.after_receive",
+        ],
+    )
     assert context["after_errors"] == [
         ("child", None),
         ("parent", None),
