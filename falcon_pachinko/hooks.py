@@ -172,6 +172,34 @@ class HookManager:
                     await typ.cast("typ.Awaitable[None]", result)
         context.resource = None
 
+    async def _notify_before(
+        self,
+        event: str,
+        target: WebSocketResource,
+        *,
+        req: falcon.Request | None = None,
+        ws: WebSocketLike | None = None,
+        params: dict[str, object] | None = None,
+        raw: str | bytes | None = None,
+        result: bool | None = None,
+        error: BaseException | None = None,
+        close_code: int | None = None,
+    ) -> HookContext:
+        context = HookContext(
+            event=event,
+            target=target,
+            resource=None,
+            req=req,
+            ws=ws,
+            params=params,
+            raw=raw,
+            result=result,
+            error=error,
+            close_code=close_code,
+        )
+        await self._run_hooks(event, context)
+        return context
+
     async def notify_before_connect(
         self,
         target: WebSocketResource,
@@ -181,16 +209,13 @@ class HookManager:
         params: dict[str, object],
     ) -> HookContext:
         """Fire ``before_connect`` hooks and return the shared context."""
-        context = HookContext(
-            event="before_connect",
-            target=target,
-            resource=None,
+        return await self._notify_before(
+            "before_connect",
+            target,
             req=req,
             ws=ws,
             params=params,
         )
-        await self._run_hooks("before_connect", context)
-        return context
 
     async def notify_after_connect(self, context: HookContext) -> None:
         """Run ``after_connect`` hooks using ``context``."""
@@ -205,15 +230,12 @@ class HookManager:
         raw: str | bytes,
     ) -> HookContext:
         """Run ``before_receive`` hooks and return the shared context."""
-        context = HookContext(
-            event="before_receive",
-            target=target,
-            resource=None,
+        return await self._notify_before(
+            "before_receive",
+            target,
             ws=ws,
             raw=raw,
         )
-        await self._run_hooks("before_receive", context)
-        return context
 
     async def notify_after_receive(self, context: HookContext) -> None:
         """Run ``after_receive`` hooks using ``context``."""
@@ -228,12 +250,9 @@ class HookManager:
         close_code: int,
     ) -> HookContext:
         """Run ``before_disconnect`` hooks and return the shared context."""
-        context = HookContext(
-            event="before_disconnect",
-            target=target,
-            resource=None,
+        return await self._notify_before(
+            "before_disconnect",
+            target,
             ws=ws,
             close_code=close_code,
         )
-        await self._run_hooks("before_disconnect", context)
-        return context
