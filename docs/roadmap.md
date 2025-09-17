@@ -152,14 +152,14 @@ finalizes the connection manager API.
 This phase adds the essential features for building production-grade
 applications.
 
-- [ ] **Implement the Multi-Tiered Hook System.**
+- [x] **Implement the Multi-Tiered Hook System.**
 
-  - [ ] Create a `HookManager` to orchestrate hook execution.
+  - [x] Create a `HookManager` to orchestrate hook execution.
 
-  - [ ] Add support for global hooks on `WebSocketRouter` and per-resource hooks
+  - [x] Add support for global hooks on `WebSocketRouter` and per-resource hooks
     on `WebSocketResource`.
 
-  - [ ] Implement the "onion-style" execution order (outermost hooks run first)
+  - [x] Implement the "onion-style" execution order (outermost hooks run first)
     and define the error propagation behaviour for exceptions raised within the
     hook chain.
 
