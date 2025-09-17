@@ -5,3 +5,8 @@ Feature: Hook execution order
     Then the hook log should show layered connect order
     And the hook log should show layered receive order
     And the child resource records hook-injected params
+
+  Scenario: Errors propagate through after hooks
+    Given a router with multi-tier hooks
+    When a client connects and sends a message that triggers an error
+    Then the error is propagated to after_receive hook and the hook chain remains intact

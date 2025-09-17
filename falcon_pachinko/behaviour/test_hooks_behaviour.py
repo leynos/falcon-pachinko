@@ -18,6 +18,7 @@ from falcon_pachinko import (
 from falcon_pachinko.unittests.helpers import DummyWS
 
 EVENTS: list[str] = []
+AFTER_RECEIVE_ERRORS: list[tuple[str, BaseException | None]] = []
 
 
 class HookedChild(WebSocketResource):
@@ -37,6 +38,10 @@ class HookedChild(WebSocketResource):
         """Record unhandled messages to observe hook ordering."""
         EVENTS.append("handler.child")
 
+    async def on_error(self, ws: object, payload: object | None) -> None:
+        """Raise an error to exercise hook propagation."""
+        raise ValueError
+
 
 class HookedParent(WebSocketResource):
     """Parent resource that mounts :class:`HookedChild`."""
@@ -52,10 +57,10 @@ async def global_hook(context: HookContext) -> None:
         if context.params is None:
             context.params = {}
         context.params.setdefault("global", True)
-    if context.event == "after_connect":
+    elif context.event == "after_connect":
         assert context.result is True
-    if context.event == "after_receive":
-        assert context.error is None
+    elif context.event == "after_receive":
+        AFTER_RECEIVE_ERRORS.append(("global", context.error))
 
 
 async def parent_hook(context: HookContext) -> None:
@@ -65,17 +70,17 @@ async def parent_hook(context: HookContext) -> None:
         if context.params is None:
             context.params = {}
         context.params.setdefault("parent", True)
-    if context.event == "after_receive":
-        assert context.error is None
+    elif context.event == "after_receive":
+        AFTER_RECEIVE_ERRORS.append(("parent", context.error))
 
 
 async def child_hook(context: HookContext) -> None:
     """Capture child-level hooks for ordering assertions."""
     EVENTS.append(f"child.{context.event}")
     if context.event == "before_receive":
-        assert context.raw == b'{"type":"noop"}'
-    if context.event == "after_receive":
-        assert context.error is None
+        assert context.raw is not None
+    elif context.event == "after_receive":
+        AFTER_RECEIVE_ERRORS.append(("child", context.error))
 
 
 @scenario("features/hooks.feature", "Global and resource hooks wrap lifecycle")
@@ -83,25 +88,31 @@ def test_hooks_feature() -> None:
     """Scenario placeholder for pytest-bdd."""
 
 
-def _reset_hooks() -> None:
-    HookedParent.hooks = HookCollection()
-    HookedChild.hooks = HookCollection()
+@pytest.fixture(autouse=True)
+def reset_hooks() -> typ.Iterator[None]:
+    """Reset hook registries and accumulated events between scenarios."""
+    HookedParent.hooks = HookCollection.inherit(WebSocketResource.hooks)
+    HookedChild.hooks = HookCollection.inherit(WebSocketResource.hooks)
+    HookedChild.instances.clear()
+    EVENTS.clear()
+    AFTER_RECEIVE_ERRORS.clear()
+    yield
+    HookedParent.hooks = HookCollection.inherit(WebSocketResource.hooks)
+    HookedChild.hooks = HookCollection.inherit(WebSocketResource.hooks)
+    HookedChild.instances.clear()
+    EVENTS.clear()
+    AFTER_RECEIVE_ERRORS.clear()
 
 
 @pytest.fixture
 def context() -> dict[str, typ.Any]:
     """Scenario-scoped context object used for step communication."""
-
     return {}
 
 
 @given("a router with multi-tier hooks")
 def given_router(context: dict[str, typ.Any]) -> None:
     """Prepare a router with global and resource hooks."""
-    EVENTS.clear()
-    HookedChild.instances.clear()
-    _reset_hooks()
-
     router = WebSocketRouter()
     router.global_hooks.add("before_connect", global_hook)
     router.global_hooks.add("after_connect", global_hook)
@@ -136,6 +147,27 @@ def when_client_connects(context: dict[str, typ.Any]) -> None:
 
     asyncio.run(child.dispatch(ws, b'{"type":"noop"}'))
     context["events"] = list(EVENTS)
+    context["after_errors"] = list(AFTER_RECEIVE_ERRORS)
+
+
+@when("a client connects and sends a message that triggers an error")
+def when_client_connects_with_error(context: dict[str, typ.Any]) -> None:
+    """Simulate a connection followed by a dispatched message that raises."""
+    router: WebSocketRouter = context["router"]
+    ws = DummyWS()
+    req = SimpleNamespace(path="/hooks/child", path_template="")
+    asyncio.run(router.on_websocket(req, ws))
+
+    child = HookedChild.instances[-1]
+    context["child_params"] = child.params
+
+    try:
+        asyncio.run(child.dispatch(ws, b'{"type":"error"}'))
+    except Exception as exc:  # noqa: BLE001 - surface the raised error
+        context["error"] = exc
+
+    context["events"] = list(EVENTS)
+    context["after_errors"] = list(AFTER_RECEIVE_ERRORS)
 
 
 @then("the hook log should show layered connect order")
@@ -165,6 +197,11 @@ def then_receive_order(context: dict[str, typ.Any]) -> None:
         "parent.after_receive",
         "global.after_receive",
     ]
+    assert context["after_errors"] == [
+        ("child", None),
+        ("parent", None),
+        ("global", None),
+    ]
 
 
 @then("the child resource records hook-injected params")
@@ -173,3 +210,28 @@ def then_child_params(context: dict[str, typ.Any]) -> None:
     params = context["child_params"]
     assert params["global"] is True
     assert params["parent"] is True
+
+
+@scenario(
+    "features/hooks.feature",
+    "Errors propagate through after hooks",
+)
+def test_hooks_error_feature() -> None:
+    """Scenario placeholder for pytest-bdd error propagation."""
+
+
+@then("the error is propagated to after_receive hook and the hook chain remains intact")
+def then_error_propagates(context: dict[str, typ.Any]) -> None:
+    """Verify that after hooks observed the raised error in order."""
+    assert "error" in context
+    assert isinstance(context["error"], ValueError)
+    assert context["events"][-3:] == [
+        "child.after_receive",
+        "parent.after_receive",
+        "global.after_receive",
+    ]
+    assert context["after_errors"] == [
+        ("child", context["error"]),
+        ("parent", context["error"]),
+        ("global", context["error"]),
+    ]

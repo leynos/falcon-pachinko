@@ -6,8 +6,55 @@ import typing as typ
 
 import pytest
 
-from falcon_pachinko import HookContext, WebSocketResource, WebSocketRouter
+from falcon_pachinko import (
+    HookCollection,
+    HookContext,
+    WebSocketResource,
+    WebSocketRouter,
+)
 from falcon_pachinko.unittests.helpers import DummyWS
+
+
+def dummy_hook(context: HookContext) -> None:
+    """No-op hook used for validation tests."""
+    _ = context
+
+
+def test_hookcollection_add_unsupported_event() -> None:
+    """Registering an unknown event raises ``ValueError``."""
+    collection = HookCollection()
+    with pytest.raises(ValueError, match="Unsupported hook event"):
+        collection.add("unsupported_event", dummy_hook)
+
+
+def test_hookcollection_add_non_callable() -> None:
+    """Registering a non-callable hook raises ``TypeError``."""
+    collection = HookCollection()
+    with pytest.raises(TypeError, match="hook must be callable"):
+        collection.add("before_connect", "not_a_callable")
+
+
+def test_hookcollection_inheritance_propagates_changes() -> None:
+    """Child classes observe parent hook registrations added later."""
+    class Parent(WebSocketResource):
+        pass
+
+    class Child(Parent):
+        pass
+
+    def parent_before(context: HookContext) -> None:
+        return None
+
+    def child_after(context: HookContext) -> None:
+        return None
+
+    Parent.hooks.add("before_receive", parent_before)
+    assert parent_before in Parent.hooks.iter("before_receive")
+    assert parent_before in Child.hooks.iter("before_receive")
+
+    Child.hooks.add("after_receive", child_after)
+    assert child_after in Child.hooks.iter("after_receive")
+    assert child_after not in Parent.hooks.iter("after_receive")
 
 
 @pytest.mark.asyncio

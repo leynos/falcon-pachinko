@@ -332,9 +332,7 @@ class WebSocketRouter:
         resolved, remaining, params = self._resolve_subroutes(
             resource, remaining, params, chain
         )
-        if remaining not in ("", "/"):
-            return None
-        return resolved, remaining, params, chain
+        return (resolved, remaining, params, chain) if remaining in ("", "/") else None
 
     async def _handle_websocket_connection(
         self,
@@ -346,14 +344,13 @@ class WebSocketRouter:
         hook_manager: HookManager,
     ) -> bool:
         """Accept or close ``ws`` based on ``resource`` decision."""
-        params_obj: dict[str, object] = {key: value for key, value in params.items()}
+        params_obj: dict[str, object] = dict(params)
         context = await hook_manager.notify_before_connect(
             resource, req=req, ws=ws, params=params_obj
         )
-        if context.params is None:
-            params_for_handler: dict[str, object] = params_obj
-        else:
-            params_for_handler = context.params
+        params_for_handler: dict[str, object] = (
+            context.params if context.params is not None else params_obj
+        )
         try:
             should_accept = await resource.on_connect(req, ws, **params_for_handler)
         except Exception as exc:

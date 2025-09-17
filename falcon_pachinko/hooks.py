@@ -77,11 +77,17 @@ class HookContext:
 class HookCollection:
     """Registry for lifecycle hooks tied to a particular scope."""
 
-    def __init__(self, initial: dict[str, list[HookCallable]] | None = None) -> None:
+    def __init__(
+        self,
+        initial: dict[str, list[HookCallable]] | None = None,
+        *,
+        parent: HookCollection | None = None,
+    ) -> None:
         self._registry: dict[str, list[HookCallable]] = {
             event: list(initial.get(event, ())) if initial else []
             for event in _SUPPORTED_EVENTS
         }
+        self._parent: HookCollection | None = parent
 
     def add(self, event: str, hook: HookCallable) -> None:
         """Register ``hook`` for the given ``event``."""
@@ -98,14 +104,28 @@ class HookCollection:
         if event not in _SUPPORTED_EVENTS:
             msg = f"Unsupported hook event: {event!r}"
             raise ValueError(msg)
-        return tuple(self._registry[event])
+        local = tuple(self._registry[event])
+        if self._parent is None:
+            return local
+        parent_hooks = self._parent.iter(event)
+        if not parent_hooks:
+            return local
+        return parent_hooks + local
 
     @classmethod
     def clone_from(cls, other: HookCollection | None) -> HookCollection:
         """Return a deep copy of ``other`` or an empty collection."""
         if other is None:
             return cls()
-        return cls({event: list(other._registry[event]) for event in _SUPPORTED_EVENTS})
+        return cls(
+            {event: list(other._registry[event]) for event in _SUPPORTED_EVENTS},
+            parent=other._parent,
+        )
+
+    @classmethod
+    def inherit(cls, parent: HookCollection | None) -> HookCollection:
+        """Return a new collection whose iteration includes ``parent`` hooks."""
+        return cls(parent=parent)
 
 
 class HookManager:
@@ -121,43 +141,36 @@ class HookManager:
             msg = "HookManager requires at least one resource"
             raise ValueError(msg)
         self._global_hooks = global_hooks
-        self._resources = tuple(resources)
-        self._index = {
-            id(resource): idx for idx, resource in enumerate(self._resources)
-        }
+        self._resources = list(resources)
 
-    def _iter_resources(
-        self, target: WebSocketResource
-    ) -> tuple[WebSocketResource, ...]:
-        try:
-            idx = self._index[id(target)]
-        except KeyError as exc:  # pragma: no cover - defensive programming
+    def _build_layers(
+        self, target: WebSocketResource, event: str
+    ) -> list[tuple[WebSocketResource | None, tuple[HookCallable, ...]]]:
+        layers: list[tuple[WebSocketResource | None, tuple[HookCallable, ...]]] = [
+            (None, self._global_hooks.iter(event))
+        ]
+        for resource in self._resources:
+            layers.append((resource, resource.hooks.iter(event)))
+            if resource is target:
+                break
+        else:  # pragma: no cover - defensive programming
             msg = "target resource not managed by this HookManager"
-            raise ValueError(msg) from exc
-        return self._resources[: idx + 1]
+            raise ValueError(msg)
+        return layers
 
-    async def _invoke(
-        self, hooks: tuple[HookCallable, ...], context: HookContext
+    async def _run_hooks(
+        self, event: str, context: HookContext, *, reverse: bool = False
     ) -> None:
-        for hook in hooks:
-            result = hook(context)
-            if inspect.isawaitable(result):
-                await typ.cast("typ.Awaitable[None]", result)
-
-    async def _run_before(self, event: str, context: HookContext) -> None:
-        context.resource = None
-        await self._invoke(self._global_hooks.iter(event), context)
-        for resource in self._iter_resources(context.target):
+        layers = self._build_layers(context.target, event)
+        if reverse:
+            layers.reverse()
+        for resource, hooks in layers:
             context.resource = resource
-            await self._invoke(resource.hooks.iter(event), context)
+            for hook in hooks:
+                result = hook(context)
+                if inspect.isawaitable(result):
+                    await typ.cast("typ.Awaitable[None]", result)
         context.resource = None
-
-    async def _run_after(self, event: str, context: HookContext) -> None:
-        for resource in reversed(self._iter_resources(context.target)):
-            context.resource = resource
-            await self._invoke(resource.hooks.iter(event), context)
-        context.resource = None
-        await self._invoke(self._global_hooks.iter(event), context)
 
     async def notify_before_connect(
         self,
@@ -176,13 +189,13 @@ class HookManager:
             ws=ws,
             params=params,
         )
-        await self._run_before("before_connect", context)
+        await self._run_hooks("before_connect", context)
         return context
 
     async def notify_after_connect(self, context: HookContext) -> None:
         """Run ``after_connect`` hooks using ``context``."""
         context.event = "after_connect"
-        await self._run_after("after_connect", context)
+        await self._run_hooks("after_connect", context, reverse=True)
 
     async def notify_before_receive(
         self,
@@ -199,13 +212,13 @@ class HookManager:
             ws=ws,
             raw=raw,
         )
-        await self._run_before("before_receive", context)
+        await self._run_hooks("before_receive", context)
         return context
 
     async def notify_after_receive(self, context: HookContext) -> None:
         """Run ``after_receive`` hooks using ``context``."""
         context.event = "after_receive"
-        await self._run_after("after_receive", context)
+        await self._run_hooks("after_receive", context, reverse=True)
 
     async def notify_before_disconnect(
         self,
@@ -222,5 +235,5 @@ class HookManager:
             ws=ws,
             close_code=close_code,
         )
-        await self._run_before("before_disconnect", context)
+        await self._run_hooks("before_disconnect", context)
         return context
