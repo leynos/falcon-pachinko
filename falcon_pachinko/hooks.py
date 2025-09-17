@@ -14,6 +14,8 @@ import dataclasses as dc
 import inspect
 import typing as typ
 
+from typing_extensions import Unpack
+
 if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints only
     import falcon
 
@@ -22,6 +24,17 @@ if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints only
 
 
 HookCallable = typ.Callable[["HookContext"], typ.Awaitable[None] | None]
+
+
+class _HookContextKwargs(typ.TypedDict, total=False):
+    req: falcon.Request | None
+    ws: WebSocketLike | None
+    params: dict[str, object] | None
+    raw: str | bytes | None
+    result: bool | None
+    error: BaseException | None
+    close_code: int | None
+
 
 _SUPPORTED_EVENTS = (
     "before_connect",
@@ -172,33 +185,23 @@ class HookManager:
                     await typ.cast("typ.Awaitable[None]", result)
         context.resource = None
 
-    async def _notify_before(
+    async def _run_before_hooks(self, context: HookContext) -> HookContext:
+        await self._run_hooks(context.event, context)
+        return context
+
+    async def _notify_lifecycle_event(
         self,
         event: str,
         target: WebSocketResource,
-        *,
-        req: falcon.Request | None = None,
-        ws: WebSocketLike | None = None,
-        params: dict[str, object] | None = None,
-        raw: str | bytes | None = None,
-        result: bool | None = None,
-        error: BaseException | None = None,
-        close_code: int | None = None,
+        **kwargs: Unpack[_HookContextKwargs],
     ) -> HookContext:
         context = HookContext(
             event=event,
             target=target,
             resource=None,
-            req=req,
-            ws=ws,
-            params=params,
-            raw=raw,
-            result=result,
-            error=error,
-            close_code=close_code,
+            **kwargs,
         )
-        await self._run_hooks(event, context)
-        return context
+        return await self._run_before_hooks(context)
 
     async def notify_before_connect(
         self,
@@ -209,7 +212,7 @@ class HookManager:
         params: dict[str, object],
     ) -> HookContext:
         """Fire ``before_connect`` hooks and return the shared context."""
-        return await self._notify_before(
+        return await self._notify_lifecycle_event(
             "before_connect",
             target,
             req=req,
@@ -230,7 +233,7 @@ class HookManager:
         raw: str | bytes,
     ) -> HookContext:
         """Run ``before_receive`` hooks and return the shared context."""
-        return await self._notify_before(
+        return await self._notify_lifecycle_event(
             "before_receive",
             target,
             ws=ws,
@@ -250,7 +253,7 @@ class HookManager:
         close_code: int,
     ) -> HookContext:
         """Run ``before_disconnect`` hooks and return the shared context."""
-        return await self._notify_before(
+        return await self._notify_lifecycle_event(
             "before_disconnect",
             target,
             ws=ws,
