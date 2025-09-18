@@ -194,6 +194,19 @@ class HookManager:
                     await typ.cast("typ.Awaitable[None]", result)
         context.resource = None
 
+    def _prepare_hook_context(
+        self,
+        event: str,
+        target: WebSocketResource,
+        context: HookContext | None = None,
+        **kwargs: Unpack[_HookContextKwargs],
+    ) -> HookContext:
+        """Create or update hook context for the given event."""
+        if context is None:
+            return HookContext(event=event, target=target, resource=None, **kwargs)
+        context.event = event
+        return context
+
     async def _dispatch_event(
         self,
         event: str,
@@ -204,11 +217,7 @@ class HookManager:
         **kwargs: Unpack[_HookContextKwargs],
     ) -> HookContext:
         """Create or reuse ``context`` before executing ``event`` hooks."""
-        ctx = context
-        if ctx is None:
-            ctx = HookContext(event=event, target=target, resource=None, **kwargs)
-        else:
-            ctx.event = event
+        ctx = self._prepare_hook_context(event, target, context, **kwargs)
         await self._run_hooks(event, ctx, reverse=reverse)
         return ctx
 
