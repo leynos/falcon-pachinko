@@ -117,11 +117,17 @@ class WebSocketResource:
         cls._apply_overrides(handlers)
         cls.handlers = handlers
         cls._init_schema_registry()
-        parent_hooks = getattr(cls, "hooks", None)
-        if isinstance(parent_hooks, HookCollection):
-            cls.hooks = HookCollection.inherit(parent_hooks)
-        else:
-            cls.hooks = HookCollection()
+
+        # Locate the nearest ancestor with a hook registry so that subclasses
+        # observe later parent registrations without sharing mutable state.
+        parent_hooks = None
+        for base in cls.__mro__[1:]:
+            candidate = getattr(base, "hooks", None)
+            if isinstance(candidate, HookCollection):
+                parent_hooks = candidate
+                break
+
+        cls.hooks = HookCollection.inherit(parent_hooks)
 
     @classmethod
     def _collect_base_handlers(cls) -> dict[str, HandlerInfo]:
