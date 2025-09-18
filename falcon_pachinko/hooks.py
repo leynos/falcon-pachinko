@@ -45,7 +45,10 @@ _SUPPORTED_EVENTS = (
 )
 
 
-@dc.dataclass(slots=True)
+dataclasses = dc
+
+
+@dataclasses.dataclass(slots=True)
 class HookContext:
     """Context object passed to hook callbacks.
 
@@ -141,6 +144,14 @@ class HookCollection:
         return cls(parent=parent)
 
 
+@dataclasses.dataclass
+class _DispatchOptions:
+    """Options for hook event dispatching."""
+
+    reverse: bool = False
+    context: HookContext | None = None
+
+
 class HookManager:
     """Coordinate hook execution across router and resource tiers."""
 
@@ -199,14 +210,15 @@ class HookManager:
         self,
         event: str,
         target: WebSocketResource,
-        *,
-        reverse: bool = False,
-        context: HookContext | None = None,
+        options: _DispatchOptions | None = None,
         **kwargs: Unpack[_HookContextKwargs],
     ) -> HookContext:
         """Create or reuse ``context`` before executing ``event`` hooks."""
-        ctx = self._prepare_hook_context(event, target, context, **kwargs)
-        await self._run_hooks(event, ctx, reverse=reverse)
+        if options is None:
+            options = _DispatchOptions()
+
+        ctx = self._prepare_hook_context(event, target, options.context, **kwargs)
+        await self._run_hooks(event, ctx, reverse=options.reverse)
         return ctx
 
     async def _notify_before_event(
@@ -236,8 +248,7 @@ class HookManager:
         await self._dispatch_event(
             "after_connect",
             target=context.target,
-            reverse=True,
-            context=context,
+            options=_DispatchOptions(reverse=True, context=context),
         )
 
     async def notify_before_receive(
@@ -255,8 +266,7 @@ class HookManager:
         await self._dispatch_event(
             "after_receive",
             target=context.target,
-            reverse=True,
-            context=context,
+            options=_DispatchOptions(reverse=True, context=context),
         )
 
     async def notify_before_disconnect(
