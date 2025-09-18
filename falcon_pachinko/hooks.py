@@ -198,8 +198,8 @@ class HookManager:
     async def _dispatch_event(
         self,
         event: str,
-        *,
         target: WebSocketResource,
+        *,
         reverse: bool = False,
         context: HookContext | None = None,
         **kwargs: Unpack[_HookContextKwargs],
@@ -215,7 +215,7 @@ class HookManager:
         target: WebSocketResource,
         **kwargs: Unpack[_HookContextKwargs],
     ) -> HookContext:
-        """Dispatch before-* lifecycle events."""
+        """Helper to dispatch before-* lifecycle events."""  # noqa: D401
         return await self._dispatch_event(event, target=target, **kwargs)
 
     async def notify_before_connect(
