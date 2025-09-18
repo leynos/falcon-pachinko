@@ -199,6 +199,15 @@ class HookManager:
         await self._run_hooks(event, ctx, reverse=reverse)
         return ctx
 
+    async def _notify_before_event(
+        self,
+        event: str,
+        target: WebSocketResource,
+        **kwargs: Unpack[_HookContextKwargs],
+    ) -> HookContext:
+        """Dispatch before-* lifecycle events."""
+        return await self._dispatch_event(event, target=target, **kwargs)
+
     async def notify_before_connect(
         self,
         target: WebSocketResource,
@@ -208,12 +217,8 @@ class HookManager:
         params: dict[str, object],
     ) -> HookContext:
         """Fire ``before_connect`` hooks and return the shared context."""
-        return await self._dispatch_event(
-            "before_connect",
-            target=target,
-            req=req,
-            ws=ws,
-            params=params,
+        return await self._notify_before_event(
+            "before_connect", target, req=req, ws=ws, params=params
         )
 
     async def notify_after_connect(self, context: HookContext) -> None:
@@ -233,12 +238,7 @@ class HookManager:
         raw: str | bytes,
     ) -> HookContext:
         """Run ``before_receive`` hooks and return the shared context."""
-        return await self._dispatch_event(
-            "before_receive",
-            target=target,
-            ws=ws,
-            raw=raw,
-        )
+        return await self._notify_before_event("before_receive", target, ws=ws, raw=raw)
 
     async def notify_after_receive(self, context: HookContext) -> None:
         """Run ``after_receive`` hooks using ``context``."""
@@ -257,9 +257,6 @@ class HookManager:
         close_code: int,
     ) -> HookContext:
         """Run ``before_disconnect`` hooks and return the shared context."""
-        return await self._dispatch_event(
-            "before_disconnect",
-            target=target,
-            ws=ws,
-            close_code=close_code,
+        return await self._notify_before_event(
+            "before_disconnect", target, ws=ws, close_code=close_code
         )
