@@ -469,7 +469,7 @@ class WebSocketRouter:
         hook_manager: HookManager,
     ) -> bool:
         """Complete the connection lifecycle and honour ``should_accept``."""
-        context.result = bool(should_accept)
+        context.result = should_accept
         await hook_manager.notify_after_connect(context)
         if not should_accept:
             await ws.close()
