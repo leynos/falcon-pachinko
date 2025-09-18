@@ -155,7 +155,6 @@ class WebSocketRouter:
 
         self._validate_resource_type(resource)
         path, canonical = self._normalize_route_path(path)
-        self._check_route_conflicts(canonical, name, path)
 
         # Compile once to validate the template. The prefix is applied lazily
         # upon the first request since it may not yet be known at this point.
@@ -164,11 +163,12 @@ class WebSocketRouter:
         factory = functools.partial(resource, *args, **kwargs)
 
         with self._mount_lock:
+            self._check_route_conflicts(canonical, name, path)
             self._raw.append(WebSocketRouter._RawRoute(path, canonical, factory))
+            if name:
+                self._names[name] = path
             if self._mount_prefix:
                 self._compile_and_store_route(canonical, factory)
-        if name:
-            self._names[name] = path
 
     def _validate_resource_type(
         self, resource: type[WebSocketResource] | typ.Callable[..., WebSocketResource]
@@ -187,7 +187,15 @@ class WebSocketRouter:
     def _check_route_conflicts(
         self, canonical: str, name: str | None, path: str | None = None
     ) -> None:
-        """Raise if ``canonical`` or ``name`` already exists."""
+        """Raise if ``canonical`` or ``name`` already exists.
+
+        Callers must hold :attr:`_mount_lock` while invoking this helper to
+        avoid racing concurrent registrations.
+        """
+        if not self._mount_lock.locked():
+            msg = "_check_route_conflicts requires _mount_lock to be held"
+            raise RuntimeError(msg)
+
         display_path = path if path is not None else canonical
         if any(r.canonical == canonical for r in self._raw):
             msg = f"route path {display_path!r} already registered"
