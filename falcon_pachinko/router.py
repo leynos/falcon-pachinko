@@ -97,6 +97,11 @@ class WebSocketRouter:
         self._mount_prefix: str = ""
         self._mount_lock = threading.Lock()
         self._names: dict[str, str] = {}
+        self._registration = _RouteRegistrationService(
+            lock=self._mount_lock,
+            raw_routes=self._raw,
+            names=self._names,
+        )
         self.global_hooks = HookCollection()
         self.name = name
 
@@ -154,7 +159,7 @@ class WebSocketRouter:
             kwargs = {}
 
         self._validate_resource_type(resource)
-        path, canonical = self._normalize_route_path(path)
+        path, canonical = self._registration.normalize_path(path)
 
         # Compile once to validate the template. The prefix is applied lazily
         # upon the first request since it may not yet be known at this point.
@@ -163,7 +168,7 @@ class WebSocketRouter:
         factory = functools.partial(resource, *args, **kwargs)
 
         with self._mount_lock:
-            self._check_route_conflicts(canonical, name, path)
+            self._registration.check_conflicts(canonical, name, path=path)
             self._raw.append(WebSocketRouter._RawRoute(path, canonical, factory))
             if name:
                 self._names[name] = path
@@ -177,32 +182,6 @@ class WebSocketRouter:
         if not callable(resource):
             msg = "resource must be callable"
             raise TypeError(msg)
-
-    def _normalize_route_path(self, path: str) -> tuple[str, str]:
-        """Return normalized and canonical variants of ``path``."""
-        normalized = _normalize_path(path)
-        canonical = _canonical_path(normalized)
-        return normalized, canonical
-
-    def _check_route_conflicts(
-        self, canonical: str, name: str | None, path: str | None = None
-    ) -> None:
-        """Raise if ``canonical`` or ``name`` already exists.
-
-        Callers must hold :attr:`_mount_lock` while invoking this helper to
-        avoid racing concurrent registrations.
-        """
-        if not self._mount_lock.locked():
-            msg = "_check_route_conflicts requires _mount_lock to be held"
-            raise RuntimeError(msg)
-
-        display_path = path if path is not None else canonical
-        if any(r.canonical == canonical for r in self._raw):
-            msg = f"route path {display_path!r} already registered"
-            raise ValueError(msg)
-        if name and name in self._names:
-            msg = f"route name {name!r} already registered"
-            raise ValueError(msg)
 
     def url_for(self, name: str, **params: object) -> str:
         """Return the URL path associated with ``name`` formatted with ``params``."""
@@ -476,3 +455,43 @@ class WebSocketRouter:
             return True
         await ws.accept()
         return True
+
+
+class _RouteRegistrationService:
+    """Manage route normalization and conflict detection for a router."""
+
+    def __init__(
+        self,
+        *,
+        lock: threading.Lock,
+        raw_routes: list[WebSocketRouter._RawRoute],
+        names: dict[str, str],
+    ) -> None:
+        self._lock = lock
+        self._raw_routes = raw_routes
+        self._names = names
+
+    def normalize_path(self, path: str) -> tuple[str, str]:
+        """Return normalized and canonical variants of ``path``."""
+        normalized = _normalize_path(path)
+        canonical = _canonical_path(normalized)
+        return normalized, canonical
+
+    def check_conflicts(
+        self, canonical: str, name: str | None, *, path: str | None = None
+    ) -> None:
+        """Raise if ``canonical`` or ``name`` already exists under ``lock``."""
+        if not self._lock.locked():
+            msg = (
+                "_RouteRegistrationService.check_conflicts requires "
+                "_mount_lock to be held"
+            )
+            raise RuntimeError(msg)
+
+        display_path = path if path is not None else canonical
+        if any(route.canonical == canonical for route in self._raw_routes):
+            msg = f"route path {display_path!r} already registered"
+            raise ValueError(msg)
+        if name and name in self._names:
+            msg = f"route name {name!r} already registered"
+            raise ValueError(msg)
