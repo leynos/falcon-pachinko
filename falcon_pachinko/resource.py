@@ -14,6 +14,7 @@ from __future__ import annotations
 import functools
 import inspect
 import typing as typ
+from contextlib import asynccontextmanager, suppress
 
 if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints
     import collections.abc as cabc
@@ -42,7 +43,7 @@ class WebSocketResource:
     handlers: typ.ClassVar[dict[str, HandlerInfo]]
     _struct_handlers: typ.ClassVar[dict[type, HandlerInfo]] = {}
     schema: type | None = None
-    hooks: HookCollection = HookCollection()
+    hooks: typ.ClassVar[HookCollection] = HookCollection()
 
     def add_subroute(
         self,
@@ -230,11 +231,26 @@ class WebSocketResource:
         if manager is None:
             manager = HookManager(global_hooks=HookCollection(), resources=(self,))
             self._hook_manager = manager  # type: ignore[attr-defined]
-        context = await manager.notify_before_receive(self, ws=ws, raw=raw)
-        try:
+        async with _receive_hooks(manager, self, ws=ws, raw=raw):
             await dispatch(self, ws, raw)
-        except Exception as exc:
-            context.error = exc
+
+
+@asynccontextmanager
+async def _receive_hooks(
+    manager: HookManager,
+    target: WebSocketResource,
+    *,
+    ws: WebSocketLike,
+    raw: str | bytes,
+) -> typ.AsyncIterator[None]:
+    """Balance before/after receive hooks while guarding original errors."""
+    context = await manager.notify_before_receive(target, ws=ws, raw=raw)
+    try:
+        yield
+    except Exception as exc:
+        context.error = exc
+        with suppress(Exception):
             await manager.notify_after_receive(context)
-            raise
+        raise
+    else:
         await manager.notify_after_receive(context)

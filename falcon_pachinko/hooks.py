@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses as dc
 import inspect
 import typing as typ
+
 import typing_extensions as tpe
 
 if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints only
@@ -146,21 +147,32 @@ class HookManager:
     async def _run_hooks(
         self, event: str, context: HookContext, *, reverse: bool = False
     ) -> None:
-        layers: list[tuple[WebSocketResource | None, tuple[HookCallable, ...]]] = [
-            (None, self._global_hooks.iter(event))
-        ]
+        layers = self._build_execution_layers(event, context.target)
+        if reverse:
+            layers.reverse()
+        await self._execute_layer_hooks(layers, context)
+        return
+
+    def _build_execution_layers(
+        self, event: str, target: WebSocketResource
+    ) -> list[tuple[WebSocketResource | None, tuple[HookCallable, ...]]]:
+        """Build the execution layers from global hooks to target resource."""
+        layers = [(None, self._global_hooks.iter(event))]
 
         for resource in self._resources:
             layers.append((resource, resource.hooks.iter(event)))
-            if resource is context.target:
-                break
-        else:
-            msg = "target resource not managed by this HookManager"
-            raise ValueError(msg)
+            if resource is target:
+                return layers
 
-        if reverse:
-            layers.reverse()
+        msg = "target resource not managed by this HookManager"
+        raise ValueError(msg)
 
+    async def _execute_layer_hooks(
+        self,
+        layers: list[tuple[WebSocketResource | None, tuple[HookCallable, ...]]],
+        context: HookContext,
+    ) -> None:
+        """Execute all hooks across the provided layers."""
         for resource, hooks in layers:
             context.resource = resource
             for hook in hooks:
