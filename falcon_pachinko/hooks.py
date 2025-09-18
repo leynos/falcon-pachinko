@@ -4,7 +4,7 @@ The multi-tiered hook system allows applications to register callbacks that
 wrap the WebSocket lifecycle at both the router (global) and resource levels.
 Hooks execute in an "onion-style" order so that outer layers (global hooks)
 run before inner ones and after hooks unwind in reverse order. This mirrors the
-design outlined in :mod:`docs/falcon-websocket-extension-design.md` and keeps
+design outlined in :doc:`/falcon-websocket-extension-design` and keeps
 cross-cutting concerns explicit and testable.
 """
 
@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses as dc
 import inspect
 import typing as typ
+import typing_extensions as tpe
 
 if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints only
     import falcon
@@ -22,6 +23,18 @@ if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints only
 
 
 HookCallable = typ.Callable[["HookContext"], typ.Awaitable[None] | None]
+
+
+class _HookContextKwargs(typ.TypedDict, total=False):
+    """Optional fields forwarded when constructing :class:`HookContext`."""
+
+    req: falcon.Request
+    ws: WebSocketLike
+    params: dict[str, object]
+    raw: str | bytes
+    result: bool
+    error: BaseException
+    close_code: int
 
 
 _SUPPORTED_EVENTS = (
@@ -106,22 +119,8 @@ class HookCollection:
             msg = f"Unsupported hook event: {event!r}"
             raise ValueError(msg)
         local = tuple(self._registry[event])
-        if self._parent is None:
-            return local
-        parent_hooks = self._parent.iter(event)
-        if not parent_hooks:
-            return local
+        parent_hooks = self._parent.iter(event) if self._parent is not None else ()
         return parent_hooks + local
-
-    @classmethod
-    def clone_from(cls, other: HookCollection | None) -> HookCollection:
-        """Return a deep copy of ``other`` or an empty collection."""
-        if other is None:
-            return cls()
-        return cls(
-            {event: list(other._registry[event]) for event in _SUPPORTED_EVENTS},
-            parent=other._parent,
-        )
 
     @classmethod
     def inherit(cls, parent: HookCollection | None) -> HookCollection:
@@ -169,6 +168,23 @@ class HookManager:
                 if inspect.isawaitable(result):
                     await typ.cast("typ.Awaitable[None]", result)
         context.resource = None
+        return
+
+    async def _notify_before_event(
+        self,
+        event: str,
+        target: WebSocketResource,
+        **kwargs: tpe.Unpack[_HookContextKwargs],
+    ) -> HookContext:
+        """Dispatch before-* lifecycle events."""
+        context = HookContext(
+            event=event,
+            target=target,
+            resource=None,
+            **kwargs,
+        )
+        await self._run_hooks(event, context)
+        return context
 
     async def notify_before_connect(
         self,
@@ -179,21 +195,15 @@ class HookManager:
         params: dict[str, object],
     ) -> HookContext:
         """Fire ``before_connect`` hooks and return the shared context."""
-        context = HookContext(
-            event="before_connect",
-            target=target,
-            resource=None,
-            req=req,
-            ws=ws,
-            params=params,
+        return await self._notify_before_event(
+            "before_connect", target, req=req, ws=ws, params=params
         )
-        await self._run_hooks("before_connect", context)
-        return context
 
     async def notify_after_connect(self, context: HookContext) -> None:
         """Run ``after_connect`` hooks using ``context``."""
         context.event = "after_connect"
         await self._run_hooks("after_connect", context, reverse=True)
+        return
 
     async def notify_before_receive(
         self,
@@ -203,20 +213,13 @@ class HookManager:
         raw: str | bytes,
     ) -> HookContext:
         """Run ``before_receive`` hooks and return the shared context."""
-        context = HookContext(
-            event="before_receive",
-            target=target,
-            resource=None,
-            ws=ws,
-            raw=raw,
-        )
-        await self._run_hooks("before_receive", context)
-        return context
+        return await self._notify_before_event("before_receive", target, ws=ws, raw=raw)
 
     async def notify_after_receive(self, context: HookContext) -> None:
         """Run ``after_receive`` hooks using ``context``."""
         context.event = "after_receive"
         await self._run_hooks("after_receive", context, reverse=True)
+        return
 
     async def notify_before_disconnect(
         self,
@@ -226,12 +229,6 @@ class HookManager:
         close_code: int,
     ) -> HookContext:
         """Run ``before_disconnect`` hooks and return the shared context."""
-        context = HookContext(
-            event="before_disconnect",
-            target=target,
-            resource=None,
-            ws=ws,
-            close_code=close_code,
+        return await self._notify_before_event(
+            "before_disconnect", target, ws=ws, close_code=close_code
         )
-        await self._run_hooks("before_disconnect", context)
-        return context
