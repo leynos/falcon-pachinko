@@ -10,7 +10,7 @@ import msgspec.json as msjson
 import pytest
 
 from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
-from falcon_pachinko.unittests.helpers import DummyWS
+from falcon_pachinko.unittests.helpers import DummyWS, bind_default_hooks
 
 
 class EchoPayload(ms.Struct):
@@ -214,6 +214,7 @@ class LenientResource(WebSocketResource):
 async def test_dispatch_calls_registered_handler() -> None:
     """Test that dispatching a message with a registered type calls the handler."""
     r = EchoResource()
+    bind_default_hooks(r)
     raw = msjson.encode({"type": "echo", "payload": {"text": "hi"}})
     await r.dispatch(DummyWS(), raw)
     assert r.seen == ["hi"]
@@ -229,6 +230,7 @@ async def test_dispatch_unknown_type_calls_fallback() -> None:
     EchoResource, the raw message is appended to the resource's fallback list.
     """
     r = EchoResource()
+    bind_default_hooks(r)
     raw = msjson.encode({"type": "unknown", "payload": {"text": "oops"}})
     await r.dispatch(DummyWS(), raw)
     assert r.fallback == [raw]
@@ -239,6 +241,8 @@ async def test_handler_shared_across_instances() -> None:
     """Test that handlers are shared across instances of the same resource class."""
     r1 = EchoResource()
     r2 = EchoResource()
+    bind_default_hooks(r1)
+    bind_default_hooks(r2)
     raw = msjson.encode({"type": "echo", "payload": {"text": "hey"}})
     await r1.dispatch(DummyWS(), raw)
     await r2.dispatch(DummyWS(), raw)
@@ -263,6 +267,7 @@ async def test_payload_type_none_passes_raw(payload: object, expected: object) -
     the payload is missing.
     """
     r = RawResource()
+    bind_default_hooks(r)
     msg: dict[str, typ.Any] = {"type": "raw"}
     if payload != "MISSING":
         msg["payload"] = payload
@@ -281,6 +286,7 @@ async def test_invalid_payload_calls_fallback() -> None:
     handler.
     """
     r = EchoResource()
+    bind_default_hooks(r)
     raw = msjson.encode({"type": "echo", "payload": {"text": 42}})
     await r.dispatch(DummyWS(), raw)
     assert r.fallback == [raw]
@@ -291,6 +297,7 @@ async def test_invalid_payload_calls_fallback() -> None:
 async def test_invalid_envelope_type_calls_fallback() -> None:
     """Non-string ``type`` fields trigger the fallback handler."""
     r = EchoResource()
+    bind_default_hooks(r)
     raw = msjson.encode({"type": 123, "payload": {"text": "hi"}})
     await r.dispatch(DummyWS(), raw)
     assert r.fallback == [raw]
@@ -301,6 +308,7 @@ async def test_invalid_envelope_type_calls_fallback() -> None:
 async def test_extra_fields_strict_true_calls_fallback() -> None:
     """Extra fields trigger fallback when strict is True."""
     r = StrictResource()
+    bind_default_hooks(r)
     raw = msjson.encode({"type": "extra", "payload": {"val": 1, "extra": 2}})
     await r.dispatch(DummyWS(), raw)
     assert r.fallback == [raw]
@@ -311,6 +319,7 @@ async def test_extra_fields_strict_true_calls_fallback() -> None:
 async def test_extra_fields_strict_false_processed() -> None:
     """Extra fields are ignored when strict=False."""
     r = LenientResource()
+    bind_default_hooks(r)
     raw = msjson.encode({"type": "extra", "payload": {"val": 3, "extra": 4}})
     await r.dispatch(DummyWS(), raw)
     assert r.seen == [3]
@@ -321,6 +330,7 @@ async def test_extra_fields_strict_false_processed() -> None:
 async def test_on_tag_dispatch_envelope() -> None:
     """Messages with matching ``on_{tag}`` handlers are dispatched."""
     r = ConventionalResource()
+    bind_default_hooks(r)
     raw = msjson.encode({"type": "echo", "payload": {"x": 1}})
     await r.dispatch(DummyWS(), raw)
     assert r.seen == [{"x": 1}]
@@ -330,6 +340,7 @@ async def test_on_tag_dispatch_envelope() -> None:
 async def test_on_tag_camel_case() -> None:
     """CamelCase tags are converted to snake_case."""
     r = CamelResource()
+    bind_default_hooks(r)
     raw = msjson.encode(CamelResource.SendMessage(text="hi"))
     await r.dispatch(DummyWS(), raw)
     assert r.messages == ["hi"]
@@ -339,6 +350,7 @@ async def test_on_tag_camel_case() -> None:
 async def test_sync_handler_ignored_and_fallback_behavior() -> None:
     """Synchronous ``on_{tag}`` handlers are ignored by dispatch."""
     r = SyncHandlerResource()
+    bind_default_hooks(r)
     raw = msjson.encode({"type": "sync", "payload": {"val": 1}})
     await r.dispatch(DummyWS(), raw)
     # The sync handler should not be called

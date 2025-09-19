@@ -26,7 +26,7 @@ from falcon_pachinko.exceptions import (
     DuplicateHandlerRegistrationError,
     HandlerSignatureError,
 )
-from falcon_pachinko.unittests.helpers import DummyWS
+from falcon_pachinko.unittests.helpers import DummyWS, bind_default_hooks
 
 
 class PingPayload(ms.Struct):
@@ -66,6 +66,7 @@ async def test_decorator_registers_handler() -> None:
     3. The payload is properly deserialized and passed to the handler
     """
     r = DecoratedResource()
+    bind_default_hooks(r)
     raw = msjson.encode({"type": "ping", "payload": {"text": "hi"}})
     await r.dispatch(DummyWS(), raw)
     assert r.seen == ["hi"]
@@ -206,6 +207,7 @@ async def test_handlers_inherited() -> None:
     4. Method overrides without decoration still work as handlers
     """
     r = ChildResource()
+    bind_default_hooks(r)
     await r.dispatch(DummyWS(), msjson.encode({"type": "parent"}))
     await r.dispatch(DummyWS(), msjson.encode({"type": "child"}))
     assert r.invoked == ["parent", "child"]
@@ -220,6 +222,7 @@ async def test_decorated_override() -> None:
     precedence over the parent's handler.
     """
     r = DecoratedOverride()
+    bind_default_hooks(r)
     await r.dispatch(DummyWS(), msjson.encode({"type": "parent"}))
     assert r.invoked == "decorated"
 

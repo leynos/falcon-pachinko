@@ -45,6 +45,28 @@ class WebSocketResource:
     schema: type | None = None
     hooks: typ.ClassVar[HookCollection] = HookCollection()
 
+    def bind_hook_manager(self, manager: HookManager) -> None:
+        """Associate ``manager`` with this resource instance."""
+        self._hook_manager = manager  # type: ignore[attr-defined]
+
+    def bind_default_hook_manager(self) -> HookManager:
+        """Bind a standalone manager for direct resource usage."""
+        manager = HookManager(global_hooks=HookCollection(), resources=(self,))
+        self.bind_hook_manager(manager)
+        return manager
+
+    def _require_hook_manager(self) -> HookManager:
+        """Return the bound manager or raise a configuration error."""
+        manager = getattr(self, "_hook_manager", None)
+        if manager is None:
+            msg = (
+                "HookManager is not bound to this resource. Use "
+                "bind_hook_manager() after instantiation or dispatch via a "
+                "WebSocketRouter."
+            )
+            raise RuntimeError(msg)
+        return manager
+
     def add_subroute(
         self,
         path: str,
@@ -227,10 +249,7 @@ class WebSocketResource:
 
     async def dispatch(self, ws: WebSocketLike, raw: str | bytes) -> None:
         """Decode ``raw`` and route it to the appropriate handler."""
-        manager = getattr(self, "_hook_manager", None)
-        if manager is None:
-            manager = HookManager(global_hooks=HookCollection(), resources=(self,))
-            self._hook_manager = manager  # type: ignore[attr-defined]
+        manager = self._require_hook_manager()
         async with _receive_hooks(manager, self, ws=ws, raw=raw):
             await dispatch(self, ws, raw)
 

@@ -303,7 +303,7 @@ class WebSocketRouter:
         """Attach a :class:`HookManager` to every resource in ``chain``."""
         manager = HookManager(global_hooks=self.global_hooks, resources=chain)
         for item in chain:
-            item._hook_manager = manager  # type: ignore[attr-defined]
+            item.bind_hook_manager(manager)
         return manager
 
     def _normalize_path_remaining(
