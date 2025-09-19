@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import typing as typ
 
 import pytest
@@ -9,9 +10,11 @@ import pytest
 from falcon_pachinko import (
     HookCollection,
     HookContext,
+    HookManager,
     WebSocketResource,
     WebSocketRouter,
 )
+from falcon_pachinko.resource import _receive_hooks
 from falcon_pachinko.unittests.helpers import DummyWS
 
 
@@ -269,6 +272,33 @@ def test_hookcollection_inheritance_propagates_changes() -> None:
     Child.hooks.add("after_receive", child_after)
     assert child_after in Child.hooks.iter("after_receive")
     assert child_after not in Parent.hooks.iter("after_receive")
+
+
+@pytest.mark.asyncio
+async def test_receive_hooks_skip_cancelled_error() -> None:
+    """Cancelled dispatches propagate without invoking after hooks."""
+
+    class CancelResource(WebSocketResource):
+        pass
+
+    events: list[str] = []
+
+    async def after_hook(context: HookContext) -> None:
+        events.append(context.event)
+
+    CancelResource.hooks.add("after_receive", after_hook)
+    resource = CancelResource()
+    manager = HookManager(global_hooks=HookCollection(), resources=(resource,))
+    resource.bind_hook_manager(manager)
+
+    async def run() -> None:
+        async with _receive_hooks(manager, resource, ws=DummyWS(), raw=b"noop"):
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await run()
+
+    assert events == []
 
 
 @pytest.mark.asyncio

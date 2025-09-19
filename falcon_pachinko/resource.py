@@ -11,6 +11,7 @@ boilerplate.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import inspect
 import typing as typ
@@ -44,10 +45,11 @@ class WebSocketResource:
     _struct_handlers: typ.ClassVar[dict[type, HandlerInfo]] = {}
     schema: type | None = None
     hooks: typ.ClassVar[HookCollection] = HookCollection()
+    _hook_manager: HookManager | None
 
     def bind_hook_manager(self, manager: HookManager) -> None:
         """Associate ``manager`` with this resource instance."""
-        self._hook_manager = manager  # type: ignore[attr-defined]
+        self._hook_manager = manager
 
     def bind_default_hook_manager(self) -> HookManager:
         """Bind a standalone manager for direct resource usage."""
@@ -266,6 +268,8 @@ async def _receive_hooks(
     context = await manager.notify_before_receive(target, ws=ws, raw=raw)
     try:
         yield
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
         context.error = exc
         with suppress(Exception):
