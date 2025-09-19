@@ -27,24 +27,7 @@ if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints only
 HookCallable = typ.Callable[["HookContext"], typ.Awaitable[None] | None]
 
 
-if typ.TYPE_CHECKING:
-
-    class _StrEnumBase(str, enum.Enum):
-        """Type-checking base when :class:`enum.StrEnum` is unavailable."""
-
-        pass
-else:
-    try:
-        _StrEnumBase = typ.cast("type[enum.Enum]", enum.StrEnum)  # type: ignore[attr-defined]
-    except AttributeError:  # pragma: no cover - executed only on Python < 3.11
-
-        class _StrEnumBase(str, enum.Enum):
-            """Compatibility shim when :class:`enum.StrEnum` is unavailable."""
-
-            pass
-
-
-class HookEvent(_StrEnumBase):
+class HookEvent(enum.StrEnum):
     """Supported WebSocket lifecycle hook events."""
 
     BEFORE_CONNECT = "before_connect"

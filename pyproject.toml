@@ -3,7 +3,7 @@ name = "falcon-pachinko"
 version = "0.1.0-alpha2"
 description = "falcon-pachinko package"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { text = "ISC" }
 dependencies = ["msgspec>=0.18,<1", "falcon>=4,<5"]
 authors = [{ name = "Payton McIntosh", email = "pmcintosh@df12.net" }]
@@ -13,8 +13,6 @@ classifiers = [
   "Intended Audience :: Developers",
   "License :: OSI Approved :: ISC License (ISCL)",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Topic :: Internet :: WWW/HTTP",
@@ -30,7 +28,7 @@ dev = ["pytest", "pytest-asyncio", "pytest-bdd", "ruff", "pyright[nodejs]"]
 examples = ["aiosqlite", "uvicorn", "websocket-client"]
 
 [tool.pyright]
-pythonVersion = "3.10"
+pythonVersion = "3.12"
 typeCheckingMode = "strict"
 include = ["falcon_pachinko"]
 

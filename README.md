@@ -8,6 +8,10 @@ See
 [docs/falcon-websocket-extension-design.md](docs/falcon-websocket-extension-design.md)
  for the full design rationale.
 
+## Requirements
+
+- Python 3.12 or newer
+
 ## Key features
 
 - `app.add_websocket_route()` maps WebSocket paths to `WebSocketResource`
