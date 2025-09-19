@@ -11,9 +11,11 @@ boilerplate.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import inspect
 import typing as typ
+from contextlib import asynccontextmanager, suppress
 
 if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints
     import collections.abc as cabc
@@ -25,6 +27,7 @@ if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints
 
 from .dispatcher import dispatch
 from .handlers import Handler, HandlerInfo, _HandlesMessageDescriptor
+from .hooks import HookCollection, HookManager
 from .schema import populate_struct_handlers, validate_schema_types
 
 
@@ -41,6 +44,30 @@ class WebSocketResource:
     handlers: typ.ClassVar[dict[str, HandlerInfo]]
     _struct_handlers: typ.ClassVar[dict[type, HandlerInfo]] = {}
     schema: type | None = None
+    hooks: typ.ClassVar[HookCollection] = HookCollection()
+    _hook_manager: HookManager | None
+
+    def bind_hook_manager(self, manager: HookManager) -> None:
+        """Associate ``manager`` with this resource instance."""
+        self._hook_manager = manager
+
+    def bind_default_hook_manager(self) -> HookManager:
+        """Bind a standalone manager for direct resource usage."""
+        manager = HookManager(global_hooks=HookCollection(), resources=(self,))
+        self.bind_hook_manager(manager)
+        return manager
+
+    def _require_hook_manager(self) -> HookManager:
+        """Return the bound manager or raise a configuration error."""
+        manager = getattr(self, "_hook_manager", None)
+        if manager is None:
+            msg = (
+                "HookManager is not bound to this resource. Use "
+                "bind_hook_manager() after instantiation or dispatch via a "
+                "WebSocketRouter."
+            )
+            raise RuntimeError(msg)
+        return manager
 
     def add_subroute(
         self,
@@ -115,6 +142,17 @@ class WebSocketResource:
         cls._apply_overrides(handlers)
         cls.handlers = handlers
         cls._init_schema_registry()
+
+        # Locate the nearest ancestor with a hook registry so that subclasses
+        # observe later parent registrations without sharing mutable state.
+        parent_hooks = None
+        for base in cls.__mro__[1:]:
+            candidate = getattr(base, "hooks", None)
+            if isinstance(candidate, HookCollection):
+                parent_hooks = candidate
+                break
+
+        cls.hooks = HookCollection.inherit(parent_hooks)
 
     @classmethod
     def _collect_base_handlers(cls) -> dict[str, HandlerInfo]:
@@ -213,4 +251,29 @@ class WebSocketResource:
 
     async def dispatch(self, ws: WebSocketLike, raw: str | bytes) -> None:
         """Decode ``raw`` and route it to the appropriate handler."""
-        await dispatch(self, ws, raw)
+        manager = self._require_hook_manager()
+        async with _receive_hooks(manager, self, ws=ws, raw=raw):
+            await dispatch(self, ws, raw)
+
+
+@asynccontextmanager
+async def _receive_hooks(
+    manager: HookManager,
+    target: WebSocketResource,
+    *,
+    ws: WebSocketLike,
+    raw: str | bytes,
+) -> typ.AsyncIterator[None]:
+    """Balance before/after receive hooks while guarding original errors."""
+    context = await manager.notify_before_receive(target, ws=ws, raw=raw)
+    try:
+        yield
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        context.error = exc
+        with suppress(Exception):
+            await manager.notify_after_receive(context)
+        raise
+    else:
+        await manager.notify_after_receive(context)

@@ -7,7 +7,7 @@ import msgspec.json as msjson
 import pytest
 
 from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
-from falcon_pachinko.unittests.helpers import DummyWS
+from falcon_pachinko.unittests.helpers import DummyWS, bind_default_hooks
 
 
 class Join(ms.Struct, tag="join"):
@@ -53,6 +53,7 @@ class SchemaResource(WebSocketResource):
 async def test_schema_dispatch_to_handlers() -> None:
     """Messages matching the schema are routed to decorated handlers."""
     r = SchemaResource()
+    bind_default_hooks(r)
     await r.dispatch(DummyWS(), msjson.encode(Join(room="a")))
     await r.dispatch(DummyWS(), msjson.encode(Leave(room="b")))
     assert r.events == [("join", "a"), ("leave", "b")]
@@ -62,6 +63,7 @@ async def test_schema_dispatch_to_handlers() -> None:
 async def test_schema_unknown_tag_calls_fallback() -> None:
     """Unknown tags invoke the fallback handler with the raw message."""
     r = SchemaResource()
+    bind_default_hooks(r)
     raw = msjson.encode({"type": "oops", "room": "x"})
     await r.dispatch(DummyWS(), raw)
     assert r.events == [("raw", raw)]
@@ -71,6 +73,7 @@ async def test_schema_unknown_tag_calls_fallback() -> None:
 async def test_schema_decode_error_calls_fallback() -> None:
     """Decode failures also trigger the fallback handler."""
     r = SchemaResource()
+    bind_default_hooks(r)
     await r.dispatch(DummyWS(), b"not json")
     assert r.events == [("raw", b"not json")]
 
