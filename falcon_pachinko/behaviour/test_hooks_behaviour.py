@@ -146,6 +146,20 @@ def given_router(context: dict[str, typ.Any]) -> None:
     context["router"] = router
 
 
+@given("a router with only global hooks")
+def given_router_global_only(context: dict[str, typ.Any]) -> None:
+    """Prepare a router that only registers global hooks."""
+    router = WebSocketRouter()
+    router.global_hooks.add("before_connect", global_hook)
+    router.global_hooks.add("after_connect", global_hook)
+    router.global_hooks.add("before_receive", global_hook)
+    router.global_hooks.add("after_receive", global_hook)
+
+    router.add_route("/hooks", HookedParent)
+    router.mount("/")
+    context["router"] = router
+
+
 @when("a client connects and sends a message")
 def when_client_connects(context: dict[str, typ.Any]) -> None:
     """Simulate a connection followed by a dispatched message."""
@@ -222,6 +236,22 @@ def then_receive_order(context: dict[str, typ.Any]) -> None:
         ("parent", None),
         ("global", None),
     ]
+
+
+@then("only global hooks are recorded")
+def then_only_global_hooks(context: dict[str, typ.Any]) -> None:
+    """Ensure only router-level hooks executed for the scenario."""
+    assert context["events"] == [
+        "global.before_connect",
+        "global.after_connect",
+        "global.before_receive",
+        "handler.child",
+        "global.after_receive",
+    ]
+    params = context["child_params"]
+    assert params["global"] is True
+    assert "parent" not in params
+    assert context["after_errors"] == [("global", None)]
 
 
 @then("the child resource records hook-injected params")

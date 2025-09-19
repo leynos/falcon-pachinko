@@ -9,7 +9,7 @@ import falcon
 import falcon.asgi
 import pytest
 
-from falcon_pachinko import WebSocketResource, WebSocketRouter
+from falcon_pachinko import HookContext, WebSocketResource, WebSocketRouter
 from falcon_pachinko.unittests.helpers import DummyWS
 
 pytest_plugins = ["falcon_pachinko.unittests.test_app_install"]
@@ -38,6 +38,58 @@ class AcceptingResource(WebSocketResource):
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
         """Signal that the connection should be accepted."""
         return True
+
+
+@pytest.mark.asyncio
+async def test_router_global_hooks_wrap_lifecycle() -> None:
+    """Router-level hooks execute around connection and receive phases."""
+    events: list[str] = []
+
+    class GlobalHookResource(WebSocketResource):
+        instances: typ.ClassVar[list[GlobalHookResource]] = []
+
+        def __init__(self) -> None:
+            GlobalHookResource.instances.append(self)
+            self.params: dict[str, object] = {}
+
+        async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            self.params = params
+            return True
+
+        async def on_unhandled(self, ws: object, message: str | bytes) -> None:
+            events.append("handler.dispatch")
+
+    async def global_hook(context: HookContext) -> None:
+        if context.event == "before_connect":
+            if context.params is None:
+                context.params = {}
+            context.params["injected"] = True
+        events.append(f"global.{context.event}")
+
+    router = WebSocketRouter()
+    router.global_hooks.add("before_connect", global_hook)
+    router.global_hooks.add("after_connect", global_hook)
+    router.global_hooks.add("before_receive", global_hook)
+    router.global_hooks.add("after_receive", global_hook)
+
+    router.add_route("/hooks", GlobalHookResource)
+    router.mount("/")
+
+    ws = DummyWS()
+    req = type("Req", (), {"path": "/hooks", "path_template": ""})()
+    await router.on_websocket(req, ws)
+
+    resource = GlobalHookResource.instances[-1]
+    await resource.dispatch(ws, b'{"type":"noop"}')
+
+    assert resource.params["injected"] is True
+    assert events == [
+        "global.before_connect",
+        "global.after_connect",
+        "global.before_receive",
+        "handler.dispatch",
+        "global.after_receive",
+    ]
 
 
 async def _expect_close(
