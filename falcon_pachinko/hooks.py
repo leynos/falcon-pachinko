@@ -103,6 +103,7 @@ class HookCollection:
             for event in _SUPPORTED_EVENTS
         }
         self._parent: HookCollection | None = parent
+        self._versions: dict[str, int] = dict.fromkeys(_SUPPORTED_EVENTS, 0)
 
     def add(self, event: str, hook: HookCallable) -> None:
         """Register ``hook`` for the given ``event``."""
@@ -113,6 +114,7 @@ class HookCollection:
             msg = "hook must be callable"
             raise TypeError(msg)
         self._registry[event].append(hook)
+        self._versions[event] += 1
 
     def iter(self, event: str) -> tuple[HookCallable, ...]:
         """Return the hooks registered for ``event``."""
@@ -123,10 +125,25 @@ class HookCollection:
         parent_hooks = self._parent.iter(event) if self._parent is not None else ()
         return parent_hooks + local
 
+    def version(self, event: str) -> int:
+        """Return the mutation counter for ``event`` hooks."""
+        if event not in _SUPPORTED_EVENTS:
+            msg = f"Unsupported hook event: {event!r}"
+            raise ValueError(msg)
+        return self._versions[event]
+
     @classmethod
     def inherit(cls, parent: HookCollection | None) -> HookCollection:
         """Return a new collection whose iteration includes ``parent`` hooks."""
         return cls(parent=parent)
+
+
+@dc.dataclass(slots=True)
+class _HookLayerCacheEntry:
+    """Cached hook execution layers and their mutation tokens."""
+
+    layers: tuple[tuple[WebSocketResource | None, tuple[HookCallable, ...]], ...]
+    tokens: tuple[int, ...]
 
 
 class HookManager:
@@ -143,33 +160,48 @@ class HookManager:
             raise ValueError(msg)
         self._global_hooks = global_hooks
         self._resources = list(resources)
+        self._resource_indices: dict[WebSocketResource, int] = {
+            resource: index for index, resource in enumerate(self._resources)
+        }
+        self._layer_cache: dict[
+            tuple[str, WebSocketResource],
+            _HookLayerCacheEntry,
+        ] = {}
 
     async def _run_hooks(
         self, event: str, context: HookContext, *, reverse: bool = False
     ) -> None:
         layers = self._build_execution_layers(event, context.target)
         if reverse:
-            layers.reverse()
+            layers = tuple(reversed(layers))
         await self._execute_layer_hooks(layers, context)
         return
 
     def _build_execution_layers(
         self, event: str, target: WebSocketResource
-    ) -> list[tuple[WebSocketResource | None, tuple[HookCallable, ...]]]:
+    ) -> tuple[tuple[WebSocketResource | None, tuple[HookCallable, ...]], ...]:
         """Build the execution layers from global hooks to target resource."""
-        layers = [(None, self._global_hooks.iter(event))]
+        cache_key = (event, target)
+        cached = self._layer_cache.get(cache_key)
 
-        for resource in self._resources:
-            layers.append((resource, resource.hooks.iter(event)))
-            if resource is target:
-                return layers
+        try:
+            index = self._resource_indices[target]
+        except KeyError as exc:  # pragma: no cover - defensive guard
+            msg = "target resource not managed by this HookManager"
+            raise ValueError(msg) from exc
 
-        msg = "target resource not managed by this HookManager"
-        raise ValueError(msg)
+        tokens = self._layer_signature(event, index)
+        if cached is not None and cached.tokens == tokens:
+            return cached.layers
+
+        layers = self._construct_layers(event, index)
+        entry = _HookLayerCacheEntry(layers=layers, tokens=tokens)
+        self._layer_cache[cache_key] = entry
+        return entry.layers
 
     async def _execute_layer_hooks(
         self,
-        layers: list[tuple[WebSocketResource | None, tuple[HookCallable, ...]]],
+        layers: typ.Sequence[tuple[WebSocketResource | None, tuple[HookCallable, ...]]],
         context: HookContext,
     ) -> None:
         """Execute all hooks across the provided layers."""
@@ -181,6 +213,27 @@ class HookManager:
                     await typ.cast("typ.Awaitable[None]", result)
         context.resource = None
         return
+
+    def _layer_signature(self, event: str, index: int) -> tuple[int, ...]:
+        """Return mutation counters for global and resource hooks."""
+        tokens = [self._global_hooks.version(event)]
+        tokens.extend(
+            self._resources[position].hooks.version(event)
+            for position in range(index + 1)
+        )
+        return tuple(tokens)
+
+    def _construct_layers(
+        self, event: str, index: int
+    ) -> tuple[tuple[WebSocketResource | None, tuple[HookCallable, ...]], ...]:
+        """Materialize hook layers for ``event`` up to ``index``."""
+        layers: list[tuple[WebSocketResource | None, tuple[HookCallable, ...]]] = [
+            (None, self._global_hooks.iter(event))
+        ]
+        for position in range(index + 1):
+            resource = self._resources[position]
+            layers.append((resource, resource.hooks.iter(event)))
+        return tuple(layers)
 
     async def _notify_before_event(
         self,
