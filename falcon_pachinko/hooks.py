@@ -171,10 +171,10 @@ class HookManager:
         self._global_hooks = global_hooks
         self._resources = list(resources)
 
-    async def _run_hooks(
-        self, event: EventType, context: HookContext, *, reverse: bool = False
-    ) -> None:
-        event_name = str(event)
+    def _build_hook_layers(
+        self, event_name: str, context: HookContext
+    ) -> list[tuple[WebSocketResource | None, tuple[HookCallable, ...]]]:
+        """Build the ordered list of hook layers for execution."""
         layers: list[tuple[WebSocketResource | None, tuple[HookCallable, ...]]] = [
             (None, self._global_hooks.iter(event_name))
         ]
@@ -185,16 +185,30 @@ class HookManager:
         else:  # pragma: no cover - defensive guard
             msg = "target resource not managed by this HookManager"
             raise ValueError(msg)
+        return layers
+
+    async def _execute_hook_layer(
+        self, hooks: tuple[HookCallable, ...], context: HookContext
+    ) -> None:
+        """Execute all hooks in a single layer."""
+        for hook in hooks:
+            result = hook(context)
+            if inspect.isawaitable(result):
+                await typ.cast("typ.Awaitable[None]", result)
+        return
+
+    async def _run_hooks(
+        self, event: EventType, context: HookContext, *, reverse: bool = False
+    ) -> None:
+        event_name = str(event)
+        layers = self._build_hook_layers(event_name, context)
 
         if reverse:
             layers.reverse()
 
         for resource, hooks in layers:
             context.resource = resource
-            for hook in hooks:
-                result = hook(context)
-                if inspect.isawaitable(result):
-                    await typ.cast("typ.Awaitable[None]", result)
+            await self._execute_hook_layer(hooks, context)
         context.resource = None
         return
 
