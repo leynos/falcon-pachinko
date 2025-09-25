@@ -165,9 +165,22 @@ applications.
 
 - [ ] **Design and Implement Dependency Injection.**
 
-  - [ ] Formalize and implement a strategy for injecting shared services into
-    ephemeral `WebSocketResource` instances. This will likely involve allowing
-    a DI container or factory to be provided to the `WebSocketRouter`.
+  - [x] Formalize a strategy for injecting shared services into ephemeral
+    `WebSocketResource` instances, centring on a router-level resource factory
+    that delegates instantiation to application-provided containers.
+
+  - [ ] Extend `WebSocketRouter.__init__` to accept an optional
+    `resource_factory` callable, defaulting to the existing behaviour when not
+    supplied.
+
+  - [ ] Update the router's resource instantiation flow to invoke the provided
+    factory and ensure compatibility with nested resource composition.
+
+  - [ ] Add regression tests covering default instantiation, custom factories,
+    and dependency injection into nested resources.
+
+  - [ ] Document usage patterns (including test-oriented factories) and update
+    examples to demonstrate DI wiring.
 
 ## Phase 5: Testing, Documentation, and Examples
 
