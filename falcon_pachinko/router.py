@@ -96,8 +96,8 @@ class WebSocketRouter:
         *,
         name: str | None = None,
         resource_factory: typ.Callable[
-            [typ.Callable[[], "WebSocketResource"]],
-            "WebSocketResource",
+            [typ.Callable[[], WebSocketResource]],
+            WebSocketResource,
         ]
         | None = None,
     ) -> None:
@@ -114,13 +114,14 @@ class WebSocketRouter:
         self.global_hooks = HookCollection()
         self.name = name
         self._resource_factory: typ.Callable[
-            [typ.Callable[[], "WebSocketResource"]],
-            "WebSocketResource",
+            [typ.Callable[[], WebSocketResource]],
+            WebSocketResource,
         ]
         if resource_factory is None:
+
             def default_resource_factory(
-                factory: typ.Callable[[], "WebSocketResource"]
-            ) -> "WebSocketResource":
+                factory: typ.Callable[[], WebSocketResource],
+            ) -> WebSocketResource:
                 return factory()
 
             self._resource_factory = default_resource_factory
@@ -349,7 +350,8 @@ class WebSocketRouter:
                     return None
                 context = resource.get_child_context()
                 child_kwargs = {k: v for k, v in context.items() if k != "state"}
-                new_resource = factory(**child_kwargs)
+                child_factory = functools.partial(factory, **child_kwargs)
+                new_resource = self._resource_factory(child_factory)
                 new_resource.state = context.get("state", resource.state)
                 params = match.groupdict()
                 return new_resource, remaining, params

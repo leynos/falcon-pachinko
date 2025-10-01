@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
+import dataclasses as dc
 import typing as typ
 
 from pytest_bdd import given, scenario, then, when
@@ -19,7 +19,9 @@ class DummyWebSocket:
         self.accepted = False
         self.close_code: int | None = None
 
-    async def accept(self, subprotocol: str | None = None) -> None:  # pragma: no cover - not exercised
+    async def accept(
+        self, subprotocol: str | None = None
+    ) -> None:  # pragma: no cover - not exercised
         """Record that the connection was accepted."""
         self.accepted = True
 
@@ -28,11 +30,15 @@ class DummyWebSocket:
         self.closed = True
         self.close_code = code
 
+    async def send_media(self, data: object) -> None:  # pragma: no cover - unused
+        """Record that media was sent on the connection."""
+        self.last_media = data
+
 
 class InjectedChild(WebSocketResource):
     """Child resource capturing injected service dependencies."""
 
-    instances: typ.ClassVar[list["InjectedChild"]] = []
+    instances: typ.ClassVar[list[InjectedChild]] = []
 
     def __init__(self, *, service: str) -> None:
         self.service = service
@@ -40,6 +46,7 @@ class InjectedChild(WebSocketResource):
         InjectedChild.instances.append(self)
 
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Record path params observed during connection negotiation."""
         self.params = params
         return False
 
@@ -47,7 +54,7 @@ class InjectedChild(WebSocketResource):
 class InjectedParent(WebSocketResource):
     """Parent resource that exposes a nested child route."""
 
-    instances: typ.ClassVar[list["InjectedParent"]] = []
+    instances: typ.ClassVar[list[InjectedParent]] = []
 
     def __init__(self, *, label: str, service: str) -> None:
         self.label = label
@@ -56,16 +63,13 @@ class InjectedParent(WebSocketResource):
         InjectedParent.instances.append(self)
         self.add_subroute("child/{member}", InjectedChild)
 
-    def get_child_context(self) -> dict[str, object]:
-        """Return constructor kwargs for child resources."""
-        return {"service": self.service}
-
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Record path params observed during connection negotiation."""
         self.params = params
         return False
 
 
-@dataclasses.dataclass
+@dc.dataclass
 class RouterScenario:
     """Hold contextual state shared between steps."""
 
@@ -77,11 +81,13 @@ class RouterScenario:
     child: InjectedChild | None = None
 
 
-def _resource_factory(service: str) -> typ.Callable[[typ.Callable[[], WebSocketResource]], WebSocketResource]:
+def _resource_factory(
+    service: str,
+) -> typ.Callable[[typ.Callable[[], WebSocketResource]], WebSocketResource]:
     """Build a router-level resource factory injecting ``service``."""
 
     def build_resource(
-        route_factory: typ.Callable[[], WebSocketResource]
+        route_factory: typ.Callable[[], WebSocketResource],
     ) -> WebSocketResource:
         target = getattr(route_factory, "func", route_factory)
         args = getattr(route_factory, "args", ())

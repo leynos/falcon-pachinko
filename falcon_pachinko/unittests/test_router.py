@@ -400,11 +400,13 @@ async def test_resource_init_args_kwargs() -> None:
     assert inst.bar == 5
 
 
-def _make_resource_factory(service: object) -> typ.Callable[[typ.Callable[[], WebSocketResource]], WebSocketResource]:
+def _make_resource_factory(
+    service: object,
+) -> typ.Callable[[typ.Callable[[], WebSocketResource]], WebSocketResource]:
     """Return a factory that injects ``service`` into created resources."""
 
     def build_resource(
-        route_factory: typ.Callable[[], WebSocketResource]
+        route_factory: typ.Callable[[], WebSocketResource],
     ) -> WebSocketResource:
         target = getattr(route_factory, "func", route_factory)
         args = getattr(route_factory, "args", ())
@@ -418,7 +420,7 @@ def _make_resource_factory(service: object) -> typ.Callable[[typ.Callable[[], We
 class InjectedResource(WebSocketResource):
     """Resource that records injected dependencies."""
 
-    instances: typ.ClassVar[list["InjectedResource"]] = []
+    instances: typ.ClassVar[list[InjectedResource]] = []
 
     def __init__(self, *, config: str, service: object) -> None:
         self.config = config
@@ -426,6 +428,7 @@ class InjectedResource(WebSocketResource):
         InjectedResource.instances.append(self)
 
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Record connection params for assertion."""
         self.params = params
         return False
 
@@ -433,21 +436,22 @@ class InjectedResource(WebSocketResource):
 class InjectedChild(WebSocketResource):
     """Child resource that expects the injected service."""
 
-    instances: typ.ClassVar[list["InjectedChild"]] = []
+    instances: typ.ClassVar[list[InjectedChild]] = []
 
     def __init__(self, *, service: object) -> None:
         self.service = service
         InjectedChild.instances.append(self)
 
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Capture params for later verification."""
         self.params = params
         return False
 
 
 class InjectedParent(WebSocketResource):
-    """Parent resource that passes dependencies to its child."""
+    """Parent resource that relies on injected dependencies."""
 
-    instances: typ.ClassVar[list["InjectedParent"]] = []
+    instances: typ.ClassVar[list[InjectedParent]] = []
 
     def __init__(self, *, label: str, service: object) -> None:
         self.label = label
@@ -455,10 +459,8 @@ class InjectedParent(WebSocketResource):
         InjectedParent.instances.append(self)
         self.add_subroute("child/{member}", InjectedChild)
 
-    def get_child_context(self) -> dict[str, object]:
-        return {"service": self.service}
-
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Capture params for later verification."""
         self.params = params
         return False
 
@@ -466,7 +468,6 @@ class InjectedParent(WebSocketResource):
 @pytest.mark.asyncio
 async def test_router_resource_factory_injects_dependency() -> None:
     """Router-level factories can inject dependencies into resources."""
-
     InjectedResource.instances.clear()
     service = object()
     router = WebSocketRouter(resource_factory=_make_resource_factory(service))
@@ -487,7 +488,6 @@ async def test_router_resource_factory_injects_dependency() -> None:
 @pytest.mark.asyncio
 async def test_router_resource_factory_supports_nested_resources() -> None:
     """Injected dependencies are preserved when traversing subroutes."""
-
     InjectedParent.instances.clear()
     InjectedChild.instances.clear()
     service = object()

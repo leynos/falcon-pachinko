@@ -170,8 +170,8 @@ applications.
     that delegates instantiation to application-provided containers.
 
     - [x] Extend `WebSocketRouter.__init__` to accept an optional
-      `resource_factory` callable, defaulting to the existing behaviour when not
-      supplied.
+      `resource_factory` callable, defaulting to the existing behaviour when
+      not supplied.
 
     - [x] Update the router's resource instantiation flow to invoke the provided
       factory and ensure compatibility with nested resource composition.
