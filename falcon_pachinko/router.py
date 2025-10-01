@@ -91,7 +91,16 @@ class WebSocketRouter:
         pattern: re.Pattern[str]
         factory: typ.Callable[..., WebSocketResource]
 
-    def __init__(self, *, name: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        name: str | None = None,
+        resource_factory: typ.Callable[
+            [typ.Callable[[], "WebSocketResource"]],
+            "WebSocketResource",
+        ]
+        | None = None,
+    ) -> None:
         self._raw: list[WebSocketRouter._RawRoute] = []
         self._routes: list[WebSocketRouter._CompiledRoute] = []
         self._mount_prefix: str = ""
@@ -104,6 +113,19 @@ class WebSocketRouter:
         )
         self.global_hooks = HookCollection()
         self.name = name
+        self._resource_factory: typ.Callable[
+            [typ.Callable[[], "WebSocketResource"]],
+            "WebSocketResource",
+        ]
+        if resource_factory is None:
+            def default_resource_factory(
+                factory: typ.Callable[[], "WebSocketResource"]
+            ) -> "WebSocketResource":
+                return factory()
+
+            self._resource_factory = default_resource_factory
+        else:
+            self._resource_factory = resource_factory
 
     def _compile_and_store_route(
         self,
@@ -274,7 +296,7 @@ class WebSocketRouter:
         remaining: str,
     ) -> bool:
         """Resolve the final resource and dispatch the connection."""
-        base_resource = route.factory()
+        base_resource = self._resource_factory(route.factory)
         chain = [base_resource]
         resolution = self._resolve_resource_and_path(
             base_resource, remaining, params, chain

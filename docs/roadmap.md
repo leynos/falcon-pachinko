@@ -163,21 +163,21 @@ applications.
     and define the error propagation behaviour for exceptions raised within the
     hook chain.
 
-- [ ] **Design and Implement Dependency Injection.**
+- [x] **Design and Implement Dependency Injection.**
 
   - [x] Formalize a strategy for injecting shared services into ephemeral
     `WebSocketResource` instances, centring on a router-level resource factory
     that delegates instantiation to application-provided containers.
 
-  - [ ] Extend `WebSocketRouter.__init__` to accept an optional
-    `resource_factory` callable, defaulting to the existing behaviour when not
-    supplied.
+    - [x] Extend `WebSocketRouter.__init__` to accept an optional
+      `resource_factory` callable, defaulting to the existing behaviour when not
+      supplied.
 
-  - [ ] Update the router's resource instantiation flow to invoke the provided
-    factory and ensure compatibility with nested resource composition.
+    - [x] Update the router's resource instantiation flow to invoke the provided
+      factory and ensure compatibility with nested resource composition.
 
-  - [ ] Add regression tests covering default instantiation, custom factories,
-    and dependency injection into nested resources.
+    - [x] Add regression tests covering default instantiation, custom factories,
+      and dependency injection into nested resources.
 
   - [ ] Document usage patterns (including test-oriented factories) and update
     examples to demonstrate DI wiring.

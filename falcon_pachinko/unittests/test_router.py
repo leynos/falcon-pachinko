@@ -400,6 +400,120 @@ async def test_resource_init_args_kwargs() -> None:
     assert inst.bar == 5
 
 
+def _make_resource_factory(service: object) -> typ.Callable[[typ.Callable[[], WebSocketResource]], WebSocketResource]:
+    """Return a factory that injects ``service`` into created resources."""
+
+    def build_resource(
+        route_factory: typ.Callable[[], WebSocketResource]
+    ) -> WebSocketResource:
+        target = getattr(route_factory, "func", route_factory)
+        args = getattr(route_factory, "args", ())
+        base_kwargs = dict(getattr(route_factory, "keywords", {}) or {})
+        base_kwargs["service"] = service
+        return target(*args, **base_kwargs)
+
+    return build_resource
+
+
+class InjectedResource(WebSocketResource):
+    """Resource that records injected dependencies."""
+
+    instances: typ.ClassVar[list["InjectedResource"]] = []
+
+    def __init__(self, *, config: str, service: object) -> None:
+        self.config = config
+        self.service = service
+        InjectedResource.instances.append(self)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        self.params = params
+        return False
+
+
+class InjectedChild(WebSocketResource):
+    """Child resource that expects the injected service."""
+
+    instances: typ.ClassVar[list["InjectedChild"]] = []
+
+    def __init__(self, *, service: object) -> None:
+        self.service = service
+        InjectedChild.instances.append(self)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        self.params = params
+        return False
+
+
+class InjectedParent(WebSocketResource):
+    """Parent resource that passes dependencies to its child."""
+
+    instances: typ.ClassVar[list["InjectedParent"]] = []
+
+    def __init__(self, *, label: str, service: object) -> None:
+        self.label = label
+        self.service = service
+        InjectedParent.instances.append(self)
+        self.add_subroute("child/{member}", InjectedChild)
+
+    def get_child_context(self) -> dict[str, object]:
+        return {"service": self.service}
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        self.params = params
+        return False
+
+
+@pytest.mark.asyncio
+async def test_router_resource_factory_injects_dependency() -> None:
+    """Router-level factories can inject dependencies into resources."""
+
+    InjectedResource.instances.clear()
+    service = object()
+    router = WebSocketRouter(resource_factory=_make_resource_factory(service))
+    router.add_route(
+        "/di/{item}", InjectedResource, kwargs={"config": "alpha"}, name="di"
+    )
+    router.mount("/")
+
+    req = type("Req", (), {"path": "/di/foo", "path_template": ""})()
+    await router.on_websocket(req, DummyWS())
+
+    resource = InjectedResource.instances[-1]
+    assert resource.service is service
+    assert resource.config == "alpha"
+    assert resource.params == {"item": "foo"}
+
+
+@pytest.mark.asyncio
+async def test_router_resource_factory_supports_nested_resources() -> None:
+    """Injected dependencies are preserved when traversing subroutes."""
+
+    InjectedParent.instances.clear()
+    InjectedChild.instances.clear()
+    service = object()
+    router = WebSocketRouter(resource_factory=_make_resource_factory(service))
+    router.add_route(
+        "/parent/{pid}",
+        InjectedParent,
+        kwargs={"label": "rooms"},
+        name="parent",
+    )
+    router.mount("/")
+
+    req = type(
+        "Req",
+        (),
+        {"path": "/parent/42/child/7", "path_template": ""},
+    )()
+    await router.on_websocket(req, DummyWS())
+
+    parent = InjectedParent.instances[-1]
+    child = InjectedChild.instances[-1]
+    assert parent.service is service
+    assert child.service is service
+    assert child.params == {"pid": "42", "member": "7"}
+
+
 @pytest.mark.asyncio
 async def test_resource_missing_init_args() -> None:
     """Invalid or missing init args should raise ``TypeError`` and close the WS."""
