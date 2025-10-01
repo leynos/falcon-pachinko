@@ -24,6 +24,12 @@ if typ.TYPE_CHECKING:
     from .resource import WebSocketResource
 
 
+ResourceFactory = typ.Callable[
+    [typ.Callable[..., "WebSocketResource"]],
+    "WebSocketResource",
+]
+
+
 def _replace_param_in_template(match: re.Match[str], template: str) -> str:
     """Return a regex group for ``match`` ensuring the param is non-empty."""
     param_name = match.group(1)
@@ -95,11 +101,7 @@ class WebSocketRouter:
         self,
         *,
         name: str | None = None,
-        resource_factory: typ.Callable[
-            [typ.Callable[[], WebSocketResource]],
-            WebSocketResource,
-        ]
-        | None = None,
+        resource_factory: ResourceFactory | None = None,
     ) -> None:
         self._raw: list[WebSocketRouter._RawRoute] = []
         self._routes: list[WebSocketRouter._CompiledRoute] = []
@@ -113,20 +115,8 @@ class WebSocketRouter:
         )
         self.global_hooks = HookCollection()
         self.name = name
-        self._resource_factory: typ.Callable[
-            [typ.Callable[[], WebSocketResource]],
-            WebSocketResource,
-        ]
-        if resource_factory is None:
-
-            def default_resource_factory(
-                factory: typ.Callable[[], WebSocketResource],
-            ) -> WebSocketResource:
-                return factory()
-
-            self._resource_factory = default_resource_factory
-        else:
-            self._resource_factory = resource_factory
+        self._resource_factory: ResourceFactory
+        self._resource_factory = resource_factory or (lambda factory: factory())
 
     def _compile_and_store_route(
         self,
@@ -284,8 +274,9 @@ class WebSocketRouter:
             return await self._process_route_resolution(
                 route, req, ws, params, remaining
             )
-        except Exception:
-            await ws.close()
+        except Exception as exc:
+            if not getattr(exc, "_pachinko_factory_closed", False):
+                await ws.close()
             raise
 
     async def _process_route_resolution(
@@ -297,10 +288,10 @@ class WebSocketRouter:
         remaining: str,
     ) -> bool:
         """Resolve the final resource and dispatch the connection."""
-        base_resource = self._resource_factory(route.factory)
+        base_resource = await self._instantiate_resource(route.factory, ws)
         chain = [base_resource]
-        resolution = self._resolve_resource_and_path(
-            base_resource, remaining, params, chain
+        resolution = await self._resolve_resource_and_path(
+            base_resource, remaining, params, chain, ws
         )
         if resolution is None:
             return False
@@ -337,8 +328,8 @@ class WebSocketRouter:
             return remaining
         return f"/{remaining}" if match.group(0).endswith("/") else None
 
-    def _try_subroute_match(
-        self, resource: WebSocketResource, path: str
+    async def _try_subroute_match(
+        self, resource: WebSocketResource, path: str, ws: WebSocketLike
     ) -> tuple[WebSocketResource, str, dict[str, str]] | None:
         """Return matched subroute components or ``None``."""
         for pattern, factory in getattr(resource, "_subroutes", []):
@@ -351,22 +342,23 @@ class WebSocketRouter:
                 context = resource.get_child_context()
                 child_kwargs = {k: v for k, v in context.items() if k != "state"}
                 child_factory = functools.partial(factory, **child_kwargs)
-                new_resource = self._resource_factory(child_factory)
+                new_resource = await self._instantiate_resource(child_factory, ws)
                 new_resource.state = context.get("state", resource.state)
                 params = match.groupdict()
                 return new_resource, remaining, params
         return None
 
-    def _resolve_subroutes(
+    async def _resolve_subroutes(
         self,
         resource: WebSocketResource,
         path: str,
         params: dict[str, str],
         chain: list[WebSocketResource],
+        ws: WebSocketLike,
     ) -> tuple[WebSocketResource, str, dict[str, str]]:
         """Traverse ``resource`` subroutes matching ``path``."""
         while path not in ("", "/"):
-            result = self._try_subroute_match(resource, path)
+            result = await self._try_subroute_match(resource, path, ws)
             if result is None:
                 break
             resource, path, new_params = result
@@ -389,18 +381,32 @@ class WebSocketRouter:
                 return None
         return params, remaining
 
-    def _resolve_resource_and_path(
+    async def _resolve_resource_and_path(
         self,
         resource: WebSocketResource,
         remaining: str,
         params: dict[str, str],
         chain: list[WebSocketResource],
+        ws: WebSocketLike,
     ) -> tuple[WebSocketResource, str, dict[str, str], list[WebSocketResource]] | None:
         """Return resolved resource, params, and traversal chain."""
-        resolved, remaining, params = self._resolve_subroutes(
-            resource, remaining, params, chain
+        resolved, remaining, params = await self._resolve_subroutes(
+            resource, remaining, params, chain, ws
         )
         return (resolved, remaining, params, chain) if remaining in ("", "/") else None
+
+    async def _instantiate_resource(
+        self,
+        route_factory: typ.Callable[..., WebSocketResource],
+        ws: WebSocketLike,
+    ) -> WebSocketResource:
+        """Instantiate a resource using ``route_factory`` with error handling."""
+        try:
+            return self._resource_factory(route_factory)
+        except Exception as exc:  # pragma: no cover - exercise via tests
+            await ws.close()
+            exc._pachinko_factory_closed = True  # type: ignore[attr-defined]
+            raise
 
     async def _handle_websocket_connection(
         self,

@@ -9,6 +9,7 @@ import typing as typ
 from pytest_bdd import given, scenario, then, when
 
 from falcon_pachinko import WebSocketResource, WebSocketRouter
+from falcon_pachinko.unittests.resource_factories import resource_factory
 
 
 class DummyWebSocket:
@@ -81,23 +82,6 @@ class RouterScenario:
     child: InjectedChild | None = None
 
 
-def _resource_factory(
-    service: str,
-) -> typ.Callable[[typ.Callable[[], WebSocketResource]], WebSocketResource]:
-    """Build a router-level resource factory injecting ``service``."""
-
-    def build_resource(
-        route_factory: typ.Callable[[], WebSocketResource],
-    ) -> WebSocketResource:
-        target = getattr(route_factory, "func", route_factory)
-        args = getattr(route_factory, "args", ())
-        base_kwargs = dict(getattr(route_factory, "keywords", {}) or {})
-        base_kwargs["service"] = service
-        return target(*args, **base_kwargs)
-
-    return build_resource
-
-
 @scenario(
     "dependency_injection.feature",
     "route resources are constructed through the configured factory",
@@ -115,7 +99,7 @@ def given_router() -> RouterScenario:
     InjectedParent.instances.clear()
     InjectedChild.instances.clear()
     service = "svc"
-    router = WebSocketRouter(resource_factory=_resource_factory(service))
+    router = WebSocketRouter(resource_factory=resource_factory(service))
     router.add_route("/rooms/{room}", InjectedParent, kwargs={"label": "rooms"})
     router.mount("/")
     loop = asyncio.new_event_loop()
@@ -164,5 +148,6 @@ def then_rejected(context: RouterScenario) -> None:
     try:
         assert context.websocket.closed is True
         assert context.websocket.accepted is False
+        assert context.websocket.close_code == 1000
     finally:
         context.loop.close()
