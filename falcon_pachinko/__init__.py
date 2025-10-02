@@ -6,7 +6,7 @@ from .handlers import handles_message
 from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
 from .resource import WebSocketResource
-from .router import WebSocketRouter
+from .router import ResourceFactory, WebSocketRouter
 from .websocket import (
     ConnectionBackend,
     InProcessBackend,
@@ -21,6 +21,7 @@ __all__ = (
     "HookContext",
     "HookManager",
     "InProcessBackend",
+    "ResourceFactory",
     "WebSocketConnectionManager",
     "WebSocketLike",
     "WebSocketResource",

@@ -11,6 +11,7 @@ import pytest
 
 from falcon_pachinko import HookContext, WebSocketResource, WebSocketRouter
 from falcon_pachinko.unittests.helpers import DummyWS
+from falcon_pachinko.unittests.resource_factories import resource_factory
 
 pytest_plugins = ["falcon_pachinko.unittests.test_app_install"]
 
@@ -398,6 +399,138 @@ async def test_resource_init_args_kwargs() -> None:
     inst = ParamResource.instances[-1]
     assert inst.foo == "hey"
     assert inst.bar == 5
+
+
+class InjectedResource(WebSocketResource):
+    """Resource that records injected dependencies."""
+
+    instances: typ.ClassVar[list[InjectedResource]] = []
+
+    def __init__(self, *, config: str, service: object) -> None:
+        self.config = config
+        self.service = service
+        InjectedResource.instances.append(self)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Record connection params for assertion."""
+        self.params = params
+        return False
+
+
+class InjectedChild(WebSocketResource):
+    """Child resource that expects the injected service."""
+
+    instances: typ.ClassVar[list[InjectedChild]] = []
+
+    def __init__(self, *, service: object) -> None:
+        self.service = service
+        InjectedChild.instances.append(self)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Capture params for later verification."""
+        self.params = params
+        return False
+
+
+class InjectedParent(WebSocketResource):
+    """Parent resource that relies on injected dependencies."""
+
+    instances: typ.ClassVar[list[InjectedParent]] = []
+
+    def __init__(self, *, label: str, service: object) -> None:
+        self.label = label
+        self.service = service
+        InjectedParent.instances.append(self)
+        self.add_subroute("child/{member}", InjectedChild)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Capture params for later verification."""
+        self.params = params
+        return False
+
+
+@pytest.mark.asyncio
+async def test_router_resource_factory_injects_dependency() -> None:
+    """Router-level factories can inject dependencies into resources."""
+    InjectedResource.instances.clear()
+    service = object()
+    router = WebSocketRouter(resource_factory=resource_factory(service))
+    router.add_route(
+        "/di/{item}", InjectedResource, kwargs={"config": "alpha"}, name="di"
+    )
+    router.mount("/")
+
+    req = type("Req", (), {"path": "/di/foo", "path_template": ""})()
+    await router.on_websocket(req, DummyWS())
+
+    resource = InjectedResource.instances[-1]
+    assert resource.service is service
+    assert resource.config == "alpha"
+    assert resource.params == {"item": "foo"}
+
+
+@pytest.mark.asyncio
+async def test_router_resource_factory_supports_nested_resources() -> None:
+    """Injected dependencies are preserved when traversing subroutes."""
+    InjectedParent.instances.clear()
+    InjectedChild.instances.clear()
+    service = object()
+    router = WebSocketRouter(resource_factory=resource_factory(service))
+    router.add_route(
+        "/parent/{pid}",
+        InjectedParent,
+        kwargs={"label": "rooms"},
+        name="parent",
+    )
+    router.mount("/")
+
+    req = type(
+        "Req",
+        (),
+        {"path": "/parent/42/child/7", "path_template": ""},
+    )()
+    await router.on_websocket(req, DummyWS())
+
+    parent = InjectedParent.instances[-1]
+    child = InjectedChild.instances[-1]
+    assert parent.service is service
+    assert child.service is service
+    assert child.params == {"pid": "42", "member": "7"}
+    assert child.state is parent.state
+
+
+@pytest.mark.asyncio
+async def test_router_resource_factory_failure_closes_connection() -> None:
+    """Router closes the websocket when a resource factory raises."""
+
+    class FailingResource(WebSocketResource):
+        async def on_connect(
+            self, req: object, ws: object, **params: object
+        ) -> bool:  # pragma: no cover - not reached
+            return True
+
+    def failing_factory(_: typ.Callable[..., WebSocketResource]) -> WebSocketResource:
+        msg = "resource factory failed"
+        raise RuntimeError(msg)
+
+    router = WebSocketRouter(resource_factory=failing_factory)
+    router.add_route("/boom", FailingResource)
+    router.mount("/")
+
+    ws = DummyWS()
+    closed: dict[str, object] = {}
+
+    async def close(code: int = 1000) -> None:
+        closed["code"] = code
+
+    typ.cast("typ.Any", ws).close = close
+    req = type("Req", (), {"path": "/boom", "path_template": ""})()
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await router.on_websocket(req, ws)
+
+    assert "resource factory failed" in str(excinfo.value)
+    assert closed.get("code") == 1000
 
 
 @pytest.mark.asyncio

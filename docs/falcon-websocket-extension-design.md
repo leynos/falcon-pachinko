@@ -1318,32 +1318,42 @@ be created once per process. The DI approach must therefore:
 
 ##### Router-Level Resource Factory
 
-`WebSocketRouter.__init__` accepts an optional `resource_factory` argument. When
-omitted, the router preserves the current behaviour—calling the per-route
+`WebSocketRouter.__init__` accepts an optional `resource_factory` argument.
+When omitted, the router preserves the current behaviour—calling the per-route
 factory captured by `add_route()` with no extra indirection. When provided, the
 callable receives that per-route factory (typically a `functools.partial`
 wrapping the resource class and static `init_args`) and returns a fully
 constructed `WebSocketResource` instance. This indirection allows the
 application to inspect the resource signature, resolve dependencies from a DI
 container, merge them with static route configuration, and return the
-constructed instance.
+constructed instance. The public :class:`ResourceFactory` type alias documents
+the expected call signature for these factories so applications can annotate
+their DI hooks consistently.
 
 ```python
+from falcon_pachinko.router import ResourceFactory
+
+
 class WebSocketRouter:
     def __init__(
         self,
         *,
-        resource_factory: Callable[
-            [Callable[[], WebSocketResource]],
-            WebSocketResource,
-        ]
-        | None = None,
+        resource_factory: ResourceFactory | None = None,
         ...,
     ):
         self._resource_factory = resource_factory or (lambda factory: factory())
 
-    def _instantiate_resource(self, route: _RouteNode) -> WebSocketResource:
-        return self._resource_factory(route.factory)
+    async def _instantiate_resource(
+        self,
+        route_factory: Callable[..., WebSocketResource],
+        ws: WebSocketLike,
+    ) -> WebSocketResource:
+        try:
+            return self._resource_factory(route_factory)
+        except Exception as exc:
+            await ws.close()
+            exc._pachinko_factory_closed = True
+            raise
 ```
 
 ##### Example Container Integration
