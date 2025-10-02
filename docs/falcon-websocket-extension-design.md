@@ -1334,7 +1334,7 @@ class WebSocketRouter:
         self,
         *,
         resource_factory: Callable[
-            [Callable[[], WebSocketResource]],
+            [Callable[..., WebSocketResource]],
             WebSocketResource,
         ]
         | None = None,
@@ -1342,8 +1342,17 @@ class WebSocketRouter:
     ):
         self._resource_factory = resource_factory or (lambda factory: factory())
 
-    def _instantiate_resource(self, route: _RouteNode) -> WebSocketResource:
-        return self._resource_factory(route.factory)
+    async def _instantiate_resource(
+        self,
+        route_factory: Callable[..., WebSocketResource],
+        ws: WebSocketLike,
+    ) -> WebSocketResource:
+        try:
+            return self._resource_factory(route_factory)
+        except Exception as exc:
+            await ws.close()
+            exc._pachinko_factory_closed = True
+            raise
 ```
 
 ##### Example Container Integration

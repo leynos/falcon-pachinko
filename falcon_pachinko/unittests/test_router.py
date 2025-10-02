@@ -496,6 +496,7 @@ async def test_router_resource_factory_supports_nested_resources() -> None:
     assert parent.service is service
     assert child.service is service
     assert child.params == {"pid": "42", "member": "7"}
+    assert child.state is parent.state
 
 
 @pytest.mark.asyncio

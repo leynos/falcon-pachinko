@@ -2,14 +2,29 @@
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses as dc
 import typing as typ
 
+import pytest
 from pytest_bdd import given, scenario, then, when
 
 from falcon_pachinko import WebSocketResource, WebSocketRouter
 from falcon_pachinko.unittests.resource_factories import resource_factory
+
+if typ.TYPE_CHECKING:
+    import asyncio
+
+
+@pytest.fixture
+def event_loop(
+    event_loop_policy: asyncio.AbstractEventLoopPolicy,
+) -> typ.Iterator[asyncio.AbstractEventLoop]:
+    """Provide an event loop managed by pytest-asyncio's policy fixture."""
+    loop = event_loop_policy.new_event_loop()
+    try:
+        yield loop
+    finally:
+        loop.close()
 
 
 class DummyWebSocket:
@@ -75,7 +90,6 @@ class RouterScenario:
     """Hold contextual state shared between steps."""
 
     router: WebSocketRouter
-    loop: asyncio.AbstractEventLoop
     service: str
     websocket: DummyWebSocket | None = None
     parent: InjectedParent | None = None
@@ -102,15 +116,16 @@ def given_router() -> RouterScenario:
     router = WebSocketRouter(resource_factory=resource_factory(service))
     router.add_route("/rooms/{room}", InjectedParent, kwargs={"label": "rooms"})
     router.mount("/")
-    loop = asyncio.new_event_loop()
-    return RouterScenario(router=router, loop=loop, service=service)
+    return RouterScenario(router=router, service=service)
 
 
 @when(
     'a websocket connection targets "/rooms/alpha/child/beta"',
     target_fixture="context",
 )
-def when_dispatch(context: RouterScenario) -> RouterScenario:
+def when_dispatch(
+    context: RouterScenario, event_loop: asyncio.AbstractEventLoop
+) -> RouterScenario:
     """Dispatch a connection through the router to the nested child route."""
     req = type(
         "Req",
@@ -118,7 +133,7 @@ def when_dispatch(context: RouterScenario) -> RouterScenario:
         {"path": "/rooms/alpha/child/beta", "path_template": ""},
     )()
     ws = DummyWebSocket()
-    context.loop.run_until_complete(context.router.on_websocket(req, ws))
+    event_loop.run_until_complete(context.router.on_websocket(req, ws))
     context.websocket = ws
     context.parent = InjectedParent.instances[-1]
     context.child = InjectedChild.instances[-1]
@@ -143,11 +158,8 @@ def then_child(context: RouterScenario) -> None:
 
 @then("the connection attempt is rejected")
 def then_rejected(context: RouterScenario) -> None:
-    """Ensure the websocket was closed instead of accepted and clean up."""
+    """Ensure the websocket was closed instead of accepted."""
     assert context.websocket is not None
-    try:
-        assert context.websocket.closed is True
-        assert context.websocket.accepted is False
-        assert context.websocket.close_code == 1000
-    finally:
-        context.loop.close()
+    assert context.websocket.closed is True
+    assert context.websocket.accepted is False
+    assert context.websocket.close_code == 1000
