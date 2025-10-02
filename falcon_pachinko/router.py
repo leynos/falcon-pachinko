@@ -24,6 +24,9 @@ if typ.TYPE_CHECKING:
     from .resource import WebSocketResource
 
 
+__all__ = ["ResourceFactory", "WebSocketRouter"]
+
+
 ResourceFactory = typ.Callable[
     [typ.Callable[..., "WebSocketResource"]],
     "WebSocketResource",

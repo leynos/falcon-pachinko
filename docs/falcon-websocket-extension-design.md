@@ -1326,18 +1326,19 @@ wrapping the resource class and static `init_args`) and returns a fully
 constructed `WebSocketResource` instance. This indirection allows the
 application to inspect the resource signature, resolve dependencies from a DI
 container, merge them with static route configuration, and return the
-constructed instance.
+constructed instance. The public :class:`ResourceFactory` type alias documents
+the expected call signature for these factories so applications can annotate
+their DI hooks consistently.
 
 ```python
+from falcon_pachinko.router import ResourceFactory
+
+
 class WebSocketRouter:
     def __init__(
         self,
         *,
-        resource_factory: Callable[
-            [Callable[..., WebSocketResource]],
-            WebSocketResource,
-        ]
-        | None = None,
+        resource_factory: ResourceFactory | None = None,
         ...,
     ):
         self._resource_factory = resource_factory or (lambda factory: factory())
