@@ -1378,6 +1378,31 @@ Because the router delegates instantiation, unit tests can supply a lightweight
 factory that injects mocks, while production code can reuse existing DI
 infrastructure.
 
+##### Usage Patterns
+
+Practical usage of the resource-factory pattern falls into two complementary
+scenarios:
+
+1. **Application wiring.** The `examples/random_status/server.py` module now
+   demonstrates a `ServiceContainer` that registers process-wide dependencies
+   at startup and exposes a `create_resource()` hook to the router. The
+   container mirrors the behaviour described above—capturing the target
+   callable from the route's partial, merging static kwargs with registered
+   services, and returning the final resource instance. Both WebSocket
+   resources and regular HTTP endpoints resolve dependencies from the same
+   container, ensuring a single source of truth for shared services.
+
+2. **Test-specific factories.** Behavioural and unit tests use lightweight
+   factories to inject fakes without bootstrapping the full container. The
+   `falcon_pachinko.unittests.resource_factories.resource_factory()` helper
+   returns a callable compatible with `WebSocketRouter` that simply merges a
+   provided dependency into the stored partial's kwargs. Tests can therefore
+   inject spies or mock services while still exercising the router's lifecycle
+   exactly as production code would.
+
+Both patterns emphasise explicit construction and keep the dependency graph
+outside the framework core, maintaining Falcon's principle of explicitness.
+
 ##### Benefits
 
 - **Decoupling:** Resource classes simply declare constructor arguments—the
