@@ -36,9 +36,7 @@ from falcon_pachinko import (
 
 try:
     from tests.behaviour._lifespan import LifespanApp  # type: ignore[import-not-found]
-except Exception:  # noqa: BLE001
-    import contextlib as cl
-    import typing as typ
+except ImportError:
 
     class LifespanApp(falcon_asgi.App):
         """Falcon ASGI App with a minimal lifespan decorator (local fallback)."""
@@ -66,7 +64,18 @@ except Exception:  # noqa: BLE001
 
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     import falcon
+
+    class _SupportsWebSocketRoute(typ.Protocol):
+        def add_websocket_route(
+            self,
+            uri_template: str,
+            resource: (
+                cabc.Callable[..., object] | WebSocketResource | WebSocketRouter
+            ),
+        ) -> None: ...
 
 
 async def _setup_db() -> aiosqlite.Connection:
@@ -123,7 +132,7 @@ class ServiceContainer:
             if parameter.name in self._services:
                 kwargs[parameter.name] = self._services[parameter.name]
 
-        return target(*args, **kwargs)
+        return typ.cast("WebSocketResource", target(*args, **kwargs))
 
 
 @worker
@@ -225,7 +234,8 @@ def create_app() -> falcon_asgi.App:
     router = WebSocketRouter(resource_factory=container.create_resource)
     router.add_route("/", StatusResource)
     router.mount("/ws")
-    app.add_websocket_route("/ws", router)
+    ws_app = typ.cast("_SupportsWebSocketRoute", app)
+    ws_app.add_websocket_route("/ws", router)
     app.add_route("/status", StatusEndpoint(container))
     return app
 
