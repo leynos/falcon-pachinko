@@ -1378,6 +1378,41 @@ Because the router delegates instantiation, unit tests can supply a lightweight
 factory that injects mocks, while production code can reuse existing DI
 infrastructure.
 
+##### Component Relationships
+
+The following class diagram illustrates how the sample `ServiceContainer`
+coordinates dependency injection for both HTTP and WebSocket endpoints in the
+random status example:
+
+```mermaid
+classDiagram
+    class ServiceContainer {
+        -_services: dict[str, object]
+        +register(name: str, value: object)
+        +resolve(name: str) -> object
+        +create_resource(route_factory: Callable[..., WebSocketResource]) -> WebSocketResource
+    }
+    class StatusResource {
+        -_conn_mgr: WebSocketConnectionManager
+        -_db: aiosqlite.Connection
+        -_conn_id: str | None
+        +__init__(conn_mgr: WebSocketConnectionManager, db: aiosqlite.Connection)
+        +on_connect(ws: WebSocketLike)
+        +on_disconnect(ws: WebSocketLike, close_code: int)
+        +update_status(ws: WebSocketLike, payload: StatusPayload)
+    }
+    class StatusEndpoint {
+        -_container: ServiceContainer
+        +__init__(container: ServiceContainer)
+        +on_get(req: falcon.Request, resp: falcon.Response)
+    }
+    ServiceContainer --> StatusEndpoint : provides dependencies
+    ServiceContainer --> StatusResource : provides dependencies
+    StatusEndpoint --> ServiceContainer : resolves 'db'
+    StatusResource --> WebSocketConnectionManager
+    StatusResource --> aiosqlite.Connection
+```
+
 ##### Usage Patterns
 
 Practical usage of the resource-factory pattern falls into two complementary
