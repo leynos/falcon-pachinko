@@ -1423,9 +1423,12 @@ scenarios:
    at startup and exposes a `create_resource()` hook to the router. The
    container mirrors the behaviour described above—capturing the target
    callable from the route's partial, merging static kwargs with registered
-   services, and returning the final resource instance. Both WebSocket
-   resources and regular HTTP endpoints resolve dependencies from the same
-   container, ensuring a single source of truth for shared services.
+   services, and returning the final resource instance. A lightweight
+   `RouterEndpoint` adapter wraps the router so it can be registered via
+   `app.add_websocket_route()` while still delegating connection handling to
+   the router itself. Both WebSocket resources and regular HTTP endpoints
+   resolve dependencies from the same container, ensuring a single source of
+   truth for shared services.
 
 2. **Test-specific factories.** Behavioural and unit tests use lightweight
    factories to inject fakes without bootstrapping the full container. The

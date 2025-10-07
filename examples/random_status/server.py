@@ -72,9 +72,9 @@ if typ.TYPE_CHECKING:
         def add_websocket_route(
             self,
             uri_template: str,
-            resource: (
-                cabc.Callable[..., object] | WebSocketResource | WebSocketRouter
-            ),
+            resource: type[WebSocketResource] | cabc.Callable[..., WebSocketResource],
+            *args: object,
+            **kwargs: object,
         ) -> None: ...
 
 
@@ -133,6 +133,20 @@ class ServiceContainer:
                 kwargs[parameter.name] = self._services[parameter.name]
 
         return typ.cast("WebSocketResource", target(*args, **kwargs))
+
+
+class RouterEndpoint(WebSocketResource):
+    """Adapt a router for registration via ``app.add_websocket_route``."""
+
+    def __init__(self, *, router: WebSocketRouter) -> None:
+        self._router = router
+
+    async def on_connect(
+        self, req: falcon.Request, ws: WebSocketLike, **params: object
+    ) -> bool:
+        """Delegate connection handling to the mounted router."""
+        await self._router.on_websocket(req, ws)
+        return False
 
 
 @worker
@@ -235,7 +249,7 @@ def create_app() -> falcon_asgi.App:
     router.add_route("/", StatusResource)
     router.mount("/ws")
     ws_app = typ.cast("_SupportsWebSocketRoute", app)
-    ws_app.add_websocket_route("/ws", router)
+    ws_app.add_websocket_route("/ws", RouterEndpoint, router=router)
     app.add_route("/status", StatusEndpoint(container))
     return app
 
