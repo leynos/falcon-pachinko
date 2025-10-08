@@ -18,7 +18,7 @@ import sys
 import websocket
 
 
-def on_message(ws: websocket.WebSocket, message: object) -> None:
+def on_message(app: websocket.WebSocketApp, message: object) -> None:
     """
     Handle incoming messages from the WebSocket server.
 
@@ -27,7 +27,7 @@ def on_message(ws: websocket.WebSocket, message: object) -> None:
     print("<", message)
 
 
-def on_open(ws: websocket.WebSocket) -> None:
+def on_open(app: websocket.WebSocketApp) -> None:
     """
     Send a status message to the WebSocket server when the connection is opened.
 
@@ -37,7 +37,7 @@ def on_open(ws: websocket.WebSocket) -> None:
     """
     status = sys.argv[1] if len(sys.argv) > 1 else "hello"
     msg = json.dumps({"type": "status", "payload": {"text": status}})
-    ws.send(msg)
+    app.send(msg)
 
 
 if __name__ == "__main__":

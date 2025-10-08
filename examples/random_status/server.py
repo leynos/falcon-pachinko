@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib as cl
-import inspect
 import secrets
 import typing as typ
 
@@ -24,6 +23,7 @@ import aiosqlite
 import falcon.asgi as falcon_asgi
 
 from falcon_pachinko import (
+    ServiceContainer,
     WebSocketConnectionManager,
     WebSocketLike,
     WebSocketResource,
@@ -90,49 +90,6 @@ class StatusPayload(typ.TypedDict):
     """Type definition for status message payload."""
 
     text: str
-
-
-class ServiceContainer:
-    """Minimal container used to demonstrate router-level DI wiring."""
-
-    def __init__(self) -> None:
-        self._services: dict[str, object] = {}
-
-    def register(self, name: str, value: object) -> None:
-        """Expose ``value`` for resources requesting ``name``."""
-        self._services[name] = value
-
-    def resolve(self, name: str) -> object:
-        """Return the registered dependency named ``name``."""
-        try:
-            return self._services[name]
-        except KeyError as exc:  # pragma: no cover - used interactively
-            msg = f"service {name!r} is not registered"
-            raise RuntimeError(msg) from exc
-
-    def create_resource(
-        self, route_factory: typ.Callable[..., WebSocketResource]
-    ) -> WebSocketResource:
-        """Instantiate ``route_factory`` injecting registered dependencies."""
-        target = getattr(route_factory, "func", route_factory)
-        args = getattr(route_factory, "args", ())
-        kwargs = dict(getattr(route_factory, "keywords", {}) or {})
-        signature = inspect.signature(target)
-
-        for parameter in signature.parameters.values():
-            if parameter.name in {"self"}:
-                continue
-            if parameter.kind in (
-                inspect.Parameter.VAR_POSITIONAL,
-                inspect.Parameter.VAR_KEYWORD,
-            ):
-                continue
-            if parameter.name in kwargs:
-                continue
-            if parameter.name in self._services:
-                kwargs[parameter.name] = self._services[parameter.name]
-
-        return typ.cast("WebSocketResource", target(*args, **kwargs))
 
 
 class RouterEndpoint(WebSocketResource):
