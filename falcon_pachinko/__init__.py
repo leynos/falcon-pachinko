@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .di import ServiceContainer, ServiceNotFoundError
 from .handlers import handles_message
 from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
@@ -22,6 +23,8 @@ __all__ = (
     "HookManager",
     "InProcessBackend",
     "ResourceFactory",
+    "ServiceContainer",
+    "ServiceNotFoundError",
     "WebSocketConnectionManager",
     "WebSocketLike",
     "WebSocketResource",

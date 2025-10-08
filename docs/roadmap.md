@@ -179,7 +179,7 @@ applications.
     - [x] Add regression tests covering default instantiation, custom factories,
       and dependency injection into nested resources.
 
-  - [ ] Document usage patterns (including test-oriented factories) and update
+  - [x] Document usage patterns (including test-oriented factories) and update
     examples to demonstrate DI wiring.
 
 ## Phase 5: Testing, Documentation, and Examples

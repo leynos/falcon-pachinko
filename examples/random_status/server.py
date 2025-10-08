@@ -23,9 +23,11 @@ import aiosqlite
 import falcon.asgi as falcon_asgi
 
 from falcon_pachinko import (
+    ServiceContainer,
     WebSocketConnectionManager,
     WebSocketLike,
     WebSocketResource,
+    WebSocketRouter,
     WorkerController,
     handles_message,
     install,
@@ -34,9 +36,7 @@ from falcon_pachinko import (
 
 try:
     from tests.behaviour._lifespan import LifespanApp  # type: ignore[import-not-found]
-except Exception:  # noqa: BLE001
-    import contextlib as cl
-    import typing as typ
+except ImportError:
 
     class LifespanApp(falcon_asgi.App):
         """Falcon ASGI App with a minimal lifespan decorator (local fallback)."""
@@ -64,7 +64,18 @@ except Exception:  # noqa: BLE001
 
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     import falcon
+
+    class _SupportsWebSocketRoute(typ.Protocol):
+        def add_websocket_route(
+            self,
+            uri_template: str,
+            resource: type[WebSocketResource] | cabc.Callable[..., WebSocketResource],
+            *args: object,
+            **kwargs: object,
+        ) -> None: ...
 
 
 async def _setup_db() -> aiosqlite.Connection:
@@ -75,14 +86,24 @@ async def _setup_db() -> aiosqlite.Connection:
     return conn
 
 
-# Lazily initialized during startup to avoid import-time event loop work
-DB: aiosqlite.Connection | None = None
-
-
 class StatusPayload(typ.TypedDict):
     """Type definition for status message payload."""
 
     text: str
+
+
+class RouterEndpoint(WebSocketResource):
+    """Adapt a router for registration via ``app.add_websocket_route``."""
+
+    def __init__(self, *, router: WebSocketRouter) -> None:
+        self._router = router
+
+    async def on_connect(
+        self, req: falcon.Request, ws: WebSocketLike, **params: object
+    ) -> bool:
+        """Delegate connection handling to the mounted router."""
+        await self._router.on_websocket(req, ws)
+        return False
 
 
 @worker
@@ -104,8 +125,14 @@ async def random_worker(*, conn_mgr: WebSocketConnectionManager) -> None:
 class StatusResource(WebSocketResource):
     """WebSocket resource for handling status updates."""
 
-    def __init__(self, conn_mgr: WebSocketConnectionManager) -> None:
+    def __init__(
+        self,
+        *,
+        conn_mgr: WebSocketConnectionManager,
+        db: aiosqlite.Connection,
+    ) -> None:
         self._conn_mgr = conn_mgr
+        self._db = db
         self._conn_id: str | None = None
 
     async def on_connect(
@@ -127,24 +154,20 @@ class StatusResource(WebSocketResource):
     async def update_status(self, ws: WebSocketLike, payload: StatusPayload) -> None:
         """Update the stored status value and acknowledge."""
         text = payload["text"]
-        conn = DB
-        if conn is None:
-            msg = "DB connection not initialized"
-            raise RuntimeError(msg)
-        await conn.execute("UPDATE status SET value=?", (text,))
-        await conn.commit()
+        await self._db.execute("UPDATE status SET value=?", (text,))
+        await self._db.commit()
         await ws.send_media({"type": "ack", "payload": text})
 
 
 class StatusEndpoint:
     """HTTP endpoint for retrieving the current status value."""
 
+    def __init__(self, container: ServiceContainer) -> None:
+        self._container = container
+
     async def on_get(self, req: falcon.Request, resp: falcon.Response) -> None:
         """Return the current status value as JSON."""
-        conn = DB
-        if conn is None:
-            msg = "DB connection not initialized"
-            raise RuntimeError(msg)
+        conn = typ.cast("aiosqlite.Connection", self._container.resolve("db"))
         async with conn.execute("SELECT value FROM status") as cursor:
             row = await cursor.fetchone()
         resp.media = {"status": row[0] if row else None}
@@ -158,13 +181,15 @@ def create_app() -> falcon_asgi.App:
         "WebSocketConnectionManager",
         getattr(app, "ws_connection_manager"),  # noqa: B009
     )
+    container = ServiceContainer()
+    container.register("conn_mgr", conn_mgr)
 
     controller = WorkerController()
 
     @app.lifespan
     async def lifespan(app_instance: LifespanApp) -> typ.AsyncIterator[None]:
-        global DB
-        DB = await _setup_db()
+        db = await _setup_db()
+        container.register("db", db)
         await controller.start(random_worker, conn_mgr=conn_mgr)
         try:
             yield
@@ -175,12 +200,14 @@ def create_app() -> falcon_asgi.App:
                 await asyncio.gather(
                     *(ws.close() for ws in conns), return_exceptions=True
                 )
-            if DB is not None:
-                await DB.close()
-                DB = None
+            await db.close()
 
-    app.add_websocket_route("/ws", lambda: StatusResource(conn_mgr))  # type: ignore[attr-defined]
-    app.add_route("/status", StatusEndpoint())
+    router = WebSocketRouter(resource_factory=container.create_resource)
+    router.add_route("/", StatusResource)
+    router.mount("/ws")
+    ws_app = typ.cast("_SupportsWebSocketRoute", app)
+    ws_app.add_websocket_route("/ws", RouterEndpoint, router=router)
+    app.add_route("/status", StatusEndpoint(container))
     return app
 
 
