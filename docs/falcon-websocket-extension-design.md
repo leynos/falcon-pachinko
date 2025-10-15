@@ -1530,30 +1530,110 @@ pluggable, allowing different backend implementations. For example:
 
 ### 6.5. Testing Utilities
 
-To aid developers in creating robust WebSocket applications, dedicated testing
-utilities would be highly beneficial. These could be similar to Falcon's
-`falcon.testing` module for HTTP or Django Channels'
-`WebsocketCommunicator`.[^5] Such utilities would allow developers to:
+Providing first-class testing utilities keeps Falcon-Pachinko approachable for
+teams who rely on tight feedback loops. The design includes two complementary
+helpers—`WebSocketTestClient` and `WebSocketSimulator`—plus a pytest fixture that
+encapsulates common setup. Together they support both end-to-end exercises
+against a running ASGI server and hermetic unit tests that spy on the framework
+internals.
 
-- Simulate a WebSocket client connecting to a `WebSocketResource`.
+#### 6.5.1. `WebSocketTestClient`
 
-- Send messages to the server and assert responses.
+The `WebSocketTestClient` offers a lightweight façade over an existing
+WebSocket client library, reducing wheel reinvention while presenting a
+Falcon-flavoured API. It wraps `websockets.connect()` from the
+[`websockets`](https://websockets.readthedocs.io) project because that library
+already provides a reliable asyncio client with excellent RFC coverage.
 
-- Receive messages broadcast by the server or background workers.
+- **Instantiation**: `WebSocketTestClient(app_url: str, *, headers: dict | None,
+  subprotocols: list[str] | None)` stores the base URL and optional defaults.
 
-- Test connection lifecycle events (`on_connect`, `on_disconnect`). The
-  provision of comprehensive testing tools is critical for library adoption and
-  for enabling developers to build reliable real-time systems, which can
-  otherwise be complex to test. Proactively considering these utilities
-  enhances the library's completeness and professional appeal.
+- **Connection Context**: `async with client.connect(path)` opens a connection
+  with `websockets.connect(f"{base}{path}", extra_headers=..., subprotocols=...)`
+  and yields a `WebSocketSession` helper. Context exit guarantees closure even
+  if assertions fail.
 
-An initial API could include a `WebSocketSimulator` class that mimics a client
-connection using Falcon's ASGI test harness. The simulator would operate as an
-asynchronous context manager, returning a connection object with helpers like
-`send_json()` and `receive_json()`. A convenience method,
-`simulate_websocket()`, on the standard test client would construct this
-simulator. Additionally, pytest fixtures should expose a ready-to-use simulator
-and manage background worker startup, so tests can focus on asserting behaviour.
+- **Session API**: The session mirrors the server-facing `WebSocketLike`
+  protocol so tests read naturally:
+
+  ```python
+  async with WebSocketTestClient("ws://localhost:8000").connect("/ws/chat") as session:
+      await session.send_json({"type": "ping"})
+      reply = await session.receive_json()
+  ```
+
+  JSON helpers rely on `msgspec` for encoding/decoding to maintain parity with
+  runtime validation. Additional passthroughs expose `send_bytes`, `receive`,
+  and `close` for full coverage.
+
+- **Trace Collection**: Optional hooks capture a chronological log of outbound
+  and inbound frames. The log integrates with pytest's assertion introspection,
+  making it easy to debug sequencing issues.
+
+By delegating network semantics to `websockets`, the client stays thin while
+still supporting TLS, custom headers, and subprotocol negotiation.
+
+#### 6.5.2. `WebSocketSimulator`
+
+Where the test client targets black-box integration, the `WebSocketSimulator`
+acts as an injectable dependency that emulates the `WebSocketLike` contract.
+It enables white-box testing of router behaviour without needing an ASGI
+server.
+
+- **Construction**: `WebSocketSimulator()` accepts optional queues for inbound
+  and outbound payloads plus dependency hooks. When mounted, the simulator is
+  passed into a `WebSocketResource` in place of a real connection.
+
+- **Interface**: It implements the same async methods as
+  `falcon.asgi.WebSocket` (`accept`, `close`, `send_media`, `receive_media`),
+  but internally uses asyncio queues so tests can inject messages or spy on
+  emitted frames. Helper shortcuts (`send_json`, `pop_sent`) keep tests concise.
+
+- **Spying and Injection**: Tests enqueue inbound messages via
+  `await simulator.push_message({...})` before driving the resource's receive
+  loop. Outbound frames are recorded and made available through
+  `simulator.sent_messages`, enabling assertions about order, payload, or
+  metadata. Because the simulator is dependency-injectable, resources can be
+  exercised in isolation alongside fake connection managers or hook managers.
+
+- **Integration with Falcon-Pachinko**: The router exposes an optional
+  `simulator_factory` parameter. When supplied, `WebSocketRouter` calls this
+  factory to obtain a simulator whenever a connection is created during tests.
+  Production deployments omit the factory and continue using the real ASGI
+  websocket instance. This pattern mirrors Falcon's existing HTTP testing hooks
+  and keeps the simulator out of the hot path in production.
+
+#### 6.5.3. Pytest Fixture
+
+To streamline usage, the documentation prescribes a pytest fixture that
+initialises the simulator alongside a configured router. A representative
+fixture looks like:
+
+```python
+@pytest.fixture
+async def websocket_simulator(app, event_loop):
+    sim = WebSocketSimulator()
+    router = WebSocketRouter(simulator_factory=lambda *_: sim)
+    app.add_route("/ws", router)
+    async with sim.connected() as connection:
+        yield connection
+```
+
+- **Lifecycle Management**: The fixture ensures `accept()` is invoked before
+  yielding and that `close()` is called after the test, preventing dangling
+  tasks or leaked queues.
+
+- **Behavioural Testing**: Higher-level fixtures can compose the simulator with
+  the connection manager to validate broadcast flows, or parameterise initial
+  inbound frames to exercise specific message handlers.
+
+- **Extensibility**: Because the simulator is injectable, teams can swap in
+  variants that add latency simulation, failure injection, or statistics
+  gathering without altering production code.
+
+These utilities provide a cohesive story that spans unit, integration, and
+behavioural testing while keeping the production runtime free from testing
+concerns.
 
 ```mermaid
 sequenceDiagram
@@ -1563,20 +1643,18 @@ sequenceDiagram
     participant WSConn as WebSocketConnection
     participant App as ASGIAppUnderTest
 
-    Developer->>TC: client.simulate_websocket()
+    Developer->>TC: client.connect("/ws/chat")
     activate TC
-    TC->>WSSim: new WebSocketSimulator()
-    TC-->>Developer: simulator
+    TC->>WSConn: new WebSocketSession()
+    TC-->>Developer: session
     deactivate TC
 
-    Developer->>WSSim: async with simulator as conn:
+    Developer->>WSSim: simulator.push_message(data)
     activate WSSim
-    WSSim->>App: Establish Connection (via ASGI Test Harness)
-    activate App
-    WSSim-->>Developer: conn (WebSocketConnection instance)
+    WSSim->>App: Inject frame (router receive loop)
     deactivate WSSim
 
-    Developer->>WSConn: conn.send_json(data)
+    Developer->>WSConn: session.send_json(data)
     activate WSConn
     WSConn->>App: Send JSON data
     App-->>WSConn: (optional ack/response data)
@@ -1584,22 +1662,10 @@ sequenceDiagram
     WSConn-->>Developer: (return from send)
     deactivate WSConn
 
-    Developer->>WSConn: data = conn.receive_json()
-    activate WSConn
-    WSConn->>App: Request/await data
-    activate App
-    App-->>WSConn: Send JSON data
-    deactivate App
-    WSConn-->>Developer: received_data
-    deactivate WSConn
+    Developer->>WSSim: simulator.sent_messages
+    WSSim-->>Developer: Inspect recorded frames
 
-    Developer->>WSSim: (end of async with block / context exit)
-    activate WSSim
-    WSSim->>App: Close Connection
-    activate App
-    deactivate App
-    deactivate WSSim
-
+    Developer->>WSConn: await session.close()
 ```
 
 ### 6.6. Automatic AsyncAPI Documentation Generation (Ambitious)

@@ -189,13 +189,22 @@ the library is ready for use.
 
 - [ ] **Develop Comprehensive Testing Utilities.**
 
-  - [ ] Build a `WebSocketTestClient` or `WebSocketSimulator` for high-level
-    integration testing.
+  - [ ] Implement a `WebSocketTestClient` built on the third-party
+    `websockets` asyncio client, including context-managed connections and JSON
+    helpers.
 
-  - [ ] Ensure the test client API is intuitive and supports the full connection
-    and message lifecycle.
+  - [ ] Add trace/log capture to `WebSocketTestClient` sessions so tests can
+    assert on frame ordering and payloads.
 
-  - [ ] Provide pytest fixtures to simplify test setup.
+  - [ ] Implement an injectable `WebSocketSimulator` that mimics the
+    `WebSocketLike` interface with spyable send/receive queues.
+
+  - [ ] Extend `WebSocketRouter` with an optional `simulator_factory` hook used
+    to supply `WebSocketSimulator` instances under test.
+
+  - [ ] Provide a pytest fixture that wires a simulator-backed router into the
+    ASGI app, handles connection lifecycle management, and exposes helpers for
+    pushing and inspecting messages.
 
 - [ ] **Build a Full Reference Example.**
 
