@@ -13,7 +13,7 @@ all: build check-fmt test typecheck
 
 build: uv ## Build virtual-env and install deps
 	uv venv
-	uv sync --group dev --group examples
+	uv sync --group dev
 
 build-release: ## Build artefacts (sdist & wheel)
 	python -m build --sdist --wheel
@@ -57,7 +57,7 @@ lint: ruff ## Run linters
 	ruff check
 
 typecheck: build ty ## Run typechecking
-	ty check
+	ty check falcon_pachinko tests
 
 markdownlint: $(MDLINT) ## Lint Markdown files
 	find . -type f -name '*.md' \
