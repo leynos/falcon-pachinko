@@ -9,7 +9,18 @@ from urllib.parse import urlsplit
 
 import msgspec.json as msjson
 
-Direction = typ.Literal["send", "receive", "close"]
+try:  # pragma: no cover - optional dependency exercised in tests
+    from websockets.client import connect as _ws_connect
+except ImportError:  # pragma: no cover - imported lazily in tests
+    _ws_connect = None  # type: ignore[assignment]
+
+if typ.TYPE_CHECKING:  # pragma: no cover - typing only
+    from websockets.client import WebSocketClientProtocol
+else:  # pragma: no cover - runtime fallback when dependency missing
+    WebSocketClientProtocol = typ.Any  # type: ignore[misc,assignment]
+
+Direction = typ.Literal["send", "receive", "close", "error"]
+FrameKind = typ.Literal["text", "bytes", "json"]
 PayloadKind = typ.Literal["text", "bytes", "json", "close"]
 
 _MISSING_WEBSOCKETS_MSG = (
@@ -18,43 +29,18 @@ _MISSING_WEBSOCKETS_MSG = (
 )
 _EXPECTED_TEXT_MSG = "Expected text frame but received bytes"
 _EXPECTED_BYTES_MSG = "Expected binary frame but received text"
-_UNEXPECTED_FRAME_MSG = "Unexpected frame type received"
-
-if typ.TYPE_CHECKING:  # pragma: no cover - imported for typing only
-    import websockets.client as ws_client
-    from websockets.client import WebSocketClientProtocol
-else:  # pragma: no cover - runtime fallback
-    ws_client = None  # type: ignore[assignment]
-    WebSocketClientProtocol = typ.Any  # type: ignore[misc,assignment]
+_TEXT_PAYLOAD_REQUIRED_MSG = "Text frames require str payloads"
+_BINARY_PAYLOAD_REQUIRED_MSG = "Binary frames require bytes payloads"
+_UNSUPPORTED_FRAME_KIND_MSG = "Unsupported frame kind: {frame_kind}"
+_FAILED_JSON_DECODE_MSG = "Failed to decode JSON payload: {message!r}"
+_INSECURE_WEBSOCKET_MSG = (
+    "Insecure websocket URLs require allow_insecure=True. "
+    "Use a wss:// URL for secure connections."
+)
 
 
 class MissingDependencyError(RuntimeError):
     """Raised when optional testing dependencies are unavailable."""
-
-
-class _ClientModule(typ.Protocol):
-    """Subset of the ``websockets.client`` module used by the test client."""
-
-    def connect(
-        self,
-        uri: str,
-        *,
-        extra_headers: typ.Mapping[str, str] | None = ...,  # pragma: no cover - stub
-        subprotocols: typ.Sequence[str] | None = ...,  # pragma: no cover - stub
-        open_timeout: float | None = ...,  # pragma: no cover - stub
-    ) -> typ.AsyncContextManager[WebSocketClientProtocol]:  # pragma: no cover - stub
-        ...
-
-
-def _require_websockets() -> _ClientModule:
-    """Return the ``websockets.client`` module or raise a helpful error."""
-    global ws_client
-    if ws_client is None:  # pragma: no cover - exercised via import error tests
-        try:
-            import websockets.client as ws_client  # type: ignore[assignment]
-        except ImportError as exc:  # pragma: no cover - environment specific
-            raise MissingDependencyError(_MISSING_WEBSOCKETS_MSG) from exc
-    return typ.cast("_ClientModule", ws_client)
 
 
 @dc.dataclass(slots=True)
@@ -100,51 +86,57 @@ class WebSocketSession:
                 TraceEvent(direction=direction, kind=kind, payload=payload)
             )
 
-    async def send_text(self, message: str) -> None:
-        """Send a text frame."""
-        await self._connection.send(message)
-        self._log("send", "text", message)
-
-    async def send_bytes(self, payload: bytes) -> None:
-        """Send a binary frame."""
-        await self._connection.send(payload)
-        self._log("send", "bytes", payload)
-
     def _encode_json(self, payload: object) -> str:
         """Encode ``payload`` as UTF-8 JSON text."""
         data = self._json_encoder.encode(payload)
         return data.decode("utf-8")
 
+    async def send(
+        self, payload: str | bytes | object, *, kind: FrameKind | None = None
+    ) -> None:
+        """Send a frame, inferring the payload kind when omitted."""
+        frame_kind: FrameKind
+        if kind is None:
+            if isinstance(payload, bytes):
+                frame_kind = "bytes"
+            elif isinstance(payload, str):
+                frame_kind = "text"
+            else:
+                frame_kind = "json"
+        else:
+            frame_kind = kind
+
+        if frame_kind == "text":
+            if not isinstance(payload, str):
+                raise TypeError(_TEXT_PAYLOAD_REQUIRED_MSG)
+            data: str | bytes = payload
+        elif frame_kind == "bytes":
+            if not isinstance(payload, bytes):
+                raise TypeError(_BINARY_PAYLOAD_REQUIRED_MSG)
+            data = payload
+        elif frame_kind == "json":
+            data = self._encode_json(payload)
+        else:  # pragma: no cover - safeguarded by the FrameKind literal
+            raise ValueError(_UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=frame_kind))
+
+        await self._connection.send(data)
+        self._log("send", frame_kind, payload)
+
+    async def send_text(self, message: str) -> None:
+        """Send a text frame."""
+        await self.send(message, kind="text")
+
+    async def send_bytes(self, payload: bytes) -> None:
+        """Send a binary frame."""
+        await self.send(payload, kind="bytes")
+
     async def send_json(self, payload: object) -> None:
         """Send a JSON payload using msgspec for encoding."""
-        message = self._encode_json(payload)
-        await self._connection.send(message)
-        self._log("send", "json", payload)
+        await self.send(payload, kind="json")
 
     async def _recv_raw(self) -> str | bytes:
         """Receive the next frame without decoding."""
         return await self._connection.recv()
-
-    async def receive(self) -> str | bytes:
-        """Receive a frame without interpretation."""
-        message = await self._recv_raw()
-        kind: PayloadKind = "text" if isinstance(message, str) else "bytes"
-        self._log("receive", kind, message)
-        return message
-
-    async def receive_text(self) -> str:
-        """Receive a text frame."""
-        message = await self.receive()
-        if isinstance(message, str):
-            return message
-        raise TypeError(_EXPECTED_TEXT_MSG)
-
-    async def receive_bytes(self) -> bytes:
-        """Receive a binary frame."""
-        message = await self.receive()
-        if isinstance(message, bytes):
-            return message
-        raise TypeError(_EXPECTED_BYTES_MSG)
 
     def _decoder_for(self, payload_type: type[object] | None) -> msjson.Decoder:
         """Return a JSON decoder for the requested payload type."""
@@ -156,24 +148,72 @@ class WebSocketSession:
             self._decoders[payload_type] = decoder
         return decoder
 
+    async def receive(
+        self,
+        *,
+        kind: FrameKind | None = None,
+        payload_type: type[object] | None = None,
+    ) -> object:
+        """Receive a frame and decode it according to ``kind``."""
+        message = await self._recv_raw()
+        frame_kind: FrameKind
+        if kind is None:
+            frame_kind = "text" if isinstance(message, str) else "bytes"
+        else:
+            frame_kind = kind
+
+        if frame_kind == "json":
+            data = message.encode("utf-8") if isinstance(message, str) else message
+            decoder = self._decoder_for(payload_type)
+            try:
+                payload = decoder.decode(data)
+            except Exception as exc:
+                raise RuntimeError(
+                    _FAILED_JSON_DECODE_MSG.format(message=message)
+                ) from exc
+        elif frame_kind == "text":
+            if isinstance(message, str):
+                payload = message
+            else:
+                raise TypeError(_EXPECTED_TEXT_MSG)
+        elif frame_kind == "bytes":
+            if isinstance(message, bytes):
+                payload = message
+            else:
+                raise TypeError(_EXPECTED_BYTES_MSG)
+        else:  # pragma: no cover - safeguarded by the FrameKind literal
+            raise ValueError(_UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=frame_kind))
+
+        self._log("receive", frame_kind, payload)
+        return payload
+
+    async def receive_text(self) -> str:
+        """Receive a text frame."""
+        message = await self.receive(kind="text")
+        return typ.cast("str", message)
+
+    async def receive_bytes(self) -> bytes:
+        """Receive a binary frame."""
+        message = await self.receive(kind="bytes")
+        return typ.cast("bytes", message)
+
     async def receive_json(self, payload_type: type[object] | None = None) -> object:
         """Receive and decode a JSON payload."""
-        message = await self._recv_raw()
-        if isinstance(message, str):
-            data = message.encode("utf-8")
-        elif isinstance(message, bytes):
-            data = message
-        else:  # pragma: no cover - websockets always returns str | bytes
-            raise TypeError(_UNEXPECTED_FRAME_MSG)
-        decoder = self._decoder_for(payload_type)
-        payload = decoder.decode(data)
-        self._log("receive", "json", payload)
-        return payload
+        return await self.receive(kind="json", payload_type=payload_type)
 
     async def close(self, code: int = 1000, reason: str = "") -> None:
         """Close the websocket connection."""
-        await self._connection.close(code=code, reason=reason)
-        self._log("close", "close", {"code": code, "reason": reason})
+        try:
+            await self._connection.close(code=code, reason=reason)
+        except Exception as exc:  # pragma: no cover - close failures are rare
+            self._log(
+                "error",
+                "close",
+                {"code": code, "reason": reason, "exception": str(exc)},
+            )
+            raise
+        else:
+            self._log("close", "close", {"code": code, "reason": reason})
 
 
 class WebSocketTestClient:
@@ -188,6 +228,7 @@ class WebSocketTestClient:
         open_timeout: float | None = 10.0,
         capture_trace: bool = False,
         trace_factory: typ.Callable[[], list[TraceEvent]] | None = None,
+        allow_insecure: bool = False,
     ) -> None:
         self._base_url = base_url.rstrip("/") or base_url
         self._default_headers = dict(default_headers or {})
@@ -195,11 +236,17 @@ class WebSocketTestClient:
         self._open_timeout = open_timeout
         self._capture_trace = capture_trace
         self._trace_factory = trace_factory or list
+        self._allow_insecure = allow_insecure
+
+        if self._base_url.startswith("ws://") and not self._allow_insecure:
+            raise ValueError(_INSECURE_WEBSOCKET_MSG)
 
     def _build_url(self, path: str) -> tuple[str, str]:
         """Return the absolute connection URL and normalized path."""
         if path.startswith(("ws://", "wss://")):
             parsed = urlsplit(path)
+            if parsed.scheme == "ws" and not self._allow_insecure:
+                raise ValueError(_INSECURE_WEBSOCKET_MSG)
             normalized = parsed.path or "/"
             if parsed.query:
                 normalized = f"{normalized}?{parsed.query}"
@@ -218,7 +265,7 @@ class WebSocketTestClient:
             return None
         merged = dict(self._default_headers)
         if headers:
-            merged.update(headers)
+            merged |= headers
         return merged
 
     def _should_trace(
@@ -227,9 +274,7 @@ class WebSocketTestClient:
         """Return whether tracing should be enabled for this session."""
         if trace is not None:
             return True
-        if capture_trace is None:
-            return self._capture_trace
-        return capture_trace
+        return self._capture_trace if capture_trace is None else capture_trace
 
     @asynccontextmanager
     async def connect(
@@ -242,7 +287,14 @@ class WebSocketTestClient:
         capture_trace: bool | None = None,
     ) -> typ.AsyncIterator[WebSocketSession]:
         """Connect to ``path`` and yield a managed :class:`WebSocketSession`."""
-        module = _require_websockets()
+        global _ws_connect
+        ws_connect = _ws_connect
+        if ws_connect is None:  # pragma: no cover - exercised via import error test
+            try:
+                from websockets.client import connect as ws_connect  # type: ignore
+            except ImportError as exc:  # pragma: no cover - optional dependency
+                raise MissingDependencyError(_MISSING_WEBSOCKETS_MSG) from exc
+            _ws_connect = ws_connect
         url, normalized_path = self._build_url(path)
         negotiated = (
             tuple(subprotocols) if subprotocols is not None else self._subprotocols
@@ -250,7 +302,7 @@ class WebSocketTestClient:
         trace_log = trace
         if self._should_trace(capture_trace=capture_trace, trace=trace_log):
             trace_log = trace_log or self._trace_factory()
-        async with module.connect(
+        async with ws_connect(
             url,
             extra_headers=self._merge_headers(headers),
             subprotocols=negotiated,

@@ -73,6 +73,7 @@ def echo_service(event_loop: asyncio.AbstractEventLoop) -> typ.Iterator[ClientCo
         default_headers={"X-Test": "bdd"},
         subprotocols=("json",),
         capture_trace=True,
+        allow_insecure=True,
     )
 
     context = ClientContext(

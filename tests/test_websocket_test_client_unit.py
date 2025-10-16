@@ -72,7 +72,7 @@ async def echo_server() -> typ.AsyncIterator[tuple[str, EchoState]]:
 async def test_send_and_receive_json(echo_server: tuple[str, EchoState]) -> None:
     """Send JSON payloads and receive decoded responses."""
     base_url, state = echo_server
-    client = WebSocketTestClient(base_url)
+    client = WebSocketTestClient(base_url, allow_insecure=True)
 
     async with client.connect("/chat") as session:
         await session.send_json({"hello": "world"})
@@ -84,12 +84,30 @@ async def test_send_and_receive_json(echo_server: tuple[str, EchoState]) -> None
 
 
 @pytest.mark.asyncio
+async def test_send_and_receive_binary(echo_server: tuple[str, EchoState]) -> None:
+    """Exchange binary frames using the helper."""
+    base_url, state = echo_server
+    client = WebSocketTestClient(base_url, allow_insecure=True)
+
+    payload = b"\x00\x01binary"
+
+    async with client.connect("/binary") as session:
+        await session.send_bytes(payload)
+        reply = await session.receive_bytes()
+
+    assert reply == payload
+    assert state.messages == [payload]
+    assert state.paths == ["/binary"]
+
+
+@pytest.mark.asyncio
 async def test_header_merging(echo_server: tuple[str, EchoState]) -> None:
     """Default headers merge with per-connection overrides."""
     base_url, state = echo_server
     client = WebSocketTestClient(
         base_url,
         default_headers={"X-App": "test"},
+        allow_insecure=True,
     )
 
     async with client.connect("/headers", headers={"X-Trace": "1"}):
@@ -104,7 +122,11 @@ async def test_header_merging(echo_server: tuple[str, EchoState]) -> None:
 async def test_subprotocol_negotiation() -> None:
     """Subprotocol preferences propagate to the server."""
     async with start_echo_server(subprotocols=("trace", "chat")) as (base_url, state):
-        client = WebSocketTestClient(base_url, subprotocols=("trace", "chat"))
+        client = WebSocketTestClient(
+            base_url,
+            subprotocols=("trace", "chat"),
+            allow_insecure=True,
+        )
 
         async with client.connect("/rooms") as session:
             await session.send_text("ping")
@@ -120,7 +142,7 @@ async def test_trace_records_send_and_receive(
 ) -> None:
     """Trace logs capture frame ordering and payloads."""
     base_url, state = echo_server
-    client = WebSocketTestClient(base_url, capture_trace=True)
+    client = WebSocketTestClient(base_url, capture_trace=True, allow_insecure=True)
 
     async with client.connect("/trace") as session:
         await session.send_text("hi")
@@ -140,7 +162,7 @@ async def test_receive_json_with_custom_type(
 ) -> None:
     """Structured JSON decoding uses msgspec's typed decoding."""
     base_url, _ = echo_server
-    client = WebSocketTestClient(base_url)
+    client = WebSocketTestClient(base_url, allow_insecure=True)
 
     @dc.dataclass
     class Payload:
@@ -152,3 +174,11 @@ async def test_receive_json_with_custom_type(
 
     assert isinstance(reply, Payload)
     assert reply.message == "hello"
+
+
+def test_insecure_base_url_requires_opt_in() -> None:
+    """Disallow insecure websocket URLs without explicit opt-in."""
+    with pytest.raises(
+        ValueError, match="Insecure websocket URLs require allow_insecure=True"
+    ):
+        WebSocketTestClient("ws://localhost:8765")
