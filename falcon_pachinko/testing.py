@@ -290,14 +290,6 @@ class WebSocketTestClient:
             merged |= headers
         return merged
 
-    def _should_trace(
-        self, *, capture_trace: bool | None, trace: list[TraceEvent] | None
-    ) -> bool:
-        """Return whether tracing should be enabled for this session."""
-        if trace is not None:
-            return True
-        return self._capture_trace if capture_trace is None else capture_trace
-
     @asynccontextmanager
     async def connect(
         self,
@@ -305,10 +297,17 @@ class WebSocketTestClient:
         *,
         headers: typ.Mapping[str, str] | None = None,
         subprotocols: typ.Sequence[str] | None = None,
-        trace: list[TraceEvent] | None = None,
-        capture_trace: bool | None = None,
+        trace: list[TraceEvent] | bool | None = None,
     ) -> typ.AsyncIterator[WebSocketSession]:
-        """Connect to ``path`` and yield a managed :class:`WebSocketSession`."""
+        """Connect to ``path`` and yield a managed :class:`WebSocketSession`.
+
+        ``trace`` accepts one of four values:
+
+        - ``list``: use the provided list to record trace events.
+        - ``True``: create and return a new trace list via ``trace_factory``.
+        - ``False``: disable tracing for this session.
+        - ``None``: fall back to the client's ``capture_trace`` default.
+        """
         global _ws_connect
         ws_connect = _ws_connect
         if ws_connect is None:  # pragma: no cover - exercised via import error test
@@ -321,9 +320,12 @@ class WebSocketTestClient:
         negotiated = (
             tuple(subprotocols) if subprotocols is not None else self._subprotocols
         )
-        trace_log = trace
-        if self._should_trace(capture_trace=capture_trace, trace=trace_log):
-            trace_log = trace_log or self._trace_factory()
+        if isinstance(trace, list):
+            trace_log = trace
+        elif trace is True or (trace is None and self._capture_trace):
+            trace_log = self._trace_factory()
+        else:
+            trace_log = None
         async with ws_connect(
             url,
             extra_headers=self._merge_headers(headers),
