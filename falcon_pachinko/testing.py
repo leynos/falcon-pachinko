@@ -156,36 +156,58 @@ class WebSocketSession:
     ) -> object:
         """Receive a frame and decode it according to ``kind``."""
         message = await self._recv_raw()
-        frame_kind: FrameKind
-        if kind is None:
-            frame_kind = "text" if isinstance(message, str) else "bytes"
-        else:
-            frame_kind = kind
-
-        if frame_kind == "json":
-            data = message.encode("utf-8") if isinstance(message, str) else message
-            decoder = self._decoder_for(payload_type)
-            try:
-                payload = decoder.decode(data)
-            except Exception as exc:
-                raise RuntimeError(
-                    _FAILED_JSON_DECODE_MSG.format(message=message)
-                ) from exc
-        elif frame_kind == "text":
-            if isinstance(message, str):
-                payload = message
-            else:
-                raise TypeError(_EXPECTED_TEXT_MSG)
-        elif frame_kind == "bytes":
-            if isinstance(message, bytes):
-                payload = message
-            else:
-                raise TypeError(_EXPECTED_BYTES_MSG)
-        else:  # pragma: no cover - safeguarded by the FrameKind literal
-            raise ValueError(_UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=frame_kind))
-
+        frame_kind = self._determine_frame_kind(kind, message)
+        payload = self._decode_frame(frame_kind, message, payload_type)
         self._log("receive", frame_kind, payload)
         return payload
+
+    def _determine_frame_kind(
+        self, kind: FrameKind | None, message: str | bytes
+    ) -> FrameKind:
+        """Return the frame kind inferred from ``kind`` or ``message``."""
+        if kind is not None:
+            return kind
+        return "text" if isinstance(message, str) else "bytes"
+
+    def _decode_frame(
+        self,
+        frame_kind: FrameKind,
+        message: str | bytes,
+        payload_type: type[object] | None,
+    ) -> object:
+        """Decode ``message`` according to ``frame_kind``."""
+        if frame_kind == "json":
+            return self._decode_json_frame(message, payload_type)
+        if frame_kind == "text":
+            return self._decode_text_frame(message)
+        if frame_kind == "bytes":
+            return self._decode_bytes_frame(message)
+        raise ValueError(  # pragma: no cover - safeguarded by the FrameKind literal
+            _UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=frame_kind)
+        )
+
+    def _decode_json_frame(
+        self, message: str | bytes, payload_type: type[object] | None
+    ) -> object:
+        """Decode ``message`` as JSON using ``payload_type`` when provided."""
+        data = message.encode("utf-8") if isinstance(message, str) else message
+        decoder = self._decoder_for(payload_type)
+        try:
+            return decoder.decode(data)
+        except Exception as exc:  # pragma: no cover - msgspec raised
+            raise RuntimeError(_FAILED_JSON_DECODE_MSG.format(message=message)) from exc
+
+    def _decode_text_frame(self, message: str | bytes) -> str:
+        """Validate and return a text frame payload."""
+        if isinstance(message, str):
+            return message
+        raise TypeError(_EXPECTED_TEXT_MSG)
+
+    def _decode_bytes_frame(self, message: str | bytes) -> bytes:
+        """Validate and return a binary frame payload."""
+        if isinstance(message, bytes):
+            return message
+        raise TypeError(_EXPECTED_BYTES_MSG)
 
     async def receive_text(self) -> str:
         """Receive a text frame."""
