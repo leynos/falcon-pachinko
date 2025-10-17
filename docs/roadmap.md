@@ -189,11 +189,11 @@ the library is ready for use.
 
 - [ ] **Develop Comprehensive Testing Utilities.**
 
-  - [ ] Implement a `WebSocketTestClient` built on the third-party
+  - [x] Implement a `WebSocketTestClient` built on the third-party
     `websockets` asyncio client, including context-managed connections and JSON
     helpers.
 
-  - [ ] Add trace/log capture to `WebSocketTestClient` sessions so tests can
+  - [x] Add trace/log capture to `WebSocketTestClient` sessions so tests can
     assert on frame ordering and payloads.
 
   - [ ] Implement an injectable `WebSocketSimulator` that mimics the

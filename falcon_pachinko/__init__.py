@@ -8,6 +8,7 @@ from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
 from .resource import WebSocketResource
 from .router import ResourceFactory, WebSocketRouter
+from .testing import MissingDependencyError, TraceEvent, WebSocketTestClient
 from .websocket import (
     ConnectionBackend,
     InProcessBackend,
@@ -22,13 +23,16 @@ __all__ = (
     "HookContext",
     "HookManager",
     "InProcessBackend",
+    "MissingDependencyError",
     "ResourceFactory",
     "ServiceContainer",
     "ServiceNotFoundError",
+    "TraceEvent",
     "WebSocketConnectionManager",
     "WebSocketLike",
     "WebSocketResource",
     "WebSocketRouter",
+    "WebSocketTestClient",
     "WorkerController",
     "handles_message",
     "install",

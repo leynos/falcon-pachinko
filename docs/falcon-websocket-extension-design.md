@@ -1381,10 +1381,10 @@ router.add_route(
 resource. Internally the helper caches each computed `inspect.Signature` in the
 private ``_signature_cache`` mapping so repeated instantiation does not redo
 reflection. Should a dependency be missing, `ServiceContainer.resolve()` raises
-``ServiceNotFoundError`` (a ``LookupError`` subclass) to make failures explicit.
-Because the router delegates instantiation, unit tests can supply a lightweight
-factory that injects mocks, while production code can reuse existing DI
-infrastructure.
+``ServiceNotFoundError`` (a ``LookupError`` subclass) to make failures
+explicit. Because the router delegates instantiation, unit tests can supply a
+lightweight factory that injects mocks, while production code can reuse
+existing DI infrastructure.
 
 ##### Component Relationships
 
@@ -1532,8 +1532,8 @@ pluggable, allowing different backend implementations. For example:
 
 Providing first-class testing utilities keeps Falcon-Pachinko approachable for
 teams who rely on tight feedback loops. The design includes two complementary
-helpers—`WebSocketTestClient` and `WebSocketSimulator`—plus a pytest fixture that
-encapsulates common setup. Together they support both end-to-end exercises
+helpers—`WebSocketTestClient` and `WebSocketSimulator`—plus a pytest fixture
+that encapsulates common setup. Together they support both end-to-end exercises
 against a running ASGI server and hermetic unit tests that spy on the framework
 internals.
 
@@ -1546,10 +1546,13 @@ Falcon-flavoured API. It wraps `websockets.connect()` from the
 already provides a reliable asyncio client with excellent RFC coverage.
 
 - **Instantiation**: `WebSocketTestClient(app_url: str, *, headers: dict | None,
-  subprotocols: list[str] | None)` stores the base URL and optional defaults.
+  subprotocols: list[str] | None, allow_insecure: bool =
+  False)` stores the base URL and defaults, requiring opt-in for local `ws://`
+  use.
 
 - **Connection Context**: `async with client.connect(path)` opens a connection
-  with `websockets.connect(f"{base}{path}", extra_headers=..., subprotocols=...)`
+  with
+  `websockets.connect(f"{base}{path}", extra_headers=..., subprotocols=...)`
   and yields a `WebSocketSession` helper. Context exit guarantees closure even
   if assertions fail.
 
@@ -1557,7 +1560,9 @@ already provides a reliable asyncio client with excellent RFC coverage.
   protocol so tests read naturally:
 
   ```python
-  async with WebSocketTestClient("ws://localhost:8000").connect("/ws/chat") as session:
+  async with WebSocketTestClient(
+      "ws://localhost:8000", allow_insecure=True
+  ).connect("/ws/chat") as session:
       await session.send_json({"type": "ping"})
       reply = await session.receive_json()
   ```
@@ -1576,9 +1581,8 @@ still supporting TLS, custom headers, and subprotocol negotiation.
 #### 6.5.2. `WebSocketSimulator`
 
 Where the test client targets black-box integration, the `WebSocketSimulator`
-acts as an injectable dependency that emulates the `WebSocketLike` contract.
-It enables white-box testing of router behaviour without needing an ASGI
-server.
+acts as an injectable dependency that emulates the `WebSocketLike` contract. It
+enables white-box testing of router behaviour without needing an ASGI server.
 
 - **Construction**: `WebSocketSimulator()` accepts optional queues for inbound
   and outbound payloads plus dependency hooks. When mounted, the simulator is
