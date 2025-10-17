@@ -258,20 +258,43 @@ class WebSocketSession:
             self._log("close", "close", {"code": code, "reason": reason})
 
 
+class _ClientOptions(typ.TypedDict, total=False):
+    """Optional configuration parameters for :class:`WebSocketTestClient`."""
+
+    default_headers: typ.Mapping[str, str]
+    subprotocols: typ.Sequence[str]
+    open_timeout: float
+    capture_trace: bool
+    trace_factory: typ.Callable[[], list[TraceEvent]]
+    allow_insecure: bool
+
+
 class WebSocketTestClient:
     """High-level client tailored for websocket integration tests."""
 
     def __init__(
         self,
         base_url: str,
-        *,
-        default_headers: typ.Mapping[str, str] | None = None,
-        subprotocols: typ.Sequence[str] | None = None,
-        open_timeout: float | None = 10.0,
-        capture_trace: bool = False,
-        trace_factory: typ.Callable[[], list[TraceEvent]] | None = None,
-        allow_insecure: bool = False,
+        **options: typ.Unpack[_ClientOptions],
     ) -> None:
+        """Configure the client with optional keyword-only ``options``.
+
+        Accepted keys are:
+
+        - ``default_headers``: base headers merged into each connection.
+        - ``subprotocols``: preferred subprotocols offered on connect.
+        - ``open_timeout``: connection timeout in seconds (default ``10.0``).
+        - ``capture_trace``: capture trace events by default (default ``False``).
+        - ``trace_factory``: callable returning a new trace list (default ``list``).
+        - ``allow_insecure``: allow ``ws://`` URLs (default ``False``).
+        """
+        default_headers = options.get("default_headers")
+        subprotocols = options.get("subprotocols")
+        open_timeout = options.get("open_timeout", 10.0)
+        capture_trace = options.get("capture_trace", False)
+        trace_factory = options.get("trace_factory")
+        allow_insecure = options.get("allow_insecure", False)
+
         self._base_url = base_url.rstrip("/") or base_url
         self._default_headers = dict(default_headers or {})
         self._subprotocols = tuple(subprotocols) if subprotocols is not None else None
