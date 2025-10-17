@@ -336,6 +336,19 @@ class WebSocketTestClient:
             merged |= headers
         return merged
 
+    def _should_create_new_trace_list(
+        self, *, trace: list[TraceEvent] | bool | None
+    ) -> bool:
+        """Determine whether to create a new trace list for the session.
+
+        Returns True when:
+        - trace is explicitly True (caller requests tracing), or
+        - trace is None (use default) and instance capture_trace is enabled
+        """
+        explicit_enable = trace is True
+        use_instance_default = trace is None and self._capture_trace
+        return explicit_enable or use_instance_default
+
     @asynccontextmanager
     async def connect(
         self,
@@ -368,7 +381,7 @@ class WebSocketTestClient:
         )
         if isinstance(trace, list):
             trace_log = trace
-        elif trace is True or (trace is None and self._capture_trace):
+        elif self._should_create_new_trace_list(trace=trace):
             trace_log = self._trace_factory()
         else:
             trace_log = None
