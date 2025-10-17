@@ -336,6 +336,14 @@ class WebSocketTestClient:
             merged |= headers
         return merged
 
+    def _resolve_subprotocols(
+        self, subprotocols: typ.Sequence[str] | None
+    ) -> tuple[str, ...] | None:
+        """Return connection subprotocols, honoring per-call overrides."""
+        if subprotocols is not None:
+            return tuple(subprotocols)
+        return self._subprotocols
+
     def _should_create_new_trace_list(
         self, *, trace: list[TraceEvent] | bool | None
     ) -> bool:
@@ -348,6 +356,42 @@ class WebSocketTestClient:
         explicit_enable = trace is True
         use_instance_default = trace is None and self._capture_trace
         return explicit_enable or use_instance_default
+
+    def _ensure_ws_connect(
+        self,
+    ) -> typ.Callable[..., typ.Awaitable[WebSocketClientProtocol]]:
+        """Return the websockets connect callable, importing lazily when needed."""
+        global _ws_connect
+        ws_connect = _ws_connect
+        if ws_connect is None:  # pragma: no cover - exercised via import error test
+            try:
+                from websockets.client import connect as ws_connect  # type: ignore
+            except ImportError as exc:  # pragma: no cover - optional dependency
+                raise MissingDependencyError(_MISSING_WEBSOCKETS_MSG) from exc
+            _ws_connect = ws_connect
+        return ws_connect
+
+    def _prepare_connection_params(
+        self,
+        path: str,
+        headers: typ.Mapping[str, str] | None,
+        subprotocols: typ.Sequence[str] | None,
+    ) -> tuple[str, str, dict[str, str] | None, tuple[str, ...] | None]:
+        """Compute the URL, normalized path, headers, and subprotocols."""
+        url, normalized_path = self._build_url(path)
+        merged_headers = self._merge_headers(headers)
+        negotiated = self._resolve_subprotocols(subprotocols)
+        return url, normalized_path, merged_headers, negotiated
+
+    def _configure_trace(
+        self, *, trace: list[TraceEvent] | bool | None
+    ) -> list[TraceEvent] | None:
+        """Resolve the trace log to use for the connection session."""
+        if isinstance(trace, list):
+            return trace
+        if self._should_create_new_trace_list(trace=trace):
+            return self._trace_factory()
+        return None
 
     @asynccontextmanager
     async def connect(
@@ -367,27 +411,17 @@ class WebSocketTestClient:
         - ``False``: disable tracing for this session.
         - ``None``: fall back to the client's ``capture_trace`` default.
         """
-        global _ws_connect
-        ws_connect = _ws_connect
-        if ws_connect is None:  # pragma: no cover - exercised via import error test
-            try:
-                from websockets.client import connect as ws_connect  # type: ignore
-            except ImportError as exc:  # pragma: no cover - optional dependency
-                raise MissingDependencyError(_MISSING_WEBSOCKETS_MSG) from exc
-            _ws_connect = ws_connect
-        url, normalized_path = self._build_url(path)
-        negotiated = (
-            tuple(subprotocols) if subprotocols is not None else self._subprotocols
-        )
-        if isinstance(trace, list):
-            trace_log = trace
-        elif self._should_create_new_trace_list(trace=trace):
-            trace_log = self._trace_factory()
-        else:
-            trace_log = None
+        ws_connect = self._ensure_ws_connect()
+        (
+            url,
+            normalized_path,
+            merged_headers,
+            negotiated,
+        ) = self._prepare_connection_params(path, headers, subprotocols)
+        trace_log = self._configure_trace(trace=trace)
         async with ws_connect(
             url,
-            extra_headers=self._merge_headers(headers),
+            extra_headers=merged_headers,
             subprotocols=negotiated,
             open_timeout=self._open_timeout,
         ) as connection:
