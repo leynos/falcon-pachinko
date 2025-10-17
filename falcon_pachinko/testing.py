@@ -95,32 +95,48 @@ class WebSocketSession:
         self, payload: str | bytes | object, *, kind: FrameKind | None = None
     ) -> None:
         """Send a frame, inferring the payload kind when omitted."""
-        frame_kind: FrameKind
-        if kind is None:
-            if isinstance(payload, bytes):
-                frame_kind = "bytes"
-            elif isinstance(payload, str):
-                frame_kind = "text"
-            else:
-                frame_kind = "json"
-        else:
-            frame_kind = kind
-
-        if frame_kind == "text":
-            if not isinstance(payload, str):
-                raise TypeError(_TEXT_PAYLOAD_REQUIRED_MSG)
-            data: str | bytes = payload
-        elif frame_kind == "bytes":
-            if not isinstance(payload, bytes):
-                raise TypeError(_BINARY_PAYLOAD_REQUIRED_MSG)
-            data = payload
-        elif frame_kind == "json":
-            data = self._encode_json(payload)
-        else:  # pragma: no cover - safeguarded by the FrameKind literal
-            raise ValueError(_UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=frame_kind))
-
+        frame_kind = self._determine_send_frame_kind(kind, payload)
+        data = self._encode_payload(frame_kind, payload)
         await self._connection.send(data)
         self._log("send", frame_kind, payload)
+
+    def _determine_send_frame_kind(
+        self, kind: FrameKind | None, payload: str | bytes | object
+    ) -> FrameKind:
+        """Return the frame kind inferred from ``kind`` or ``payload``."""
+        if kind is not None:
+            return kind
+        if isinstance(payload, bytes):
+            return "bytes"
+        if isinstance(payload, str):
+            return "text"
+        return "json"
+
+    def _encode_payload(
+        self, frame_kind: FrameKind, payload: str | bytes | object
+    ) -> str | bytes:
+        """Encode ``payload`` according to ``frame_kind``."""
+        if frame_kind == "text":
+            return self._encode_text_payload(payload)
+        if frame_kind == "bytes":
+            return self._encode_bytes_payload(payload)
+        if frame_kind == "json":
+            return self._encode_json(payload)
+        raise ValueError(  # pragma: no cover - safeguarded by the FrameKind literal
+            _UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=frame_kind)
+        )
+
+    def _encode_text_payload(self, payload: str | bytes | object) -> str:
+        """Validate and return a text payload."""
+        if isinstance(payload, str):
+            return payload
+        raise TypeError(_TEXT_PAYLOAD_REQUIRED_MSG)
+
+    def _encode_bytes_payload(self, payload: str | bytes | object) -> bytes:
+        """Validate and return a binary payload."""
+        if isinstance(payload, bytes):
+            return payload
+        raise TypeError(_BINARY_PAYLOAD_REQUIRED_MSG)
 
     async def send_text(self, message: str) -> None:
         """Send a text frame."""
