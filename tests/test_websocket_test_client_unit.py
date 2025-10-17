@@ -141,7 +141,7 @@ async def test_trace_records_send_and_receive(
     echo_server: tuple[str, EchoState],
 ) -> None:
     """Trace logs capture frame ordering and payloads."""
-    base_url, state = echo_server
+    base_url, _ = echo_server
     client = WebSocketTestClient(base_url, capture_trace=True, allow_insecure=True)
 
     async with client.connect("/trace") as session:

@@ -228,12 +228,16 @@ class WebSocketSession:
     async def receive_text(self) -> str:
         """Receive a text frame."""
         message = await self.receive(kind="text")
-        return typ.cast("str", message)
+        if not isinstance(message, str):  # pragma: no cover - safeguarded upstream
+            raise TypeError(_EXPECTED_TEXT_MSG)
+        return message
 
     async def receive_bytes(self) -> bytes:
         """Receive a binary frame."""
         message = await self.receive(kind="bytes")
-        return typ.cast("bytes", message)
+        if not isinstance(message, bytes):  # pragma: no cover - safeguarded upstream
+            raise TypeError(_EXPECTED_BYTES_MSG)
+        return message
 
     async def receive_json(self, payload_type: type[object] | None = None) -> object:
         """Receive and decode a JSON payload."""
@@ -276,24 +280,27 @@ class WebSocketTestClient:
         self._trace_factory = trace_factory or list
         self._allow_insecure = allow_insecure
 
-        if self._base_url.startswith("ws://") and not self._allow_insecure:
+        parsed_base = urlsplit(self._base_url)
+        if parsed_base.scheme == "ws" and not self._allow_insecure:
             raise ValueError(_INSECURE_WEBSOCKET_MSG)
 
     def _build_url(self, path: str) -> tuple[str, str]:
         """Return the absolute connection URL and normalized path."""
-        if path.startswith(("ws://", "wss://")):
-            parsed = urlsplit(path)
+        parsed = urlsplit(path)
+        if parsed.scheme in {"ws", "wss"}:
             if parsed.scheme == "ws" and not self._allow_insecure:
                 raise ValueError(_INSECURE_WEBSOCKET_MSG)
             normalized = parsed.path or "/"
             if parsed.query:
                 normalized = f"{normalized}?{parsed.query}"
             return path, normalized
-        if not path.startswith("/"):
-            path = f"/{path}"
-        if self._base_url.endswith("/"):
-            return f"{self._base_url.rstrip('/')}{path}", path
-        return f"{self._base_url}{path}", path
+        normalized = parsed.path or path
+        if parsed.query:
+            normalized = f"{normalized}?{parsed.query}"
+        if not normalized.startswith("/"):
+            normalized = f"/{normalized}"
+        base = self._base_url.rstrip("/")
+        return f"{base}{normalized}", normalized
 
     def _merge_headers(
         self, headers: typ.Mapping[str, str] | None
