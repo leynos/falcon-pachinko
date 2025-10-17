@@ -311,19 +311,30 @@ class WebSocketTestClient:
         """Return the absolute connection URL and normalized path."""
         parsed = urlsplit(path)
         if parsed.scheme in {"ws", "wss"}:
-            if parsed.scheme == "ws" and not self._allow_insecure:
-                raise ValueError(_INSECURE_WEBSOCKET_MSG)
-            normalized = parsed.path or "/"
-            if parsed.query:
-                normalized = f"{normalized}?{parsed.query}"
-            return path, normalized
+            return self._handle_absolute_url(path, parsed)
+        return self._handle_relative_url(path, parsed)
+
+    def _handle_absolute_url(self, path: str, parsed: typ.Any) -> tuple[str, str]:  # noqa: ANN401
+        """Handle an absolute WebSocket URL with validation."""
+        if parsed.scheme == "ws" and not self._allow_insecure:
+            raise ValueError(_INSECURE_WEBSOCKET_MSG)
+        normalized = self._append_query(parsed.path or "/", parsed.query)
+        return path, normalized
+
+    def _handle_relative_url(self, path: str, parsed: typ.Any) -> tuple[str, str]:  # noqa: ANN401
+        """Handle a relative path by joining it with the base URL."""
         normalized = parsed.path or path
-        if parsed.query:
-            normalized = f"{normalized}?{parsed.query}"
+        normalized = self._append_query(normalized, parsed.query)
         if not normalized.startswith("/"):
             normalized = f"/{normalized}"
         base = self._base_url.rstrip("/")
         return f"{base}{normalized}", normalized
+
+    def _append_query(self, path: str, query: str) -> str:
+        """Append query string to path if present."""
+        if query:
+            return f"{path}?{query}"
+        return path
 
     def _merge_headers(
         self, headers: typ.Mapping[str, str] | None
