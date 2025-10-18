@@ -47,6 +47,7 @@ class MissingDependencyError(RuntimeError):
 class TraceEvent:
     """Describe a frame exchanged during a traced websocket session."""
 
+    index: int
     direction: Direction
     kind: PayloadKind
     payload: object
@@ -68,6 +69,7 @@ class WebSocketSession:
         self._json_encoder = msjson.Encoder()
         self._default_decoder = msjson.Decoder()
         self._decoders: dict[type[object], msjson.Decoder] = {}
+        self._next_trace_index = 0
 
     @property
     def subprotocol(self) -> str | None:
@@ -82,9 +84,14 @@ class WebSocketSession:
     def _log(self, direction: Direction, kind: PayloadKind, payload: object) -> None:
         """Append a trace event if tracing is enabled."""
         if self.trace is not None:
-            self.trace.append(
-                TraceEvent(direction=direction, kind=kind, payload=payload)
+            event = TraceEvent(
+                index=self._next_trace_index,
+                direction=direction,
+                kind=kind,
+                payload=payload,
             )
+            self.trace.append(event)
+            self._next_trace_index += 1
 
     def _encode_json(self, payload: object) -> str:
         """Encode ``payload`` as UTF-8 JSON text."""

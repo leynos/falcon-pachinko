@@ -1572,8 +1572,10 @@ already provides a reliable asyncio client with excellent RFC coverage.
   and `close` for full coverage.
 
 - **Trace Collection**: Optional hooks capture a chronological log of outbound
-  and inbound frames. The log integrates with pytest's assertion introspection,
-  making it easy to debug sequencing issues.
+  and inbound frames. Each `TraceEvent` is annotated with a monotonically
+  increasing index alongside the direction, payload kind, and decoded payload.
+  The log integrates with pytest's assertion introspection, making it easy to
+  debug sequencing issues.
 
 By delegating network semantics to `websockets`, the client stays thin while
 still supporting TLS, custom headers, and subprotocol negotiation.

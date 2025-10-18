@@ -149,6 +149,7 @@ async def test_trace_records_send_and_receive(
         await session.receive_text()
         trace = session.trace or []
 
+    assert [event.index for event in trace] == [0, 1, 2]
     assert [event.kind for event in trace] == ["text", "text", "close"]
     assert [event.direction for event in trace] == ["send", "receive", "close"]
     assert [event.payload for event in trace[:2]] == ["hi", "hi"]
