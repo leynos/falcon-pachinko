@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import functools
+import inspect
 import re
 import threading
 import typing as typ
@@ -18,18 +19,23 @@ import typing as typ
 import falcon
 
 from .hooks import HookCollection, HookContext, HookManager
+from .protocols import WebSocketLike
 
 if typ.TYPE_CHECKING:
-    from .protocols import WebSocketLike
     from .resource import WebSocketResource
 
 
-__all__ = ["ResourceFactory", "WebSocketRouter"]
+__all__ = ["ResourceFactory", "SimulatorFactory", "WebSocketRouter"]
 
 
 ResourceFactory = typ.Callable[
     [typ.Callable[..., "WebSocketResource"]],
     "WebSocketResource",
+]
+
+SimulatorFactory = typ.Callable[
+    [falcon.Request, WebSocketLike],
+    WebSocketLike | typ.Awaitable[WebSocketLike],
 ]
 
 
@@ -105,6 +111,7 @@ class WebSocketRouter:
         *,
         name: str | None = None,
         resource_factory: ResourceFactory | None = None,
+        simulator_factory: SimulatorFactory | None = None,
     ) -> None:
         self._raw: list[WebSocketRouter._RawRoute] = []
         self._routes: list[WebSocketRouter._CompiledRoute] = []
@@ -120,6 +127,7 @@ class WebSocketRouter:
         self.name = name
         self._resource_factory: ResourceFactory
         self._resource_factory = resource_factory or (lambda factory: factory())
+        self._simulator_factory = simulator_factory
 
     def _compile_and_store_route(
         self,
@@ -273,14 +281,42 @@ class WebSocketRouter:
         remaining: str,
     ) -> bool:
         """Run the routing pipeline and close ``ws`` on unexpected errors."""
+        ws_for_cleanup: WebSocketLike = ws
         try:
+            prepared = await self._prepare_websocket(req, ws)
+            ws_for_cleanup = prepared
             return await self._process_route_resolution(
-                route, req, ws, params, remaining
+                route, req, prepared, params, remaining
             )
         except Exception as exc:
             if not getattr(exc, "_pachinko_factory_closed", False):
-                await ws.close()
+                await ws_for_cleanup.close()
             raise
+
+    async def _prepare_websocket(
+        self, req: falcon.Request, ws: WebSocketLike
+    ) -> WebSocketLike:
+        """Return the WebSocket to use for ``req``."""
+        # When :attr:`_simulator_factory` is configured the factory may wrap or
+        # replace ``ws`` with an injectable simulator. The returned object is
+        # validated to expose the :class:`WebSocketLike` surface used by the
+        # router.
+        if self._simulator_factory is None:
+            return ws
+
+        candidate = self._simulator_factory(req, ws)
+        if inspect.isawaitable(candidate):
+            candidate = await candidate
+
+        for attr in ("accept", "close", "send_media", "receive_media"):
+            if not hasattr(candidate, attr):
+                msg = (
+                    "simulator_factory must return a WebSocketLike object; "
+                    f"missing attribute {attr!r}"
+                )
+                raise TypeError(msg)
+
+        return typ.cast("WebSocketLike", candidate)
 
     async def _process_route_resolution(
         self,

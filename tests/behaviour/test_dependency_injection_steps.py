@@ -50,6 +50,10 @@ class DummyWebSocket:
         """Record that media was sent on the connection."""
         self.last_media = data
 
+    async def receive_media(self) -> object:  # pragma: no cover - unused
+        """Return a placeholder payload."""
+        return None
+
 
 class InjectedChild(WebSocketResource):
     """Child resource capturing injected service dependencies."""

@@ -196,10 +196,10 @@ the library is ready for use.
   - [x] Add trace/log capture to `WebSocketTestClient` sessions so tests can
     assert on frame ordering and payloads.
 
-  - [ ] Implement an injectable `WebSocketSimulator` that mimics the
+  - [x] Implement an injectable `WebSocketSimulator` that mimics the
     `WebSocketLike` interface with spyable send/receive queues.
 
-  - [ ] Extend `WebSocketRouter` with an optional `simulator_factory` hook used
+  - [x] Extend `WebSocketRouter` with an optional `simulator_factory` hook used
     to supply `WebSocketSimulator` instances under test.
 
   - [ ] Provide a pytest fixture that wires a simulator-backed router into the

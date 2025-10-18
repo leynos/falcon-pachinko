@@ -8,7 +8,12 @@ from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
 from .resource import WebSocketResource
 from .router import ResourceFactory, WebSocketRouter
-from .testing import MissingDependencyError, TraceEvent, WebSocketTestClient
+from .testing import (
+    MissingDependencyError,
+    TraceEvent,
+    WebSocketSimulator,
+    WebSocketTestClient,
+)
 from .websocket import (
     ConnectionBackend,
     InProcessBackend,
@@ -32,6 +37,7 @@ __all__ = (
     "WebSocketLike",
     "WebSocketResource",
     "WebSocketRouter",
+    "WebSocketSimulator",
     "WebSocketTestClient",
     "WorkerController",
     "handles_message",

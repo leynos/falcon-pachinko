@@ -30,6 +30,10 @@ class DummyWebSocket:
         """Record sent data."""
         self.messages.append(data)
 
+    async def receive_media(self) -> object:  # pragma: no cover - unused
+        """Return a placeholder payload."""
+        return None
+
 
 SetupFixture = tuple[
     WebSocketConnectionManager,
