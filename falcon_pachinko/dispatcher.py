@@ -77,13 +77,10 @@ async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
                 validate_strict_payload(
                     payload, payload_type, strict=context.handler_info.strict
                 )
-            payload = typ.cast(
-                "typ.Any",
-                ms.convert(
-                    payload,
-                    type=payload_type,
-                    strict=context.handler_info.strict,
-                ),
+            payload = ms.convert(
+                payload,
+                type=payload_type,
+                strict=context.handler_info.strict,
             )
         except ms.ValidationError:
             await context.resource.on_unhandled(context.ws, context.raw)

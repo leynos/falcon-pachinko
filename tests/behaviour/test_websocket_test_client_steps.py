@@ -141,6 +141,7 @@ def then_client_observes(context: ClientContext) -> None:
 def then_trace(context: ClientContext) -> None:
     """Verify that the trace contains both the sent and received frames."""
     assert context.trace is not None
+    assert [event.index for event in context.trace] == [0, 1, 2]
     assert [event.direction for event in context.trace] == ["send", "receive", "close"]
     assert [event.kind for event in context.trace] == ["json", "json", "close"]
     assert [event.payload for event in context.trace[:2]] == [
