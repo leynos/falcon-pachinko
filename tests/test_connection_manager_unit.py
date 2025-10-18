@@ -36,6 +36,10 @@ class DummyWebSocket:
         """Record a message sent via the stub."""
         self.messages.append(data)
 
+    async def receive_media(self) -> object:  # pragma: no cover - unused
+        """Return a placeholder payload."""
+        return None
+
 
 class ErrorWebSocket(DummyWebSocket):
     """WebSocket stub whose send raises an error."""
@@ -45,6 +49,10 @@ class ErrorWebSocket(DummyWebSocket):
     ) -> None:  # pragma: no cover - behaviour tested
         """Raise to simulate a broken connection."""
         raise RuntimeError("boom")
+
+    async def receive_media(self) -> object:  # pragma: no cover - unused
+        """Return a placeholder payload."""
+        return None
 
 
 @pytest_asyncio.fixture

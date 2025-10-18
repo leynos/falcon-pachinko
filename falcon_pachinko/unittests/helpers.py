@@ -45,3 +45,7 @@ class DummyWS:
         data : object
             The data to send over the WebSocket connection
         """
+
+    async def receive_media(self) -> object:  # pragma: no cover
+        """Receive structured data over the connection."""
+        return None
