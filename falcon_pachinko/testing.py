@@ -641,4 +641,9 @@ class WebSocketTestClient:
                     await session.close()
 
 
-__all__ = ["MissingDependencyError", "TraceEvent", "WebSocketTestClient"]
+__all__ = [
+    "MissingDependencyError",
+    "TraceEvent",
+    "WebSocketSimulator",
+    "WebSocketTestClient",
+]
