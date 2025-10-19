@@ -50,10 +50,6 @@ class ErrorWebSocket(DummyWebSocket):
         """Raise to simulate a broken connection."""
         raise RuntimeError("boom")
 
-    async def receive_media(self) -> object:  # pragma: no cover - unused
-        """Return a placeholder payload."""
-        return None
-
 
 @pytest_asyncio.fixture
 async def room_with_two_connections() -> tuple[

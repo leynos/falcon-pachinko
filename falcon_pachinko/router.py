@@ -9,6 +9,7 @@ Falcon app and used to generate URLs for registered routes.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses as dc
 import functools
 import inspect
@@ -290,7 +291,8 @@ class WebSocketRouter:
             )
         except Exception as exc:
             if not getattr(exc, "_pachinko_factory_closed", False):
-                await ws_for_cleanup.close()
+                with contextlib.suppress(Exception):
+                    await ws_for_cleanup.close()
             raise
 
     async def _prepare_websocket(
@@ -309,7 +311,12 @@ class WebSocketRouter:
             candidate = await candidate
 
         for attr in ("accept", "close", "send_media", "receive_media"):
-            if not hasattr(candidate, attr):
+            func = getattr(candidate, attr, None)
+            if (
+                func is None
+                or not callable(func)
+                or not inspect.iscoroutinefunction(func)
+            ):
                 msg = (
                     "simulator_factory must return a WebSocketLike object; "
                     f"missing attribute {attr!r}"
