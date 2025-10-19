@@ -190,20 +190,29 @@ class WebSocketSimulator:
 
     async def push_message(self, payload: object, *, kind: FrameKind = "json") -> None:
         """Queue ``payload`` as if it were received from the peer."""
-        if kind == "text":
-            if not isinstance(payload, str):
-                raise TypeError(_TEXT_PAYLOAD_REQUIRED_MSG)
-            data: object = payload
-        elif kind == "bytes":
-            if not isinstance(payload, bytes | bytearray | memoryview):
-                raise TypeError(_BINARY_PAYLOAD_REQUIRED_MSG)
-            data = bytes(payload)
-        elif kind == "json":
-            data = self._json_encoder.encode(payload)
-        else:  # pragma: no cover - safeguarded by FrameKind literal
-            raise ValueError(_UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=kind))
-
+        data = self._prepare_inbound_payload(payload, kind)
         await self._inbound.put(data)
+
+    def _prepare_inbound_payload(self, payload: object, kind: FrameKind) -> object:
+        if kind == "text":
+            return self._prepare_text_payload(payload)
+        if kind == "bytes":
+            return self._prepare_bytes_payload(payload)
+        if kind == "json":
+            return self._json_encoder.encode(payload)
+        raise ValueError(
+            _UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=kind)
+        )  # pragma: no cover - safeguarded by FrameKind literal
+
+    def _prepare_text_payload(self, payload: object) -> str:
+        if not isinstance(payload, str):
+            raise TypeError(_TEXT_PAYLOAD_REQUIRED_MSG)
+        return payload
+
+    def _prepare_bytes_payload(self, payload: object) -> bytes:
+        if not isinstance(payload, bytes | bytearray | memoryview):
+            raise TypeError(_BINARY_PAYLOAD_REQUIRED_MSG)
+        return bytes(payload)
 
     async def push_text(self, message: str) -> None:
         """Queue a UTF-8 text frame."""
