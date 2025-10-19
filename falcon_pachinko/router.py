@@ -311,12 +311,7 @@ class WebSocketRouter:
             candidate = await candidate
 
         for attr in ("accept", "close", "send_media", "receive_media"):
-            func = getattr(candidate, attr, None)
-            if (
-                func is None
-                or not callable(func)
-                or not inspect.iscoroutinefunction(func)
-            ):
+            if not self._is_valid_websocket_method(candidate, attr):
                 msg = (
                     "simulator_factory must return a WebSocketLike object; "
                     f"missing attribute {attr!r}"
@@ -324,6 +319,13 @@ class WebSocketRouter:
                 raise TypeError(msg)
 
         return typ.cast("WebSocketLike", candidate)
+
+    def _is_valid_websocket_method(self, obj: object, attr_name: str) -> bool:
+        """Return ``True`` when ``obj`` exposes coroutine ``attr_name``."""
+        func = getattr(obj, attr_name, None)
+        if func is None or not callable(func):
+            return False
+        return inspect.iscoroutinefunction(func)
 
     async def _process_route_resolution(
         self,
