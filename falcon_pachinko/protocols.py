@@ -16,3 +16,6 @@ class WebSocketLike(typ.Protocol):
 
     async def send_media(self, data: object) -> None:
         """Send structured data over the connection."""
+
+    async def receive_media(self) -> object:
+        """Receive structured data from the connection."""
