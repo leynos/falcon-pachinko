@@ -25,6 +25,8 @@ from .protocols import WebSocketLike
 if typ.TYPE_CHECKING:
     from .resource import WebSocketResource
 
+typing = typ
+
 
 __all__ = ["ResourceFactory", "SimulatorFactory", "WebSocketRouter"]
 
@@ -391,7 +393,11 @@ class WebSocketRouter:
                 child_kwargs = {k: v for k, v in context.items() if k != "state"}
                 child_factory = functools.partial(factory, **child_kwargs)
                 new_resource = await self._instantiate_resource(child_factory, ws)
-                new_resource.state = context.get("state", resource.state)
+                state_mapping = context.get("state", resource.state)
+                new_resource.state = typ.cast(
+                    "typing.MutableMapping[str, typing.Any]",
+                    state_mapping,
+                )
                 params = match.groupdict()
                 return new_resource, remaining, params
         return None

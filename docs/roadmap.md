@@ -187,7 +187,7 @@ applications.
 This is an ongoing process, but it will be finalized in this phase to ensure
 the library is ready for use.
 
-- [ ] **Develop Comprehensive Testing Utilities.**
+- [x] **Develop Comprehensive Testing Utilities.**
 
   - [x] Implement a `WebSocketTestClient` built on the third-party
     `websockets` asyncio client, including context-managed connections and JSON
@@ -202,7 +202,7 @@ the library is ready for use.
   - [x] Extend `WebSocketRouter` with an optional `simulator_factory` hook used
     to supply `WebSocketSimulator` instances under test.
 
-  - [ ] Provide a pytest fixture that wires a simulator-backed router into the
+  - [x] Provide a pytest fixture that wires a simulator-backed router into the
     ASGI app, handles connection lifecycle management, and exposes helpers for
     pushing and inspecting messages.
 
