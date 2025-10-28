@@ -1641,6 +1641,64 @@ These utilities provide a cohesive story that spans unit, integration, and
 behavioural testing while keeping the production runtime free from testing
 concerns.
 
+The following class diagram summarises how the harness composes simulators,
+routers, and the original Falcon websocket stub when exercised from tests.
+
+```mermaid
+classDiagram
+    class SimulatorConnection {
+        +path: str
+        +router: WebSocketRouter
+        +simulator: WebSocketSimulator
+        +request: object
+        +websocket: _OriginalWebSocket
+        -_json_decoder: msjson.Decoder
+        +accepted: bool
+        +closed: bool
+        +close_code: int | None
+        +sent_messages: list[object]
+        +pop_sent(): object
+        +pop_sent_json(payload_type): object
+        +push_json(payload): None
+        +push_text(message): None
+        +push_bytes(payload): None
+    }
+    class _OriginalWebSocket {
+        +accepted: bool
+        +closed: bool
+        +close_code: int | None
+        +subprotocol: str | None
+        +sent: list[object]
+        +accept(subprotocol): None
+        +close(code): None
+        +send_media(data): None
+        +receive_media(): object
+    }
+    class _HarnessSimulator {
+        +bind_original(original): None
+        +accept(subprotocol): None
+        +close(code): None
+    }
+    _HarnessSimulator --|> WebSocketSimulator
+    SimulatorConnection o-- _OriginalWebSocket
+    SimulatorConnection o-- WebSocketRouter
+    SimulatorConnection o-- WebSocketSimulator
+    class SimulatorRouterHarness {
+        +app: falcon.asgi.App
+        +router: WebSocketRouter
+        +mount(prefix): None
+        +connect(path, initial_inbound): AsyncIterator[SimulatorConnection]
+    }
+    SimulatorRouterHarness o-- WebSocketRouter
+    SimulatorRouterHarness o-- SimulatorConnection
+    class _TestRequest {
+        +path: str
+        +path_template: str
+        +context: SimpleNamespace
+    }
+    SimulatorConnection o-- _TestRequest
+```
+
 ```mermaid
 sequenceDiagram
     actor Developer
@@ -1657,6 +1715,7 @@ sequenceDiagram
 
     Developer->>WSSim: simulator.push_message(data)
     activate WSSim
+    activate App
     WSSim->>App: Inject frame (router receive loop)
     deactivate WSSim
 
@@ -1664,9 +1723,10 @@ sequenceDiagram
     activate WSConn
     WSConn->>App: Send JSON data
     App-->>WSConn: (optional ack/response data)
-    deactivate App
     WSConn-->>Developer: (return from send)
     deactivate WSConn
+
+    deactivate App
 
     Developer->>WSSim: simulator.sent_messages
     WSSim-->>Developer: Inspect recorded frames
