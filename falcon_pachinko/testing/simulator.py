@@ -10,6 +10,7 @@ import msgspec.json as msjson
 
 from ._common import (
     FrameKind,
+    _LifecycleSocket,
     _BINARY_PAYLOAD_REQUIRED_MSG,
     _EXPECTED_BYTES_MSG,
     _EXPECTED_TEXT_MSG,
@@ -22,7 +23,7 @@ if typ.TYPE_CHECKING:  # pragma: no cover - typing only
     from .harness import _OriginalWebSocket
 
 
-class WebSocketSimulator:
+class WebSocketSimulator(_LifecycleSocket):
     """In-memory :class:`WebSocketLike` implementation for hermetic tests."""
 
     def __init__(
@@ -31,12 +32,9 @@ class WebSocketSimulator:
         inbound: asyncio.Queue[object] | None = None,
         outbound: asyncio.Queue[object] | None = None,
     ) -> None:
+        super().__init__()
         self._inbound = inbound or asyncio.Queue()
         self._outbound = outbound or asyncio.Queue()
-        self._accepted = False
-        self._closed = False
-        self._close_code: int | None = None
-        self._subprotocol: str | None = None
         self._json_encoder = msjson.Encoder()
         self._default_decoder = msjson.Decoder()
         self._decoders: dict[type[object], msjson.Decoder] = {}
@@ -83,13 +81,11 @@ class WebSocketSimulator:
 
     async def accept(self, subprotocol: str | None = None) -> None:
         """Record that the handshake was accepted."""
-        self._accepted = True
-        self._subprotocol = subprotocol
+        await super().accept(subprotocol=subprotocol)
 
     async def close(self, code: int = 1000) -> None:
         """Record that the connection was closed."""
-        self._closed = True
-        self._close_code = code
+        await super().close(code)
 
     async def send_media(self, data: object) -> None:
         """Record ``data`` as an outbound frame."""
@@ -217,13 +213,4 @@ class _HarnessSimulator(WebSocketSimulator):
     def bind_original(self, original: _OriginalWebSocket) -> None:
         """Associate ``original`` so lifecycle events stay in sync."""
         self._original = original
-
-    async def accept(self, subprotocol: str | None = None) -> None:
-        await super().accept(subprotocol=subprotocol)
-        if self._original is not None and not self._original.accepted:
-            await self._original.accept(subprotocol=subprotocol)
-
-    async def close(self, code: int = 1000) -> None:
-        await super().close(code)
-        if self._original is not None and not self._original.closed:
-            await self._original.close(code)
+        self.bind_peer(original)

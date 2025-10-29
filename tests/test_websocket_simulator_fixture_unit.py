@@ -44,6 +44,19 @@ class GreeterResource(WebSocketResource):
         return True
 
 
+class ChattyResource(WebSocketResource):
+    """Resource that negotiates a subprotocol and closes with a custom code."""
+
+    async def on_connect(
+        self, req: object, ws: WebSocketSimulator, **params: object
+    ) -> bool:
+        """Accept the connection using ``chat`` and close with code 1001."""
+
+        await ws.accept(subprotocol="chat")
+        await ws.close(code=1001)
+        return False
+
+
 @pytest.mark.asyncio
 async def test_fixture_routes_connections(
     websocket_simulator: SimulatorRouterHarness,
@@ -85,3 +98,20 @@ async def test_fixture_closes_accepted_connections(
     assert connection.closed is True
     assert connection.websocket.closed is True
     assert connection.websocket.close_code == 1000
+
+
+@pytest.mark.asyncio
+async def test_simulator_connection_subprotocol_and_close_code(
+    websocket_simulator: SimulatorRouterHarness,
+) -> None:
+    """Ensure lifecycle metadata mirrors between simulator and original stub."""
+
+    websocket_simulator.router.add_route("/chat", ChattyResource)
+
+    async with websocket_simulator.connect("/chat") as connection:
+        assert connection.accepted is True
+        assert connection.subprotocol == "chat"
+        assert connection.close_code == 1001
+        assert connection.websocket.subprotocol == "chat"
+        assert connection.websocket.close_code == 1001
+        assert connection.closed is True

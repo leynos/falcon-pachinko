@@ -11,7 +11,12 @@ import falcon.asgi
 import msgspec.json as msjson
 
 from ..router import WebSocketRouter
-from ._common import FrameKind, _JSON_FRAME_REQUIRED_MSG, _ORIGINAL_WS_RECEIVE_MSG
+from ._common import (
+    FrameKind,
+    _JSON_FRAME_REQUIRED_MSG,
+    _LifecycleSocket,
+    _ORIGINAL_WS_RECEIVE_MSG,
+)
 from .simulator import WebSocketSimulator, _HarnessSimulator
 
 
@@ -50,6 +55,12 @@ class SimulatorConnection:
         """Return a snapshot of frames emitted by the resource."""
         return list(self.simulator.sent_messages)
 
+    @property
+    def subprotocol(self) -> str | None:
+        """Expose the negotiated subprotocol from the simulator."""
+
+        return self.simulator.subprotocol
+
     def pop_sent(self) -> object:
         """Pop the next outbound frame without decoding."""
         return self.simulator.pop_sent()
@@ -81,23 +92,18 @@ class SimulatorConnection:
         await self.simulator.push_bytes(payload)
 
 
-class _OriginalWebSocket:
+class _OriginalWebSocket(_LifecycleSocket):
     """Minimal stub representing the ASGI-provided websocket."""
 
     def __init__(self) -> None:
-        self.accepted = False
-        self.closed = False
-        self.close_code: int | None = None
-        self.subprotocol: str | None = None
+        super().__init__()
         self.sent: list[object] = []
 
     async def accept(self, subprotocol: str | None = None) -> None:
-        self.accepted = True
-        self.subprotocol = subprotocol
+        await super().accept(subprotocol=subprotocol)
 
     async def close(self, code: int = 1000) -> None:
-        self.closed = True
-        self.close_code = code
+        await super().close(code)
 
     async def send_media(self, data: object) -> None:  # pragma: no cover - unused
         self.sent.append(data)
@@ -163,9 +169,7 @@ class SimulatorRouterHarness:
             path = f"/{path}"
         if path.startswith(self._mount_prefix):
             return path
-        if self._mount_prefix == "/":
-            return path
-        return f"{self._mount_prefix}{path}"
+        return path if self._mount_prefix == "/" else f"{self._mount_prefix}{path}"
 
     @asynccontextmanager
     async def connect(
@@ -189,15 +193,15 @@ class SimulatorRouterHarness:
         original = _OriginalWebSocket()
         try:
             await self.router.on_websocket(request, original)
-            connection = SimulatorConnection(
+            yield SimulatorConnection(
                 path=request_path,
                 router=self.router,
                 simulator=simulator,
                 request=request,
                 websocket=original,
             )
-            yield connection
         finally:
+            self._pending_simulator = None
             if not simulator.closed:
                 await simulator.close()
             if not original.closed:

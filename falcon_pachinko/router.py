@@ -25,9 +25,6 @@ from .protocols import WebSocketLike
 if typ.TYPE_CHECKING:
     from .resource import WebSocketResource
 
-typing = typ
-
-
 __all__ = ["ResourceFactory", "SimulatorFactory", "WebSocketRouter"]
 
 
