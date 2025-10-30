@@ -19,6 +19,11 @@ from ._common import (
 )
 from .simulator import WebSocketSimulator, _HarnessSimulator
 
+if typ.TYPE_CHECKING:
+    from falcon import Request
+else:  # pragma: no cover - falcon is optional at runtime
+    Request = typ.Any
+
 
 @dc.dataclass(slots=True)
 class SimulatorConnection:
@@ -192,7 +197,10 @@ class SimulatorRouterHarness:
         request = _TestRequest(path=request_path, path_template=self._mount_prefix)
         original = _OriginalWebSocket()
         try:
-            await self.router.on_websocket(request, original)
+            await self.router.on_websocket(
+                typ.cast(Request, request),
+                original,
+            )
             yield SimulatorConnection(
                 path=request_path,
                 router=self.router,
