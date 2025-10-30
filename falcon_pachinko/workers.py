@@ -59,7 +59,7 @@ class WorkerController:
                 exc = task.exception()
             except asyncio.CancelledError:
                 continue
-            if exc:
+            if isinstance(exc, Exception):
                 return exc
         return None
 

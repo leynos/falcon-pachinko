@@ -5,24 +5,26 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 from contextlib import asynccontextmanager
-from types import SimpleNamespace
 
 import falcon.asgi
 import msgspec.json as msjson
 
-from ..router import WebSocketRouter
-from ._common import (
-    FrameKind,
-    _JSON_FRAME_REQUIRED_MSG,
-    _LifecycleSocket,
-    _ORIGINAL_WS_RECEIVE_MSG,
+from falcon_pachinko._testing_harness import (
+    _HarnessSimulator,
+    _OriginalWebSocket,
+    _TestRequest,
 )
-from .simulator import WebSocketSimulator, _HarnessSimulator
+from falcon_pachinko.router import WebSocketRouter
+
+from ._common import _JSON_FRAME_REQUIRED_MSG, FrameKind
 
 if typ.TYPE_CHECKING:
     from falcon import Request
-else:  # pragma: no cover - falcon is optional at runtime
+
+    from falcon_pachinko.testing.simulator import WebSocketSimulator
+else:  # pragma: no cover - optional types under runtime-only execution
     Request = typ.Any
+    WebSocketSimulator = typ.Any
 
 
 @dc.dataclass(slots=True)
@@ -63,7 +65,6 @@ class SimulatorConnection:
     @property
     def subprotocol(self) -> str | None:
         """Expose the negotiated subprotocol from the simulator."""
-
         return self.simulator.subprotocol
 
     def pop_sent(self) -> object:
@@ -95,35 +96,6 @@ class SimulatorConnection:
     async def push_bytes(self, payload: bytes | bytearray | memoryview) -> None:
         """Queue a binary frame for the resource."""
         await self.simulator.push_bytes(payload)
-
-
-class _OriginalWebSocket(_LifecycleSocket):
-    """Minimal stub representing the ASGI-provided websocket."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.sent: list[object] = []
-
-    async def accept(self, subprotocol: str | None = None) -> None:
-        await super().accept(subprotocol=subprotocol)
-
-    async def close(self, code: int = 1000) -> None:
-        await super().close(code)
-
-    async def send_media(self, data: object) -> None:  # pragma: no cover - unused
-        self.sent.append(data)
-
-    async def receive_media(self) -> object:  # pragma: no cover - unused
-        raise RuntimeError(_ORIGINAL_WS_RECEIVE_MSG)
-
-
-@dc.dataclass(slots=True)
-class _TestRequest:
-    """Lightweight stand-in for :class:`falcon.Request`."""
-
-    path: str
-    path_template: str
-    context: SimpleNamespace = dc.field(default_factory=SimpleNamespace)
 
 
 class SimulatorRouterHarness:
@@ -198,7 +170,7 @@ class SimulatorRouterHarness:
         original = _OriginalWebSocket()
         try:
             await self.router.on_websocket(
-                typ.cast(Request, request),
+                typ.cast("Request", request),
                 original,
             )
             yield SimulatorConnection(

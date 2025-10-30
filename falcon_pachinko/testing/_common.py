@@ -40,38 +40,32 @@ class _LifecycleSocket:
         self._subprotocol: str | None = None
         self._peer: _LifecycleSocket | None = None
 
-    def bind_peer(self, peer: "_LifecycleSocket") -> None:
+    def bind_peer(self, peer: _LifecycleSocket) -> None:
         """Mirror lifecycle events to ``peer`` when accepting or closing."""
-
         self._peer = peer
 
     @property
     def accepted(self) -> bool:
         """Return ``True`` once :meth:`accept` has been invoked."""
-
         return self._accepted
 
     @property
     def closed(self) -> bool:
         """Return ``True`` once :meth:`close` has been invoked."""
-
         return self._closed
 
     @property
     def close_code(self) -> int | None:
         """Return the close code provided to :meth:`close`, if any."""
-
         return self._close_code
 
     @property
     def subprotocol(self) -> str | None:
         """Return the negotiated subprotocol, if any."""
-
         return self._subprotocol
 
     async def accept(self, subprotocol: str | None = None) -> None:
         """Record handshake acceptance and mirror to any bound peer."""
-
         if self._accepted:
             return
         self._accepted = True
@@ -82,7 +76,6 @@ class _LifecycleSocket:
 
     async def close(self, code: int = 1000) -> None:
         """Record connection closure and mirror to any bound peer."""
-
         if self._closed:
             return
         self._closed = True

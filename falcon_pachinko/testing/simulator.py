@@ -9,18 +9,15 @@ from contextlib import asynccontextmanager
 import msgspec.json as msjson
 
 from ._common import (
-    FrameKind,
-    _LifecycleSocket,
     _BINARY_PAYLOAD_REQUIRED_MSG,
     _EXPECTED_BYTES_MSG,
     _EXPECTED_TEXT_MSG,
     _FAILED_JSON_DECODE_MSG,
     _TEXT_PAYLOAD_REQUIRED_MSG,
     _UNSUPPORTED_FRAME_KIND_MSG,
+    FrameKind,
+    _LifecycleSocket,
 )
-
-if typ.TYPE_CHECKING:  # pragma: no cover - typing only
-    from .harness import _OriginalWebSocket
 
 
 class WebSocketSimulator(_LifecycleSocket):
@@ -201,16 +198,3 @@ class WebSocketSimulator(_LifecycleSocket):
         finally:
             if not self._closed:
                 await self.close()
-
-
-class _HarnessSimulator(WebSocketSimulator):
-    """Simulator variant that mirrors lifecycle events to the original stub."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._original: _OriginalWebSocket | None = None
-
-    def bind_original(self, original: _OriginalWebSocket) -> None:
-        """Associate ``original`` so lifecycle events stay in sync."""
-        self._original = original
-        self.bind_peer(original)

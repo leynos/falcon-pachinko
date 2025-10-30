@@ -51,7 +51,6 @@ class ChattyResource(WebSocketResource):
         self, req: object, ws: WebSocketSimulator, **params: object
     ) -> bool:
         """Accept the connection using ``chat`` and close with code 1001."""
-
         await ws.accept(subprotocol="chat")
         await ws.close(code=1001)
         return False
@@ -105,7 +104,6 @@ async def test_simulator_connection_subprotocol_and_close_code(
     websocket_simulator: SimulatorRouterHarness,
 ) -> None:
     """Ensure lifecycle metadata mirrors between simulator and original stub."""
-
     websocket_simulator.router.add_route("/chat", ChattyResource)
 
     async with websocket_simulator.connect("/chat") as connection:

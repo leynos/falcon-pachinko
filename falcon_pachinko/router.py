@@ -392,7 +392,7 @@ class WebSocketRouter:
                 new_resource = await self._instantiate_resource(child_factory, ws)
                 state_mapping = context.get("state", resource.state)
                 new_resource.state = typ.cast(
-                    "typing.MutableMapping[str, typing.Any]",
+                    "typ.MutableMapping[str, typ.Any]",
                     state_mapping,
                 )
                 params = match.groupdict()

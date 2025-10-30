@@ -10,10 +10,6 @@ from urllib.parse import urlsplit
 import msgspec.json as msjson
 
 from ._common import (
-    Direction,
-    FrameKind,
-    PayloadKind,
-    MissingDependencyError,
     _BINARY_PAYLOAD_REQUIRED_MSG,
     _EXPECTED_BYTES_MSG,
     _EXPECTED_TEXT_MSG,
@@ -22,6 +18,10 @@ from ._common import (
     _MISSING_WEBSOCKETS_MSG,
     _TEXT_PAYLOAD_REQUIRED_MSG,
     _UNSUPPORTED_FRAME_KIND_MSG,
+    Direction,
+    FrameKind,
+    MissingDependencyError,
+    PayloadKind,
 )
 
 try:  # pragma: no cover - optional dependency exercised in tests
