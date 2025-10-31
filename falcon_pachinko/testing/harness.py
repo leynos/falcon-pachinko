@@ -34,6 +34,9 @@ class SimulatorConnection:
     request: object
     websocket: _OriginalWebSocket
     _json_decoder: msjson.Decoder = dc.field(init=False, repr=False)
+    _decoders: dict[type[object], msjson.Decoder] = dc.field(
+        init=False, repr=False, default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         """Initialize a decoder used to inspect outbound JSON frames."""
@@ -77,9 +80,13 @@ class SimulatorConnection:
             data = bytes(raw)
         else:  # pragma: no cover - safeguarded by simulator helpers
             raise TypeError(_JSON_FRAME_REQUIRED_MSG)
-        decoder = (
-            self._json_decoder if payload_type is None else msjson.Decoder(payload_type)
-        )
+        if payload_type is None:
+            decoder = self._json_decoder
+        else:
+            decoder = self._decoders.get(payload_type)
+            if decoder is None:
+                decoder = msjson.Decoder(payload_type)
+                self._decoders[payload_type] = decoder
         return decoder.decode(data)
 
     async def push_json(self, payload: object) -> None:
