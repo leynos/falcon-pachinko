@@ -91,12 +91,16 @@ async def test_fixture_closes_accepted_connections(
         assert isinstance(connection, SimulatorConnection)
         assert connection.accepted is True
         assert connection.closed is False
+        assert connection.subprotocol is None
+        assert connection.close_code is None
         assert connection.pop_sent() == "welcome aboard"
 
     # After leaving the context the fixture should close the simulator.
     assert connection.closed is True
     assert connection.websocket.closed is True
     assert connection.websocket.close_code == 1000
+    assert connection.close_code == 1000
+    assert connection.subprotocol is None
 
 
 @pytest.mark.asyncio
@@ -112,6 +116,7 @@ async def test_simulator_connection_subprotocol_and_close_code(
         assert connection.close_code == 1001
         assert connection.websocket.subprotocol == "chat"
         assert connection.websocket.close_code == 1001
+        assert connection.websocket.accepted is True
         assert connection.closed is True
 
     assert connection.subprotocol == "chat"
@@ -119,3 +124,4 @@ async def test_simulator_connection_subprotocol_and_close_code(
     assert connection.websocket.subprotocol == "chat"
     assert connection.websocket.close_code == 1001
     assert connection.websocket.closed is True
+    assert connection.websocket.accepted is True
