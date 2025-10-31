@@ -113,3 +113,9 @@ async def test_simulator_connection_subprotocol_and_close_code(
         assert connection.websocket.subprotocol == "chat"
         assert connection.websocket.close_code == 1001
         assert connection.closed is True
+
+    assert connection.subprotocol == "chat"
+    assert connection.close_code == 1001
+    assert connection.websocket.subprotocol == "chat"
+    assert connection.websocket.close_code == 1001
+    assert connection.websocket.closed is True
