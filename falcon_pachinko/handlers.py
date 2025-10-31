@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
-import functools
 import inspect
 import typing as typ
 
@@ -86,7 +85,6 @@ class _HandlesMessageDescriptor:
         self.func = func
         self.payload_type = get_payload_type(func)
         self.strict = strict
-        functools.update_wrapper(self, func)
         self.owner: type | None = None
         self.name: str | None = None
 

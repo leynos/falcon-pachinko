@@ -10,6 +10,8 @@ from .resource import WebSocketResource
 from .router import ResourceFactory, WebSocketRouter
 from .testing import (
     MissingDependencyError,
+    SimulatorConnection,
+    SimulatorRouterHarness,
     TraceEvent,
     WebSocketSimulator,
     WebSocketTestClient,
@@ -32,6 +34,8 @@ __all__ = (
     "ResourceFactory",
     "ServiceContainer",
     "ServiceNotFoundError",
+    "SimulatorConnection",
+    "SimulatorRouterHarness",
     "TraceEvent",
     "WebSocketConnectionManager",
     "WebSocketLike",
