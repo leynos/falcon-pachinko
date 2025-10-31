@@ -19,11 +19,8 @@ from falcon_pachinko.router import WebSocketRouter
 from ._common import _JSON_FRAME_REQUIRED_MSG, FrameKind
 
 if typ.TYPE_CHECKING:
-    from falcon import Request
-
     from falcon_pachinko.testing.simulator import WebSocketSimulator
 else:  # pragma: no cover - optional types under runtime-only execution
-    Request = typ.Any
     WebSocketSimulator = typ.Any
 
 
@@ -170,7 +167,7 @@ class SimulatorRouterHarness:
         original = _OriginalWebSocket()
         try:
             await self.router.on_websocket(
-                typ.cast("Request", request),
+                typ.cast("falcon.asgi.Request", request),
                 original,
             )
             yield SimulatorConnection(
