@@ -206,12 +206,12 @@ the library is ready for use.
     ASGI app, handles connection lifecycle management, and exposes helpers for
     pushing and inspecting messages.
 
-- [ ] **Build a Full Reference Example.**
+- [x] **Build a Full Reference Example.**
 
-  - [ ] Create a new, comprehensive example application that demonstrates all
-    the advanced features working in concert: a mountable router, schema-driven
-    dispatch, nested resources, lifespan workers, hooks, and dependency
-    injection.
+  - [x] Create the `examples/reference_app` project showcasing router mounting,
+    schema-driven dispatch, nested resources, hooks, dependency injection, and
+    lifespan-managed workers end-to-end, backed by pytest unit tests and
+    pytest-bdd behavioural coverage.
 
 - [ ] **Rewrite the Documentation.**
 

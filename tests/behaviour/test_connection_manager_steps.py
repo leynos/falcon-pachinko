@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
+import typing as typ
 
 from pytest_bdd import given, scenario, then, when
 
@@ -70,7 +71,10 @@ async def _iterate_lobby(
     exclude: set[str] | None = None,
 ) -> list[DummyWebSocket]:
     """Collect websockets yielded when iterating the lobby."""
-    return [ws async for ws in mgr.connections(room="lobby", exclude=exclude)]
+    return [
+        typ.cast("DummyWebSocket", ws)
+        async for ws in mgr.connections(room="lobby", exclude=exclude)
+    ]
 
 
 @scenario(
