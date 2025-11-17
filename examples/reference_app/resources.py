@@ -16,6 +16,8 @@ from falcon_pachinko import (
 )
 from falcon_pachinko.hooks import HookContext, HookEvent
 
+from .services import Task, TaskCreationParams
+
 if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
     import falcon
 
@@ -128,7 +130,6 @@ class TaskStreamResource(WebSocketResource):
         *,
         workspace_id: str,
         project_id: str,
-        user: str | None = None,
     ) -> bool:
         """Attach the websocket to the workspace-wide room."""
         conn_id = secrets.token_hex(12)
@@ -137,7 +138,7 @@ class TaskStreamResource(WebSocketResource):
         self._conn_id = conn_id
         self.state.setdefault("workspace_id", workspace_id)
         self.state["project_id"] = project_id
-        self.state["user"] = user or req.get_header("x-user", default="guest")
+        self.state["user"] = req.get_header("x-user", default="guest")
         await self._audit.record(
             "session.open",
             connection=conn_id,
@@ -177,10 +178,12 @@ class TaskStreamResource(WebSocketResource):
         await self._repo.add_task(
             workspace_id,
             project_id,
-            task_id=payload.task_id,
-            title=payload.title,
-            author=typ.cast("str", self.state.get("user", "guest")),
-            assignee=payload.assignee,
+            TaskCreationParams(
+                task_id=payload.task_id,
+                title=payload.title,
+                author=typ.cast("str", self.state.get("user", "guest")),
+                assignee=payload.assignee,
+            ),
         )
         await ws.send_media(
             {
@@ -206,35 +209,24 @@ class TaskStreamResource(WebSocketResource):
     @handles_message("task.complete")
     async def handle_complete(self, ws: WebSocketLike, payload: CompleteTask) -> None:
         """Mark a task as complete and acknowledge the caller."""
-        workspace_id = typ.cast("str", self.state["workspace_id"])
-        project_id = typ.cast("str", self.state["project_id"])
-        task = await self._repo.complete_task(workspace_id, project_id, payload.task_id)
-        await ws.send_media(
-            {
-                "type": "task.completed",
-                "payload": {
-                    "task_id": task.task_id,
-                    "completed": task.completed,
-                },
-            }
+        await self._execute_task_operation(
+            ws,
+            payload.task_id,
+            self._repo.complete_task,
+            "task.completed",
+            lambda task: {"task_id": task.task_id, "completed": task.completed},
         )
 
     @handles_message("task.assign")
     async def handle_assign(self, ws: WebSocketLike, payload: AssignTask) -> None:
         """Reassign a task and echo the new owner."""
-        workspace_id = typ.cast("str", self.state["workspace_id"])
-        project_id = typ.cast("str", self.state["project_id"])
-        task = await self._repo.assign_task(
-            workspace_id, project_id, payload.task_id, payload.assignee
-        )
-        await ws.send_media(
-            {
-                "type": "task.assigned",
-                "payload": {
-                    "task_id": task.task_id,
-                    "assignee": task.assigned_to,
-                },
-            }
+        await self._execute_task_operation(
+            ws,
+            payload.task_id,
+            self._repo.assign_task,
+            "task.assigned",
+            lambda task: {"task_id": task.task_id, "assignee": task.assigned_to},
+            payload.assignee,
         )
 
     @handles_message("task.list", strict=False)
@@ -276,6 +268,30 @@ class TaskStreamResource(WebSocketResource):
             {
                 "type": "error",
                 "payload": "unsupported message",
+            }
+        )
+
+    async def _execute_task_operation(
+        self,
+        ws: WebSocketLike,
+        task_id: str,
+        repo_operation: typ.Callable[..., Task],
+        response_type: str,
+        payload_builder: typ.Callable[[Task], dict[str, object]],
+        *operation_args: object,
+    ) -> None:
+        workspace_id = typ.cast("str", self.state["workspace_id"])
+        project_id = typ.cast("str", self.state["project_id"])
+        task = await repo_operation(
+            workspace_id,
+            project_id,
+            task_id,
+            *operation_args,
+        )
+        await ws.send_media(
+            {
+                "type": response_type,
+                "payload": payload_builder(task),
             }
         )
 

@@ -12,6 +12,7 @@ __all__ = [
     "AuthenticationError",
     "Project",
     "Task",
+    "TaskCreationParams",
     "TokenAuthenticator",
     "Workspace",
     "WorkspaceRepository",
@@ -27,6 +28,16 @@ class Task:
     created_by: str
     assigned_to: str | None = None
     completed: bool = False
+
+
+@dc.dataclass(slots=True)
+class TaskCreationParams:
+    """Parameter object capturing task creation details."""
+
+    task_id: str
+    title: str
+    author: str
+    assignee: str | None = None
 
 
 @dc.dataclass(slots=True)
@@ -69,22 +80,18 @@ class WorkspaceRepository:
         self,
         workspace_id: str,
         project_id: str,
-        *,
-        task_id: str,
-        title: str,
-        author: str,
-        assignee: str | None = None,
+        params: TaskCreationParams,
     ) -> Task:
         """Store a new task and return it."""
         async with self._lock:
             project = self._ensure_project_locked(workspace_id, project_id)
             task = Task(
-                task_id=task_id,
-                title=title,
-                created_by=author,
-                assigned_to=assignee,
+                task_id=params.task_id,
+                title=params.title,
+                created_by=params.author,
+                assigned_to=params.assignee,
             )
-            project.tasks[task_id] = task
+            project.tasks[task.task_id] = task
             return task
 
     async def complete_task(

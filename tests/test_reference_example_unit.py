@@ -13,6 +13,7 @@ from examples.reference_app.services import (
     AnnouncementFeed,
     AuthenticationError,
     Task,
+    TaskCreationParams,
     TokenAuthenticator,
     WorkspaceRepository,
 )
@@ -99,10 +100,12 @@ async def test_workspace_repository_task_lifecycle() -> None:
     await repo.add_task(
         "atlas",
         "triage",
-        task_id="T-1",
-        title="Investigate outage",
-        author="avery",
-        assignee="brooke",
+        TaskCreationParams(
+            task_id="T-1",
+            title="Investigate outage",
+            author="avery",
+            assignee="brooke",
+        ),
     )
     task = await repo.assign_task("atlas", "triage", "T-1", "casey")
     assert task.assigned_to == "casey"
