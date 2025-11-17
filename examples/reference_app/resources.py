@@ -298,7 +298,6 @@ class TaskStreamResource(WebSocketResource):
         *operation_args: object,
     ) -> None:
         """Execute a task operation and send the standardized response."""
-
         workspace_id = typ.cast("str", self.state["workspace_id"])
         project_id = typ.cast("str", self.state["project_id"])
         task = await config.repo_operation(
