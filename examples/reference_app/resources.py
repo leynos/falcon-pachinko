@@ -131,6 +131,22 @@ class TaskStreamResource(WebSocketResource):
         self._feed = announcement_feed
         self._conn_mgr = conn_mgr
         self._conn_id: str | None = None
+        self._complete_config = TaskOperationConfig(
+            repo_operation=self._repo.complete_task,
+            response_type="task.completed",
+            payload_builder=lambda task: {
+                "task_id": task.task_id,
+                "completed": task.completed,
+            },
+        )
+        self._assign_config = TaskOperationConfig(
+            repo_operation=self._repo.assign_task,
+            response_type="task.assigned",
+            payload_builder=lambda task: {
+                "task_id": task.task_id,
+                "assignee": task.assigned_to,
+            },
+        )
 
     async def on_connect(
         self,
@@ -218,18 +234,7 @@ class TaskStreamResource(WebSocketResource):
     @handles_message("task.complete")
     async def handle_complete(self, ws: WebSocketLike, payload: CompleteTask) -> None:
         """Mark a task as complete and acknowledge the caller."""
-        await self._execute_task_operation(
-            ws,
-            payload.task_id,
-            TaskOperationConfig(
-                repo_operation=self._repo.complete_task,
-                response_type="task.completed",
-                payload_builder=lambda task: {
-                    "task_id": task.task_id,
-                    "completed": task.completed,
-                },
-            ),
-        )
+        await self._execute_task_operation(ws, payload.task_id, self._complete_config)
 
     @handles_message("task.assign")
     async def handle_assign(self, ws: WebSocketLike, payload: AssignTask) -> None:
@@ -237,14 +242,7 @@ class TaskStreamResource(WebSocketResource):
         await self._execute_task_operation(
             ws,
             payload.task_id,
-            TaskOperationConfig(
-                repo_operation=self._repo.assign_task,
-                response_type="task.assigned",
-                payload_builder=lambda task: {
-                    "task_id": task.task_id,
-                    "assignee": task.assigned_to,
-                },
-            ),
+            self._assign_config,
             payload.assignee,
         )
 
