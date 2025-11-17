@@ -104,6 +104,15 @@ class ProjectResource(WebSocketResource):
         self.add_subroute("tasks", TaskStreamResource)
 
 
+@dc.dataclass(frozen=True, slots=True)
+class TaskOperationConfig:
+    """Configuration for a task operation handler."""
+
+    repo_operation: typ.Callable[..., Task]
+    response_type: str
+    payload_builder: typ.Callable[[Task], dict[str, object]]
+
+
 class TaskStreamResource(WebSocketResource):
     """Final resource that handles the bidirectional task stream."""
 
@@ -212,9 +221,14 @@ class TaskStreamResource(WebSocketResource):
         await self._execute_task_operation(
             ws,
             payload.task_id,
-            self._repo.complete_task,
-            "task.completed",
-            lambda task: {"task_id": task.task_id, "completed": task.completed},
+            TaskOperationConfig(
+                repo_operation=self._repo.complete_task,
+                response_type="task.completed",
+                payload_builder=lambda task: {
+                    "task_id": task.task_id,
+                    "completed": task.completed,
+                },
+            ),
         )
 
     @handles_message("task.assign")
@@ -223,9 +237,14 @@ class TaskStreamResource(WebSocketResource):
         await self._execute_task_operation(
             ws,
             payload.task_id,
-            self._repo.assign_task,
-            "task.assigned",
-            lambda task: {"task_id": task.task_id, "assignee": task.assigned_to},
+            TaskOperationConfig(
+                repo_operation=self._repo.assign_task,
+                response_type="task.assigned",
+                payload_builder=lambda task: {
+                    "task_id": task.task_id,
+                    "assignee": task.assigned_to,
+                },
+            ),
             payload.assignee,
         )
 
@@ -275,14 +294,14 @@ class TaskStreamResource(WebSocketResource):
         self,
         ws: WebSocketLike,
         task_id: str,
-        repo_operation: typ.Callable[..., Task],
-        response_type: str,
-        payload_builder: typ.Callable[[Task], dict[str, object]],
+        config: TaskOperationConfig,
         *operation_args: object,
     ) -> None:
+        """Execute a task operation and send the standardized response."""
+
         workspace_id = typ.cast("str", self.state["workspace_id"])
         project_id = typ.cast("str", self.state["project_id"])
-        task = await repo_operation(
+        task = await config.repo_operation(
             workspace_id,
             project_id,
             task_id,
@@ -290,8 +309,8 @@ class TaskStreamResource(WebSocketResource):
         )
         await ws.send_media(
             {
-                "type": response_type,
-                "payload": payload_builder(task),
+                "type": config.response_type,
+                "payload": config.payload_builder(task),
             }
         )
 
