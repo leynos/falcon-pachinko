@@ -788,7 +788,7 @@ async def lifespan(app_instance):
 A JavaScript client would interact as follows:
 
 1. **Connect**:
-   `const socket = new WebSocket("ws://localhost:8000/ws/chat/general");`
+  `const socket = new WebSocket("wss://example.com/ws/chat/general");`
 
 2. **Send Messages**:
 
@@ -1038,7 +1038,7 @@ class ProjectResource(WebSocketResource):
 # This assumes a router is already defined.
 router.add_route('/projects/{project_id}', ProjectResource)
 
-# A connection to "ws://.../projects/123/tasks" would be handled
+# A connection to "wss://.../projects/123/tasks" would be handled
 # by an instance of TasksResource, with the context of project "123".
 
 ```
@@ -1421,6 +1421,15 @@ classDiagram
     StatusResource --> aiosqlite.Connection
 ```
 
+The comprehensive reference application under ``examples/reference_app`` builds
+on this pattern to exercise every advanced feature in one place. Its router is
+mounted at ``/ws`` and instantiates ``WorkspaceResource`` → ``ProjectResource`` →
+``TaskStreamResource`` chains through the shared `ServiceContainer`, allowing
+hooks to seed per-connection state while message handlers rely on schema-driven
+dispatch. The same container also wires the announcement worker and HTTP
+helpers, providing a concrete illustration of the stateful,
+per-connection resources described in §5.5.1.
+
 ##### Usage Patterns
 
 Practical usage of the resource-factory pattern falls into two complementary
@@ -1547,8 +1556,8 @@ already provides a reliable asyncio client with excellent RFC coverage.
 
 - **Instantiation**: `WebSocketTestClient(app_url: str, *, headers: dict | None,
   subprotocols: list[str] | None, allow_insecure: bool =
-  False)` stores the base URL and defaults, requiring opt-in for local `ws://`
-  use.
+  False)` stores the base URL and defaults, requiring opt-in for local `ws://
+  ` use.
 
 - **Connection Context**: `async with client.connect(path)` opens a connection
   with
@@ -1561,7 +1570,7 @@ already provides a reliable asyncio client with excellent RFC coverage.
 
   ```python
   async with WebSocketTestClient(
-      "ws://localhost:8000", allow_insecure=True
+      "wss://example.com", allow_insecure=True
   ).connect("/ws/chat") as session:
       await session.send_json({"type": "ping"})
       reply = await session.receive_json()

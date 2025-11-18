@@ -429,12 +429,16 @@ class WebSocketTestClient:
             negotiated,
         ) = self._prepare_connection_params(path, headers, subprotocols)
         trace_log = self._configure_trace(trace=trace)
-        async with ws_connect(
-            url,
-            extra_headers=merged_headers,
-            subprotocols=negotiated,
-            open_timeout=self._open_timeout,
-        ) as connection:
+        connect_cm = typ.cast(
+            "typ.AsyncContextManager[WebSocketClientProtocol]",
+            ws_connect(
+                url,
+                extra_headers=merged_headers,
+                subprotocols=negotiated,
+                open_timeout=self._open_timeout,
+            ),
+        )
+        async with connect_cm as connection:
             session = WebSocketSession(
                 connection,
                 path=normalized_path,
