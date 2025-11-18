@@ -233,3 +233,4 @@ class TokenAuthenticator:
             return
         if token != expected:
             raise AuthenticationError(workspace_id)
+        return

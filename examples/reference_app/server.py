@@ -26,7 +26,7 @@ from falcon_pachinko import (
 )
 from falcon_pachinko.hooks import HookContext, HookEvent
 
-from .resources import WorkspaceResource
+from .resources import WorkspaceResource, register_reference_hooks
 from .services import (
     AnnouncementFeed,
     AuditTrail,
@@ -150,6 +150,7 @@ def build_router(
     | None = None,
 ) -> WebSocketRouter:
     """Construct the router with routes, hooks, and DI wiring."""
+    register_reference_hooks()
     router = WebSocketRouter(
         name="reference",
         resource_factory=resource_factory or container.create_resource,

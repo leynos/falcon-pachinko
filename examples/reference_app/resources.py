@@ -84,10 +84,23 @@ class WorkspaceResource(WebSocketResource):
         *,
         workspace_repo: WorkspaceRepository,
         audit_trail: AuditTrail,
+        announcement_feed: AnnouncementFeed,
+        conn_mgr: WebSocketConnectionManager,
     ) -> None:
         self._repo = workspace_repo
         self._audit = audit_trail
+        self._feed = announcement_feed
+        self._conn_mgr = conn_mgr
         self.add_subroute("projects/{project_id}", ProjectResource)
+
+    def get_child_context(self) -> dict[str, object]:
+        """Provide constructor kwargs for the nested project resource."""
+        return {
+            "workspace_repo": self._repo,
+            "audit_trail": self._audit,
+            "announcement_feed": self._feed,
+            "conn_mgr": self._conn_mgr,
+        }
 
 
 class ProjectResource(WebSocketResource):
@@ -98,10 +111,23 @@ class ProjectResource(WebSocketResource):
         *,
         workspace_repo: WorkspaceRepository,
         audit_trail: AuditTrail,
+        announcement_feed: AnnouncementFeed,
+        conn_mgr: WebSocketConnectionManager,
     ) -> None:
         self._repo = workspace_repo
         self._audit = audit_trail
+        self._feed = announcement_feed
+        self._conn_mgr = conn_mgr
         self.add_subroute("tasks", TaskStreamResource)
+
+    def get_child_context(self) -> dict[str, object]:
+        """Share dependencies with the nested task stream resource."""
+        return {
+            "workspace_repo": self._repo,
+            "audit_trail": self._audit,
+            "announcement_feed": self._feed,
+            "conn_mgr": self._conn_mgr,
+        }
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -159,28 +185,34 @@ class TaskStreamResource(WebSocketResource):
         """Attach the websocket to the workspace-wide room."""
         conn_id = secrets.token_hex(12)
         await self._conn_mgr.add_connection(conn_id, ws)
-        await self._conn_mgr.join_room(conn_id, _workspace_room(workspace_id))
         self._conn_id = conn_id
-        self.state.setdefault("workspace_id", workspace_id)
-        self.state["project_id"] = project_id
-        self.state["user"] = req.get_header("x-user", default="guest")
-        await self._audit.record(
-            "session.open",
-            connection=conn_id,
-            workspace=workspace_id,
-            project=project_id,
-            user=self.state["user"],
-        )
-        await ws.send_media(
-            {
-                "type": "session.ready",
-                "payload": {
-                    "workspace": workspace_id,
-                    "project": project_id,
-                },
-            }
-        )
-        return True
+        try:
+            await self._conn_mgr.join_room(conn_id, _workspace_room(workspace_id))
+            self.state.setdefault("workspace_id", workspace_id)
+            self.state["project_id"] = project_id
+            self.state["user"] = req.get_header("x-user", default="guest")
+            await self._audit.record(
+                "session.open",
+                connection=conn_id,
+                workspace=workspace_id,
+                project=project_id,
+                user=self.state["user"],
+            )
+            await ws.send_media(
+                {
+                    "type": "session.ready",
+                    "payload": {
+                        "workspace": workspace_id,
+                        "project": project_id,
+                    },
+                }
+            )
+        except Exception:
+            await self._conn_mgr.remove_connection(conn_id)
+            self._conn_id = None
+            raise
+        else:
+            return True
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Remove the websocket from the connection manager on disconnect."""
@@ -316,7 +348,9 @@ async def _seed_workspace(context: HookContext) -> None:
     resource = typ.cast("WorkspaceResource", context.resource)
     if not context.params:
         return
-    workspace_id = typ.cast("str", context.params.get("workspace_id"))
+    workspace_id = context.params.get("workspace_id")
+    if not isinstance(workspace_id, str):
+        return
     workspace = await resource._repo.ensure_workspace(workspace_id)
     resource.state["workspace_id"] = workspace_id
     resource.state["workspace_name"] = workspace.name
@@ -326,8 +360,10 @@ async def _seed_workspace(context: HookContext) -> None:
 async def _seed_project(context: HookContext) -> None:
     resource = typ.cast("ProjectResource", context.resource)
     params = context.params or {}
-    workspace_id = typ.cast("str", params.get("workspace_id"))
-    project_id = typ.cast("str", params.get("project_id"))
+    workspace_id = params.get("workspace_id")
+    project_id = params.get("project_id")
+    if not isinstance(workspace_id, str) or not isinstance(project_id, str):
+        return
     project = await resource._repo.ensure_project(workspace_id, project_id)
     resource.state["workspace_id"] = workspace_id
     resource.state["project_id"] = project_id
@@ -368,6 +404,3 @@ def register_reference_hooks() -> None:
     TaskStreamResource.hooks.add(HookEvent.BEFORE_RECEIVE, _record_receive)
     TaskStreamResource.hooks.add(HookEvent.AFTER_RECEIVE, _record_receive_result)
     _HOOKS_REGISTERED = True
-
-
-register_reference_hooks()
