@@ -1418,6 +1418,8 @@ classDiagram
     ServiceContainer --> StatusResource : provides dependencies
     StatusEndpoint --> ServiceContainer : resolves 'db'
     StatusResource --> WebSocketConnectionManager
+    StatusResource --> aiosqlite.Connection
+```
 
 The comprehensive reference application under ``examples/reference_app`` builds
 on this pattern to exercise every advanced feature in one place. Its router is
@@ -1427,8 +1429,6 @@ hooks to seed per-connection state while message handlers rely on schema-driven
 dispatch. The same container also wires the announcement worker and HTTP
 helpers, providing a concrete illustration of the stateful,
 per-connection resources described in §5.5.1.
-    StatusResource --> aiosqlite.Connection
-```
 
 ##### Usage Patterns
 

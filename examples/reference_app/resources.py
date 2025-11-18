@@ -108,7 +108,7 @@ class ProjectResource(WebSocketResource):
 class TaskOperationConfig:
     """Configuration for a task operation handler."""
 
-    repo_operation: typ.Callable[..., Task]
+    repo_operation: typ.Callable[..., typ.Awaitable[Task]]
     response_type: str
     payload_builder: typ.Callable[[Task], dict[str, object]]
 
