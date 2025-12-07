@@ -181,9 +181,9 @@ class TaskStreamResource(WebSocketResource):
         *,
         workspace_id: str,
         project_id: str,
-        user: str = "guest",
     ) -> bool:
         """Attach the websocket to the workspace-wide room."""
+        user = req.get_header("X-User") or req.get_param("user", default="guest")
         conn_id = secrets.token_hex(12)
         await self._conn_mgr.add_connection(conn_id, ws)
         self._conn_id = conn_id
