@@ -12,6 +12,9 @@ from pytest_bdd import given, scenario, then, when
 
 from falcon_pachinko.testing import TraceEvent, WebSocketTestClient
 
+if typ.TYPE_CHECKING:
+    from websockets.typing import Subprotocol
+
 
 @dc.dataclass
 class EchoRecord:
@@ -54,6 +57,7 @@ def event_loop(
 def echo_service(event_loop: asyncio.AbstractEventLoop) -> typ.Iterator[ClientContext]:
     """Run an echo server for the duration of a scenario."""
     record = EchoRecord(paths=[], headers=[], messages=[], subprotocols=[])
+    protocols: list[Subprotocol] = [typ.cast("Subprotocol", "json")]
 
     async def handler(websocket: ws_server.WebSocketServerProtocol, path: str) -> None:
         record.paths.append(path)
@@ -64,14 +68,14 @@ def echo_service(event_loop: asyncio.AbstractEventLoop) -> typ.Iterator[ClientCo
             await websocket.send(message)
 
     server = event_loop.run_until_complete(
-        ws_server.serve(handler, "127.0.0.1", 0, subprotocols=("json",))
+        ws_server.serve(handler, "127.0.0.1", 0, subprotocols=protocols)
     )
     host, port, *_ = server.sockets[0].getsockname()
     base_url = f"ws://{host}:{port}"
     client = WebSocketTestClient(
         base_url,
         default_headers={"X-Test": "bdd"},
-        subprotocols=("json",),
+        subprotocols=protocols,
         capture_trace=True,
         allow_insecure=True,
     )

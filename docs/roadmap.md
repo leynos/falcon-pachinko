@@ -213,12 +213,12 @@ the library is ready for use.
     lifespan-managed workers end-to-end, backed by pytest unit tests and
     pytest-bdd behavioural coverage.
 
-- [ ] **Rewrite the Documentation.**
+- [x] **Rewrite the Documentation.**
 
-  - [ ] Update the project's official documentation to reflect the new,
+  - [x] Update the project's official documentation to reflect the new,
     composable architecture as the primary and recommended approach.
 
-  - [ ] Create a migration guide for users of the pre-release version.
+  - [x] Create a migration guide for users of the pre-release version.
 
-  - [ ] Add detailed "how-to" guides for advanced features like DI, state
+  - [x] Add detailed "how-to" guides for advanced features like DI, state
     management, and custom connection manager backends.

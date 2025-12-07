@@ -13,6 +13,11 @@ from falcon_pachinko import (
     WebSocketSimulator,
 )
 
+if typ.TYPE_CHECKING:
+    import falcon
+
+    from falcon_pachinko.protocols import WebSocketLike
+
 
 class EchoResource(WebSocketResource):
     """Resource that echoes inbound JSON payloads and closes the connection."""
@@ -24,12 +29,13 @@ class EchoResource(WebSocketResource):
         EchoResource.instances.append(self)
 
     async def on_connect(
-        self, req: object, ws: WebSocketSimulator, **params: object
+        self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
         """Handle the simulated connection for the test resource."""
-        payload = await ws.receive_json(dict)
+        simulator = typ.cast("WebSocketSimulator", ws)
+        payload = await simulator.receive_json(dict)
         self.received.append(payload)
-        await ws.send_json({"type": "ack", "payload": payload})
+        await simulator.send_json({"type": "ack", "payload": payload})
         return False
 
 
@@ -37,10 +43,11 @@ class GreeterResource(WebSocketResource):
     """Resource that accepts the connection and sends a welcome message."""
 
     async def on_connect(
-        self, req: object, ws: WebSocketSimulator, **params: object
+        self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
         """Greet the client and accept the simulated connection."""
-        await ws.send_text("welcome aboard")
+        simulator = typ.cast("WebSocketSimulator", ws)
+        await simulator.send_text("welcome aboard")
         return True
 
 
@@ -48,7 +55,7 @@ class ChattyResource(WebSocketResource):
     """Resource that negotiates a subprotocol and closes with a custom code."""
 
     async def on_connect(
-        self, req: object, ws: WebSocketSimulator, **params: object
+        self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
         """Accept the connection using ``chat`` and close with code 1001."""
         await ws.accept(subprotocol="chat")
@@ -67,10 +74,13 @@ class TestWebSocketSimulatorFixture:
         """Ensure the fixture injects the simulator and captures frames."""
         EchoResource.instances.clear()
         websocket_simulator.router.add_route("/echo", EchoResource)
+        initial_frames: list[tuple[object, typ.Literal["json"]]] = [
+            ({"type": "ping"}, "json"),
+        ]
 
         async with websocket_simulator.connect(
             "/echo",
-            initial_inbound=[({"type": "ping"}, "json")],
+            initial_inbound=initial_frames,
         ) as connection:
             assert isinstance(connection, SimulatorConnection)
             resource = EchoResource.instances[-1]

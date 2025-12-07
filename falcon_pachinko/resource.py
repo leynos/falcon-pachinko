@@ -172,8 +172,10 @@ class WebSocketResource:
             and inspect.iscoroutinefunction(obj)
         }
         for msg_type, info in list(handlers.items()):
-            if info.handler.__name__ in shadowed:
-                new_handler = typ.cast("Handler", cls.__dict__[info.handler.__name__])
+            handler_obj = typ.cast("typ.Any", info.handler)
+            handler_name = handler_obj.__name__
+            if handler_name in shadowed:
+                new_handler = typ.cast("Handler", cls.__dict__[handler_name])
                 handlers[msg_type] = HandlerInfo(
                     new_handler, info.payload_type, info.strict
                 )

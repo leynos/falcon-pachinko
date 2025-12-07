@@ -13,6 +13,9 @@ from falcon_pachinko import SimulatorConnection, WebSocketResource, WebSocketSim
 if typ.TYPE_CHECKING:  # pragma: no cover - typing only
     import asyncio
 
+    import falcon
+
+    from falcon_pachinko.protocols import WebSocketLike
     from falcon_pachinko.testing import SimulatorRouterHarness
 
 
@@ -43,12 +46,13 @@ class EchoResource(WebSocketResource):
         EchoResource.instances.append(self)
 
     async def on_connect(
-        self, req: object, ws: WebSocketSimulator, **params: object
+        self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
         """Handle the echo interaction for the simulator scenario."""
-        payload = await ws.receive_json(dict)
+        simulator = typ.cast("WebSocketSimulator", ws)
+        payload = await simulator.receive_json(dict)
         self.received.append(payload)
-        await ws.send_json({"type": "ack", "payload": payload})
+        await simulator.send_json({"type": "ack", "payload": payload})
         return False
 
 
@@ -85,11 +89,14 @@ def when_connect(
 ) -> FixtureContext:
     """Establish a connection using the harness fixture."""
     assert context.payload is not None
+    frames: list[tuple[object, typ.Literal["json"]]] = [
+        (context.payload, "json"),
+    ]
 
     async def _open() -> SimulatorConnection:
         async with context.harness.connect(
             "/echo",
-            initial_inbound=[(context.payload, "json")],
+            initial_inbound=frames,
         ) as connection:
             return connection
 
