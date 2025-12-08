@@ -41,11 +41,9 @@ class DummyWebSocket:
 
     async def accept(self, subprotocol: str | None = None) -> None:  # pragma: no cover
         """Accept the websocket connection (unused in this scenario)."""
-        return
 
     async def close(self, code: int = 1000) -> None:  # pragma: no cover
         """Close the websocket connection (unused in this scenario)."""
-        return
 
     async def send_media(self, data: object) -> None:
         """Record outbound messages."""
@@ -53,7 +51,6 @@ class DummyWebSocket:
 
     async def receive_media(self) -> object:  # pragma: no cover
         """Provide a placeholder receive implementation."""
-        return None
 
 
 class RecordingBackend(ConnectionBackend):
