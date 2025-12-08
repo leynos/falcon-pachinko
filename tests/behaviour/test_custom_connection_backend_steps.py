@@ -67,7 +67,7 @@ class RecordingBackend(ConnectionBackend):
     @property
     def websockets(self) -> typ.Mapping[str, WebSocketLike]:
         """Expose a read-only snapshot of active websockets."""
-        return types.MappingProxyType(self._websockets.copy())
+        return types.MappingProxyType(self._websockets)
 
     @property
     def rooms(self) -> typ.Mapping[str, typ.Collection[str]]:
