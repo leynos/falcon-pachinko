@@ -173,8 +173,8 @@ class WebSocketResource:
         }
         for msg_type, info in list(handlers.items()):
             handler_obj = typ.cast("typ.Any", info.handler)
-            handler_name = handler_obj.__name__
-            if handler_name in shadowed:
+            handler_name = getattr(handler_obj, "__name__", None)
+            if handler_name and handler_name in shadowed:
                 new_handler = typ.cast("Handler", cls.__dict__[handler_name])
                 handlers[msg_type] = HandlerInfo(
                     new_handler, info.payload_type, info.strict
