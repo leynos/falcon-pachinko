@@ -38,7 +38,9 @@ def populate_struct_handlers(cls: type[WebSocketResource]) -> dict[type, Handler
         existing = mapping.get(payload_type)
         if existing is not None:
             raise ValueError(
-                duplicate_payload_type_msg(payload_type, handler.__qualname__)
+                duplicate_payload_type_msg(
+                    payload_type, typ.cast("typ.Any", handler).__qualname__
+                )
             )
         mapping[payload_type] = info
     return mapping

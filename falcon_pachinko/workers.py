@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import collections.abc as cabc
+import typing as typ
 from contextlib import AsyncExitStack
 
-WorkerFn = cabc.Callable[..., cabc.Awaitable[None]]
+WorkerFn = cabc.Callable[..., cabc.Coroutine[object, object, None]]
 
 
 class WorkerController:
@@ -30,7 +31,8 @@ class WorkerController:
         await self._stack.__aenter__()
 
         for fn in workers:
-            task = asyncio.create_task(fn(**context))
+            coroutine = typ.cast("cabc.Coroutine[object, object, None]", fn(**context))
+            task = asyncio.create_task(coroutine)
             self._tasks.append(task)
 
     async def stop(self) -> None:

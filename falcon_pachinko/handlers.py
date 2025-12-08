@@ -16,11 +16,10 @@ from .exceptions import (
     HandlerSignatureError,
     SignatureInspectionError,
 )
-from .protocols import WebSocketLike
 
 # Handlers accept ``self``, a ``WebSocketLike`` connection, and a decoded payload.
 # The return value is ignored.
-Handler = cabc.Callable[[typ.Any, WebSocketLike, typ.Any], cabc.Awaitable[None]]
+Handler = cabc.Callable[..., cabc.Awaitable[None]]
 
 
 @dc.dataclass(frozen=True)
@@ -59,15 +58,16 @@ def select_payload_param(
 
 def get_payload_type(func: Handler) -> type | None:
     """Validate ``func``'s signature and return the payload annotation."""
+    func_name = typ.cast("typ.Any", func).__qualname__
     if not inspect.iscoroutinefunction(func):
-        raise HandlerNotAsyncError(func.__qualname__)
+        raise HandlerNotAsyncError(func_name)
 
     try:
         sig = inspect.signature(func)
     except ValueError as exc:  # pragma: no cover - C extensions unlikely
-        raise SignatureInspectionError(func.__qualname__) from exc
+        raise SignatureInspectionError(func_name) from exc
 
-    param = select_payload_param(sig, func_name=func.__qualname__)
+    param = select_payload_param(sig, func_name=func_name)
     try:
         hints: dict[str, type] = typ.get_type_hints(func)
     except (NameError, AttributeError):
@@ -116,15 +116,23 @@ class _HandlesMessageDescriptor:
     ) -> Handler | _HandlesMessageDescriptor:
         if instance is None:
             return self
-        return self.func.__get__(instance, owner or self.owner)
+        return typ.cast(
+            "Handler",
+            typ.cast("typ.Any", self.func).__get__(instance, owner or self.owner),
+        )
 
 
 def handles_message(
     message_type: str, *, strict: bool = True
-) -> cabc.Callable[[Handler], _HandlesMessageDescriptor]:
+) -> cabc.Callable[
+    [cabc.Callable[..., cabc.Awaitable[None]]], _HandlesMessageDescriptor
+]:
     """Create a decorator to mark a method as a WebSocket message handler."""
 
-    def decorator(func: Handler) -> _HandlesMessageDescriptor:
-        return _HandlesMessageDescriptor(message_type, func, strict=strict)
+    def decorator(
+        func: cabc.Callable[..., cabc.Awaitable[None]],
+    ) -> _HandlesMessageDescriptor:
+        typed = typ.cast("Handler", func)
+        return _HandlesMessageDescriptor(message_type, typed, strict=strict)
 
     return decorator

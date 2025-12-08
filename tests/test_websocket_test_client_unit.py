@@ -12,6 +12,9 @@ import websockets.server as ws_server
 
 from falcon_pachinko.testing import TraceEvent, WebSocketTestClient
 
+if typ.TYPE_CHECKING:
+    from websockets.typing import Subprotocol
+
 
 @dc.dataclass
 class EchoState:
@@ -49,7 +52,10 @@ async def start_echo_server(
     async def handler(websocket: ws_server.WebSocketServerProtocol, path: str) -> None:
         await _echo_handler(websocket, path, state)
 
-    server = await ws_server.serve(handler, "127.0.0.1", 0, subprotocols=subprotocols)
+    protocols: list[Subprotocol] = [
+        typ.cast("Subprotocol", proto) for proto in subprotocols
+    ]
+    server = await ws_server.serve(handler, "127.0.0.1", 0, subprotocols=protocols)
     sock = next(iter(server.sockets))
     host, port, *_ = sock.getsockname()
     base_url = f"ws://{host}:{port}"

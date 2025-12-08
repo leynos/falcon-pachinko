@@ -113,18 +113,6 @@ def _require_token_hook(
     return _hook
 
 
-def _inject_user_param() -> typ.Callable[[HookContext], typ.Awaitable[None] | None]:
-    async def _hook(context: HookContext) -> None:
-        if context.req is None:
-            return
-        user = context.req.get_header("x-user", default="guest")
-        params = context.params or {}
-        params.setdefault("user", user)
-        context.params = params
-
-    return _hook
-
-
 def build_container(conn_mgr: WebSocketConnectionManager) -> ServiceContainer:
     """Create and populate the service container used for DI."""
     container = ServiceContainer()
@@ -169,7 +157,6 @@ def build_router(
     router.global_hooks.add(
         HookEvent.BEFORE_CONNECT, _require_token_hook(authenticator)
     )
-    router.global_hooks.add(HookEvent.BEFORE_CONNECT, _inject_user_param())
     return router
 
 

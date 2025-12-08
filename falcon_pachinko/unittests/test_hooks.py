@@ -17,6 +17,9 @@ from falcon_pachinko import (
 from falcon_pachinko.resource import _receive_hooks
 from falcon_pachinko.unittests.helpers import DummyWS
 
+if typ.TYPE_CHECKING:
+    from falcon_pachinko.hooks import HookCallable
+
 
 def dummy_hook(context: HookContext) -> None:
     """No-op hook used for validation tests."""
@@ -246,8 +249,9 @@ def test_hookcollection_add_unsupported_event() -> None:
 def test_hookcollection_add_non_callable() -> None:
     """Registering a non-callable hook raises ``TypeError``."""
     collection = HookCollection()
+    bad_hook = typ.cast("HookCallable", typ.cast("object", "not_a_callable"))
     with pytest.raises(TypeError, match="hook must be callable"):
-        collection.add("before_connect", "not_a_callable")
+        collection.add("before_connect", bad_hook)
 
 
 def test_hookcollection_inheritance_propagates_changes() -> None:
