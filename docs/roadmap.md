@@ -5,11 +5,13 @@ extension based on the revised, composable architecture detailed in the main
 design document. It supersedes the previous roadmap and reflects a pivot
 towards a more robust, scalable, and Falcon-idiomatic system.
 
-## Phase 1: Foundational Composable Router
+## 1. Foundational Composable Router
 
 This phase replaces the initial `app.add_websocket_route` mechanism with the
 more powerful and modular `WebSocketRouter`. This is the most significant
 architectural change and underpins all subsequent features.
+
+### 1.1. Composable router tasks
 
 - [x] **Deprecate the old routing API.**
 
@@ -50,10 +52,12 @@ architectural change and underpins all subsequent features.
     instantiate the associated resource with the correct path parameters and
     initialization arguments.
 
-## Phase 2: Advanced Dispatch and Resource Model
+## 2. Advanced Dispatch and Resource Model
 
 This phase refines the `WebSocketResource` to support the new schema-driven and
 composable patterns.
+
+### 2.1. Dispatch and resource model tasks
 
 - [ ] **Integrate** `msgspec` **for Schema-Driven Dispatch.**
 
@@ -115,10 +119,12 @@ composable patterns.
 
 [¹](falcon-websocket-extension-design.md#523-context-passing-for-nested-resources)
 
-## Phase 3: Lifespan Workers and Connection Management
+## 3. Lifespan Workers and Connection Management
 
 This phase implements the redesigned, ASGI-native background worker system and
 finalizes the connection manager API.
+
+### 3.1. Worker and connection management tasks
 
 - [x] **Implement Lifespan-Based Worker Management.**
 
@@ -147,10 +153,12 @@ finalizes the connection manager API.
   - [x] Ensure the default `InProcessBackend` correctly implements this new,
     robust interface.
 
-## Phase 4: Cross-Cutting Concerns
+## 4. Cross-Cutting Concerns
 
 This phase adds the essential features for building production-grade
 applications.
+
+### 4.1. Cross-cutting concern tasks
 
 - [x] **Implement the Multi-Tiered Hook System.**
 
@@ -182,10 +190,12 @@ applications.
   - [x] Document usage patterns (including test-oriented factories) and update
     examples to demonstrate DI wiring.
 
-## Phase 5: Testing, Documentation, and Examples
+## 5. Testing, Documentation, and Examples
 
 This is an ongoing process, but it will be finalized in this phase to ensure
 the library is ready for use.
+
+### 5.1. Testing, documentation, and example tasks
 
 - [x] **Develop Comprehensive Testing Utilities.**
 
