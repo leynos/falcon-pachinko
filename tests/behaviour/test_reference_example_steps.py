@@ -138,10 +138,7 @@ def when_send_task_add(
     payload = AddTask(task_id="T-42", title="Investigate event loop")
     raw = msjson.encode(payload)
     event_loop.run_until_complete(resource.dispatch(context.simulator, raw))
-    context.last_event = typ.cast(
-        "tuple[str, dict[str, object]]",
-        event_loop.run_until_complete(context.feed.next_event()),
-    )
+    context.last_event = event_loop.run_until_complete(context.feed.next_event())
     return context
 
 

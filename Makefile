@@ -11,8 +11,10 @@ VENV_TOOLS = pytest
 
 all: build check-fmt test typecheck
 
-build: uv ## Build virtual-env and install deps
-	uv venv
+.venv: pyproject.toml
+	uv venv --clear
+
+build: uv .venv ## Build virtual-env and install deps
 	uv sync --group dev
 
 build-release: ## Build artefacts (sdist & wheel)

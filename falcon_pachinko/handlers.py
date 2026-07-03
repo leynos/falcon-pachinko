@@ -132,7 +132,6 @@ def handles_message(
     def decorator(
         func: cabc.Callable[..., cabc.Awaitable[None]],
     ) -> _HandlesMessageDescriptor:
-        typed = typ.cast("Handler", func)
-        return _HandlesMessageDescriptor(message_type, typed, strict=strict)
+        return _HandlesMessageDescriptor(message_type, func, strict=strict)
 
     return decorator

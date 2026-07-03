@@ -70,7 +70,7 @@ def echo_service(event_loop: asyncio.AbstractEventLoop) -> typ.Iterator[ClientCo
     server = event_loop.run_until_complete(
         ws_server.serve(handler, "127.0.0.1", 0, subprotocols=protocols)
     )
-    host, port, *_ = server.sockets[0].getsockname()
+    host, port, *_ = next(iter(server.sockets)).getsockname()
     base_url = f"ws://{host}:{port}"
     client = WebSocketTestClient(
         base_url,

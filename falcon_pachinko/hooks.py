@@ -177,7 +177,7 @@ class HookManager:
         for hook in hooks:
             result = hook(context)
             if inspect.isawaitable(result):
-                await typ.cast("typ.Awaitable[None]", result)
+                await result
         return
 
     async def _run_hooks(

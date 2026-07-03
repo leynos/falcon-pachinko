@@ -216,7 +216,7 @@ def test_add_websocket_route_invalid_path(
     results in a ValueError.
     """
     with pytest.raises(ValueError, match="Invalid WebSocket route path"):
-        dummy_app.add_websocket_route(path, dummy_resource_cls)  # type: ignore[arg-type]
+        dummy_app.add_websocket_route(typ.cast("str", path), dummy_resource_cls)
 
 
 def test_create_websocket_resource_returns_new_instances(
