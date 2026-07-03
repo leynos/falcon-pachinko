@@ -115,7 +115,12 @@ libraries), use:
 **Example:**
 
 ```bash
-slipcover --source=./my_app_src --omit="*/tests/*,*/venv/*" --branch --out coverage.xml -m pytest tests/
+slipcover \
+  --source=./my_app_src \
+  --omit="*/tests/*,*/venv/*" \
+  --branch \
+  --out coverage.xml \
+  -m pytest tests/
 ```
 
 ## 3. Test Execution with Pytest and Parallelization
@@ -135,7 +140,12 @@ For example, to generate a Cobertura XML report with branch coverage for tests
 in the `tests` directory, focusing on source code in `my_app_src`:
 
 ```bash
-python -m slipcover --source=./my_app_src --omit="*/tests/*,*/venv/*" --branch --out coverage.xml -m pytest -v tests/
+python -m slipcover \
+  --source=./my_app_src \
+  --omit="*/tests/*,*/venv/*" \
+  --branch \
+  --out coverage.xml \
+  -m pytest -v tests/
 ```
 
 ### 3.2. Leveraging `pytest-forked` for Test Isolation
@@ -269,7 +279,10 @@ data.
 
 ```yaml
 - name: Install CodeScene Coverage CLI
-  run: curl https://downloads.codescene.io/enterprise/cli/install-cs-coverage-tool.sh | bash -s -- -y
+  run: >
+    curl
+    https://downloads.codescene.io/enterprise/cli/install-cs-coverage-tool.sh
+    | bash -s -- -y
 ```
 
 - Command Structure and Options:
