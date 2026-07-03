@@ -187,7 +187,7 @@ async def test_not_found_raises() -> None:
     router = WebSocketRouter()
     router.add_route("/ok", DummyResource)
     router.mount("/")
-    req = type("Req", (), {"path": "/missing"})()
+    req = type("Req", (), {"path": "/missing", "path_template": ""})()
 
     with pytest.raises(falcon.HTTPNotFound):
         await router.on_websocket(req, DummyWS())
@@ -218,7 +218,7 @@ async def test_on_connect_accepts_connection() -> None:
         called["accepted"] = True
 
     typ.cast("typ.Any", ws).accept = accept
-    req = type("Req", (), {"path": "/ok"})()
+    req = type("Req", (), {"path": "/ok", "path_template": ""})()
     await router.on_websocket(req, ws)
     assert called.get("accepted") is True
 

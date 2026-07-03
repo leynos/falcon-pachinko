@@ -173,10 +173,7 @@ class SimulatorRouterHarness:
         request = _TestRequest(path=request_path, path_template=self._mount_prefix)
         original = _OriginalWebSocket()
         try:
-            await self.router.on_websocket(
-                typ.cast("falcon.asgi.Request", request),
-                original,
-            )
+            await self.router.on_websocket(request, original)
             yield SimulatorConnection(
                 path=request_path,
                 router=self.router,

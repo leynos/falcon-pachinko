@@ -39,12 +39,26 @@ SimulatorFactory = typ.Callable[
 ]
 
 
-def _request_path(req: object) -> str:
+class _RequestLike(typ.Protocol):
+    """Request surface consumed by the router before resource dispatch."""
+
+    @property
+    def path(self) -> str:
+        """Return the request path."""
+        ...
+
+    @property
+    def path_template(self) -> str:
+        """Return the mount path template."""
+        ...
+
+
+def _request_path(req: _RequestLike) -> str:
     """Return the request path used for route matching."""
-    return typ.cast("str", typ.cast("typ.Any", req).path)
+    return req.path
 
 
-def _request_path_template(req: object) -> str:
+def _request_path_template(req: _RequestLike) -> str:
     """Return the mounted path template, defaulting like Falcon does."""
     return typ.cast("str", getattr(req, "path_template", ""))
 
@@ -228,7 +242,7 @@ class WebSocketRouter:
         return _normalize_path(template.format(**params))
 
     async def on_websocket(
-        self, req: object, ws: WebSocketLike
+        self, req: _RequestLike, ws: WebSocketLike
     ) -> None:  # pragma: no cover - simple wrapper
         """Dispatch the connection to the first matching route.
 
@@ -254,7 +268,7 @@ class WebSocketRouter:
         raise falcon.HTTPNotFound
 
     async def _try_route(
-        self, route: _CompiledRoute, req: object, ws: WebSocketLike
+        self, route: _CompiledRoute, req: _RequestLike, ws: WebSocketLike
     ) -> bool:
         """Attempt to handle ``req`` using ``route``.
 
@@ -285,7 +299,7 @@ class WebSocketRouter:
     async def _execute_route_with_error_handling(
         self,
         route: _CompiledRoute,
-        req: object,
+        req: _RequestLike,
         ws: WebSocketLike,
         params: dict[str, str],
         remaining: str,
@@ -304,7 +318,9 @@ class WebSocketRouter:
                     await ws_for_cleanup.close()
             raise
 
-    async def _prepare_websocket(self, req: object, ws: WebSocketLike) -> WebSocketLike:
+    async def _prepare_websocket(
+        self, req: _RequestLike, ws: WebSocketLike
+    ) -> WebSocketLike:
         """Return the WebSocket to use for ``req``."""
         # When :attr:`_simulator_factory` is configured the factory may wrap or
         # replace ``ws`` with an injectable simulator. The returned object is
@@ -337,7 +353,7 @@ class WebSocketRouter:
     async def _process_route_resolution(
         self,
         route: _CompiledRoute,
-        req: object,
+        req: _RequestLike,
         ws: WebSocketLike,
         params: dict[str, str],
         remaining: str,
@@ -363,7 +379,7 @@ class WebSocketRouter:
         resource: WebSocketResource,
         base_resource: WebSocketResource,
         route: _CompiledRoute,
-        req: object,
+        req: _RequestLike,
     ) -> bool:
         """Return ``True`` if ``resource`` is usable for ``req``."""
         return not (
@@ -430,7 +446,7 @@ class WebSocketRouter:
         return resource, path, params
 
     def _validate_and_normalize_path(
-        self, route: _CompiledRoute, req: object
+        self, route: _CompiledRoute, req: _RequestLike
     ) -> tuple[dict[str, str], str] | None:
         """Return params and remaining path or ``None`` if invalid."""
         if not (match := route.prefix.match(_request_path(req))):
@@ -473,7 +489,7 @@ class WebSocketRouter:
     async def _handle_websocket_connection(
         self,
         resource: WebSocketResource,
-        req: object,
+        req: _RequestLike,
         ws: WebSocketLike,
         params: dict[str, str],
         *,
@@ -498,7 +514,7 @@ class WebSocketRouter:
         self,
         hook_manager: HookManager,
         resource: WebSocketResource,
-        req: object,
+        req: _RequestLike,
         ws: WebSocketLike,
         params: dict[str, str],
     ) -> tuple[HookContext, dict[str, object]]:
@@ -515,7 +531,7 @@ class WebSocketRouter:
     async def _execute_resource_handler(
         self,
         resource: WebSocketResource,
-        req: object,
+        req: _RequestLike,
         ws: WebSocketLike,
         params: dict[str, object],
         context: HookContext,
