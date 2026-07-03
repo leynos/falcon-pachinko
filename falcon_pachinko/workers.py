@@ -31,7 +31,7 @@ class WorkerController:
         await self._stack.__aenter__()
 
         for fn in workers:
-            coroutine = typ.cast("cabc.Coroutine[object, object, None]", fn(**context))
+            coroutine = fn(**context)
             task = asyncio.create_task(coroutine)
             self._tasks.append(task)
 
@@ -73,5 +73,5 @@ class WorkerController:
 
 def worker(fn: WorkerFn) -> WorkerFn:
     """Mark *fn* as a background worker."""
-    fn.__pachinko_worker__ = True  # type: ignore[attr-defined]
+    typ.cast("typ.Any", fn).__pachinko_worker__ = True
     return fn

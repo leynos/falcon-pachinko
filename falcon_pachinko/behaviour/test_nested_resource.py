@@ -200,7 +200,7 @@ def _simulate_connection(
     """Simulate a WebSocket connection."""
     router: WebSocketRouter = context["router"]
     ws = DummyWS()
-    req = typ.cast("falcon.Request", SimpleNamespace(path=path, path_template=""))
+    req = SimpleNamespace(path=path, path_template="")
     if capture_exceptions:
         try:
             asyncio.run(router.on_websocket(req, ws))

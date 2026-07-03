@@ -45,10 +45,7 @@ async def test_nested_subroute_params() -> None:
     router = WebSocketRouter()
     router.add_route("/parent/{pid}", Parent)
     router.mount("/")
-    req = typ.cast(
-        "falcon.Request",
-        SimpleNamespace(path="/parent/1/child/2", path_template=""),
-    )
+    req = SimpleNamespace(path="/parent/1/child/2", path_template="")
     await router.on_websocket(req, DummyWS())
 
     assert Child.instances[-1].params == {"pid": "1", "cid": "2"}
@@ -68,10 +65,7 @@ async def test_nested_subroute_not_found(path: str, description: str) -> None:
     router = WebSocketRouter()
     router.add_route("/parent/{pid}", Parent)
     router.mount("/")
-    req = typ.cast(
-        "falcon.Request",
-        SimpleNamespace(path=path, path_template=""),
-    )
+    req = SimpleNamespace(path=path, path_template="")
     with pytest.raises(falcon.HTTPNotFound):
         await router.on_websocket(req, DummyWS())
 
@@ -132,10 +126,7 @@ async def _setup_and_run_nested_test(
     router = WebSocketRouter()
     router.add_route(route_path, parent_class)
     router.mount("/")
-    req = typ.cast(
-        "falcon.Request",
-        SimpleNamespace(path=request_path, path_template=""),
-    )
+    req = SimpleNamespace(path=request_path, path_template="")
     await router.on_websocket(req, DummyWS())
     parent = parent_class.instances[-1]
     child = child_class.instances[-1]

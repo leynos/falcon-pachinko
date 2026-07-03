@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import types
 import typing as typ
 from types import SimpleNamespace
 
@@ -58,7 +59,7 @@ if typ.TYPE_CHECKING:
 try:  # pragma: no cover - optional dependency for fixture registration
     import pytest
 except ImportError:  # pragma: no cover - fixture only available under pytest
-    pytest = None  # type: ignore[assignment]
+    pytest: types.ModuleType | None = None
 else:
 
     @pytest.fixture

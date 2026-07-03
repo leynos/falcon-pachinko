@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import typing as typ
 
-import falcon
 import pytest
 from falcon import HTTPUnauthorized
 
@@ -72,10 +71,7 @@ async def test_router_rejects_missing_token() -> None:
     req = _RequestStub(headers={})
     ws = _WebSocketStub()
     with pytest.raises(HTTPUnauthorized):
-        await router.on_websocket(
-            typ.cast("falcon.Request", req),
-            ws,
-        )
+        await router.on_websocket(req, ws)
     assert ws.closed is True
     assert ws.accepted is False
 
@@ -86,7 +82,7 @@ async def test_router_accepts_with_valid_token() -> None:
     router, _ = _build_router()
     req = _RequestStub(headers={"x-workspace-token": "seekrit", "x-user": "riley"})
     ws = _WebSocketStub()
-    await router.on_websocket(typ.cast("falcon.Request", req), ws)
+    await router.on_websocket(req, ws)
     assert ws.accepted is True
     assert ws.messages
     first = typ.cast("dict[str, object]", ws.messages[0])

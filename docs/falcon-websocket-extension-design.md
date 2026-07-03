@@ -573,10 +573,14 @@ conn_mgr = app.ws_connection_manager
 
 # 1. Define workers as ordinary async functions with explicit dependencies
 @worker
-async def announcement_worker(conn_mgr: pachinko.WebSocketConnectionManager) -> None:
+async def announcement_worker(
+    conn_mgr: pachinko.WebSocketConnectionManager,
+) -> None:
     """Broadcasts a heartbeat message to all sockets every 30s."""
     while True:
-        await conn_mgr.broadcast_to_all({"type": "ping"}) # Assuming a broadcast_to_all method
+        await conn_mgr.broadcast_to_all(
+            {"type": "ping"},
+        )  # Assuming a broadcast_to_all method
         await asyncio.sleep(30)
 
 # 2. Bind the worker lifecycle to the ASGI lifespan
@@ -609,16 +613,55 @@ abstractions and their intended use. This API structure is designed to be both
 powerful enough for complex applications and intuitive for developers
 accustomed to Falcon.
 
-| Component                      | Key Elements                                                  | Purpose                                                                 | Falcon Analogy              |
-| ------------------------------ | ------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------- |
-| Application Setup              | `falcon_pachinko.install(app)`                                | Initializes shared WebSocket components such as the connection manager. | App-level extensions        |
-| Route Definition               | `app.add_websocket_route()` and `WebSocketRouter.add_route()` | Maps a URI path to a `WebSocketResource`.                               | `app.add_route()`           |
-| Resource Class                 | `falcon_pachinko.WebSocketResource`                           | Handles connections and messages for a given route.                     | Falcon HTTP `Resource`      |
-| Connection Lifecycle           | `on_connect()`, `on_disconnect()`                             | Setup and teardown hooks for each connection.                           | Request/response middleware |
-| Message Handling (Typed)       | `@handles_message()` and `on_{type}`                          | Routes incoming JSON messages by type.                                  | `on_get`, `on_post`, etc.   |
-| Message Handling (Generic)     | `on_unhandled()`                                              | Fallback for unrecognized or non-JSON messages.                         | N/A                         |
-| Background Worker Integration  | `WorkerController`, `@app.lifespan`                           | Manages long-running tasks within the ASGI lifecycle.                   | Custom patterns             |
-| Connection Management (Global) | `app.ws_connection_manager`                                   | Tracks connections and enables broadcasting.                            | N/A                         |
+- **Application Setup**
+
+  - Key elements: `falcon_pachinko.install(app)`
+  - Purpose: initializes shared WebSocket components such as the connection
+    manager.
+  - Falcon analogy: app-level extensions.
+
+- **Route Definition**
+
+  - Key elements: `app.add_websocket_route()` and
+    `WebSocketRouter.add_route()`
+  - Purpose: maps a URI path to a `WebSocketResource`.
+  - Falcon analogy: `app.add_route()`.
+
+- **Resource Class**
+
+  - Key elements: `falcon_pachinko.WebSocketResource`
+  - Purpose: handles connections and messages for a given route.
+  - Falcon analogy: Falcon HTTP `Resource`.
+
+- **Connection Lifecycle**
+
+  - Key elements: `on_connect()`, `on_disconnect()`
+  - Purpose: setup and teardown hooks for each connection.
+  - Falcon analogy: request/response middleware.
+
+- **Message Handling (Typed)**
+
+  - Key elements: `@handles_message()` and `on_{type}`
+  - Purpose: routes incoming JSON messages by type.
+  - Falcon analogy: `on_get`, `on_post`, etc.
+
+- **Message Handling (Generic)**
+
+  - Key elements: `on_unhandled()`
+  - Purpose: fallback for unrecognized or non-JSON messages.
+  - Falcon analogy: N/A.
+
+- **Background Worker Integration**
+
+  - Key elements: `WorkerController`, `@app.lifespan`
+  - Purpose: manages long-running tasks within the ASGI lifecycle.
+  - Falcon analogy: custom patterns.
+
+- **Connection Management (Global)**
+
+  - Key elements: `app.ws_connection_manager`
+  - Purpose: tracks connections and enables broadcasting.
+  - Falcon analogy: N/A.
 
 ## 4. Illustrative Usecase: Real-time Chat Application
 
@@ -667,7 +710,12 @@ import falcon.asgi
 from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
 
 class ChatRoomResource(WebSocketResource):
-    async def on_connect(self, req: falcon.Request, ws: WebSocketLike, room_name: str) -> bool:
+    async def on_connect(
+        self,
+        req: falcon.Request,
+        ws: WebSocketLike,
+        room_name: str,
+    ) -> bool:
         # Assume authentication middleware has set req.context.user
         self.user = req.context.get("user")
         if not self.user:
@@ -695,14 +743,26 @@ class ChatRoomResource(WebSocketResource):
         # Add validation/sanitization as needed
         await self.broadcast_to_room(
             self.room_name,
-            {"type": "serverNewMessage", "payload": {"user": self.user.name, "text": message_text}}
+            {
+                "type": "serverNewMessage",
+                "payload": {
+                    "user": self.user.name,
+                    "text": message_text,
+                },
+            }
         )
 
     @handles_message("clientStartTyping")
     async def handle_start_typing(self, ws: WebSocketLike, payload: dict):
         await self.broadcast_to_room(
             self.room_name,
-            {"type": "serverUserTyping", "payload": {"user": self.user.name, "isTyping": True}},
+            {
+                "type": "serverUserTyping",
+                "payload": {
+                    "user": self.user.name,
+                    "isTyping": True,
+                },
+            },
             exclude_self=True
         )
 
@@ -710,7 +770,13 @@ class ChatRoomResource(WebSocketResource):
     async def handle_stop_typing(self, ws: WebSocketLike, payload: dict):
         await self.broadcast_to_room(
             self.room_name,
-            {"type": "serverUserTyping", "payload": {"user": self.user.name, "isTyping": False}},
+            {
+                "type": "serverUserTyping",
+                "payload": {
+                    "user": self.user.name,
+                    "isTyping": False,
+                },
+            },
             exclude_self=True
         )
 
@@ -729,7 +795,10 @@ class ChatRoomResource(WebSocketResource):
 
     async def on_unhandled(self, ws: WebSocketLike, message: Union[str, bytes]):
         # Fallback for messages not matching handled types or non-JSON
-        print(f"Received unhandled message from {self.user.name} in {self.room_name}: {message}")
+        print(
+            "Received unhandled message from "
+            f"{self.user.name} in {self.room_name}: {message}"
+        )
         await ws.send_media({
             "type": "serverError",
             "payload": {"error": "Unrecognized message format or type."}
@@ -762,7 +831,9 @@ conn_mgr = app.ws_connection_manager
 app.add_websocket_route('/ws/chat/{room_name}', ChatRoomResource)
 
 # Define a background worker
-async def system_announcement_worker(conn_mgr: falcon_pachinko.WebSocketConnectionManager) -> None:
+async def system_announcement_worker(
+    conn_mgr: falcon_pachinko.WebSocketConnectionManager,
+) -> None:
     while True:
         await asyncio.sleep(3600) # Every hour
         announcement_text = "System maintenance is scheduled for 2 AM UTC."
@@ -1068,7 +1139,7 @@ sequenceDiagram
     Client->>FalconRequest: Initiates WebSocket request
     FalconRequest->>WebSocketRouter: on_websocket(req, ws)
     WebSocketRouter->>WebSocketRouter: Check req.path_template == _mount_prefix
-    WebSocketRouter->>WebSocketRouter: Match full request path against compiled routes
+    WebSocketRouter->>WebSocketRouter: Match path against compiled routes
     alt Match found
         WebSocketRouter->>ResourceFactory: Instantiate resource
         ResourceFactory-->>WebSocketRouter: Resource instance

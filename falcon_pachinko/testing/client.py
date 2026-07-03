@@ -24,10 +24,14 @@ from ._common import (
     PayloadKind,
 )
 
+_ws_connect: typ.Any
+
 try:  # pragma: no cover - optional dependency exercised in tests
-    from websockets.client import connect as _ws_connect
+    from websockets.client import connect as _ws_connect_import
 except ImportError:  # pragma: no cover - imported lazily in tests
-    _ws_connect = None  # type: ignore[assignment]
+    _ws_connect = None
+else:
+    _ws_connect = _ws_connect_import
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing only
     from websockets.client import WebSocketClientProtocol
@@ -375,7 +379,7 @@ class WebSocketTestClient:
         ws_connect = _ws_connect
         if ws_connect is None:  # pragma: no cover - exercised via import error test
             try:
-                from websockets.client import connect as ws_connect  # type: ignore
+                from websockets.client import connect as ws_connect
             except ImportError as exc:  # pragma: no cover - optional dependency
                 raise MissingDependencyError(_MISSING_WEBSOCKETS_MSG) from exc
             _ws_connect = ws_connect

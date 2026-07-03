@@ -122,9 +122,7 @@ def when_client_connects(
         path="/ws/workspaces/atlas/projects/triage/tasks",
         headers={"x-workspace-token": "seekrit", "x-user": "casey"},
     )
-    event_loop.run_until_complete(
-        context.router.on_websocket(typ.cast("falcon.Request", req), context.simulator)
-    )
+    event_loop.run_until_complete(context.router.on_websocket(req, context.simulator))
     context.resource = _select_task_resource(context.instances)
     return context
 
@@ -138,10 +136,7 @@ def when_send_task_add(
     payload = AddTask(task_id="T-42", title="Investigate event loop")
     raw = msjson.encode(payload)
     event_loop.run_until_complete(resource.dispatch(context.simulator, raw))
-    context.last_event = typ.cast(
-        "tuple[str, dict[str, object]]",
-        event_loop.run_until_complete(context.feed.next_event()),
-    )
+    context.last_event = event_loop.run_until_complete(context.feed.next_event())
     return context
 
 

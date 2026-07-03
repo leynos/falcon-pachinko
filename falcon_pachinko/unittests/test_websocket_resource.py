@@ -392,7 +392,7 @@ async def test_state_rejects_non_mapping() -> None:
     """Assigning non-mapping to ``state`` raises ``TypeError``."""
     r = EchoResource()
     with pytest.raises(TypeError):
-        r.state = 123  # type: ignore[arg-type]
+        typ.cast("typ.Any", r).state = 123
 
 
 @pytest.mark.asyncio

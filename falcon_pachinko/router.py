@@ -39,6 +39,30 @@ SimulatorFactory = typ.Callable[
 ]
 
 
+class _RequestLike(typ.Protocol):
+    """Request surface consumed by the router before resource dispatch."""
+
+    @property
+    def path(self) -> str:
+        """Return the request path."""
+        ...
+
+    @property
+    def path_template(self) -> str:
+        """Return the mount path template."""
+        ...
+
+
+def _request_path(req: _RequestLike) -> str:
+    """Return the request path used for route matching."""
+    return req.path
+
+
+def _request_path_template(req: _RequestLike) -> str:
+    """Return the mounted path template, defaulting like Falcon does."""
+    return typ.cast("str", getattr(req, "path_template", ""))
+
+
 def _replace_param_in_template(match: re.Match[str], template: str) -> str:
     """Return a regex group for ``match`` ensuring the param is non-empty."""
     param_name = match.group(1)
@@ -218,7 +242,7 @@ class WebSocketRouter:
         return _normalize_path(template.format(**params))
 
     async def on_websocket(
-        self, req: falcon.Request, ws: WebSocketLike
+        self, req: _RequestLike, ws: WebSocketLike
     ) -> None:  # pragma: no cover - simple wrapper
         """Dispatch the connection to the first matching route.
 
@@ -227,7 +251,7 @@ class WebSocketRouter:
         the requested path does not map to this router's mount point.
         """
         # Handle missing or empty path_template by defaulting to root "/"
-        prefix = getattr(req, "path_template", "").rstrip("/") or "/"
+        prefix = _request_path_template(req).rstrip("/") or "/"
         if prefix != self._mount_prefix:
             msg = (
                 f"path_template '{prefix}' does not match router mount "
@@ -244,7 +268,7 @@ class WebSocketRouter:
         raise falcon.HTTPNotFound
 
     async def _try_route(
-        self, route: _CompiledRoute, req: falcon.Request, ws: WebSocketLike
+        self, route: _CompiledRoute, req: _RequestLike, ws: WebSocketLike
     ) -> bool:
         """Attempt to handle ``req`` using ``route``.
 
@@ -275,7 +299,7 @@ class WebSocketRouter:
     async def _execute_route_with_error_handling(
         self,
         route: _CompiledRoute,
-        req: falcon.Request,
+        req: _RequestLike,
         ws: WebSocketLike,
         params: dict[str, str],
         remaining: str,
@@ -295,7 +319,7 @@ class WebSocketRouter:
             raise
 
     async def _prepare_websocket(
-        self, req: falcon.Request, ws: WebSocketLike
+        self, req: _RequestLike, ws: WebSocketLike
     ) -> WebSocketLike:
         """Return the WebSocket to use for ``req``."""
         # When :attr:`_simulator_factory` is configured the factory may wrap or
@@ -305,7 +329,7 @@ class WebSocketRouter:
         if self._simulator_factory is None:
             return ws
 
-        candidate = self._simulator_factory(req, ws)
+        candidate = self._simulator_factory(typ.cast("falcon.Request", req), ws)
         if inspect.isawaitable(candidate):
             candidate = await candidate
 
@@ -329,7 +353,7 @@ class WebSocketRouter:
     async def _process_route_resolution(
         self,
         route: _CompiledRoute,
-        req: falcon.Request,
+        req: _RequestLike,
         ws: WebSocketLike,
         params: dict[str, str],
         remaining: str,
@@ -355,10 +379,13 @@ class WebSocketRouter:
         resource: WebSocketResource,
         base_resource: WebSocketResource,
         route: _CompiledRoute,
-        req: falcon.Request,
+        req: _RequestLike,
     ) -> bool:
         """Return ``True`` if ``resource`` is usable for ``req``."""
-        return not (resource is base_resource and not route.pattern.fullmatch(req.path))
+        return not (
+            resource is base_resource
+            and not route.pattern.fullmatch(_request_path(req))
+        )
 
     def _setup_hook_management(self, chain: list[WebSocketResource]) -> HookManager:
         """Attach a :class:`HookManager` to every resource in ``chain``."""
@@ -419,13 +446,13 @@ class WebSocketRouter:
         return resource, path, params
 
     def _validate_and_normalize_path(
-        self, route: _CompiledRoute, req: falcon.Request
+        self, route: _CompiledRoute, req: _RequestLike
     ) -> tuple[dict[str, str], str] | None:
         """Return params and remaining path or ``None`` if invalid."""
-        if not (match := route.prefix.match(req.path)):
+        if not (match := route.prefix.match(_request_path(req))):
             return None
         params = match.groupdict()
-        remaining = req.path[match.end() :]
+        remaining = _request_path(req)[match.end() :]
         if remaining and not remaining.startswith("/"):
             remaining = self._normalize_path_remaining(remaining, match)
             if remaining is None:
@@ -456,13 +483,13 @@ class WebSocketRouter:
             return self._resource_factory(route_factory)
         except Exception as exc:  # pragma: no cover - exercise via tests
             await ws.close()
-            exc._pachinko_factory_closed = True  # type: ignore[attr-defined]
+            typ.cast("typ.Any", exc)._pachinko_factory_closed = True
             raise
 
     async def _handle_websocket_connection(
         self,
         resource: WebSocketResource,
-        req: falcon.Request,
+        req: _RequestLike,
         ws: WebSocketLike,
         params: dict[str, str],
         *,
@@ -487,14 +514,14 @@ class WebSocketRouter:
         self,
         hook_manager: HookManager,
         resource: WebSocketResource,
-        req: falcon.Request,
+        req: _RequestLike,
         ws: WebSocketLike,
         params: dict[str, str],
     ) -> tuple[HookContext, dict[str, object]]:
         """Return the hook context and handler parameters."""
         params_obj: dict[str, object] = dict(params)
         context = await hook_manager.notify_before_connect(
-            resource, req=req, ws=ws, params=params_obj
+            resource, req=typ.cast("falcon.Request", req), ws=ws, params=params_obj
         )
         params_for_handler = (
             context.params if context.params is not None else params_obj
@@ -504,7 +531,7 @@ class WebSocketRouter:
     async def _execute_resource_handler(
         self,
         resource: WebSocketResource,
-        req: falcon.Request,
+        req: _RequestLike,
         ws: WebSocketLike,
         params: dict[str, object],
         context: HookContext,
@@ -512,7 +539,9 @@ class WebSocketRouter:
     ) -> bool:
         """Invoke ``resource.on_connect`` handling hook error propagation."""
         try:
-            return await resource.on_connect(req, ws, **params)
+            return await resource.on_connect(
+                typ.cast("falcon.Request", req), ws, **params
+            )
         except Exception as exc:
             context.error = exc
             context.result = False
