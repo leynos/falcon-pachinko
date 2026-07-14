@@ -1,0 +1,17 @@
+# Repository-specific exceptions to the shared en-GB-oxendict policy.
+
+schema = 1
+
+[oxford]
+stems = []
+
+[words]
+accepted = []
+
+[words.corrections]
+
+[patterns]
+ignore = ['\bbuild-test-analyze\b']
+
+[files]
+exclude = []

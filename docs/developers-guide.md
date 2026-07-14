@@ -3,6 +3,24 @@
 This guide captures maintainer-facing conventions that are not part of the
 public user guide.
 
+## Spelling policy
+
+The tracked `typos.toml` is generated from the shared estate dictionary and
+the repository-specific `typos.local.toml` overlay. Never edit generated
+entries by hand. Add only narrow repository terminology to the overlay, then
+generate the configuration with:
+
+```bash
+make spelling-config-write
+```
+
+Use `make spelling-config` to verify that the generated file is current. The
+shared `typos-config-builder` CLI refreshes the estate dictionary into an
+untracked local cache only when the authoritative copy is newer. A valid cache
+remains usable when the network is unavailable. Quoted APIs and identifiers
+retain their upstream spelling; put them in backticks or fenced code blocks
+where practical rather than adding broad word-level exceptions.
+
 ## Router Request Boundary
 
 `WebSocketRouter` is mounted as a Falcon resource, but its internal dispatch

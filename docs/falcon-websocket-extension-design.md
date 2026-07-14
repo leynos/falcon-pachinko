@@ -25,7 +25,7 @@ updates to clients.
 The design prioritizes leveraging Falcon's existing capabilities and adhering
 to its core principles, particularly the principle of least surprise for
 developers already familiar with Falcon's HTTP paradigm. The AsyncAPI document,
-as specified in the use case, will be treated as a design artifact informing
+as specified in the use case, will be treated as a design artefact informing
 the structure of messages and interactions, rather than being directly consumed
 by the library at runtime. This document will first survey existing solutions
 and identify the specific needs addressed by the proposed extension. It will
@@ -677,7 +677,7 @@ connected, they can send messages, and these messages will be broadcast to all
 other users in the same room. The application will also support presence
 indications (users joining/leaving) and typing indicators.
 
-An AsyncAPI document (used as a design artifact) would define the message
+An AsyncAPI document (used as a design artefact) would define the message
 structures. For example:
 
 - Client to Server:
@@ -1200,7 +1200,7 @@ globals.
    `TasksResource`, verifying that the child receives the object and both
    modify the shared `state`.
 
-   The relationships and runtime behavior are illustrated below.
+   The relationships and runtime behaviour are illustrated below.
 
    ```mermaid
    classDiagram
@@ -1300,7 +1300,7 @@ provides "zero-cost" validation via `msgspec`.
 The framework must gracefully handle dispatch errors.
 
 - A `msgspec.ValidationError` raised during decoding should be caught, and a
-  customisable error hook should be invoked.
+  customizable error hook should be invoked.
 
 - If a message has a valid tag that does not correspond to any registered
   handler, the `on_unhandled(self, req, ws, msg)` fallback method on the base
@@ -1692,7 +1692,7 @@ enables white-box testing of router behaviour without needing an ASGI server.
 #### 6.5.3. Pytest Fixture
 
 To streamline usage, the documentation prescribes a pytest fixture that
-initialises the simulator alongside a configured router. A representative
+initializes the simulator alongside a configured router. A representative
 fixture looks like:
 
 ```python
@@ -1710,7 +1710,7 @@ async def websocket_simulator(app, event_loop):
   tasks or leaked queues.
 
 - **Behavioural Testing**: Higher-level fixtures can compose the simulator with
-  the connection manager to validate broadcast flows, or parameterise initial
+  the connection manager to validate broadcast flows, or parameterize initial
   inbound frames to exercise specific message handlers.
 
 - **Extensibility**: Because the simulator is injectable, teams can swap in
@@ -1721,7 +1721,7 @@ These utilities provide a cohesive story that spans unit, integration, and
 behavioural testing while keeping the production runtime free from testing
 concerns.
 
-The following class diagram summarises how the harness composes simulators,
+The following class diagram summarizes how the harness composes simulators,
 routers, and the original Falcon websocket stub when exercised from tests.
 
 ```mermaid
@@ -1819,7 +1819,7 @@ sequenceDiagram
 As a long-term vision, the structured nature of `WebSocketResource` and the
 `on_{tag}` handlers could potentially be leveraged to automatically generate a
 stub or a basic AsyncAPI document. This would further bridge the gap between
-design artifacts and implementation, though it represents a significantly more
+design artefacts and implementation, though it represents a significantly more
 complex undertaking.
 
 ## 7. Conclusion
@@ -1871,7 +1871,7 @@ The Falcon-Pachinko extension, as designed, offers several benefits:
   communicate with connected clients.
 
 - **Adherence to Least Surprise**: The design aims to be intuitive and
-  predictable for those familiar with Falcon. The design endeavors to strike a
+  predictable for those familiar with Falcon. The design endeavours to strike a
   balance, introducing powerful new capabilities while respecting Falcon's
   characteristic minimalism and performance focus.[^1] The objective is for
   these features to feel like a natural and lean augmentation of the framework.
@@ -1894,7 +1894,7 @@ query:
 - **Consistency and Least Surprise**: The API design mimics Falcon's HTTP
   counterparts where appropriate.
 
-- **AsyncAPI as Design Artifact**: The message 'type' based dispatch aligns well
+- **AsyncAPI as Design Artefact**: The message 'type' based dispatch aligns well
   with message definitions in an AsyncAPI document, facilitating its use as a
   design guide.
 
@@ -1910,7 +1910,7 @@ and performance they expect from Falcon for HTTP APIs.
 The successful development and adoption of this library could broaden Falcon's
 applicability, attracting developers who require first-class real-time features
 within a high-performance Python framework. This, in turn, could foster a
-larger and more diverse Falcon community and ecosystem, centered around both
+larger and more diverse Falcon community and ecosystem, centred around both
 traditional API development and emerging real-time use cases.
 
 [^1]: <https://falcon.readthedocs.io>

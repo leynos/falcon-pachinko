@@ -22,7 +22,7 @@ Our journey to superior code coverage analysis involves three key players:
   coverage analysis without significantly impacting development or CI build
   times.1
 
-- **Pytest**: A mature, feature-rich Python testing framework favored for its
+- **Pytest**: A mature, feature-rich Python testing framework favoured for its
   simplicity and extensibility. We'll explore how to use Pytest effectively
   with Slipcover, including considerations for test isolation using
   `pytest-forked`.

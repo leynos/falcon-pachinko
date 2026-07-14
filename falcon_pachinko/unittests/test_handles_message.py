@@ -6,7 +6,7 @@ cover various scenarios including:
 
 - Basic decorator functionality and message dispatching
 - Error handling for duplicate handlers and invalid signatures
-- Inheritance behavior with parent and child resources
+- Inheritance behaviour with parent and child resources
 - Method overriding with and without decorators
 - Type annotation handling for payload parameters
 """
@@ -118,7 +118,7 @@ def test_ambiguous_payload_param_raises() -> None:
 class ParentResource(WebSocketResource):
     """A parent WebSocket resource class with a decorated message handler.
 
-    This class is used to test inheritance behavior of message handlers.
+    This class is used to test inheritance behaviour of message handlers.
     """
 
     @handles_message("parent")
