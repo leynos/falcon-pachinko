@@ -26,7 +26,7 @@ class ExtraPayload(ms.Struct):
 
 
 class EchoResource(WebSocketResource):
-    """A WebSocket resource for testing message handling and fallback behavior."""
+    """A WebSocket resource for testing message handling and fallback behaviour."""
 
     def __init__(self) -> None:
         """Initialize the EchoResource with empty lists.
@@ -347,7 +347,7 @@ async def test_on_tag_camel_case() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sync_handler_ignored_and_fallback_behavior() -> None:
+async def test_sync_handler_ignored_and_fallback_behaviour() -> None:
     """Synchronous ``on_{tag}`` handlers are ignored by dispatch."""
     r = SyncHandlerResource()
     bind_default_hooks(r)

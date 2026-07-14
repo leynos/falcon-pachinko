@@ -353,7 +353,7 @@ class WebSocketTestClient:
     def _resolve_subprotocols(
         self, subprotocols: typ.Sequence[str] | None
     ) -> tuple[str, ...] | None:
-        """Return connection subprotocols, honoring per-call overrides."""
+        """Return connection subprotocols, honouring per-call overrides."""
         if subprotocols is not None:
             return tuple(subprotocols)
         return self._subprotocols

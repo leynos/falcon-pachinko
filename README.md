@@ -34,7 +34,7 @@ Maintainer-facing notes live in the
 - Background tasks run under Falcon's ASGI lifespan via
   `WorkerController` and the `@app.lifespan` decorator.
 
-These concepts are summarised in the design document:
+These concepts are summarized in the design document:
 
 ```python
 # pass route-specific options to the resource

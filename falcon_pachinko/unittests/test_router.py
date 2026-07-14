@@ -290,7 +290,7 @@ def test_mount_twice_raises_error() -> None:
 
 @pytest.mark.asyncio
 async def test_mount_with_empty_vs_slash_prefix() -> None:
-    """Validate behavior between empty and slash prefixes."""
+    """Validate behaviour between empty and slash prefixes."""
     router_slash = WebSocketRouter()
     router_slash.add_route("/x", AcceptingResource)
     router_slash.mount("/")
