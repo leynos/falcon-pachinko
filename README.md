@@ -1,5 +1,8 @@
 # falcon-pachinko
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](
+https://deepwiki.com/leynos/falcon-pachinko)
+
 `falcon-pachinko` is an extension library for the
 [Falcon](https://falcon.readthedocs.io) web framework. It adds a structured
 approach to asynchronous WebSocket routing and background worker integration.
