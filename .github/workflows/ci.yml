@@ -73,7 +73,7 @@ jobs:
         env:
           CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
         if: env.CS_ACCESS_TOKEN != '' && github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@c3141c3d4cb2a2828d2abbcf3d94b15197740c58
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@4d696e72fff6db49f34302ccf119ba978f1032c9
         with:
           format: cobertura
           mode: check
