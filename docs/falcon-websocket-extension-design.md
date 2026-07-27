@@ -51,7 +51,7 @@ is successfully routed.
 
 The `falcon.asgi.WebSocket` object provided to this responder offers methods
 for managing the connection lifecycle, such as `accept()`, `close()`,
-`receive_text()`, `receive_data()`, `send_text()`, and `send_data()`. [^2]
+`receive_text()`, `receive_data()`, `send_text()`, and `send_data()`.[^2]
 Falcon also handles events like lost connections by raising a
 `WebSocketDisconnected` exception. Middleware components and media handlers can
 be used to augment WebSocket flows, similar to regular HTTP requests.[^2]
@@ -944,8 +944,8 @@ creation of modular, hierarchical WebSocket APIs.
 #### 5.1.1. Mounting the Router
 
 Instead of assigning a router to a special application attribute, it is mounted
-at a URL prefix using Falcon's standard `app.add_route()` method. This makes
-the `WebSocketRouter` a first-class citizen in Falcon's routing tree.
+at a URL prefix using Falcon's standard `app.add_route()` method. This makes the
+`WebSocketRouter` a first-class citizen in Falcon's routing tree.
 
 ```python
 import falcon.asgi
@@ -1121,8 +1121,8 @@ is the natural data structure for this task. When resolving a path like
 `/projects/123/tasks`, the router would first match `/projects/{project_id}`
 and instantiate `ProjectResource`, passing it the `project_id`. The
 `ProjectResource` constructor would then call `add_subroute`, registering
-`TasksResource`. The router would then match the `tasks` segment and
-instantiate `TasksResource`.
+`TasksResource`. The router would then match the `tasks` segment and instantiate
+`TasksResource`.
 
 A critical aspect is **context passing**. The router must facilitate passing
 state from parent to child. A robust implementation would involve the router
@@ -1174,9 +1174,9 @@ globals.
 
 2. **Shared state object**
 
-   Pass the same connection-scoped `state` proxy down the chain. The router
-   sets `child.state = parent.state` unless the parent supplies an alternative
-   via `get_child_context()`.
+   Pass the same connection-scoped `state` proxy down the chain. The router sets
+   `child.state = parent.state` unless the parent supplies an alternative via
+   `get_child_context()`.
 
 3. **Router chain instantiation**
 
@@ -1625,10 +1625,19 @@ Falcon-flavoured API. It wraps `websockets.connect()` from the
 [`websockets`](https://websockets.readthedocs.io) project because that library
 already provides a reliable asyncio client with excellent RFC coverage.
 
-- **Instantiation**: `WebSocketTestClient(app_url: str, *, headers: dict | None,
-  subprotocols: list[str] | None, allow_insecure: bool =
-  False)` stores the base URL and defaults, requiring opt-in for local `ws://
-  ` use.
+- **Instantiation**:
+
+  ```python
+  WebSocketTestClient(
+      app_url: str,
+      *,
+      headers: dict | None,
+      subprotocols: list[str] | None,
+      allow_insecure: bool = False,
+  )
+  ```
+
+  stores the base URL and defaults, requiring opt-in for local `ws://` use.
 
 - **Connection Context**: `async with client.connect(path)` opens a connection
   with

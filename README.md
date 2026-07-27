@@ -9,10 +9,9 @@ approach to asynchronous WebSocket routing and background worker integration.
 
 See
 [docs/falcon-websocket-extension-design.md](docs/falcon-websocket-extension-design.md)
- for the full design rationale. For practical guidance, start with the
+for the full design rationale. For practical guidance, start with the
 [User Guide](docs/users-guide.md) and the
-[Migration Guide](docs/migration-guide.md).
-Maintainer-facing notes live in the
+[Migration Guide](docs/migration-guide.md). Maintainer-facing notes live in the
 [Developer Guide](docs/developers-guide.md).
 
 ## Requirements
@@ -88,7 +87,8 @@ async def lifespan(app):
 ## Roadmap
 
 Implementation tasks are tracked in [docs/roadmap.md](docs/roadmap.md). See the
-[Release Workflow documentation](docs/release-workflow.md) for release details.
+[Release Workflow documentation](docs/release-workflow.md)
+for release details.
 
 ## Examples
 

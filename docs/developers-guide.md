@@ -5,10 +5,10 @@ public user guide.
 
 ## Spelling policy
 
-The tracked `typos.toml` is generated from the shared estate dictionary and
-the repository-specific `typos.local.toml` overlay. Never edit generated
-entries by hand. Add only narrow repository terminology to the overlay, then
-generate the configuration with:
+The tracked `typos.toml` is generated from the shared estate dictionary and the
+repository-specific `typos.local.toml` overlay. Never edit generated entries by
+hand. Add only narrow repository terminology to the overlay, then generate the
+configuration with:
 
 ```bash
 make spelling-config-write
@@ -39,13 +39,13 @@ actually consumes.
 
 Keep casts to `falcon.Request` at the edge where the router calls APIs whose
 public contract is Falcon-specific, such as hook notification and
-`WebSocketResource.on_connect()`. Do not widen the whole router pipeline back
-to `falcon.Request` unless those internals start depending on Falcon-only
+`WebSocketResource.on_connect()`. Do not widen the whole router pipeline back to
+`falcon.Request` unless those internals start depending on Falcon-only
 attributes.
 
-Test request doubles should expose both `path` and `path_template`. Use an
-empty `path_template` for root-mounted router tests, matching the runtime
-default used by Falcon-style request objects that do not provide a template.
+Test request doubles should expose both `path` and `path_template`. Use an empty
+`path_template` for root-mounted router tests, matching the runtime default
+used by Falcon-style request objects that do not provide a template.
 
 ## Build Environment
 
