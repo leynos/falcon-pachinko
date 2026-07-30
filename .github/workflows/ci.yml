@@ -21,12 +21,12 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
+        uses: astral-sh/setup-uv@v9.0.0
 
       - name: Check spelling
         run: make spelling
@@ -57,7 +57,7 @@ jobs:
       # the work and the CodeScene upload for the same commit.
       - name: Generate coverage
         if: github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/generate-coverage@e0d9b652b137eb15314fff188f09e1ba18d3cc5b
+        uses: leynos/shared-actions/.github/actions/generate-coverage@19a7f5d1b8d5c1b2236c39720a5744492b3fc129
         with:
           output-path: coverage.xml
           format: cobertura
@@ -73,7 +73,7 @@ jobs:
         env:
           CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
         if: env.CS_ACCESS_TOKEN != '' && github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@c3141c3d4cb2a2828d2abbcf3d94b15197740c58
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@19a7f5d1b8d5c1b2236c39720a5744492b3fc129
         with:
           format: cobertura
           mode: check
