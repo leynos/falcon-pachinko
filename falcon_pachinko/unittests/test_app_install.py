@@ -54,7 +54,6 @@ class SupportsWebSocket(typ.Protocol):
         ValueError
             If no resource class is registered for the specified path
         """
-        ...
 
     def add_websocket_route(
         self, path: str, resource: type[object], *args: object, **kwargs: object
@@ -83,7 +82,6 @@ class SupportsWebSocket(typ.Protocol):
         TypeError
             If resource is not a subclass of WebSocketResource
         """
-        ...
 
 
 @pytest.fixture
@@ -96,7 +94,7 @@ def dummy_app() -> SupportsWebSocket:
         WebSocket integration methods and attributes added
     """
     app = DummyApp()
-    install(app)  # type: ignore[arg-type]
+    install(app)  # type: ignore[arg-type]  # DummyApp lacks the protocol until installed
     return typ.cast("SupportsWebSocket", app)
 
 
@@ -130,12 +128,25 @@ def test_install_adds_methods_and_manager(dummy_app: SupportsWebSocket) -> None:
     """
     app_any = dummy_app
 
-    assert hasattr(app_any, "ws_connection_manager")
-    assert isinstance(app_any.ws_connection_manager, WebSocketConnectionManager)
-    assert callable(app_any.add_websocket_route)
-    assert callable(app_any.create_websocket_resource)
-    assert hasattr(app_any, "_websocket_route_lock")
-    assert isinstance(app_any._websocket_route_lock, LockType)  # pyright: ignore[reportPrivateUsage]
+    assert hasattr(app_any, "ws_connection_manager"), (
+        "install() should attach a connection manager"
+    )
+    assert isinstance(app_any.ws_connection_manager, WebSocketConnectionManager), (
+        "connection manager should be a WebSocketConnectionManager instance"
+    )
+    assert callable(app_any.add_websocket_route), (
+        "install() should attach a callable add_websocket_route"
+    )
+    assert callable(app_any.create_websocket_resource), (
+        "install() should attach a callable create_websocket_resource"
+    )
+    assert hasattr(app_any, "_websocket_route_lock"), (
+        "install() should attach a private route lock"
+    )
+    assert isinstance(
+        app_any._websocket_route_lock,  # pyright: ignore[reportPrivateUsage]  # test inspects the installed private lock
+        LockType,
+    ), "install() should attach a threading.Lock for route registration"
 
 
 def test_add_websocket_route_registers_resource(
@@ -148,10 +159,14 @@ def test_add_websocket_route_registers_resource(
     """
     dummy_app.add_websocket_route("/ws", dummy_resource_cls, 1, flag=True)
 
-    stored = dummy_app._websocket_routes["/ws"]  # pyright: ignore[reportPrivateUsage]
-    assert stored.resource_cls is dummy_resource_cls
-    assert stored.args == (1,)
-    assert stored.kwargs == {"flag": True}
+    stored = dummy_app._websocket_routes[  # pyright: ignore[reportPrivateUsage]  # test inspects the installed private route table
+        "/ws"
+    ]
+    assert stored.resource_cls is dummy_resource_cls, (
+        "route table should store the registered resource class"
+    )
+    assert stored.args == (1,), "route table should store positional init args"
+    assert stored.kwargs == {"flag": True}, "route table should store keyword init args"
 
 
 def test_install_is_idempotent(dummy_app: SupportsWebSocket) -> None:
@@ -163,13 +178,22 @@ def test_install_is_idempotent(dummy_app: SupportsWebSocket) -> None:
     first_manager = dummy_app.ws_connection_manager
     first_route_fn = dummy_app.add_websocket_route
     first_create_fn = dummy_app.create_websocket_resource
-    first_lock = dummy_app._websocket_route_lock  # pyright: ignore[reportPrivateUsage]
+    first_lock = dummy_app._websocket_route_lock  # pyright: ignore[reportPrivateUsage]  # test inspects the installed private lock
 
-    install(dummy_app)  # type: ignore[arg-type]
-    assert dummy_app.ws_connection_manager is first_manager
-    assert dummy_app.add_websocket_route is first_route_fn
-    assert dummy_app.create_websocket_resource is first_create_fn
-    assert dummy_app._websocket_route_lock is first_lock  # pyright: ignore[reportPrivateUsage]
+    install(dummy_app)  # type: ignore[arg-type]  # DummyApp lacks the protocol until installed
+    assert dummy_app.ws_connection_manager is first_manager, (
+        "re-install() should not replace the connection manager"
+    )
+    assert dummy_app.add_websocket_route is first_route_fn, (
+        "re-install() should not replace add_websocket_route"
+    )
+    assert dummy_app.create_websocket_resource is first_create_fn, (
+        "re-install() should not replace create_websocket_resource"
+    )
+    assert (
+        dummy_app._websocket_route_lock  # pyright: ignore[reportPrivateUsage]  # test inspects the installed private lock
+        is first_lock
+    ), "install() should not replace an already-installed lock"
 
 
 def test_install_detects_partial_state(dummy_app: SupportsWebSocket) -> None:
@@ -180,12 +204,12 @@ def test_install_detects_partial_state(dummy_app: SupportsWebSocket) -> None:
     installation state.
     """
     # Simulate tampering with one of the install attributes
-    delattr(dummy_app, "_websocket_routes")
-    delattr(dummy_app, "create_websocket_resource")
-    delattr(dummy_app, "_websocket_route_lock")
+    del dummy_app._websocket_routes
+    del dummy_app.create_websocket_resource
+    del dummy_app._websocket_route_lock
 
     with pytest.raises(RuntimeError):
-        install(dummy_app)  # type: ignore[arg-type]
+        install(dummy_app)  # type: ignore[arg-type]  # DummyApp lacks the protocol until installed
 
 
 def test_add_websocket_route_duplicate_raises(
@@ -232,10 +256,16 @@ def test_create_websocket_resource_returns_new_instances(
     first = dummy_app.create_websocket_resource("/ws")
     second = dummy_app.create_websocket_resource("/ws")
 
-    assert isinstance(first, dummy_resource_cls)
-    assert isinstance(second, dummy_resource_cls)
-    assert type(first) is dummy_resource_cls
-    assert first is not second
+    assert isinstance(first, dummy_resource_cls), (
+        "created resource should be an instance of the registered class"
+    )
+    assert isinstance(second, dummy_resource_cls), (
+        "created resource should be an instance of the registered class"
+    )
+    assert type(first) is dummy_resource_cls, (
+        "created resource should not be subclassed"
+    )
+    assert first is not second, "each call should create a distinct instance"
 
 
 def test_route_specific_init_args(dummy_app: SupportsWebSocket) -> None:
@@ -251,8 +281,8 @@ def test_route_specific_init_args(dummy_app: SupportsWebSocket) -> None:
     r1 = typ.cast("ConfigResource", dummy_app.create_websocket_resource("/one"))
     r2 = typ.cast("ConfigResource", dummy_app.create_websocket_resource("/two"))
 
-    assert r1.value == 1
-    assert r2.value == 2
+    assert r1.value == 1, "resource created for /one should receive its route args"
+    assert r2.value == 2, "resource created for /two should receive its route args"
 
 
 def test_create_websocket_resource_unregistered_path(
@@ -266,4 +296,7 @@ def test_create_websocket_resource_unregistered_path(
 def test_add_websocket_route_type_check(dummy_app: SupportsWebSocket) -> None:
     """Test that add_websocket_route raises TypeError given a non-WebSocketResource."""
     with pytest.raises(TypeError):
-        dummy_app.add_websocket_route("/ws", object)  # type: ignore[arg-type]
+        dummy_app.add_websocket_route(
+            "/ws",
+            object,  # type: ignore[arg-type]  # deliberately not a WebSocketResource subclass
+        )

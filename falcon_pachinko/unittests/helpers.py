@@ -2,19 +2,6 @@
 
 from __future__ import annotations
 
-import typing as typ
-
-if typ.TYPE_CHECKING:
-    from falcon_pachinko import HookManager, WebSocketResource
-else:  # pragma: no cover - runtime placeholders for type hints
-    HookManager = typ.Any  # type: ignore[assignment]
-    WebSocketResource = typ.Any  # type: ignore[assignment]
-
-
-def bind_default_hooks(resource: WebSocketResource) -> HookManager:
-    """Bind a standalone hook manager for ``resource`` during tests."""
-    return resource.bind_default_hook_manager()
-
 
 class DummyWS:
     """A dummy WebSocket implementation for testing purposes."""
@@ -46,6 +33,7 @@ class DummyWS:
             The data to send over the WebSocket connection
         """
 
-    async def receive_media(self) -> object:  # pragma: no cover
+    @staticmethod
+    async def receive_media() -> object:  # pragma: no cover
         """Receive structured data over the connection."""
         return None

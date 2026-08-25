@@ -726,12 +726,10 @@ class ChatRoomResource(WebSocketResource):
 
         await self.join_room(self.room_name)
 
-        await ws.send_media(
-            {
-                "type": "serverSystemMessage",
-                "payload": {"text": f"Welcome {self.user.name} to room '{room_name}'!"},
-            }
-        )
+        await ws.send_media({
+            "type": "serverSystemMessage",
+            "payload": {"text": f"Welcome {self.user.name} to room '{room_name}'!"},
+        })
 
         await self.broadcast_to_room(
             self.room_name,
@@ -802,12 +800,10 @@ class ChatRoomResource(WebSocketResource):
             "Received unhandled message from "
             f"{self.user.name} in {self.room_name}: {message}"
         )
-        await ws.send_media(
-            {
-                "type": "serverError",
-                "payload": {"error": "Unrecognized message format or type."},
-            }
-        )
+        await ws.send_media({
+            "type": "serverError",
+            "payload": {"error": "Unrecognized message format or type."},
+        })
 ```
 
 This example demonstrates how the `WebSocketResource` streamlines the
@@ -1000,9 +996,7 @@ sub-routes. These paths are *relative* to the router's mount point.
 chat_router = WebSocketRouter(name="chat")  # Give the router a name for reversal
 
 # Add a route to the router, giving it a name for url_for.
-chat_router.add_route(
-    "/{room_id}", ChatResource, name="room", init_args={"history_size": 100}
-)
+chat_router.add_route("/{room_id}", ChatResource, name="room", history_size=100)
 
 app.add_route("/ws/chat", chat_router)
 
@@ -1067,7 +1061,7 @@ classDiagram
         - _names: dict[str, str]
         - name: str | None
         + __init__(name: str | None = None)
-        + add_route(path: str, resource: type[WebSocketResource] | Callable[..., WebSocketResource], name: str | None = None, args: tuple = (), kwargs: dict | None = None)
+        + add_route(path: str, resource: type[WebSocketResource] | Callable[..., WebSocketResource], *init_args: object, name: str | None = None, **init_kwargs: object)
         + url_for(name: str, **params: object) str
         + on_websocket(req: falcon.Request, ws: WebSocketLike)
     }
@@ -1450,7 +1444,7 @@ router = WebSocketRouter(resource_factory=container.create_resource)
 router.add_route(
     "/{room_id}",
     ChatResource,
-    kwargs={"history_size": 100},
+    history_size=100,
 )
 ```
 

@@ -11,14 +11,45 @@ NIXIE ?= $(shell which nixie)
 # neither missed because it is new nor rewritten twice.
 MDTABLEFIX ?= mdtablefix
 MDTABLEFIX_SELECT = --git --include-untracked
-TOOLS = ruff ty $(MDLINT) $(MDTABLEFIX) $(NIXIE) uv
+TOOLS = $(MDLINT) $(MDTABLEFIX) $(NIXIE) uv
 VENV_TOOLS = pytest
 UV ?= uv
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
+# Retain main's typos-config-builder gate: the bespoke spelling machinery
+# (and the RUFF_VERSION/PATHSPEC_VERSION/TYPOS_VERSION pins that served only
+# it) was retired in favour of this single gate subcommand.
 TYPOS_CONFIG_BUILDER_VERSION ?= v0.1.1
 TYPOS_CONFIG_BUILDER = $(UV_ENV) $(UV) tool run --python 3.14 --from \
 	"git+https://github.com/leynos/typos-config-builder.git@$(TYPOS_CONFIG_BUILDER_VERSION)" \
 	typos-config-builder
+# Pin Ruff so `make` invokes the same version as the `ruff==` pin in
+# .github/workflows/ci.yml. tests/test_toolchain_versions.py enforces that
+# both sites stay in sync; bump them together, because rule sets differ
+# between Ruff releases and a mismatch causes version-skew lint failures.
+# This pin is unrelated to the retired spelling-helper RUFF_VERSION: it drives
+# the repository-wide format and lint gates.
+RUFF_VERSION ?= 0.16.4
+RUFF ?= $(UV) tool run --from ruff==$(RUFF_VERSION) ruff
+# Pin ty so `make` and CI invoke the same typechecker release. ty is
+# pre-1.0 and diagnostics shift between releases, so an unpinned install
+# breaks the typecheck gate without any code change. Bump deliberately and
+# fix new diagnostics in the same commit.
+TY_VERSION ?= 0.0.74
+TY ?= $(UV) tool run --from ty==$(TY_VERSION) ty
+# Run Pylint with the df12-python-lints plugin on CPython 3.14, matching the
+# plugin's supported baseline. The same tool environment provides ambrleaks.
+DF12_PYTHON_LINTS_REF ?= v0.3.0
+DF12_PYTHON_LINTS = df12-python-lints @ git+https://github.com/leynos/df12-python-lints.git@$(DF12_PYTHON_LINTS_REF)
+PYLINT_PYTHON ?= 3.14
+# List falcon_pachinko/unittests and falcon_pachinko/behaviour explicitly:
+# they carry no __init__.py, so package discovery from falcon_pachinko does
+# not descend into them.
+PYLINT_TARGETS ?= falcon_pachinko falcon_pachinko/unittests \
+	falcon_pachinko/behaviour tests examples
+PYLINT = $(UV_ENV) $(UV) tool run --python $(PYLINT_PYTHON) \
+	--from pylint --with '$(DF12_PYTHON_LINTS)' pylint
+AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(PYLINT_PYTHON) \
+	--from '$(DF12_PYTHON_LINTS)' ambrleaks
 
 .PHONY: help all clean build build-release lint fmt check-fmt \
 	markdownlint nixie spelling test test-workflow-contracts typecheck \
@@ -63,21 +94,23 @@ $(TOOLS): ## Verify required CLI tools
 $(VENV_TOOLS): ## Verify required CLI tools in venv
 	$(call ensure_tool_venv,$@)
 
-fmt: ruff $(MDTABLEFIX) $(MDLINT) ## Format sources
-	ruff format
-	ruff check --select I --fix
+fmt: uv $(MDTABLEFIX) $(MDLINT) ## Format sources
+	$(RUFF) format
+	$(RUFF) check --select I --fix
 	$(MDTABLEFIX) --in-place $(MDTABLEFIX_SELECT)
 	@unset FORCE_COLOR; $(MDLINT) --fix "**/*.md"
 
-check-fmt: ruff $(MDTABLEFIX) ## Verify formatting
-	ruff format --check
+check-fmt: uv $(MDTABLEFIX) ## Verify formatting
+	$(RUFF) format --check
 	$(MDTABLEFIX) --check $(MDTABLEFIX_SELECT)
 
-lint: ruff ## Run linters
-	ruff check
+lint: uv ## Run linters
+	$(RUFF) check
+	$(PYLINT) $(PYLINT_TARGETS)
+	$(AMBRLEAKS) tests
 
-typecheck: build ty ## Run typechecking
-	ty check falcon_pachinko tests
+typecheck: build uv ## Run typechecking
+	$(TY) check falcon_pachinko tests
 
 # Local convenience only. CI lints Markdown through
 # DavidAnson/markdownlint-cli2-action, whose release carries the linter's
