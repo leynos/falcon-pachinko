@@ -13,10 +13,12 @@ import websockets.server as ws_server
 from falcon_pachinko.testing import TraceEvent, WebSocketTestClient
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from websockets.typing import Subprotocol
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class EchoState:
     """Track events observed by the echo server."""
 
@@ -45,7 +47,7 @@ async def _echo_handler(
 async def start_echo_server(
     *,
     subprotocols: tuple[str, ...] = (),
-) -> typ.AsyncIterator[tuple[str, EchoState]]:
+) -> cabc.AsyncIterator[tuple[str, EchoState]]:
     """Start an echo server and yield its base URL and captured state."""
     state = EchoState(paths=[], headers=[], messages=[], subprotocols=[])
 
@@ -56,8 +58,11 @@ async def start_echo_server(
         typ.cast("Subprotocol", proto) for proto in subprotocols
     ]
     server = await ws_server.serve(handler, "127.0.0.1", 0, subprotocols=protocols)
-    sock = next(iter(server.sockets))
-    host, port, *_ = sock.getsockname()
+    sockets = tuple(server.sockets)
+    if not sockets:
+        msg = "echo server did not bind any sockets"
+        raise RuntimeError(msg)
+    host, port, *_ = sockets[0].getsockname()
     base_url = f"ws://{host}:{port}"
 
     try:
@@ -68,7 +73,7 @@ async def start_echo_server(
 
 
 @pytest_asyncio.fixture
-async def echo_server() -> typ.AsyncIterator[tuple[str, EchoState]]:
+async def echo_server() -> cabc.AsyncIterator[tuple[str, EchoState]]:
     """Yield a running websocket echo server."""
     async with start_echo_server() as context:
         yield context
@@ -84,9 +89,11 @@ async def test_send_and_receive_json(echo_server: tuple[str, EchoState]) -> None
         await session.send_json({"hello": "world"})
         reply = await session.receive_json()
 
-    assert reply == {"hello": "world"}
-    assert state.messages == ['{"hello":"world"}']
-    assert state.paths == ["/chat"]
+    assert reply == {"hello": "world"}, "the JSON reply must round-trip unchanged"
+    assert state.messages == ['{"hello":"world"}'], (
+        "the server must have received the encoded JSON payload"
+    )
+    assert state.paths == ["/chat"], "the server must record the request path"
 
 
 @pytest.mark.asyncio
@@ -101,9 +108,11 @@ async def test_send_and_receive_binary(echo_server: tuple[str, EchoState]) -> No
         await session.send_bytes(payload)
         reply = await session.receive_bytes()
 
-    assert reply == payload
-    assert state.messages == [payload]
-    assert state.paths == ["/binary"]
+    assert reply == payload, "the binary reply must round-trip unchanged"
+    assert state.messages == [payload], (
+        "the server must have received the binary payload"
+    )
+    assert state.paths == ["/binary"], "the server must record the request path"
 
 
 @pytest.mark.asyncio
@@ -120,8 +129,8 @@ async def test_header_merging(echo_server: tuple[str, EchoState]) -> None:
         pass
 
     headers = {key.lower(): value for key, value in state.headers[0].items()}
-    assert headers["x-app"] == "test"
-    assert headers["x-trace"] == "1"
+    assert headers["x-app"] == "test", "default headers must reach the server"
+    assert headers["x-trace"] == "1", "per-connection headers must reach the server"
 
 
 @pytest.mark.asyncio
@@ -138,8 +147,10 @@ async def test_subprotocol_negotiation() -> None:
             await session.send_text("ping")
             reply = await session.receive_text()
 
-    assert reply == "ping"
-    assert state.subprotocols == ["trace"]
+    assert reply == "ping", "the text reply must round-trip unchanged"
+    assert state.subprotocols == ["trace"], (
+        "the higher-priority subprotocol must be negotiated"
+    )
 
 
 @pytest.mark.asyncio
@@ -155,12 +166,24 @@ async def test_trace_records_send_and_receive(
         await session.receive_text()
         trace = session.trace or []
 
-    assert [event.index for event in trace] == [0, 1, 2]
-    assert [event.kind for event in trace] == ["text", "text", "close"]
-    assert [event.direction for event in trace] == ["send", "receive", "close"]
-    assert [event.payload for event in trace[:2]] == ["hi", "hi"]
-    assert trace[-1].payload == {"code": 1000, "reason": ""}
-    assert all(isinstance(event, TraceEvent) for event in trace)
+    assert [event.index for event in trace] == [0, 1, 2], (
+        "trace events must be indexed in order"
+    )
+    assert [event.kind for event in trace] == ["text", "text", "close"], (
+        "trace events must record their frame kind"
+    )
+    assert [event.direction for event in trace] == ["send", "receive", "close"], (
+        "trace events must record send, receive, then close"
+    )
+    assert [event.payload for event in trace[:2]] == ["hi", "hi"], (
+        "the send and receive frames must carry the text payload"
+    )
+    assert trace[-1].payload == {"code": 1000, "reason": ""}, (
+        "the close frame must carry the default close payload"
+    )
+    assert all(isinstance(event, TraceEvent) for event in trace), (
+        "every trace entry must be a TraceEvent"
+    )
 
 
 @pytest.mark.asyncio
@@ -171,7 +194,7 @@ async def test_receive_json_with_custom_type(
     base_url, _ = echo_server
     client = WebSocketTestClient(base_url, allow_insecure=True)
 
-    @dc.dataclass
+    @dc.dataclass(slots=True)
     class Payload:
         message: str
 
@@ -179,8 +202,8 @@ async def test_receive_json_with_custom_type(
         await session.send_json({"message": "hello"})
         reply = await session.receive_json(Payload)
 
-    assert isinstance(reply, Payload)
-    assert reply.message == "hello"
+    assert isinstance(reply, Payload), "the reply must decode into the given type"
+    assert reply.message == "hello", "the decoded payload must preserve the message"
 
 
 def test_insecure_base_url_requires_opt_in() -> None:

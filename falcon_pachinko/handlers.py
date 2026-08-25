@@ -19,10 +19,13 @@ from .exceptions import (
 
 # Handlers accept ``self``, a ``WebSocketLike`` connection, and a decoded payload.
 # The return value is ignored.
-Handler = cabc.Callable[..., cabc.Awaitable[None]]
+type Handler = cabc.Callable[..., cabc.Awaitable[None]]
+
+# ``self``, the connection, and the payload are the minimum handler parameters.
+_MIN_HANDLER_PARAMS = 3
 
 
-@dc.dataclass(frozen=True)
+@dc.dataclass(frozen=True, slots=True)
 class HandlerInfo:
     """Information about a message handler and its payload type."""
 
@@ -36,7 +39,7 @@ def select_payload_param(
 ) -> inspect.Parameter:
     """Return the parameter representing the message payload."""
     params = list(sig.parameters.values())
-    if len(params) < 3:
+    if len(params) < _MIN_HANDLER_PARAMS:
         raise HandlerSignatureError(func_name)
 
     payload_param = sig.parameters.get("payload")

@@ -7,7 +7,7 @@ import msgspec.json as msjson
 import pytest
 
 from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
-from falcon_pachinko.unittests.helpers import DummyWS, bind_default_hooks
+from falcon_pachinko.unittests.helpers import DummyWS
 
 
 class Join(ms.Struct, tag="join"):
@@ -53,29 +53,34 @@ class SchemaResource(WebSocketResource):
 async def test_schema_dispatch_to_handlers() -> None:
     """Messages matching the schema are routed to decorated handlers."""
     r = SchemaResource()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     await r.dispatch(DummyWS(), msjson.encode(Join(room="a")))
     await r.dispatch(DummyWS(), msjson.encode(Leave(room="b")))
-    assert r.events == [("join", "a"), ("leave", "b")]
+    assert r.events == [
+        ("join", "a"),
+        ("leave", "b"),
+    ], "both schema-tagged messages should dispatch to their handlers in order"
 
 
 @pytest.mark.asyncio
 async def test_schema_unknown_tag_calls_fallback() -> None:
     """Unknown tags invoke the fallback handler with the raw message."""
     r = SchemaResource()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     raw = msjson.encode({"type": "oops", "room": "x"})
     await r.dispatch(DummyWS(), raw)
-    assert r.events == [("raw", raw)]
+    assert r.events == [("raw", raw)], "unknown tags should fall back to on_unhandled"
 
 
 @pytest.mark.asyncio
 async def test_schema_decode_error_calls_fallback() -> None:
     """Decode failures also trigger the fallback handler."""
     r = SchemaResource()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     await r.dispatch(DummyWS(), b"not json")
-    assert r.events == [("raw", b"not json")]
+    assert r.events == [
+        ("raw", b"not json"),
+    ], "decode failures should fall back to on_unhandled with the raw payload"
 
 
 def test_invalid_schema_type_raises() -> None:
@@ -110,5 +115,7 @@ def test_duplicate_payload_type_raises() -> None:
             @handles_message("b")
             async def h2(self, ws: WebSocketLike, payload: Payload) -> None: ...
 
-    assert "Payload" in str(exc.value)
-    assert "BadResource.h2" in str(exc.value)
+    assert "Payload" in str(exc.value), "error should name the duplicated payload type"
+    assert "BadResource.h2" in str(exc.value), (
+        "error should name the second handler that caused the duplicate"
+    )

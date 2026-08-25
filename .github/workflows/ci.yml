@@ -33,7 +33,13 @@ jobs:
 
       - name: Install CLI tools
         run: |
-          for tool in mbake ty ruff; do uv tool install ${tool}; done
+          for tool in mbake; do uv tool install ${tool}; done
+          # Pin ruff and ty to the versions the Makefile invokes
+          # (RUFF_VERSION and TY_VERSION); the contract test
+          # tests/test_toolchain_versions.py enforces that both sites stay
+          # in sync. Bump the Makefile and these pins together.
+          uv tool install ruff==0.16.4
+          uv tool install ty==0.0.74
           npm install -g markdownlint-cli2
 
       - name: Validate Makefile
@@ -45,7 +51,7 @@ jobs:
       - name: Check formatting
         run: make check-fmt
 
-      - name: Run ruff
+      - name: Run linters
         run: make lint
 
       - name: Run typechecker

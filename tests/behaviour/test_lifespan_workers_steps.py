@@ -11,7 +11,7 @@ from falcon_pachinko.workers import WorkerController, worker
 from tests.behaviour._lifespan import LifespanApp
 
 START_TIMEOUT = 2.0
-AppWithWorker = tuple[LifespanApp, dict[str, bool], asyncio.Event, asyncio.Event]
+type AppWithWorker = tuple[LifespanApp, dict[str, bool], asyncio.Event, asyncio.Event]
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -69,11 +69,11 @@ def run_lifespan(app_with_worker: AppWithWorker) -> None:
 def worker_has_run(app_with_worker: AppWithWorker) -> None:
     """Assert that the worker executed."""
     _, state, _, _ = app_with_worker
-    assert state["ran"] is True
+    assert state["ran"] is True, "the worker must run while the lifespan is active"
 
 
 @then("the worker stops after the lifespan ends")
 def worker_stops(app_with_worker: AppWithWorker) -> None:
     """Assert that the worker stopped after the lifespan context."""
     _, _, _, stopped = app_with_worker
-    assert stopped.is_set()
+    assert stopped.is_set(), "the worker must signal that it stopped"

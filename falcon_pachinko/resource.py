@@ -82,11 +82,20 @@ class WebSocketResource:
         This method mutates the instance's ``_subroutes`` list. Resource
         instances are expected to be per-connection objects and must not be
         shared across threads.
+
+        Raises
+        ------
+        TypeError
+            If ``resource`` is not callable.
+        ValueError
+            If ``path`` compiles to a pattern already registered on this
+            resource.
         """
         if kwargs is None:
             kwargs = {}
         if not callable(resource):
-            raise TypeError("resource must be callable")  # noqa: TRY003
+            msg = "resource must be callable"
+            raise TypeError(msg)
 
         from .router import _canonical_path, _compile_prefix_template
 
@@ -104,7 +113,7 @@ class WebSocketResource:
         subroutes.append((pattern, factory))
         self._subroutes = subroutes
 
-    def get_child_context(self) -> dict[str, object]:
+    def get_child_context(self) -> dict[str, object]:  # ruff: ignore[no-self-use] - overridable hook
         """Return kwargs to be forwarded to the next child resource.
 
         Override this hook to explicitly share context or dependencies with a
@@ -112,6 +121,12 @@ class WebSocketResource:
         constructor. If ``state`` is included, its value will replace the
         connection-scoped ``state`` passed to the child; otherwise, the parent
         state is propagated automatically.
+
+        Returns
+        -------
+        dict[str, object]
+            Keyword arguments for the child resource's constructor. Empty by
+            default.
         """
         return {}
 
@@ -189,7 +204,7 @@ class WebSocketResource:
         validate_schema_types(schema)
         cls._struct_handlers = populate_struct_handlers(cls)
 
-    async def on_connect(
+    async def on_connect(  # ruff: ignore[no-self-use] - overridable hook; subclasses use ``self``
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
         """Decide whether the connection should be accepted after handshake.
@@ -265,7 +280,7 @@ async def _receive_hooks(
     *,
     ws: WebSocketLike,
     raw: str | bytes,
-) -> typ.AsyncIterator[None]:
+) -> cabc.AsyncIterator[None]:
     """Balance before/after receive hooks while guarding original errors."""
     context = await manager.notify_before_receive(target, ws=ws, raw=raw)
     try:
@@ -277,5 +292,5 @@ async def _receive_hooks(
         with suppress(Exception):
             await manager.notify_after_receive(context)
         raise
-    else:
-        await manager.notify_after_receive(context)
+    # Every handler above re-raises, so reaching here means the body succeeded.
+    await manager.notify_after_receive(context)

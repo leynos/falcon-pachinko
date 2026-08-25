@@ -13,12 +13,13 @@ from falcon_pachinko.unittests.resource_factories import resource_factory
 
 if typ.TYPE_CHECKING:
     import asyncio
+    import collections.abc as cabc
 
 
 @pytest.fixture
 def event_loop(
     event_loop_policy: asyncio.AbstractEventLoopPolicy,
-) -> typ.Iterator[asyncio.AbstractEventLoop]:
+) -> cabc.Iterator[asyncio.AbstractEventLoop]:
     """Provide an event loop managed by pytest-asyncio's policy fixture."""
     loop = event_loop_policy.new_event_loop()
     try:
@@ -89,7 +90,7 @@ class InjectedParent(WebSocketResource):
         return False
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class RouterScenario:
     """Hold contextual state shared between steps."""
 
@@ -118,7 +119,7 @@ def given_router() -> RouterScenario:
     InjectedChild.instances.clear()
     service = "svc"
     router = WebSocketRouter(resource_factory=resource_factory(service))
-    router.add_route("/rooms/{room}", InjectedParent, kwargs={"label": "rooms"})
+    router.add_route("/rooms/{room}", InjectedParent, label="rooms")
     router.mount("/")
     return RouterScenario(router=router, service=service)
 
@@ -147,23 +148,29 @@ def when_dispatch(
 @then('the parent resource receives the "svc" dependency')
 def then_parent(context: RouterScenario) -> None:
     """Assert that the parent instance received the injected service."""
-    assert context.parent is not None
-    assert context.parent.service == context.service
-    assert context.parent.label == "rooms"
+    assert context.parent is not None, "the parent resource must have been constructed"
+    assert context.parent.service == context.service, (
+        "the parent resource must receive the injected service"
+    )
+    assert context.parent.label == "rooms", "the parent resource must keep its label"
 
 
 @then('the child resource receives the "svc" dependency')
 def then_child(context: RouterScenario) -> None:
     """Assert that the child instance received the injected service."""
-    assert context.child is not None
-    assert context.child.service == context.service
-    assert context.child.params == {"room": "alpha", "member": "beta"}
+    assert context.child is not None, "the child resource must have been constructed"
+    assert context.child.service == context.service, (
+        "the child resource must receive the injected service"
+    )
+    assert context.child.params == {"room": "alpha", "member": "beta"}, (
+        "the child resource must observe both nested path parameters"
+    )
 
 
 @then("the connection attempt is rejected")
 def then_rejected(context: RouterScenario) -> None:
     """Ensure the websocket was closed instead of accepted."""
-    assert context.websocket is not None
-    assert context.websocket.closed is True
-    assert context.websocket.accepted is False
-    assert context.websocket.close_code == 1000
+    assert context.websocket is not None, "a websocket must have been dispatched"
+    assert context.websocket.closed is True, "the connection must be closed"
+    assert context.websocket.accepted is False, "the connection must not be accepted"
+    assert context.websocket.close_code == 1000, "the close code must be the default"

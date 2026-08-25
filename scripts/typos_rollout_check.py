@@ -159,7 +159,7 @@ def _tracked(repository: Path) -> tuple[Path, ...]:
     if git is None:
         msg = "git executable not found on PATH"
         raise FileNotFoundError(msg)
-    raw = subprocess.run(  # noqa: S603 - Git is resolved and argv is fixed.
+    raw = subprocess.run(
         [git, "-C", str(repository), "ls-files", "-z"],
         check=True,
         capture_output=True,

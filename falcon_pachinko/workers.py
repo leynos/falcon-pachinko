@@ -7,7 +7,7 @@ import collections.abc as cabc
 import typing as typ
 from contextlib import AsyncExitStack
 
-WorkerFn = cabc.Callable[..., cabc.Coroutine[object, object, None]]
+type WorkerFn = cabc.Callable[..., cabc.Coroutine[object, object, None]]
 
 
 class WorkerController:
@@ -21,14 +21,19 @@ class WorkerController:
 
     async def start(self, *workers: WorkerFn, **context: object) -> None:
         """Schedule *workers* as tasks, injecting shared *context*.
-        Raises ``RuntimeError`` if already started.
+
+        Raises
+        ------
+        RuntimeError
+            If the controller has already been started.
         """
         if self._tasks:
             msg = "WorkerController is already started"
             raise RuntimeError(msg)
 
+        # A freshly constructed AsyncExitStack needs no explicit entry; entering
+        # it is a no-op that merely returns the stack itself.
         self._stack = AsyncExitStack()
-        await self._stack.__aenter__()
 
         for fn in workers:
             coroutine = fn(**context)
@@ -68,7 +73,7 @@ class WorkerController:
     async def _cleanup_stack(self) -> None:
         """Clean up the async context stack."""
         if self._stack:
-            await self._stack.__aexit__(None, None, None)
+            await self._stack.aclose()
 
 
 def worker(fn: WorkerFn) -> WorkerFn:

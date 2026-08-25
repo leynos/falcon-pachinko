@@ -20,11 +20,13 @@ def validate_schema_types(schema: type) -> None:
     types = typ.get_args(schema) or (schema,)
     for t in types:
         if not (inspect.isclass(t) and issubclass(t, ms.Struct)):
-            raise TypeError("schema must contain only msgspec.Struct types")  # noqa: TRY003
+            msg = "schema must contain only msgspec.Struct types"
+            raise TypeError(msg)
 
         info = msinspect.type_info(t)
         if typ.cast("msinspect.StructType", info).tag is None:
-            raise TypeError("schema Struct types must define a tag")  # noqa: TRY003
+            msg = "schema Struct types must define a tag"
+            raise TypeError(msg)
 
 
 def populate_struct_handlers(cls: type[WebSocketResource]) -> dict[type, HandlerInfo]:

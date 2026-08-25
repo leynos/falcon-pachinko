@@ -16,8 +16,13 @@ if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
 
     from .services import AnnouncementFeed
 else:  # pragma: no cover - runtime aliases for annotations
-    AnnouncementFeed = typ.Any  # type: ignore[assignment]
-    WebSocketConnectionManager = typ.Any  # type: ignore[assignment]
+    # `object` (a builtin, not an imported name) keeps these bindings out of
+    # both `typing.Any` (which ruff's any-type rule forbids) and the
+    # reexport-by-assignment pattern (assigning an attribute reached
+    # through an imported name); annotations are never evaluated at
+    # runtime because of `from __future__ import annotations`.
+    AnnouncementFeed = object  # type: ignore[assignment]  # runtime placeholder only; real type is import-time only
+    WebSocketConnectionManager = object  # type: ignore[assignment]  # runtime placeholder only; real type is import-time only
 
 
 @worker

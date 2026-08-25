@@ -15,20 +15,14 @@ from examples.reference_app.resources import AddTask, TaskStreamResource
 from falcon_pachinko.testing import WebSocketSimulator
 from falcon_pachinko.websocket import WebSocketConnectionManager
 
-if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
-    import falcon
+if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers, string-only annotations
+    import collections.abc as cabc
 
     from examples.reference_app.services import AnnouncementFeed
     from falcon_pachinko import ServiceContainer, WebSocketResource, WebSocketRouter
-else:  # pragma: no cover - runtime aliases for annotations
-    AnnouncementFeed = typ.Any  # type: ignore[assignment]
-    ServiceContainer = typ.Any  # type: ignore[assignment]
-    WebSocketResource = typ.Any  # type: ignore[assignment]
-    WebSocketRouter = typ.Any  # type: ignore[assignment]
-    falcon = typ.Any  # type: ignore[assignment]
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class ReferenceScenario:
     """Container for shared reference example state."""
 
@@ -55,7 +49,7 @@ class _RequestStub:
 
 
 @pytest.fixture
-def event_loop() -> typ.Iterator[asyncio.AbstractEventLoop]:
+def event_loop() -> cabc.Iterator[asyncio.AbstractEventLoop]:
     """Provide an isolated event loop per test."""
     loop = asyncio.new_event_loop()
     try:
@@ -81,7 +75,7 @@ def given_reference_router(event_loop: asyncio.AbstractEventLoop) -> ReferenceSc
     instances: list[WebSocketResource] = []
 
     def recording_factory(
-        route_factory: typ.Callable[..., WebSocketResource],
+        route_factory: cabc.Callable[..., WebSocketResource],
     ) -> WebSocketResource:
         instance = container.create_resource(route_factory)
         instances.append(instance)
@@ -143,22 +137,26 @@ def when_send_task_add(
 @then("the connection is accepted")
 def then_connection(context: ReferenceScenario) -> None:
     """Ensure the simulator recorded the handshake acceptance."""
-    assert context.simulator.accepted is True
+    assert context.simulator.accepted is True, "the simulator must record acceptance"
 
 
 @then("the task stream resource replies with a task acknowledgement")
 def then_acknowledgement(context: ReferenceScenario) -> None:
     """Check that the last frame is the expected acknowledgement."""
     message = typ.cast("dict[str, object]", context.simulator.sent_messages[-1])
-    assert message["type"] == "task.added"
+    assert message["type"] == "task.added", (
+        "the last frame must be a task.added acknowledgement"
+    )
 
 
 @then('the announcement feed captures an event for workspace "atlas"')
 def then_feed_capture(context: ReferenceScenario) -> None:
     """Validate that the AnnouncementFeed observed the broadcast event."""
-    assert context.last_event is not None
+    assert context.last_event is not None, "the feed must have captured an event"
     workspace, payload = context.last_event
-    assert workspace == "atlas"
+    assert workspace == "atlas", "the event must be scoped to workspace 'atlas'"
     payload_dict = payload
     nested = typ.cast("dict[str, object]", payload_dict["payload"])
-    assert nested["kind"] == "task_added"
+    assert nested["kind"] == "task_added", (
+        "the nested payload must be a task_added event"
+    )

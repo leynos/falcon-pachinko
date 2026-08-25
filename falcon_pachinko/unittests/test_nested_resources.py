@@ -48,7 +48,10 @@ async def test_nested_subroute_params() -> None:
     req = SimpleNamespace(path="/parent/1/child/2", path_template="")
     await router.on_websocket(req, DummyWS())
 
-    assert Child.instances[-1].params == {"pid": "1", "cid": "2"}
+    assert Child.instances[-1].params == {
+        "pid": "1",
+        "cid": "2",
+    }, "params from every route level should be merged into the child"
 
 
 @pytest.mark.asyncio
@@ -139,9 +142,12 @@ async def test_context_passed_and_state_shared() -> None:
     parent, child = await _setup_and_run_nested_test(
         ContextChild, ContextParent, "/ctx", "/ctx/child"
     )
-    assert child.project == "acme"
-    assert child.state is parent.state
-    assert child.state == {"parent": True, "child": True}
+    assert child.project == "acme", "parent-supplied context should set child.project"
+    assert child.state is parent.state, "child should share the parent's state mapping"
+    assert child.state == {
+        "parent": True,
+        "child": True,
+    }, "both parent and child updates should be visible in the shared state"
 
 
 class InjectedChild(WebSocketResource):
@@ -185,6 +191,13 @@ async def test_state_injected_via_context() -> None:
     parent, child = await _setup_and_run_nested_test(
         InjectedChild, InjectingParent, "/inj", "/inj/child"
     )
-    assert child.state is not parent.state
-    assert child.state == {"injected": True, "child": True}
-    assert parent.state == {"parent": True}
+    assert child.state is not parent.state, (
+        "injected state should replace the shared state, not alias it"
+    )
+    assert child.state == {
+        "injected": True,
+        "child": True,
+    }, "child should see both the injected and its own state updates"
+    assert parent.state == {
+        "parent": True,
+    }, "parent's own state should be unaffected by the child's injected state"

@@ -13,10 +13,12 @@ from pytest_bdd import given, scenario, then, when
 from falcon_pachinko.testing import TraceEvent, WebSocketTestClient
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from websockets.typing import Subprotocol
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class EchoRecord:
     """Track handshake data and frames received by the echo server."""
 
@@ -26,7 +28,7 @@ class EchoRecord:
     subprotocols: list[str | None]
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class ClientContext:
     """Shared scenario context for exercising the test client."""
 
@@ -39,10 +41,20 @@ class ClientContext:
     trace: list[TraceEvent] | None = None
 
 
+def _bound_base_url(server: ws_server.WebSocketServer) -> str:
+    """Return the ``ws://`` base URL for the first socket bound by *server*."""
+    sockets = tuple(server.sockets)
+    if not sockets:
+        msg = "echo server did not bind any sockets"
+        raise RuntimeError(msg)
+    host, port, *_ = sockets[0].getsockname()
+    return f"ws://{host}:{port}"
+
+
 @pytest.fixture
 def event_loop(
     event_loop_policy: asyncio.AbstractEventLoopPolicy,
-) -> typ.Iterator[asyncio.AbstractEventLoop]:
+) -> cabc.Iterator[asyncio.AbstractEventLoop]:
     """Provide a dedicated event loop per scenario."""
     loop = event_loop_policy.new_event_loop()
     try:
@@ -54,7 +66,7 @@ def event_loop(
 
 
 @pytest.fixture
-def echo_service(event_loop: asyncio.AbstractEventLoop) -> typ.Iterator[ClientContext]:
+def echo_service(event_loop: asyncio.AbstractEventLoop) -> cabc.Iterator[ClientContext]:
     """Run an echo server for the duration of a scenario."""
     record = EchoRecord(paths=[], headers=[], messages=[], subprotocols=[])
     protocols: list[Subprotocol] = [typ.cast("Subprotocol", "json")]
@@ -70,8 +82,7 @@ def echo_service(event_loop: asyncio.AbstractEventLoop) -> typ.Iterator[ClientCo
     server = event_loop.run_until_complete(
         ws_server.serve(handler, "127.0.0.1", 0, subprotocols=protocols)
     )
-    host, port, *_ = next(iter(server.sockets)).getsockname()
-    base_url = f"ws://{host}:{port}"
+    base_url = _bound_base_url(server)
     client = WebSocketTestClient(
         base_url,
         default_headers={"X-Test": "bdd"},
@@ -129,27 +140,41 @@ def when_send_json(context: ClientContext) -> ClientContext:
 @then("the server records the handshake metadata")
 def then_server_metadata(context: ClientContext) -> None:
     """Assert the server observed the negotiated headers and subprotocol."""
-    assert context.record.paths == ["/echo"]
+    assert context.record.paths == ["/echo"], "the server must record the request path"
     headers = {key.lower(): value for key, value in context.record.headers[0].items()}
-    assert headers["x-test"] == "bdd"
-    assert context.record.subprotocols == ["json"]
+    assert headers["x-test"] == "bdd", "the custom header must reach the server"
+    assert context.record.subprotocols == ["json"], (
+        "the negotiated subprotocol must be recorded"
+    )
 
 
 @then("the client observes the echoed payload")
 def then_client_observes(context: ClientContext) -> None:
     """Assert the client received the echoed JSON payload."""
-    assert context.response == {"type": "ping"}
+    assert context.response == {"type": "ping"}, (
+        "the client must observe the echoed payload"
+    )
 
 
 @then("the session trace records the frames")
 def then_trace(context: ClientContext) -> None:
     """Verify that the trace contains both the sent and received frames."""
-    assert context.trace is not None
-    assert [event.index for event in context.trace] == [0, 1, 2]
-    assert [event.direction for event in context.trace] == ["send", "receive", "close"]
-    assert [event.kind for event in context.trace] == ["json", "json", "close"]
+    assert context.trace is not None, "the client must capture a trace"
+    assert [event.index for event in context.trace] == [0, 1, 2], (
+        "trace events must be indexed in order"
+    )
+    assert [event.direction for event in context.trace] == [
+        "send",
+        "receive",
+        "close",
+    ], "trace events must record send, receive, then close"
+    assert [event.kind for event in context.trace] == ["json", "json", "close"], (
+        "trace events must record their frame kind"
+    )
     assert [event.payload for event in context.trace[:2]] == [
         {"type": "ping"},
         {"type": "ping"},
-    ]
-    assert context.trace[-1].payload == {"code": 1000, "reason": ""}
+    ], "the send and receive frames must carry the ping payload"
+    assert context.trace[-1].payload == {"code": 1000, "reason": ""}, (
+        "the close frame must carry the default close payload"
+    )
