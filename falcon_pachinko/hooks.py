@@ -18,13 +18,15 @@ import typing as typ
 import typing_extensions as tpe
 
 if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints only
+    import collections.abc as cabc
+
     import falcon
 
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
 
 
-HookCallable = typ.Callable[["HookContext"], typ.Awaitable[None] | None]
+type HookCallable = cabc.Callable[[HookContext], cabc.Awaitable[None] | None]
 
 
 class HookEvent(enum.StrEnum):
@@ -139,6 +141,16 @@ class HookCollection:
         return cls(parent=parent)
 
 
+async def _execute_hook_layer(
+    hooks: tuple[HookCallable, ...], context: HookContext
+) -> None:
+    """Execute all hooks in a single layer."""
+    for hook in hooks:
+        result = hook(context)
+        if inspect.isawaitable(result):
+            await result
+
+
 class HookManager:
     """Coordinate hook execution across router and resource tiers."""
 
@@ -146,7 +158,7 @@ class HookManager:
         self,
         *,
         global_hooks: HookCollection,
-        resources: typ.Sequence[WebSocketResource],
+        resources: cabc.Sequence[WebSocketResource],
     ) -> None:
         if not resources:
             msg = "HookManager requires at least one resource"
@@ -170,16 +182,6 @@ class HookManager:
             raise ValueError(msg)
         return layers
 
-    async def _execute_hook_layer(
-        self, hooks: tuple[HookCallable, ...], context: HookContext
-    ) -> None:
-        """Execute all hooks in a single layer."""
-        for hook in hooks:
-            result = hook(context)
-            if inspect.isawaitable(result):
-                await result
-        return
-
     async def _run_hooks(
         self, event: EventType, context: HookContext, *, reverse: bool = False
     ) -> None:
@@ -191,9 +193,8 @@ class HookManager:
 
         for resource, hooks in layers:
             context.resource = resource
-            await self._execute_hook_layer(hooks, context)
+            await _execute_hook_layer(hooks, context)
         context.resource = None
-        return
 
     async def _notify_before_event(
         self,
@@ -228,7 +229,6 @@ class HookManager:
         """Run ``after_connect`` hooks using ``context``."""
         context.event = HookEvent.AFTER_CONNECT
         await self._run_hooks(HookEvent.AFTER_CONNECT, context, reverse=True)
-        return
 
     async def notify_before_receive(
         self,
@@ -246,7 +246,6 @@ class HookManager:
         """Run ``after_receive`` hooks using ``context``."""
         context.event = HookEvent.AFTER_RECEIVE
         await self._run_hooks(HookEvent.AFTER_RECEIVE, context, reverse=True)
-        return
 
     async def notify_before_disconnect(
         self,

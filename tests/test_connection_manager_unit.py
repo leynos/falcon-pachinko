@@ -17,6 +17,8 @@ from falcon_pachinko.websocket import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from falcon_pachinko.protocols import WebSocketLike
 
 
@@ -36,7 +38,9 @@ class DummyWebSocket:
         """Close the connection."""
         return
 
-    async def send_media(self, data: object) -> None:
+    async def send_media(  # pylint: disable=trivial-attribute-wrapper  # protocol stub
+        self, data: object
+    ) -> None:
         """Record a message sent via the stub."""
         self.messages.append(data)
 
@@ -88,7 +92,9 @@ async def test_send_to_connection_sends_message() -> None:
 
     await mgr.send_to_connection("a", {"hello": "world"})
 
-    assert ws.messages == [{"hello": "world"}]
+    assert ws.messages == [{"hello": "world"}], (
+        "the target connection must receive the sent message"
+    )
 
 
 @pytest.mark.asyncio
@@ -135,8 +141,12 @@ async def test_broadcast_to_room_with_exclusion_scenarios(
 
     await mgr.broadcast_to_room("lobby", "hi", exclude=exclude)
 
-    assert ws1.messages == expected_ws1
-    assert ws2.messages == expected_ws2
+    assert ws1.messages == expected_ws1, (
+        f"ws1 should have received {expected_ws1!r}, got {ws1.messages!r}"
+    )
+    assert ws2.messages == expected_ws2, (
+        f"ws2 should have received {expected_ws2!r}, got {ws2.messages!r}"
+    )
 
 
 @pytest.mark.asyncio
@@ -169,7 +179,9 @@ async def test_broadcast_to_room_aggregates_multiple_errors() -> None:
     if eg is not None:
         with pytest.raises(eg) as excinfo:
             await mgr.broadcast_to_room("lobby", 42)
-        assert len(getattr(excinfo.value, "exceptions", [])) == 2
+        assert len(getattr(excinfo.value, "exceptions", [])) == 2, (
+            "both connection failures must be aggregated into the exception group"
+        )
     else:  # pragma: no cover - Python < 3.11
         with pytest.raises(RuntimeError):
             await mgr.broadcast_to_room("lobby", 42)
@@ -186,8 +198,9 @@ async def test_join_room_requires_known_connection() -> None:
 
 @pytest.mark.asyncio
 async def test_send_to_unknown_connection_raises_key_error() -> None:
-    """Sending to an unknown connection raises
-    WebSocketConnectionNotFoundError (a KeyError subclass).
+    """Sending to an unknown connection raises a not-found error.
+
+    WebSocketConnectionNotFoundError is a KeyError subclass.
     """
     mgr = WebSocketConnectionManager()
 
@@ -204,9 +217,15 @@ async def test_connections_handle_room_filters(
     """Iterating yields all connections, room members, or nothing for empty rooms."""
     mgr, ws1, ws2 = room_with_two_connections
 
-    assert {ws async for ws in mgr.connections()} == {ws1, ws2}
-    assert {ws async for ws in mgr.connections(room="lobby")} == {ws1, ws2}
-    assert [ws async for ws in mgr.connections(room="ghost")] == []
+    assert {ws async for ws in mgr.connections()} == {ws1, ws2}, (
+        "iterating without a room must yield every connection"
+    )
+    assert {ws async for ws in mgr.connections(room="lobby")} == {ws1, ws2}, (
+        "iterating the lobby room must yield its members"
+    )
+    assert [ws async for ws in mgr.connections(room="ghost")] == [], (
+        "iterating an unknown room must yield nothing"
+    )
 
 
 @pytest.mark.asyncio
@@ -220,7 +239,7 @@ async def test_connections_iterates_room_with_exclusion(
 
     seen = [ws async for ws in mgr.connections(room="lobby", exclude={"a"})]
 
-    assert seen == [ws2]
+    assert seen == [ws2], "the excluded connection must not be yielded"
 
 
 @pytest.mark.asyncio
@@ -234,7 +253,7 @@ async def test_connections_ignore_unknown_ids_in_exclude(
 
     seen = [ws async for ws in mgr.connections(room="lobby", exclude={"ghost"})]
 
-    assert set(seen) == {ws1, ws2}
+    assert set(seen) == {ws1, ws2}, "an unknown excluded ID must not filter anything"
 
 
 @pytest.mark.asyncio
@@ -250,7 +269,7 @@ async def test_connections_skip_stale_room_member(
 
     seen = [ws async for ws in mgr.connections(room="lobby")]
 
-    assert set(seen) == {ws1, ws2}
+    assert set(seen) == {ws1, ws2}, "the ghost membership must be skipped"
 
 
 @pytest.mark.asyncio
@@ -266,8 +285,8 @@ async def test_broadcast_to_room_skips_stale_members(
 
     await mgr.broadcast_to_room("lobby", "hi")
 
-    assert ws1.messages == ["hi"]
-    assert ws2.messages == ["hi"]
+    assert ws1.messages == ["hi"], "ws1 must still receive the broadcast"
+    assert ws2.messages == ["hi"], "ws2 must still receive the broadcast"
 
 
 @pytest.mark.asyncio
@@ -278,14 +297,20 @@ async def test_websockets_property_returns_snapshot() -> None:
     await mgr.add_connection("a", ws)
     snapshot = mgr.websockets
     await mgr.add_connection("b", DummyWebSocket())
-    assert dict(snapshot) == {"a": ws}
+    assert dict(snapshot) == {"a": ws}, (
+        "the snapshot must not reflect connections added afterwards"
+    )
 
 
 def test_default_backend_is_inprocess() -> None:
     """Ensure the default backend is used."""
     mgr = WebSocketConnectionManager()
-    assert isinstance(mgr.backend, InProcessBackend)
-    assert isinstance(mgr.backend, ConnectionBackend)
+    assert isinstance(mgr.backend, InProcessBackend), (
+        "the default backend must be InProcessBackend"
+    )
+    assert isinstance(mgr.backend, ConnectionBackend), (
+        "the default backend must implement ConnectionBackend"
+    )
 
 
 class RecordingBackend(ConnectionBackend):
@@ -297,12 +322,12 @@ class RecordingBackend(ConnectionBackend):
         self.calls: list[str] = []
 
     @property
-    def websockets(self) -> typ.Mapping[str, WebSocketLike]:
+    def websockets(self) -> cabc.Mapping[str, WebSocketLike]:
         """Expose a read-only snapshot of active websockets."""
         return types.MappingProxyType(self._websockets.copy())
 
     @property
-    def rooms(self) -> typ.Mapping[str, typ.Collection[str]]:
+    def rooms(self) -> cabc.Mapping[str, cabc.Collection[str]]:
         """Expose a read-only snapshot of room memberships."""
         snapshot = {room: set(ids) for room, ids in self._rooms.items()}
         return types.MappingProxyType(snapshot)
@@ -378,6 +403,10 @@ async def test_manager_uses_custom_backend() -> None:
         "join_room:alice:crew",
         "snapshot:crew",
         "get_websocket:alice",
-    ]
-    assert ws.messages == [{"msg": "hi"}, {"msg": "direct"}]
-    assert backend.rooms == {"crew": {"alice"}}
+    ], "the custom backend must receive calls in the expected order"
+    assert ws.messages == [{"msg": "hi"}, {"msg": "direct"}], (
+        "the websocket must receive both the broadcast and the direct message"
+    )
+    assert backend.rooms == {"crew": {"alice"}}, (
+        "the custom backend must report the crew room membership"
+    )

@@ -12,6 +12,9 @@ from pytest_bdd import given, scenario, then, when
 
 from falcon_pachinko import WebSocketResource, WebSocketRouter, WebSocketSimulator
 
+if typ.TYPE_CHECKING:  # pragma: no cover - typing only
+    import collections.abc as cabc
+
 
 class OriginalWebSocket:
     """Minimal stub representing the ASGI-provided websocket."""
@@ -33,7 +36,9 @@ class OriginalWebSocket:
         self.closed = True
         self.close_code = code
 
-    async def send_media(self, data: object) -> None:  # pragma: no cover - unused
+    async def send_media(  # pylint: disable=trivial-attribute-wrapper  # protocol stub
+        self, data: object
+    ) -> None:  # pragma: no cover - unused
         """Record sent data."""
         self.sent.append(data)
 
@@ -67,7 +72,7 @@ class EchoResource(WebSocketResource):
         return False
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class SimulatorScenario:
     """Container for scenario state."""
 
@@ -78,7 +83,7 @@ class SimulatorScenario:
 
 
 @pytest.fixture
-def event_loop() -> typ.Iterator[asyncio.AbstractEventLoop]:
+def event_loop() -> cabc.Iterator[asyncio.AbstractEventLoop]:
     """Provide an event loop isolated from pytest-asyncio's global loop."""
     loop = asyncio.new_event_loop()
     try:
@@ -137,20 +142,28 @@ def when_connection(
 @then("the resource receives the simulator instance")
 def then_resource(context: SimulatorScenario) -> None:
     """Assert that the resource saw the injected simulator."""
-    assert context.resource is not None
-    assert context.resource.websocket is context.simulator
-    assert context.resource.received == [{"type": "ping"}]
+    assert context.resource is not None, "the echo resource must have been constructed"
+    assert context.resource.websocket is context.simulator, (
+        "the resource must receive the injected simulator"
+    )
+    assert context.resource.received == [{"type": "ping"}], (
+        "the resource must have decoded the queued message"
+    )
 
 
 @then("the simulator records the acknowledged message")
 def then_ack(context: SimulatorScenario) -> None:
     """Ensure outbound frames are captured by the simulator."""
-    assert context.simulator.sent_messages == [{"type": "ack"}]
-    assert context.simulator.pop_sent() == {"type": "ack"}
+    assert context.simulator.sent_messages == [{"type": "ack"}], (
+        "the simulator must record the acknowledgement frame"
+    )
+    assert context.simulator.pop_sent() == {"type": "ack"}, (
+        "popping the sent frame must return the acknowledgement"
+    )
 
 
 @then("the simulator closes the connection")
 def then_closed(context: SimulatorScenario) -> None:
     """Verify the simulator lifecycle is completed by the router."""
-    assert context.simulator.closed is True
-    assert context.simulator.close_code == 1000
+    assert context.simulator.closed is True, "the simulator must be closed"
+    assert context.simulator.close_code == 1000, "the close code must be the default"

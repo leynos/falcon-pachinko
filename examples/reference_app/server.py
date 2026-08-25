@@ -36,6 +36,9 @@ from .services import (
 )
 from .workers import announcement_worker
 
+if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
+    import collections.abc as cabc
+
 try:  # pragma: no cover - used when tests are available
     from tests.behaviour._lifespan import LifespanApp
 except ImportError:  # pragma: no cover - fallback when running the script
@@ -46,12 +49,13 @@ except ImportError:  # pragma: no cover - fallback when running the script
         def __init__(self) -> None:
             super().__init__()
             self._lifespan_handler: (
-                typ.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]] | None
+                cabc.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]]
+                | None
             ) = None
 
-        def lifespan(  # type: ignore[override]
-            self, fn: typ.Callable[[LifespanApp], typ.AsyncIterator[None]]
-        ) -> typ.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]]:
+        def lifespan(  # type: ignore[override]  # narrows falcon.asgi.App's untyped hook to this fallback's signature
+            self, fn: cabc.Callable[[LifespanApp], cabc.AsyncIterator[None]]
+        ) -> cabc.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]]:
             """Register ``fn`` as the lifespan context manager."""
             manager = cl.asynccontextmanager(fn)
             self._lifespan_handler = manager
@@ -70,15 +74,20 @@ if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
     from falcon_pachinko.router import SimulatorFactory
     from falcon_pachinko.websocket import WebSocketConnectionManager
 else:  # pragma: no cover - runtime aliases for annotations
-    WebSocketLike = typ.Any  # type: ignore[assignment]
-    SimulatorFactory = typ.Any  # type: ignore[assignment]
-    WebSocketConnectionManager = typ.Any  # type: ignore[assignment]
+    # `object` (a builtin, not an imported name) keeps these bindings out of
+    # both `typing.Any` (which ruff's any-type rule forbids) and the
+    # reexport-by-assignment pattern (assigning an attribute reached
+    # through an imported name); annotations are never evaluated at
+    # runtime because of `from __future__ import annotations`.
+    WebSocketLike = object  # type: ignore[assignment]  # runtime placeholder only; real type is import-time only
+    SimulatorFactory = object  # type: ignore[assignment]  # runtime placeholder only; real type is import-time only
+    WebSocketConnectionManager = object  # type: ignore[assignment]  # runtime placeholder only; real type is import-time only
 
     class _SupportsWebSocketRoute(typ.Protocol):
         def add_websocket_route(
             self,
             uri_template: str,
-            resource: type[WebSocketResource] | typ.Callable[..., WebSocketResource],
+            resource: type[WebSocketResource] | cabc.Callable[..., WebSocketResource],
             *args: object,
             **kwargs: object,
         ) -> None: ...
@@ -100,7 +109,7 @@ class RouterEndpoint(WebSocketResource):
 
 def _require_token_hook(
     authenticator: TokenAuthenticator,
-) -> typ.Callable[[HookContext], typ.Awaitable[None]]:
+) -> cabc.Callable[[HookContext], cabc.Awaitable[None]]:
     async def _hook(context: HookContext) -> None:
         params = context.params or {}
         workspace_id = typ.cast("str | None", params.get("workspace_id"))
@@ -132,8 +141,8 @@ def build_router(
     container: ServiceContainer,
     *,
     simulator_factory: SimulatorFactory | None = None,
-    resource_factory: typ.Callable[
-        [typ.Callable[..., WebSocketResource]], WebSocketResource
+    resource_factory: cabc.Callable[
+        [cabc.Callable[..., WebSocketResource]], WebSocketResource
     ]
     | None = None,
 ) -> WebSocketRouter:
@@ -178,7 +187,7 @@ def create_app() -> LifespanApp:
     feed = typ.cast("AnnouncementFeed", container.resolve("announcement_feed"))
 
     @app.lifespan
-    async def lifespan(_app: LifespanApp) -> typ.AsyncIterator[None]:
+    async def lifespan(_app: LifespanApp) -> cabc.AsyncIterator[None]:
         await controller.start(
             announcement_worker,
             conn_mgr=conn_mgr,

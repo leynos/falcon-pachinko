@@ -19,6 +19,9 @@ from ._common import (
     _LifecycleSocket,
 )
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 
 class WebSocketSimulator(_LifecycleSocket):
     """In-memory :class:`WebSocketLike` implementation for hermetic tests."""
@@ -38,30 +41,12 @@ class WebSocketSimulator(_LifecycleSocket):
         self.sent_messages: list[object] = []
         self.received_messages: list[object] = []
 
-    @property
-    def accepted(self) -> bool:
-        """Return ``True`` once :meth:`accept` has been called."""
-        return self._accepted
-
-    @property
-    def closed(self) -> bool:
-        """Return ``True`` once :meth:`close` has been called."""
-        return self._closed
-
-    @property
-    def close_code(self) -> int | None:
-        """Return the code provided to :meth:`close`, if any."""
-        return self._close_code
-
-    @property
-    def subprotocol(self) -> str | None:
-        """Return the negotiated subprotocol, if any."""
-        return self._subprotocol
-
+    # pylint: disable-next=trivial-attribute-wrapper  # deliberate public API: the inbound queue is private, so callers need this accessor to inspect backlog depth
     def pending_inbound(self) -> int:
         """Return the number of queued inbound frames."""
         return self._inbound.qsize()
 
+    # pylint: disable-next=trivial-attribute-wrapper  # deliberate public API: the outbound queue is private, so callers need this accessor to inspect backlog depth
     def pending_outbound(self) -> int:
         """Return the number of queued outbound frames."""
         return self._outbound.qsize()
@@ -75,14 +60,6 @@ class WebSocketSimulator(_LifecycleSocket):
             decoder = msjson.Decoder(payload_type)
             self._decoders[payload_type] = decoder
         return decoder
-
-    async def accept(self, subprotocol: str | None = None) -> None:
-        """Record that the handshake was accepted."""
-        await super().accept(subprotocol=subprotocol)
-
-    async def close(self, code: int = 1000) -> None:
-        """Record that the connection was closed."""
-        await super().close(code)
 
     async def send_media(self, data: object) -> None:
         """Record ``data`` as an outbound frame."""
@@ -138,14 +115,26 @@ class WebSocketSimulator(_LifecycleSocket):
         raise TypeError(_EXPECTED_BYTES_MSG)
 
     async def receive_json(self, payload_type: type[object] | None = None) -> object:
-        """Receive and decode a JSON payload."""
+        """Receive and decode a JSON payload.
+
+        Returns
+        -------
+        object
+            The decoded payload, using ``payload_type`` when supplied.
+
+        Raises
+        ------
+        TypeError
+            If the received frame is neither a text nor a binary payload.
+        """
         message = await self.receive_media()
-        if isinstance(message, str):
-            data = message.encode("utf-8")
-        elif isinstance(message, bytes | bytearray | memoryview):
-            data = bytes(message)
-        else:
-            raise TypeError(_FAILED_JSON_DECODE_MSG.format(message=message))
+        match message:
+            case str():
+                data = message.encode("utf-8")
+            case bytes() | bytearray() | memoryview():
+                data = bytes(message)
+            case _:
+                raise TypeError(_FAILED_JSON_DECODE_MSG.format(message=message))
         decoder = self._decoder_for(payload_type)
         return decoder.decode(data)
 
@@ -165,12 +154,14 @@ class WebSocketSimulator(_LifecycleSocket):
             _UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=kind)
         )  # pragma: no cover - safeguarded by FrameKind literal
 
-    def _prepare_text_payload(self, payload: object) -> str:
+    @staticmethod
+    def _prepare_text_payload(payload: object) -> str:
         if not isinstance(payload, str):
             raise TypeError(_TEXT_PAYLOAD_REQUIRED_MSG)
         return payload
 
-    def _prepare_bytes_payload(self, payload: object) -> bytes:
+    @staticmethod
+    def _prepare_bytes_payload(payload: object) -> bytes:
         if not isinstance(payload, bytes | bytearray | memoryview):
             raise TypeError(_BINARY_PAYLOAD_REQUIRED_MSG)
         return bytes(payload)
@@ -190,7 +181,7 @@ class WebSocketSimulator(_LifecycleSocket):
     @asynccontextmanager
     async def connected(
         self, *, subprotocol: str | None = None
-    ) -> typ.AsyncIterator[WebSocketSimulator]:
+    ) -> cabc.AsyncIterator[WebSocketSimulator]:
         """Accept the connection on entry and close it on exit."""
         await self.accept(subprotocol=subprotocol)
         try:

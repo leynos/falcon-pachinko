@@ -17,6 +17,7 @@ from falcon_pachinko.websocket import (
 
 if typ.TYPE_CHECKING:
     import asyncio
+    import collections.abc as cabc
 
     from falcon_pachinko.protocols import WebSocketLike
 
@@ -24,7 +25,7 @@ if typ.TYPE_CHECKING:
 @pytest.fixture
 def event_loop(
     event_loop_policy: asyncio.AbstractEventLoopPolicy,
-) -> typ.Iterator[asyncio.AbstractEventLoop]:
+) -> cabc.Iterator[asyncio.AbstractEventLoop]:
     """Provide a dedicated event loop for the scenario."""
     loop = event_loop_policy.new_event_loop()
     try:
@@ -45,7 +46,9 @@ class DummyWebSocket:
     async def close(self, code: int = 1000) -> None:  # pragma: no cover
         """Close the websocket connection (unused in this scenario)."""
 
-    async def send_media(self, data: object) -> None:
+    async def send_media(  # pylint: disable=trivial-attribute-wrapper  # protocol stub
+        self, data: object
+    ) -> None:
         """Record outbound messages."""
         self.messages.append(data)
 
@@ -62,12 +65,12 @@ class RecordingBackend(ConnectionBackend):
         self.calls: list[str] = []
 
     @property
-    def websockets(self) -> typ.Mapping[str, WebSocketLike]:
+    def websockets(self) -> cabc.Mapping[str, WebSocketLike]:
         """Expose a read-only snapshot of active websockets."""
         return types.MappingProxyType(self._websockets)
 
     @property
-    def rooms(self) -> typ.Mapping[str, typ.Collection[str]]:
+    def rooms(self) -> cabc.Mapping[str, cabc.Collection[str]]:
         """Expose a read-only snapshot of room memberships."""
         snapshot = {room: set(ids) for room, ids in self._rooms.items()}
         return types.MappingProxyType(snapshot)
@@ -124,7 +127,7 @@ class RecordingBackend(ConnectionBackend):
         ]
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class ScenarioState:
     """Share state across steps."""
 
@@ -173,11 +176,17 @@ def when_broadcast(context: ScenarioState) -> ScenarioState:
 @then("the backend records the broadcast snapshot")
 def then_backend_calls(context: ScenarioState) -> None:
     """Ensure the backend snapshot call is recorded."""
-    assert "snapshot:crew" in context.backend.calls
-    assert context.backend.rooms == {"crew": {"alice"}}
+    assert "snapshot:crew" in context.backend.calls, (
+        "broadcasting must record a snapshot call for the room"
+    )
+    assert context.backend.rooms == {"crew": {"alice"}}, (
+        "the crew room must still contain only alice"
+    )
 
 
 @then("the websocket receives the broadcast payload")
 def then_websocket_receives(context: ScenarioState) -> None:
     """Verify the websocket saw the payload."""
-    assert context.websocket.messages == [{"msg": "hello"}]
+    assert context.websocket.messages == [{"msg": "hello"}], (
+        "the websocket should have received the broadcast payload"
+    )
