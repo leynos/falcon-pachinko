@@ -34,7 +34,7 @@ class Envelope(ms.Struct, frozen=True):
     payload: typ.Any | None = None
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class HandlerInvocationContext:
     """Context for invoking a message handler."""
 

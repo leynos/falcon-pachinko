@@ -54,4 +54,4 @@ def when_run_worker(context: dict[str, typ.Any]) -> None:
 @then("the log should contain at least one entry")
 def then_log_not_empty(context: dict[str, typ.Any]) -> None:
     """Verify the worker executed."""
-    assert context["log"]
+    assert context["log"], "the worker should have logged at least one entry"

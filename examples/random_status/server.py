@@ -34,6 +34,9 @@ from falcon_pachinko import (
     worker,
 )
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 try:
     from tests.behaviour._lifespan import LifespanApp  # type: ignore[import-not-found]
 except ImportError:
@@ -44,12 +47,13 @@ except ImportError:
         def __init__(self) -> None:
             super().__init__()
             self._lifespan_handler: (
-                typ.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]] | None
+                cabc.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]]
+                | None
             ) = None
 
         def lifespan(
-            self, fn: typ.Callable[[typ.Any], typ.AsyncIterator[None]]
-        ) -> typ.Callable[[typ.Any], cl.AbstractAsyncContextManager[None]]:
+            self, fn: cabc.Callable[[typ.Any], cabc.AsyncIterator[None]]
+        ) -> cabc.Callable[[typ.Any], cl.AbstractAsyncContextManager[None]]:
             """Register a lifespan context manager."""
             manager = cl.asynccontextmanager(fn)
             self._lifespan_handler = manager
@@ -64,8 +68,6 @@ except ImportError:
 
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
     import falcon
 
     class _SupportsWebSocketRoute(typ.Protocol):
@@ -177,17 +179,14 @@ def create_app() -> falcon_asgi.App:
     """Create and configure the Falcon ASGI application."""
     app = LifespanApp()
     install(app)
-    conn_mgr = typ.cast(
-        "WebSocketConnectionManager",
-        getattr(app, "ws_connection_manager"),  # noqa: B009
-    )
+    conn_mgr = typ.cast("WebSocketConnectionManager", app.ws_connection_manager)
     container = ServiceContainer()
     container.register("conn_mgr", conn_mgr)
 
     controller = WorkerController()
 
     @app.lifespan
-    async def lifespan(app_instance: LifespanApp) -> typ.AsyncIterator[None]:
+    async def lifespan(app_instance: LifespanApp) -> cabc.AsyncIterator[None]:
         db = await _setup_db()
         container.register("db", db)
         await controller.start(random_worker, conn_mgr=conn_mgr)

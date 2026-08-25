@@ -11,7 +11,7 @@ from pytest_bdd import given, scenario, then, when
 from falcon_pachinko.websocket import WebSocketConnectionManager
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class DummyWebSocket:
     """WebSocket stub that records messages."""
 
@@ -27,7 +27,9 @@ class DummyWebSocket:
         """Close the connection."""
         return
 
-    async def send_media(self, data: object) -> None:
+    async def send_media(  # pylint: disable=trivial-attribute-wrapper  # protocol stub
+        self, data: object
+    ) -> None:
         """Record sent data."""
         self.messages.append(data)
 
@@ -36,7 +38,7 @@ class DummyWebSocket:
         return None
 
 
-SetupFixture = tuple[
+type SetupFixture = tuple[
     WebSocketConnectionManager,
     DummyWebSocket,
     DummyWebSocket,
@@ -60,8 +62,12 @@ def _assert_messages_received(
     """Assert that each websocket received the expected messages."""
     _, ws1, ws2, loop = setup
     try:
-        assert ws1.messages == expected_ws1
-        assert ws2.messages == expected_ws2
+        assert ws1.messages == expected_ws1, (
+            f"ws1 should have received {expected_ws1!r}, got {ws1.messages!r}"
+        )
+        assert ws2.messages == expected_ws2, (
+            f"ws2 should have received {expected_ws2!r}, got {ws2.messages!r}"
+        )
     finally:
         loop.close()
 
@@ -145,6 +151,11 @@ def setup_empty_room() -> SetupFixture:
     """Create a connection manager with an empty lobby room.
 
     Note: ``ws1``/``ws2`` are placeholders to satisfy ``SetupFixture`` shape.
+
+    Returns
+    -------
+    SetupFixture
+        The manager, placeholder websockets, and the event loop.
     """
     loop = asyncio.new_event_loop()
     try:
@@ -204,7 +215,7 @@ def assert_iterated(setup: SetupFixture, iterated: list[DummyWebSocket]) -> None
     _, ws1, ws2, loop = setup
     try:
         ids = {id(ws) for ws in iterated}
-        assert ids == {id(ws1), id(ws2)}
+        assert ids == {id(ws1), id(ws2)}, "both connections should be yielded"
     finally:
         loop.close()
 
@@ -217,8 +228,8 @@ def assert_iterated_excluding(
     _, ws1, ws2, loop = setup
     try:
         ids = {id(ws) for ws in iterated}
-        assert ids == {id(ws2)}
-        assert id(ws1) not in ids
+        assert ids == {id(ws2)}, "only the non-excluded connection should be yielded"
+        assert id(ws1) not in ids, "the excluded connection must not be yielded"
     finally:
         loop.close()
 
@@ -230,6 +241,6 @@ def assert_iterated_empty_room(
     """Assert that iteration over an empty room yields nothing."""
     _, _, _, loop = setup
     try:
-        assert iterated == []
+        assert iterated == [], "an empty room must yield no connections"
     finally:
         loop.close()

@@ -6,6 +6,8 @@ import inspect
 import typing as typ
 
 if typ.TYPE_CHECKING:  # pragma: no cover - used only for static analysis
+    import collections.abc as cabc
+
     from .resource import WebSocketResource
 
     WebSocketResourceT = typ.TypeVar("WebSocketResourceT", bound=WebSocketResource)
@@ -30,7 +32,7 @@ class ServiceContainer:
 
     def __init__(self) -> None:
         self._services: dict[str, object] = {}
-        self._signature_cache: dict[typ.Callable[..., object], inspect.Signature] = {}
+        self._signature_cache: dict[cabc.Callable[..., object], inspect.Signature] = {}
 
     def register(self, name: str, value: object) -> None:
         """Expose ``value`` for resources requesting ``name``."""
@@ -44,11 +46,11 @@ class ServiceContainer:
             raise ServiceNotFoundError(name) from exc
 
     def create_resource(
-        self, route_factory: typ.Callable[..., WebSocketResourceT]
+        self, route_factory: cabc.Callable[..., WebSocketResourceT]
     ) -> WebSocketResourceT:
         """Instantiate ``route_factory`` injecting registered dependencies."""
         target = typ.cast(
-            "typ.Callable[..., WebSocketResourceT]",
+            "cabc.Callable[..., WebSocketResourceT]",
             getattr(route_factory, "func", route_factory),
         )
         args = getattr(route_factory, "args", ())
@@ -62,10 +64,10 @@ class ServiceContainer:
         for parameter in signature.parameters.values():
             if parameter.name == "self":
                 continue
-            if parameter.kind in (
+            if parameter.kind in {
                 inspect.Parameter.VAR_POSITIONAL,
                 inspect.Parameter.VAR_KEYWORD,
-            ):
+            }:
                 continue
             if parameter.name in kwargs:
                 continue

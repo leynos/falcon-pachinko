@@ -9,6 +9,9 @@ from types import SimpleNamespace
 import pytest
 from pytest_bdd import given, scenario, then, when
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 from falcon_pachinko import (
     HookCollection,
     HookContext,
@@ -50,37 +53,42 @@ class HookedParent(WebSocketResource):
         self.add_subroute("child", HookedChild)
 
 
-async def global_hook(context: HookContext) -> None:
+def global_hook(context: HookContext) -> None:
     """Record global hook invocations and mutate connect params."""
     EVENTS.append(f"global.{context.event}")
-    if context.event == "before_connect":
-        if context.params is None:
-            context.params = {}
-        context.params.setdefault("global", True)
-    elif context.event == "after_connect":
-        assert context.result is True
-    elif context.event == "after_receive":
-        AFTER_RECEIVE_ERRORS.append(("global", context.error))
+    match context.event:
+        case "before_connect":
+            if context.params is None:
+                context.params = {}
+            context.params.setdefault("global", True)
+        case "after_connect":
+            assert context.result is True, "on_connect should have returned True"
+        case "after_receive":
+            AFTER_RECEIVE_ERRORS.append(("global", context.error))
 
 
-async def parent_hook(context: HookContext) -> None:
+def parent_hook(context: HookContext) -> None:
     """Capture parent-level hooks for ordering assertions."""
     EVENTS.append(f"parent.{context.event}")
-    if context.event == "before_connect":
-        if context.params is None:
-            context.params = {}
-        context.params.setdefault("parent", True)
-    elif context.event == "after_receive":
-        AFTER_RECEIVE_ERRORS.append(("parent", context.error))
+    match context.event:
+        case "before_connect":
+            if context.params is None:
+                context.params = {}
+            context.params.setdefault("parent", True)
+        case "after_receive":
+            AFTER_RECEIVE_ERRORS.append(("parent", context.error))
 
 
-async def child_hook(context: HookContext) -> None:
+def child_hook(context: HookContext) -> None:
     """Capture child-level hooks for ordering assertions."""
     EVENTS.append(f"child.{context.event}")
-    if context.event == "before_receive":
-        assert context.raw is not None
-    elif context.event == "after_receive":
-        AFTER_RECEIVE_ERRORS.append(("child", context.error))
+    match context.event:
+        case "before_receive":
+            assert context.raw is not None, (
+                "raw payload should be visible before receive"
+            )
+        case "after_receive":
+            AFTER_RECEIVE_ERRORS.append(("child", context.error))
 
 
 @scenario("features/hooks.feature", "Global and resource hooks wrap lifecycle")
@@ -89,7 +97,7 @@ def test_hooks_feature() -> None:
 
 
 @pytest.fixture(autouse=True)
-def reset_hooks() -> typ.Iterator[None]:
+def reset_hooks() -> cabc.Iterator[None]:
     """Reset hook registries and accumulated events between scenarios."""
     HookedParent.hooks = HookCollection.inherit(WebSocketResource.hooks)
     HookedChild.hooks = HookCollection.inherit(WebSocketResource.hooks)
@@ -116,10 +124,12 @@ def _assert_event_sequence(
     end_idx: int | None,
     expected_events: list[str],
 ) -> None:
-    """Helper function to validate event sequence ordering."""  # noqa: D401
+    """Validate the recorded event sequence against ``expected_events``."""
     events: list[str] = context["events"]
     actual_slice = events[start_idx:] if end_idx is None else events[start_idx:end_idx]
-    assert actual_slice == expected_events
+    assert actual_slice == expected_events, (
+        "hook events should appear in the expected order for this slice"
+    )
 
 
 @given("a router with multi-tier hooks")
@@ -189,7 +199,7 @@ def when_client_connects_with_error(context: dict[str, typ.Any]) -> None:
 
     try:
         asyncio.run(child.dispatch(ws, b'{"type":"error"}'))
-    except Exception as exc:  # noqa: BLE001 - surface the raised error
+    except Exception as exc:  # ruff: ignore[blind-except] - surface the raised error
         context["error"] = exc
 
     context["events"] = list(EVENTS)
@@ -235,7 +245,7 @@ def then_receive_order(context: dict[str, typ.Any]) -> None:
         ("child", None),
         ("parent", None),
         ("global", None),
-    ]
+    ], "each layer's after_receive hook should observe no error"
 
 
 @then("only global hooks are recorded")
@@ -247,19 +257,21 @@ def then_only_global_hooks(context: dict[str, typ.Any]) -> None:
         "global.before_receive",
         "handler.child",
         "global.after_receive",
-    ]
+    ], "only global hooks should have run when no resource hooks are registered"
     params = context["child_params"]
-    assert params["global"] is True
-    assert "parent" not in params
-    assert context["after_errors"] == [("global", None)]
+    assert params["global"] is True, "global before_connect hook should set its flag"
+    assert "parent" not in params, "no parent hook was registered, so no parent flag"
+    assert context["after_errors"] == [("global", None)], (
+        "only the global after_receive hook should have recorded no error"
+    )
 
 
 @then("the child resource records hook-injected params")
 def then_child_params(context: dict[str, typ.Any]) -> None:
     """Ensure context mutation from hooks reaches the child resource."""
     params = context["child_params"]
-    assert params["global"] is True
-    assert params["parent"] is True
+    assert params["global"] is True, "global before_connect hook should set its flag"
+    assert params["parent"] is True, "parent before_connect hook should set its flag"
 
 
 @scenario(
@@ -273,15 +285,17 @@ def test_hooks_error_feature() -> None:
 @then("the error is propagated to after_receive hook and the hook chain remains intact")
 def then_error_propagates(context: dict[str, typ.Any]) -> None:
     """Verify that after hooks observed the raised error in order."""
-    assert "error" in context
-    assert isinstance(context["error"], ValueError)
+    assert "error" in context, "the raised error should have been captured"
+    assert isinstance(context["error"], ValueError), (
+        "the captured error should be the ValueError raised by on_error"
+    )
     assert context["events"][-3:] == [
         "child.after_receive",
         "parent.after_receive",
         "global.after_receive",
-    ]
+    ], "after_receive hooks should still run in order despite the error"
     assert context["after_errors"] == [
         ("child", context["error"]),
         ("parent", context["error"]),
         ("global", context["error"]),
-    ]
+    ], "every layer's after_receive hook should observe the same error"

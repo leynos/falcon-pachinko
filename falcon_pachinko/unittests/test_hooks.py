@@ -18,6 +18,8 @@ from falcon_pachinko.resource import _receive_hooks
 from falcon_pachinko.unittests.helpers import DummyWS
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from falcon_pachinko.hooks import HookCallable
 
 
@@ -58,19 +60,22 @@ class HookParent(WebSocketResource):
 
 def create_global_hook(
     events: list[str],
-) -> typ.Callable[[HookContext], typ.Awaitable[None]]:
+) -> cabc.Callable[[HookContext], None]:
     """Produce a global hook that records context assertions."""
 
-    async def global_hook(context: HookContext) -> None:
-        assert isinstance(context.target, HookChild)
-        if context.event == "before_connect":
-            if context.params is None:
-                context.params = {}
-            context.params.setdefault("global", True)
-        elif context.event == "after_connect":
-            assert context.result is True
-        elif context.event == "after_receive":
-            assert context.error is None
+    def global_hook(context: HookContext) -> None:
+        assert isinstance(context.target, HookChild), (
+            "global hook should target the connecting child resource"
+        )
+        match context.event:
+            case "before_connect":
+                if context.params is None:
+                    context.params = {}
+                context.params.setdefault("global", True)
+            case "after_connect":
+                assert context.result is True, "on_connect should have returned True"
+            case "after_receive":
+                assert context.error is None, "no error expected during dispatch"
         events.append(f"global.{context.event}")
 
     return global_hook
@@ -78,17 +83,20 @@ def create_global_hook(
 
 def create_parent_hook(
     events: list[str],
-) -> typ.Callable[[HookContext], typ.Awaitable[None]]:
+) -> cabc.Callable[[HookContext], None]:
     """Produce a parent-level hook for order verification."""
 
-    async def parent_hook(context: HookContext) -> None:
-        assert context.resource in HookParent.instances
-        if context.event == "before_connect":
-            if context.params is None:
-                context.params = {}
-            context.params.setdefault("parent", True)
-        elif context.event == "after_receive":
-            assert context.error is None
+    def parent_hook(context: HookContext) -> None:
+        assert context.resource in HookParent.instances, (
+            "parent hook should run against a known HookParent instance"
+        )
+        match context.event:
+            case "before_connect":
+                if context.params is None:
+                    context.params = {}
+                context.params.setdefault("parent", True)
+            case "after_receive":
+                assert context.error is None, "no error expected during dispatch"
         events.append(f"parent.{context.event}")
 
     return parent_hook
@@ -96,20 +104,76 @@ def create_parent_hook(
 
 def create_child_hook(
     events: list[str],
-) -> typ.Callable[[HookContext], typ.Awaitable[None]]:
+) -> cabc.Callable[[HookContext], None]:
     """Produce a child-level hook that inspects payload flow."""
 
-    async def child_hook(context: HookContext) -> None:
-        assert isinstance(context.target, HookChild)
-        if context.event == "after_connect":
-            assert context.result is True
-        elif context.event == "before_receive":
-            assert context.raw == b'{"type":"noop"}'
-        elif context.event == "after_receive":
-            assert context.error is None
+    def child_hook(context: HookContext) -> None:
+        assert isinstance(context.target, HookChild), (
+            "child hook should target the connecting child resource"
+        )
+        match context.event:
+            case "after_connect":
+                assert context.result is True, "on_connect should have returned True"
+            case "before_receive":
+                assert context.raw == b'{"type":"noop"}', (
+                    "the dispatched no-op payload should be visible before receive"
+                )
+            case "after_receive":
+                assert context.error is None, "no error expected during dispatch"
         events.append(f"child.{context.event}")
 
     return child_hook
+
+
+class BoomResource(WebSocketResource):
+    """Resource whose handler always raises, for error-reporting hook tests."""
+
+    instances: typ.ClassVar[list[BoomResource]] = []
+
+    def __init__(self) -> None:
+        BoomResource.instances.append(self)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Accept every connection."""
+        return True
+
+    async def on_boom(self, ws: object, payload: object) -> None:
+        """Raise to exercise after-hook error reporting."""
+        raise RuntimeError("boom")
+
+
+def create_error_reporting_global_hook(
+    events: list[tuple[str, str]],
+) -> cabc.Callable[[HookContext], None]:
+    """Produce a global hook recording events and checking the reported error."""
+
+    def global_hook(context: HookContext) -> None:
+        events.append(("global", context.event))
+        if context.event == "after_receive":
+            assert isinstance(context.error, RuntimeError), (
+                "after_receive should report the handler's RuntimeError"
+            )
+
+    return global_hook
+
+
+def create_error_reporting_resource_hook(
+    events: list[tuple[str, str]],
+) -> cabc.Callable[[HookContext], None]:
+    """Produce a resource hook recording events and checking raw/error state."""
+
+    def resource_hook(context: HookContext) -> None:
+        events.append(("resource", context.event))
+        if context.event == "before_receive":
+            assert context.raw == b'{"type":"boom"}', (
+                "before_receive should see the raw payload that triggers the error"
+            )
+        if context.event == "after_receive":
+            assert isinstance(context.error, RuntimeError), (
+                "after_receive should report the handler's RuntimeError"
+            )
+
+    return resource_hook
 
 
 class HookTestEnvironment:
@@ -163,18 +227,22 @@ class HookTestEnvironment:
 
 
 @pytest.fixture(autouse=True)
-def reset_hook_state() -> typ.Iterator[None]:
+def reset_hook_state() -> cabc.Iterator[None]:
     """Ensure per-test isolation for hook registries and instances."""
     HookParent.hooks = HookCollection()
     HookChild.hooks = HookCollection()
+    BoomResource.hooks = HookCollection()
     HookParent.instances = []
     HookChild.instances = []
+    BoomResource.instances = []
     HookChild._events = []
     yield
     HookParent.hooks = HookCollection()
     HookChild.hooks = HookCollection()
+    BoomResource.hooks = HookCollection()
     HookParent.instances = []
     HookChild.instances = []
+    BoomResource.instances = []
     HookChild._events = []
 
 
@@ -192,7 +260,7 @@ async def test_hooks_execute_in_layered_order(
     child = await hook_test_environment.open_connection()
     await hook_test_environment.dispatch_noop(child)
 
-    assert hook_test_environment.events == [
+    expected_order = [
         "global.before_connect",
         "parent.before_connect",
         "child.before_connect",
@@ -207,6 +275,9 @@ async def test_hooks_execute_in_layered_order(
         "parent.after_receive",
         "global.after_receive",
     ]
+    assert hook_test_environment.events == expected_order, (
+        "hooks should fire in onion order across all three scopes"
+    )
 
 
 @pytest.mark.asyncio
@@ -216,8 +287,12 @@ async def test_hook_context_parameter_propagation(
     """Before-connect hooks may amend params passed to the resource."""
     child = await hook_test_environment.open_connection()
 
-    assert child.params["global"] is True
-    assert child.params["parent"] is True
+    assert child.params["global"] is True, (
+        "global before_connect hook should have set the global flag"
+    )
+    assert child.params["parent"] is True, (
+        "parent before_connect hook should have set the parent flag"
+    )
 
 
 @pytest.mark.asyncio
@@ -236,7 +311,7 @@ async def test_message_processing_hooks_capture_handler_events(
         "child.after_receive",
         "parent.after_receive",
         "global.after_receive",
-    ]
+    ], "receive hooks should surround handler dispatch in onion order"
 
 
 def test_hookcollection_add_unsupported_event() -> None:
@@ -270,12 +345,20 @@ def test_hookcollection_inheritance_propagates_changes() -> None:
         return None
 
     Parent.hooks.add("before_receive", parent_before)
-    assert parent_before in Parent.hooks.iter("before_receive")
-    assert parent_before in Child.hooks.iter("before_receive")
+    assert parent_before in Parent.hooks.iter("before_receive"), (
+        "parent hook should be registered on the parent"
+    )
+    assert parent_before in Child.hooks.iter("before_receive"), (
+        "child should inherit hooks registered on the parent after the fact"
+    )
 
     Child.hooks.add("after_receive", child_after)
-    assert child_after in Child.hooks.iter("after_receive")
-    assert child_after not in Parent.hooks.iter("after_receive")
+    assert child_after in Child.hooks.iter("after_receive"), (
+        "child-only hook should be registered on the child"
+    )
+    assert child_after not in Parent.hooks.iter("after_receive"), (
+        "child-only hook should not leak back to the parent"
+    )
 
 
 @pytest.mark.asyncio
@@ -287,7 +370,7 @@ async def test_receive_hooks_skip_cancelled_error() -> None:
 
     events: list[str] = []
 
-    async def after_hook(context: HookContext) -> None:
+    def after_hook(context: HookContext) -> None:
         events.append(context.event)
 
     CancelResource.hooks.add("after_receive", after_hook)
@@ -302,37 +385,15 @@ async def test_receive_hooks_skip_cancelled_error() -> None:
     with pytest.raises(asyncio.CancelledError):
         await run()
 
-    assert events == []
+    assert not events, "after hooks should not run when the dispatch is cancelled"
 
 
 @pytest.mark.asyncio
 async def test_after_receive_reports_errors() -> None:
     """After hooks receive the raised exception."""
     events: list[tuple[str, str]] = []
-
-    class BoomResource(WebSocketResource):
-        instances: typ.ClassVar[list[BoomResource]] = []
-
-        def __init__(self) -> None:
-            BoomResource.instances.append(self)
-
-        async def on_connect(self, req: object, ws: object, **params: object) -> bool:
-            return True
-
-        async def on_boom(self, ws: object, payload: object) -> None:
-            raise RuntimeError("boom")
-
-    async def global_hook(context: HookContext) -> None:
-        events.append(("global", context.event))
-        if context.event == "after_receive":
-            assert isinstance(context.error, RuntimeError)
-
-    async def resource_hook(context: HookContext) -> None:
-        events.append(("resource", context.event))
-        if context.event == "before_receive":
-            assert context.raw == b'{"type":"boom"}'
-        if context.event == "after_receive":
-            assert isinstance(context.error, RuntimeError)
+    global_hook = create_error_reporting_global_hook(events)
+    resource_hook = create_error_reporting_resource_hook(events)
 
     router = WebSocketRouter()
     router.global_hooks.add("before_receive", global_hook)
@@ -352,9 +413,12 @@ async def test_after_receive_reports_errors() -> None:
     with pytest.raises(RuntimeError):
         await resource.dispatch(ws, b'{"type":"boom"}')
 
-    assert events == [
+    expected_events = [
         ("global", "before_receive"),
         ("resource", "before_receive"),
         ("resource", "after_receive"),
         ("global", "after_receive"),
     ]
+    assert events == expected_events, (
+        "before/after receive hooks should observe both layers around the error"
+    )

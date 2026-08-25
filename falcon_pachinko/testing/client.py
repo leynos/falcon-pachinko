@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import typing as typ
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from urllib.parse import urlsplit
 
 import msgspec.json as msjson
@@ -24,19 +24,16 @@ from ._common import (
     PayloadKind,
 )
 
-_ws_connect: typ.Any
-
 try:  # pragma: no cover - optional dependency exercised in tests
-    from websockets.client import connect as _ws_connect_import
+    from websockets.client import connect as _ws_connect
 except ImportError:  # pragma: no cover - imported lazily in tests
     _ws_connect = None
-else:
-    _ws_connect = _ws_connect_import
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing only
+    import collections.abc as cabc
+    from urllib.parse import SplitResult
+
     from websockets.client import WebSocketClientProtocol
-else:  # pragma: no cover - runtime fallback when dependency missing
-    WebSocketClientProtocol = typ.Any  # type: ignore[misc,assignment]
 
 
 @dc.dataclass(slots=True)
@@ -69,7 +66,7 @@ class WebSocketSession:
 
     @property
     def subprotocol(self) -> str | None:
-        """Return the negotiated subprotocol, if any."""
+        """Negotiated subprotocol, if any."""
         return getattr(self._connection, "subprotocol", None)
 
     @property
@@ -103,17 +100,20 @@ class WebSocketSession:
         await self._connection.send(data)
         self._log("send", frame_kind, payload)
 
+    @staticmethod
     def _determine_send_frame_kind(
-        self, kind: FrameKind | None, payload: str | bytes | object
+        kind: FrameKind | None, payload: str | bytes | object
     ) -> FrameKind:
         """Return the frame kind inferred from ``kind`` or ``payload``."""
         if kind is not None:
             return kind
-        if isinstance(payload, bytes):
-            return "bytes"
-        if isinstance(payload, str):
-            return "text"
-        return "json"
+        match payload:
+            case bytes():
+                return "bytes"
+            case str():
+                return "text"
+            case _:
+                return "json"
 
     def _encode_payload(
         self, frame_kind: FrameKind, payload: str | bytes | object
@@ -129,13 +129,15 @@ class WebSocketSession:
             _UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=frame_kind)
         )
 
-    def _encode_text_payload(self, payload: str | bytes | object) -> str:
+    @staticmethod
+    def _encode_text_payload(payload: str | bytes | object) -> str:
         """Validate and return a text payload."""
         if isinstance(payload, str):
             return payload
         raise TypeError(_TEXT_PAYLOAD_REQUIRED_MSG)
 
-    def _encode_bytes_payload(self, payload: str | bytes | object) -> bytes:
+    @staticmethod
+    def _encode_bytes_payload(payload: str | bytes | object) -> bytes:
         """Validate and return a binary payload."""
         if isinstance(payload, bytes):
             return payload
@@ -180,8 +182,9 @@ class WebSocketSession:
         self._log("receive", frame_kind, payload)
         return payload
 
+    @staticmethod
     def _determine_frame_kind(
-        self, kind: FrameKind | None, message: str | bytes
+        kind: FrameKind | None, message: str | bytes
     ) -> FrameKind:
         """Return the frame kind inferred from ``kind`` or ``message``."""
         if kind is not None:
@@ -216,13 +219,15 @@ class WebSocketSession:
         except Exception as exc:  # pragma: no cover - msgspec raised
             raise RuntimeError(_FAILED_JSON_DECODE_MSG.format(message=message)) from exc
 
-    def _decode_text_frame(self, message: str | bytes) -> str:
+    @staticmethod
+    def _decode_text_frame(message: str | bytes) -> str:
         """Validate and return a text frame payload."""
         if isinstance(message, str):
             return message
         raise TypeError(_EXPECTED_TEXT_MSG)
 
-    def _decode_bytes_frame(self, message: str | bytes) -> bytes:
+    @staticmethod
+    def _decode_bytes_frame(message: str | bytes) -> bytes:
         """Validate and return a binary frame payload."""
         if isinstance(message, bytes):
             return message
@@ -257,18 +262,17 @@ class WebSocketSession:
                 {"code": code, "reason": reason, "exception": str(exc)},
             )
             raise
-        else:
-            self._log("close", "close", {"code": code, "reason": reason})
+        self._log("close", "close", {"code": code, "reason": reason})
 
 
 class _ClientOptions(typ.TypedDict, total=False):
     """Optional configuration parameters for :class:`WebSocketTestClient`."""
 
-    default_headers: typ.Mapping[str, str]
-    subprotocols: typ.Sequence[str]
+    default_headers: cabc.Mapping[str, str]
+    subprotocols: cabc.Sequence[str]
     open_timeout: float
     capture_trace: bool
-    trace_factory: typ.Callable[[], list[TraceEvent]]
+    trace_factory: cabc.Callable[[], list[TraceEvent]]
     allow_insecure: bool
 
 
@@ -290,6 +294,12 @@ class WebSocketTestClient:
         - ``capture_trace``: capture trace events by default (default ``False``).
         - ``trace_factory``: callable returning a new trace list (default ``list``).
         - ``allow_insecure``: allow ``ws://`` URLs (default ``False``).
+
+        Raises
+        ------
+        ValueError
+            If ``base_url`` uses the insecure ``ws://`` scheme and
+            ``allow_insecure`` is not enabled.
         """
         default_headers = options.get("default_headers")
         subprotocols = options.get("subprotocols")
@@ -317,14 +327,26 @@ class WebSocketTestClient:
             return self._handle_absolute_url(path, parsed)
         return self._handle_relative_url(path, parsed)
 
-    def _handle_absolute_url(self, path: str, parsed: typ.Any) -> tuple[str, str]:  # noqa: ANN401
-        """Handle an absolute WebSocket URL with validation."""
+    def _handle_absolute_url(self, path: str, parsed: SplitResult) -> tuple[str, str]:
+        """Handle an absolute WebSocket URL with validation.
+
+        Returns
+        -------
+        tuple[str, str]
+            The unchanged connection URL and the normalized request path.
+
+        Raises
+        ------
+        ValueError
+            If ``parsed`` uses the insecure ``ws://`` scheme and the client was
+            not configured with ``allow_insecure``.
+        """
         if parsed.scheme == "ws" and not self._allow_insecure:
             raise ValueError(_INSECURE_WEBSOCKET_MSG)
         normalized = self._append_query(parsed.path or "/", parsed.query)
         return path, normalized
 
-    def _handle_relative_url(self, path: str, parsed: typ.Any) -> tuple[str, str]:  # noqa: ANN401
+    def _handle_relative_url(self, path: str, parsed: SplitResult) -> tuple[str, str]:
         """Handle a relative path by joining it with the base URL."""
         normalized = parsed.path or path
         normalized = self._append_query(normalized, parsed.query)
@@ -333,14 +355,15 @@ class WebSocketTestClient:
         base = self._base_url.rstrip("/")
         return f"{base}{normalized}", normalized
 
-    def _append_query(self, path: str, query: str) -> str:
+    @staticmethod
+    def _append_query(path: str, query: str) -> str:
         """Append query string to path if present."""
         if query:
             return f"{path}?{query}"
         return path
 
     def _merge_headers(
-        self, headers: typ.Mapping[str, str] | None
+        self, headers: cabc.Mapping[str, str] | None
     ) -> dict[str, str] | None:
         """Merge default headers with per-connection overrides."""
         if not self._default_headers and not headers:
@@ -351,7 +374,7 @@ class WebSocketTestClient:
         return merged
 
     def _resolve_subprotocols(
-        self, subprotocols: typ.Sequence[str] | None
+        self, subprotocols: cabc.Sequence[str] | None
     ) -> tuple[str, ...] | None:
         """Return connection subprotocols, honouring per-call overrides."""
         if subprotocols is not None:
@@ -363,17 +386,21 @@ class WebSocketTestClient:
     ) -> bool:
         """Determine whether to create a new trace list for the session.
 
-        Returns True when:
-        - trace is explicitly True (caller requests tracing), or
-        - trace is None (use default) and instance capture_trace is enabled
+        Returns
+        -------
+        bool
+            ``True`` when ``trace`` is explicitly ``True`` (the caller requests
+            tracing), or when ``trace`` is ``None`` and the client's
+            ``capture_trace`` default is enabled; ``False`` otherwise.
         """
         explicit_enable = trace is True
         use_instance_default = trace is None and self._capture_trace
         return explicit_enable or use_instance_default
 
-    def _ensure_ws_connect(
-        self,
-    ) -> typ.Callable[..., typ.Awaitable[WebSocketClientProtocol]]:
+    @staticmethod
+    def _ensure_ws_connect() -> cabc.Callable[
+        ..., cabc.Awaitable[WebSocketClientProtocol]
+    ]:
         """Return the websockets connect callable, importing lazily when needed."""
         global _ws_connect
         ws_connect = _ws_connect
@@ -388,8 +415,8 @@ class WebSocketTestClient:
     def _prepare_connection_params(
         self,
         path: str,
-        headers: typ.Mapping[str, str] | None,
-        subprotocols: typ.Sequence[str] | None,
+        headers: cabc.Mapping[str, str] | None,
+        subprotocols: cabc.Sequence[str] | None,
     ) -> tuple[str, str, dict[str, str] | None, tuple[str, ...] | None]:
         """Compute the URL, normalized path, headers, and subprotocols."""
         url, normalized_path = self._build_url(path)
@@ -412,10 +439,10 @@ class WebSocketTestClient:
         self,
         path: str,
         *,
-        headers: typ.Mapping[str, str] | None = None,
-        subprotocols: typ.Sequence[str] | None = None,
+        headers: cabc.Mapping[str, str] | None = None,
+        subprotocols: cabc.Sequence[str] | None = None,
         trace: list[TraceEvent] | bool | None = None,
-    ) -> typ.AsyncIterator[WebSocketSession]:
+    ) -> cabc.AsyncIterator[WebSocketSession]:
         """Connect to ``path`` and yield a managed :class:`WebSocketSession`.
 
         ``trace`` accepts one of four values:
@@ -424,6 +451,12 @@ class WebSocketTestClient:
         - ``True``: create and return a new trace list via ``trace_factory``.
         - ``False``: disable tracing for this session.
         - ``None``: fall back to the client's ``capture_trace`` default.
+
+        Yields
+        ------
+        WebSocketSession
+            A session bound to the open connection. The session is closed on
+            exit if the caller has not already closed it.
         """
         ws_connect = self._ensure_ws_connect()
         (
@@ -434,7 +467,7 @@ class WebSocketTestClient:
         ) = self._prepare_connection_params(path, headers, subprotocols)
         trace_log = self._configure_trace(trace=trace)
         connect_cm = typ.cast(
-            "typ.AsyncContextManager[WebSocketClientProtocol]",
+            "AbstractAsyncContextManager[WebSocketClientProtocol]",
             ws_connect(
                 url,
                 extra_headers=merged_headers,
