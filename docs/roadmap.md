@@ -5,6 +5,12 @@ extension based on the revised, composable architecture detailed in the main
 design document. It supersedes the previous roadmap and reflects a pivot
 towards a more robust, scalable, and Falcon-idiomatic system.
 
+Phases 1 to 5 record completed components, not a complete production session.
+The remaining runtime work is specified in
+[RFC 0001](rfcs/0001-websocket-session-runtime.md). Its ADRs supersede earlier
+claims that a mounted router already drives message receipt or that a
+connection backend can move live sockets between processes.
+
 ## 1. Foundational Composable Router
 
 This phase replaces the initial `app.add_websocket_route` mechanism with the
@@ -94,9 +100,7 @@ composable patterns.
     nested paths.
 
   - [x] Design and implement a robust context-passing mechanism for parent
-    resources to inject state into child resources (see
-    [§5.2.3](falcon-websocket-extension-design.md#523-context-passing-for- nested-resources)
-     ).
+    resources to inject state into child resources (see §5.2.3¹).
 
     - [x] Add an overridable `get_child_context()` hook on
       `WebSocketResource`¹ so parents can explicitly share data with the next
@@ -232,3 +236,243 @@ the library is ready for use.
 
   - [x] Add detailed "how-to" guides for advanced features like DI, state
     management, and custom connection manager backends.
+
+## 6. Complete WebSocket Session Runtime
+
+This phase turns the implemented router and dispatcher into one long-lived
+production session, as specified by
+[RFC 0001](rfcs/0001-websocket-session-runtime.md).
+
+### 6.1. Session lifecycle tasks
+
+- [ ] **Make the router own each complete session.**
+
+  - [ ] Introduce `WebSocketSessionRunner` and make
+    `WebSocketRouter.on_websocket()` await it until closure, following
+    [ADR 0001](adr/0001-router-owns-session-lifecycle.md).
+
+  - [ ] Implement explicit resolving, admission, opening, active, closing, and
+    closed states with phase-checked operations.
+
+  - [ ] Use `asyncio.TaskGroup` to supervise the reader, writer, and
+    connection-scoped application tasks.
+
+  - [ ] Preserve the first meaningful close code and invoke disconnect cleanup
+    exactly once for peer disconnect, explicit close, failure, cancellation,
+    and application shutdown.
+
+  - [ ] Define the final routed resource as the lifecycle target while parent
+    resources participate through hooks and shared state.
+
+- [ ] **Split admission from post-accept opening.**
+
+  - [ ] Add `AdmissionDecision`, `on_admit()`, and `on_open()` according to
+    [ADR 0002](adr/0002-split-admission-from-opening.md).
+
+  - [ ] Allow `on_open()` exclusive, bounded access to receive an initial
+    protocol message before the automatic reader starts.
+
+  - [ ] Add admission and opening hook pairs, including balanced error
+    propagation and onion ordering.
+
+  - [ ] Provide a documented deprecation adapter for the current
+    boolean-returning `on_connect()` and connect-hook names.
+
+- [ ] **Connect inbound frames to typed dispatch.**
+
+  - [ ] Separate the low-level Falcon transport protocol from the
+    application-facing session façade.
+
+  - [ ] Introduce route- or resource-selected ingress codecs following
+    [ADR 0003](adr/0003-use-explicit-ingress-codecs.md).
+
+  - [ ] Make the default JSON text codec call `receive_text()` and pass the raw
+    string to `WebSocketResource.dispatch()`.
+
+  - [ ] Support binary and deliberately media-decoded protocols through
+    explicit codecs without consuming a frame twice.
+
+  - [ ] Treat normal `WebSocketDisconnected` events as session termination and
+    map unexpected failures to deterministic close behaviour.
+
+## 7. Flow Control and Connection-Scoped Work
+
+This phase establishes enforceable output ordering, bounded buffering, and
+supervised server-originated work.
+
+### 7.1. Backpressure and supervision tasks
+
+- [ ] **Serialize all outbound transport writes.**
+
+  - [ ] Add bounded application-data and reserved control queues following
+    [ADR 0004](adr/0004-serialize-writes-through-bounded-queues.md).
+
+  - [ ] Make a dedicated writer task the sole caller of transport send methods.
+
+  - [ ] Give each send command a completion future so callers observe send,
+    timeout, disconnect, and serialization failures.
+
+  - [ ] Add configurable finite queue bounds, enqueue timeouts, completion
+    timeouts, and `SessionBackpressureError`.
+
+  - [ ] Add metrics for queue depth, queue saturation, send latency, timeout,
+    and close reason without logging payload values.
+
+- [ ] **Supervise application event pumps.**
+
+  - [ ] Add a session task-registration API that rejects new work after closing
+    begins and assigns descriptive task names.
+
+  - [ ] Cancel and await registered tasks when the session ends.
+
+  - [ ] Propagate unhandled task failures to the runner and close unexpected
+    failures with code `1011`.
+
+  - [ ] Document application-owned acknowledgement, replay, coalescing, and
+    compaction strategies as policies above the generic queue.
+
+- [ ] **Restrict connection management to local sessions.**
+
+  - [ ] Store session façades rather than raw Falcon WebSocket transports.
+
+  - [ ] Route `send_to_connection()` and broadcasts through each session's
+    writer and backpressure policy.
+
+  - [ ] Rename and document backend contracts as process-local according to
+    [ADR 0005](adr/0005-keep-connection-registries-process-local.md).
+
+  - [ ] Remove claims that Redis or another backend can store or drive live
+    connections across processes.
+
+  - [ ] Document the separate event-bus-to-local-manager pattern for
+    multi-process applications.
+
+## 8. Security-Safe Diagnostics and Observability
+
+This phase prevents the completed receive path from turning authentication and
+protocol payloads into log confetti.
+
+### 8.1. Security and diagnostic tasks
+
+- [ ] **Resolve sensitive-payload exposure tracked by issue #61.**
+
+  - [ ] Omit payload values from framework validation errors, logs, traces, and
+    object representations by default, following
+    [ADR 0007](adr/0007-omit-payload-values-from-diagnostics.md).
+
+  - [ ] Exclude raw receive-hook fields from default `repr()` output.
+
+  - [ ] Add an explicit recursive diagnostic sanitizer with configurable
+    secret-key matching and strict depth, size, and collection limits.
+
+  - [ ] Fail closed by omitting values that cannot be sanitized confidently.
+
+  - [ ] Add canary-secret tests for nested mappings, lists, mixed key casing,
+    malformed authentication frames, and short tokens near the start of a
+    payload.
+
+- [ ] **Add session-level operational telemetry.**
+
+  - [ ] Record lifecycle phase, duration, close initiator, close code, failure
+    class, task failure, and cleanup timeout without payload contents.
+
+  - [ ] Expose stable structured metadata rather than requiring consumers to
+    parse exception messages.
+
+  - [ ] Document raw payload access in application hooks as a sensitive,
+    explicitly trusted boundary.
+
+## 9. Runtime-Parity Testing
+
+This phase makes behavioural tests prove what the mounted production path
+actually does.
+
+### 9.1. Session contract tasks
+
+- [ ] **Drive simulators through the real session runner.**
+
+  - [ ] Refactor `SimulatorRouterHarness.connect()` according to
+    [ADR 0006](adr/0006-share-the-session-runner-with-tests.md).
+
+  - [ ] Run the router in a supervised background task while a simulated
+    connection remains open.
+
+  - [ ] Replace sleep-based coordination with observable lifecycle events and
+    bounded waits.
+
+  - [ ] Close the simulated client on fixture exit and await complete
+    disconnect cleanup.
+
+- [ ] **Add simulator and real-ASGI contract suites.**
+
+  - [ ] Parameterize equivalent lifecycle scenarios over the simulator and
+    `WebSocketTestClient`.
+
+  - [ ] Verify route acceptance, opening-phase authentication, decorated
+    handler dispatch, invalid messages, and binary codecs.
+
+  - [ ] Verify peer and server close codes, exact-once cleanup, shutdown
+    cancellation, and nested-resource hook ordering.
+
+  - [ ] Verify concurrent producers never overlap transport writes.
+
+  - [ ] Verify queue saturation, send timeout, application-task failure, and
+    pending-future failure.
+
+  - [ ] Verify payload canaries never appear in errors, logs, traces, or
+    hook-context representations.
+
+- [ ] **Exercise the reference application as a live session.**
+
+  - [ ] Replace manual dispatch in examples and behavioural tests with messages
+    sent through a mounted router.
+
+  - [ ] Add a server-originated event-pump example using the supervised session
+    task API.
+
+  - [ ] Demonstrate a separate process-external event source feeding the local
+    connection manager without presenting it as a distributed socket backend.
+
+## 10. Migration and Beta Readiness
+
+This phase aligns the public surface and documentation with the completed
+runtime and prevents an incomplete API from reaching beta.
+
+### 10.1. Release-readiness tasks
+
+- [ ] **Update public documentation and examples.**
+
+  - [ ] Reconcile `falcon-websocket-extension-design.md` with RFC 0001 and the
+    accepted ADRs.
+
+  - [ ] Update the user guide with admission, opening, codecs, task supervision,
+    flow control, local registry scope, and close semantics.
+
+  - [ ] Update the migration guide for lifecycle names, send completion
+    semantics, simulator behaviour, and connection-backend restrictions.
+
+  - [ ] Audit every example and code snippet to ensure it runs through the
+    mounted session runtime.
+
+- [ ] **Remove or delegate incomplete legacy paths.**
+
+  - [ ] Make the deprecated `install()` routing helpers delegate to
+    `WebSocketRouter` and `WebSocketSessionRunner`, or remove them before beta.
+
+  - [ ] Ensure no public path accepts a connection and returns without driving
+    its session.
+
+  - [ ] Define and test the deprecation window for `on_connect()` and legacy
+    connect-hook names.
+
+- [ ] **Gate the first beta release.**
+
+  - [ ] Require all RFC 0001 acceptance criteria to pass.
+
+  - [ ] Require unit, behavioural, simulator, real-ASGI, security, type,
+    formatting, spelling, Markdown, and Mermaid checks.
+
+  - [ ] Publish explicit single-process and multi-process deployment guidance.
+
+  - [ ] Remove alpha documentation claims that exceed the implemented
+    lifecycle and delivery guarantees.
