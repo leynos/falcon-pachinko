@@ -1,32 +1,28 @@
----
-description: 
-globs: *.py
-alwaysApply: false
----
-## flake8-return Style Guide (Python 3.13)
+# flake8-return Style Guide (Python 3.12)
 
-The `flake8-return` rules ensure consistent and explicit return behaviour,
-Ensuring your functions are clear in intent and free from unnecessary control
-flow. Follow these rules:
+The `flake8-return` rules (Ruff's RET family, enabled in this repository)
+ensure consistent and explicit return behaviour, keeping functions clear in
+intent and free from unnecessary control flow. Follow these rules:
 
-### R501 — Avoid Explicit `return None` if It's the Only Return
+## RET501 — Avoid Explicit `return None` if It's the Only Return
 
 ```python
 # BAD:
 def func():
     return None
 
+
 # GOOD:
 def func():
     return
 ```
 
-Use `return` alone instead of `return None` when the function's only result is
-`None`.
+Use `return` alone instead of `return None` when the function's only result
+is `None`.
 
 ______________________________________________________________________
 
-### R502 — Avoid Implicit `None` in Functions That May Return a Value
+## RET502 — Avoid Implicit `None` in Functions That May Return a Value
 
 ```python
 # BAD:
@@ -34,6 +30,7 @@ def func(x):
     if x > 0:
         return x
     # implicitly returns None (bad)
+
 
 # GOOD:
 def func(x):
@@ -46,14 +43,15 @@ Ensure all branches explicitly return a value if any branch does.
 
 ______________________________________________________________________
 
-### R503 — Add an Explicit Return at the End
+## RET503 — Add an Explicit Return at the End When a Function May Return a Value
 
 ```python
 # BAD:
 def func(x):
     if x > 0:
         return x
-    # no return (bad)
+    # missing terminal return (bad)
+
 
 # GOOD:
 def func(x):
@@ -62,17 +60,29 @@ def func(x):
     return -1
 ```
 
-Don't rely on implicit `None`—always return something at the end.
+Don't rely on implicit `None` if the function may return a value
+elsewhere—always return something at the end.
+
+Functions whose only possible result is `None` do not need a final bare
+`return`:
+
+```python
+# GOOD:
+def func():
+    do_something()
+    # implicit None is fine here
+```
 
 ______________________________________________________________________
 
-### R504 — Avoid Redundant Variable Assignment Before `return`
+## RET504 — Avoid Redundant Variable Assignment Before `return`
 
 ```python
 # BAD:
 def func():
     result = compute()
     return result
+
 
 # GOOD:
 def func():
@@ -84,10 +94,12 @@ returning.
 
 ______________________________________________________________________
 
-### R505–R508 — Eliminate Unnecessary `else` After Terminal Statements
+## RET505–RET508 — Eliminate Unnecessary `else` After Terminal Statements
 
-Avoid `else` after `return`, `raise`, `break`, or `continue`. These statements
-already exit control flow.
+Avoid `else` after `return`, `raise`, `break`, or `continue`. These
+statements already exit control flow. The Pylint `no-else-return`,
+`no-else-raise`, `no-else-break`, and `no-else-continue` messages enforce
+the same shape.
 
 ```python
 # BAD:
