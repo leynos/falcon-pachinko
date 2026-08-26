@@ -7,6 +7,7 @@ import typing as typ
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from urllib.parse import urlsplit
 
+import msgspec as ms
 import msgspec.json as msjson
 
 from ._common import (
@@ -119,15 +120,17 @@ class WebSocketSession:
         self, frame_kind: FrameKind, payload: str | bytes | object
     ) -> str | bytes:
         """Encode ``payload`` according to ``frame_kind``."""
-        if frame_kind == "text":
-            return self._encode_text_payload(payload)
-        if frame_kind == "bytes":
-            return self._encode_bytes_payload(payload)
-        if frame_kind == "json":
-            return self._encode_json(payload)
-        raise ValueError(  # pragma: no cover - safeguarded by the FrameKind literal
-            _UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=frame_kind)
-        )
+        match frame_kind:
+            case "text":
+                return self._encode_text_payload(payload)
+            case "bytes":
+                return self._encode_bytes_payload(payload)
+            case "json":
+                return self._encode_json(payload)
+            case _:  # pragma: no cover - safeguarded by the FrameKind literal
+                raise ValueError(
+                    _UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=frame_kind)
+                )
 
     @staticmethod
     def _encode_text_payload(payload: str | bytes | object) -> str:
@@ -155,18 +158,12 @@ class WebSocketSession:
         """Send a JSON payload using msgspec for encoding."""
         await self.send(payload, kind="json")
 
-    async def _recv_raw(self) -> str | bytes:
-        """Receive the next frame without decoding."""
-        return await self._connection.recv()
-
     def _decoder_for(self, payload_type: type[object] | None) -> msjson.Decoder:
         """Return a JSON decoder for the requested payload type."""
         if payload_type is None:
             return self._default_decoder
-        decoder = self._decoders.get(payload_type)
-        if decoder is None:
-            decoder = msjson.Decoder(payload_type)
-            self._decoders[payload_type] = decoder
+        if (decoder := self._decoders.get(payload_type)) is None:
+            decoder = self._decoders[payload_type] = msjson.Decoder(payload_type)
         return decoder
 
     async def receive(
@@ -176,7 +173,7 @@ class WebSocketSession:
         payload_type: type[object] | None = None,
     ) -> object:
         """Receive a frame and decode it according to ``kind``."""
-        message = await self._recv_raw()
+        message = await self._connection.recv()
         frame_kind = self._determine_frame_kind(kind, message)
         payload = self._decode_frame(frame_kind, message, payload_type)
         self._log("receive", frame_kind, payload)
@@ -198,15 +195,17 @@ class WebSocketSession:
         payload_type: type[object] | None,
     ) -> object:
         """Decode ``message`` according to ``frame_kind``."""
-        if frame_kind == "json":
-            return self._decode_json_frame(message, payload_type)
-        if frame_kind == "text":
-            return self._decode_text_frame(message)
-        if frame_kind == "bytes":
-            return self._decode_bytes_frame(message)
-        raise ValueError(  # pragma: no cover - safeguarded by the FrameKind literal
-            _UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=frame_kind)
-        )
+        match frame_kind:
+            case "json":
+                return self._decode_json_frame(message, payload_type)
+            case "text":
+                return self._decode_text_frame(message)
+            case "bytes":
+                return self._decode_bytes_frame(message)
+            case _:  # pragma: no cover - safeguarded by the FrameKind literal
+                raise ValueError(
+                    _UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=frame_kind)
+                )
 
     def _decode_json_frame(
         self, message: str | bytes, payload_type: type[object] | None
@@ -216,7 +215,7 @@ class WebSocketSession:
         decoder = self._decoder_for(payload_type)
         try:
             return decoder.decode(data)
-        except Exception as exc:  # pragma: no cover - msgspec raised
+        except ms.DecodeError as exc:  # pragma: no cover - msgspec raised
             raise RuntimeError(_FAILED_JSON_DECODE_MSG.format(message=message)) from exc
 
     @staticmethod
@@ -399,7 +398,7 @@ class WebSocketTestClient:
 
     @staticmethod
     def _ensure_ws_connect() -> cabc.Callable[
-        ..., cabc.Awaitable[WebSocketClientProtocol]
+        ..., AbstractAsyncContextManager[WebSocketClientProtocol]
     ]:
         """Return the websockets connect callable, importing lazily when needed."""
         global _ws_connect
@@ -466,14 +465,11 @@ class WebSocketTestClient:
             negotiated,
         ) = self._prepare_connection_params(path, headers, subprotocols)
         trace_log = self._configure_trace(trace=trace)
-        connect_cm = typ.cast(
-            "AbstractAsyncContextManager[WebSocketClientProtocol]",
-            ws_connect(
-                url,
-                extra_headers=merged_headers,
-                subprotocols=negotiated,
-                open_timeout=self._open_timeout,
-            ),
+        connect_cm = ws_connect(
+            url,
+            extra_headers=merged_headers,
+            subprotocols=negotiated,
+            open_timeout=self._open_timeout,
         )
         async with connect_cm as connection:
             session = WebSocketSession(
