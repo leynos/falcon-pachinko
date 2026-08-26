@@ -129,9 +129,11 @@ class WorkspaceRepository:
             project = self._ensure_project_locked(workspace_id, project_id)
             tasks = list(project.tasks.values())
 
-        if include_completed:
-            return [dc.replace(task) for task in tasks]
-        return [dc.replace(task) for task in tasks if not task.completed]
+        return [
+            dc.replace(task)
+            for task in tasks
+            if include_completed or not task.completed
+        ]
 
     async def snapshot(self) -> dict[str, Workspace]:
         """Return a deep-ish copy of the repository contents for inspection."""
@@ -156,8 +158,7 @@ class WorkspaceRepository:
             }
 
     def _get_or_create_workspace(self, workspace_id: str) -> Workspace:
-        workspace = self._workspaces.get(workspace_id)
-        if workspace is None:
+        if (workspace := self._workspaces.get(workspace_id)) is None:
             workspace = Workspace(
                 workspace_id=workspace_id,
                 name=workspace_id.replace("-", " ").title(),
@@ -168,8 +169,7 @@ class WorkspaceRepository:
 
     @staticmethod
     def _get_or_create_project(workspace: Workspace, project_id: str) -> Project:
-        project = workspace.projects.get(project_id)
-        if project is None:
+        if (project := workspace.projects.get(project_id)) is None:
             project = Project(
                 project_id=project_id,
                 name=project_id.replace("-", " ").title(),
@@ -237,4 +237,3 @@ class TokenAuthenticator:
             return
         if token != expected:
             raise AuthenticationError(workspace_id)
-        return

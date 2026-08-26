@@ -12,13 +12,14 @@ from pytest_bdd import given, scenario, then, when
 
 from examples.reference_app import build_container, build_router
 from examples.reference_app.resources import AddTask, TaskStreamResource
+from examples.reference_app.services import AnnouncementFeed
 from falcon_pachinko.testing import WebSocketSimulator
 from falcon_pachinko.websocket import WebSocketConnectionManager
+from tests._stubs import RequestStub
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers, string-only annotations
     import collections.abc as cabc
 
-    from examples.reference_app.services import AnnouncementFeed
     from falcon_pachinko import ServiceContainer, WebSocketResource, WebSocketRouter
 
 
@@ -36,16 +37,6 @@ class ReferenceScenario:
 
 
 _MISSING_TASK_RESOURCE_MSG = "TaskStreamResource was not instantiated"
-
-
-class _RequestStub:
-    def __init__(self, path: str, headers: dict[str, str]) -> None:
-        self.path = path
-        self.path_template = "/ws"
-        self._headers = {key.lower(): value for key, value in headers.items()}
-
-    def get_header(self, name: str, default: str | None = None) -> str | None:
-        return self._headers.get(name.lower(), default)
 
 
 @pytest.fixture
@@ -71,7 +62,10 @@ def given_reference_router(event_loop: asyncio.AbstractEventLoop) -> ReferenceSc
     """Build the router wiring using the shared DI container."""
     conn_mgr = WebSocketConnectionManager()
     container = build_container(conn_mgr)
-    feed = typ.cast("AnnouncementFeed", container.resolve("announcement_feed"))
+    feed = container.resolve("announcement_feed")
+    assert isinstance(feed, AnnouncementFeed), (
+        "the container must provide the announcement feed service"
+    )
     instances: list[WebSocketResource] = []
 
     def recording_factory(
@@ -112,8 +106,8 @@ def when_client_connects(
     context: ReferenceScenario, event_loop: asyncio.AbstractEventLoop
 ) -> ReferenceScenario:
     """Dispatch a connection through the router with valid headers."""
-    req = _RequestStub(
-        path="/ws/workspaces/atlas/projects/triage/tasks",
+    req = RequestStub(
+        "/ws/workspaces/atlas/projects/triage/tasks",
         headers={"x-workspace-token": "seekrit", "x-user": "casey"},
     )
     event_loop.run_until_complete(context.router.on_websocket(req, context.simulator))
@@ -126,7 +120,8 @@ def when_send_task_add(
     context: ReferenceScenario, event_loop: asyncio.AbstractEventLoop
 ) -> ReferenceScenario:
     """Dispatch a schema-defined message through the active resource."""
-    resource = typ.cast("TaskStreamResource", context.resource)
+    resource = context.resource
+    assert resource is not None, "the connection step must have selected the resource"
     payload = AddTask(task_id="T-42", title="Investigate event loop")
     raw = msjson.encode(payload)
     event_loop.run_until_complete(resource.dispatch(context.simulator, raw))
@@ -143,7 +138,8 @@ def then_connection(context: ReferenceScenario) -> None:
 @then("the task stream resource replies with a task acknowledgement")
 def then_acknowledgement(context: ReferenceScenario) -> None:
     """Check that the last frame is the expected acknowledgement."""
-    message = typ.cast("dict[str, object]", context.simulator.sent_messages[-1])
+    message = context.simulator.sent_messages[-1]
+    assert isinstance(message, dict), "the last frame must be a mapping"
     assert message["type"] == "task.added", (
         "the last frame must be a task.added acknowledgement"
     )
@@ -155,8 +151,8 @@ def then_feed_capture(context: ReferenceScenario) -> None:
     assert context.last_event is not None, "the feed must have captured an event"
     workspace, payload = context.last_event
     assert workspace == "atlas", "the event must be scoped to workspace 'atlas'"
-    payload_dict = payload
-    nested = typ.cast("dict[str, object]", payload_dict["payload"])
+    nested = payload["payload"]
+    assert isinstance(nested, dict), "the broadcast event must nest a payload mapping"
     assert nested["kind"] == "task_added", (
         "the nested payload must be a task_added event"
     )

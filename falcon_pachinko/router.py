@@ -54,7 +54,10 @@ class _RequestLike(typ.Protocol):
 
 def _request_path_template(req: _RequestLike) -> str:
     """Return the mounted path template, defaulting like Falcon does."""
-    return typ.cast("str", getattr(req, "path_template", ""))
+    try:
+        return req.path_template
+    except AttributeError:
+        return ""
 
 
 def _replace_param_in_template(match: re.Match[str], template: str) -> str:
@@ -115,7 +118,7 @@ class _Dispatch:
     """Mutable per-request state threaded through the routing pipeline."""
 
     route: WebSocketRouter._CompiledRoute
-    req: _RequestLike
+    req: falcon.Request
     ws: WebSocketLike
     match: _RouteMatch
 
@@ -327,8 +330,13 @@ class WebSocketRouter:
         match = self._validate_and_normalize_path(route, req)
         if match is None:
             return False
+        # cast: downstream hooks and ``on_connect`` are typed against
+        # ``falcon.Request``; the router accepts any ``_RequestLike`` so tests
+        # can supply structural stand-ins.
         return await self._execute_route_with_error_handling(
-            _Dispatch(route=route, req=req, ws=ws, match=match)
+            _Dispatch(
+                route=route, req=typ.cast("falcon.Request", req), ws=ws, match=match
+            )
         )
 
     async def _execute_route_with_error_handling(self, dispatch: _Dispatch) -> bool:
@@ -345,7 +353,7 @@ class WebSocketRouter:
             raise
 
     async def _prepare_websocket(
-        self, req: _RequestLike, ws: WebSocketLike
+        self, req: falcon.Request, ws: WebSocketLike
     ) -> WebSocketLike:
         """Return the WebSocket to use for ``req``.
 
@@ -368,7 +376,7 @@ class WebSocketRouter:
         if self._simulator_factory is None:
             return ws
 
-        candidate = self._simulator_factory(typ.cast("falcon.Request", req), ws)
+        candidate = self._simulator_factory(req, ws)
         if inspect.isawaitable(candidate):
             candidate = await candidate
 
@@ -380,6 +388,8 @@ class WebSocketRouter:
                 )
                 raise TypeError(msg)
 
+        # cast: the duck-type checks above establish the ``WebSocketLike``
+        # surface, which the checker cannot infer from getattr-based checks.
         return typ.cast("WebSocketLike", candidate)
 
     @staticmethod
@@ -415,7 +425,7 @@ class WebSocketRouter:
         resource: WebSocketResource,
         base_resource: WebSocketResource,
         route: _CompiledRoute,
-        req: _RequestLike,
+        req: falcon.Request,
     ) -> bool:
         """Return ``True`` if ``resource`` is usable for ``req``."""
         return not (resource is base_resource and not route.pattern.fullmatch(req.path))
@@ -450,6 +460,8 @@ class WebSocketRouter:
                 child_factory = functools.partial(factory, **child_kwargs)
                 new_resource = await self._instantiate_resource(child_factory, ws)
                 state_mapping = context.get("state", resource.state)
+                # cast: the context value is typed ``object``; the ``state``
+                # setter validates the mapping surface at runtime.
                 new_resource.state = typ.cast(
                     "cabc.MutableMapping[str, typ.Any]",
                     state_mapping,
@@ -511,6 +523,8 @@ class WebSocketRouter:
             return self._resource_factory(route_factory)
         except Exception as exc:  # pragma: no cover - exercise via tests
             await ws.close()
+            # cast: the checker cannot see the dynamic marker attribute used
+            # to signal that the socket was already closed for this failure.
             typ.cast("typ.Any", exc)._pachinko_factory_closed = True
             raise
 
@@ -545,7 +559,7 @@ class WebSocketRouter:
         params_obj: dict[str, object] = dict(dispatch.match.params)
         context = await hook_manager.notify_before_connect(
             resource,
-            req=typ.cast("falcon.Request", dispatch.req),
+            req=dispatch.req,
             ws=dispatch.ws,
             params=params_obj,
         )
@@ -565,9 +579,7 @@ class WebSocketRouter:
         """Invoke ``resource.on_connect`` handling hook error propagation."""
         params = context.params if context.params is not None else {}
         try:
-            return await resource.on_connect(
-                typ.cast("falcon.Request", dispatch.req), dispatch.ws, **params
-            )
+            return await resource.on_connect(dispatch.req, dispatch.ws, **params)
         except Exception as exc:
             context.error = exc
             context.result = False

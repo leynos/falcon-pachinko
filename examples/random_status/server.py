@@ -38,7 +38,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 try:
-    from tests.behaviour._lifespan import LifespanApp  # type: ignore[import-not-found]
+    from tests.behaviour._lifespan import LifespanApp
 except ImportError:
 
     class LifespanApp(falcon_asgi.App):
@@ -52,8 +52,8 @@ except ImportError:
             ) = None
 
         def lifespan(
-            self, fn: cabc.Callable[[typ.Any], cabc.AsyncIterator[None]]
-        ) -> cabc.Callable[[typ.Any], cl.AbstractAsyncContextManager[None]]:
+            self, fn: cabc.Callable[[LifespanApp], cabc.AsyncIterator[None]]
+        ) -> cabc.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]]:
             """Register a lifespan context manager."""
             manager = cl.asynccontextmanager(fn)
             self._lifespan_handler = manager
@@ -70,7 +70,11 @@ except ImportError:
 if typ.TYPE_CHECKING:
     import falcon
 
-    class _SupportsWebSocketRoute(typ.Protocol):
+    class _PachinkoApp(typ.Protocol):
+        """Attributes attached to the app at runtime by :func:`install`."""
+
+        ws_connection_manager: WebSocketConnectionManager
+
         def add_websocket_route(
             self,
             uri_template: str,
@@ -78,6 +82,15 @@ if typ.TYPE_CHECKING:
             *args: object,
             **kwargs: object,
         ) -> None: ...
+
+
+def _resolve_as[T](container: ServiceContainer, name: str, expected: type[T]) -> T:
+    """Resolve ``name`` from ``container``, validating its concrete type."""
+    value = container.resolve(name)
+    if not isinstance(value, expected):
+        msg = f"service {name!r} is not a {expected.__name__}"
+        raise TypeError(msg)
+    return value
 
 
 async def _setup_db() -> aiosqlite.Connection:
@@ -169,7 +182,7 @@ class StatusEndpoint:
 
     async def on_get(self, req: falcon.Request, resp: falcon.Response) -> None:
         """Return the current status value as JSON."""
-        conn = typ.cast("aiosqlite.Connection", self._container.resolve("db"))
+        conn = _resolve_as(self._container, "db", aiosqlite.Connection)
         async with conn.execute("SELECT value FROM status") as cursor:
             row = await cursor.fetchone()
         resp.media = {"status": row[0] if row else None}
@@ -179,7 +192,10 @@ def create_app() -> falcon_asgi.App:
     """Create and configure the Falcon ASGI application."""
     app = LifespanApp()
     install(app)
-    conn_mgr = typ.cast("WebSocketConnectionManager", app.ws_connection_manager)
+    # Cast: install() attaches these attributes at runtime, so the type
+    # checker cannot see them on falcon.asgi.App.
+    ws_app = typ.cast("_PachinkoApp", app)
+    conn_mgr = ws_app.ws_connection_manager
     container = ServiceContainer()
     container.register("conn_mgr", conn_mgr)
 
@@ -204,7 +220,6 @@ def create_app() -> falcon_asgi.App:
     router = WebSocketRouter(resource_factory=container.create_resource)
     router.add_route("/", StatusResource)
     router.mount("/ws")
-    ws_app = typ.cast("_SupportsWebSocketRoute", app)
     ws_app.add_websocket_route("/ws", RouterEndpoint, router=router)
     app.add_route("/status", StatusEndpoint(container))
     return app

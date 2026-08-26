@@ -78,5 +78,7 @@ class WorkerController:
 
 def worker(fn: WorkerFn) -> WorkerFn:
     """Mark *fn* as a background worker."""
+    # cast: ``WorkerFn`` is a bare callable alias, so the checker cannot see
+    # the dynamic marker attribute stamped onto the function object.
     typ.cast("typ.Any", fn).__pachinko_worker__ = True
     return fn

@@ -9,13 +9,12 @@ from contextlib import asynccontextmanager
 import pytest
 import pytest_asyncio
 import websockets.server as ws_server
+from websockets.typing import Subprotocol
 
 from falcon_pachinko.testing import TraceEvent, WebSocketTestClient
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-    from websockets.typing import Subprotocol
 
 
 @dc.dataclass(slots=True)
@@ -54,9 +53,7 @@ async def start_echo_server(
     async def handler(websocket: ws_server.WebSocketServerProtocol, path: str) -> None:
         await _echo_handler(websocket, path, state)
 
-    protocols: list[Subprotocol] = [
-        typ.cast("Subprotocol", proto) for proto in subprotocols
-    ]
+    protocols = [Subprotocol(proto) for proto in subprotocols]
     server = await ws_server.serve(handler, "127.0.0.1", 0, subprotocols=protocols)
     sockets = tuple(server.sockets)
     if not sockets:
