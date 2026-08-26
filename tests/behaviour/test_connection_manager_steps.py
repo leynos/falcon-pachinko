@@ -3,45 +3,20 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses as dc
 import typing as typ
 
 from pytest_bdd import given, scenario, then, when
 
 from falcon_pachinko.websocket import WebSocketConnectionManager
+from tests._stubs import RecordingWebSocket
 
-
-@dc.dataclass(slots=True)
-class DummyWebSocket:
-    """WebSocket stub that records messages."""
-
-    messages: list[object]
-
-    async def accept(
-        self, subprotocol: str | None = None
-    ) -> None:  # pragma: no cover - unused
-        """Accept the connection."""
-        return
-
-    async def close(self, code: int = 1000) -> None:  # pragma: no cover - unused
-        """Close the connection."""
-        return
-
-    async def send_media(  # pylint: disable=trivial-attribute-wrapper  # protocol stub
-        self, data: object
-    ) -> None:
-        """Record sent data."""
-        self.messages.append(data)
-
-    async def receive_media(self) -> object:  # pragma: no cover - unused
-        """Return a placeholder payload."""
-        return None
-
+if typ.TYPE_CHECKING:
+    from falcon_pachinko.protocols import WebSocketLike
 
 type SetupFixture = tuple[
     WebSocketConnectionManager,
-    DummyWebSocket,
-    DummyWebSocket,
+    RecordingWebSocket,
+    RecordingWebSocket,
     asyncio.AbstractEventLoop,
 ]
 
@@ -75,12 +50,9 @@ def _assert_messages_received(
 async def _iterate_lobby(
     mgr: WebSocketConnectionManager,
     exclude: set[str] | None = None,
-) -> list[DummyWebSocket]:
+) -> list[WebSocketLike]:
     """Collect websockets yielded when iterating the lobby."""
-    return [
-        typ.cast("DummyWebSocket", ws)
-        async for ws in mgr.connections(room="lobby", exclude=exclude)
-    ]
+    return [ws async for ws in mgr.connections(room="lobby", exclude=exclude)]
 
 
 @scenario(
@@ -132,8 +104,8 @@ def setup_room() -> SetupFixture:
     try:
         asyncio.set_event_loop(loop)
         mgr = WebSocketConnectionManager()
-        ws1 = DummyWebSocket(messages=[])
-        ws2 = DummyWebSocket(messages=[])
+        ws1 = RecordingWebSocket()
+        ws2 = RecordingWebSocket()
         loop.run_until_complete(mgr.add_connection("a", ws1))
         loop.run_until_complete(mgr.add_connection("b", ws2))
         loop.run_until_complete(mgr.join_room("a", "lobby"))
@@ -161,8 +133,8 @@ def setup_empty_room() -> SetupFixture:
     try:
         asyncio.set_event_loop(loop)
         mgr = WebSocketConnectionManager()
-        ws1 = DummyWebSocket(messages=[])
-        ws2 = DummyWebSocket(messages=[])
+        ws1 = RecordingWebSocket()
+        ws2 = RecordingWebSocket()
         return mgr, ws1, ws2, loop
     finally:
         asyncio.set_event_loop(None)
@@ -181,7 +153,7 @@ def broadcast_excluding(setup: SetupFixture) -> None:
 
 
 @when('we iterate over connections in room "lobby"', target_fixture="iterated")
-def iterate_lobby(setup: SetupFixture) -> list[DummyWebSocket]:
+def iterate_lobby(setup: SetupFixture) -> list[WebSocketLike]:
     """Collect websockets by iterating the lobby."""
     mgr, _, _, loop = setup
     return loop.run_until_complete(_iterate_lobby(mgr))
@@ -191,7 +163,7 @@ def iterate_lobby(setup: SetupFixture) -> list[DummyWebSocket]:
     'we iterate over connections in room "lobby" excluding connection "a"',
     target_fixture="iterated",
 )
-def iterate_lobby_excluding(setup: SetupFixture) -> list[DummyWebSocket]:
+def iterate_lobby_excluding(setup: SetupFixture) -> list[WebSocketLike]:
     """Collect websockets by iterating the lobby without connection ``a``."""
     mgr, _, _, loop = setup
     return loop.run_until_complete(_iterate_lobby(mgr, exclude={"a"}))
@@ -210,7 +182,7 @@ def assert_received_excluding(setup: SetupFixture) -> None:
 
 
 @then("both connections are yielded")
-def assert_iterated(setup: SetupFixture, iterated: list[DummyWebSocket]) -> None:
+def assert_iterated(setup: SetupFixture, iterated: list[WebSocketLike]) -> None:
     """Assert that iteration returned both websockets."""
     _, ws1, ws2, loop = setup
     try:
@@ -222,7 +194,7 @@ def assert_iterated(setup: SetupFixture, iterated: list[DummyWebSocket]) -> None
 
 @then("only the non-excluded connection is yielded")
 def assert_iterated_excluding(
-    setup: SetupFixture, iterated: list[DummyWebSocket]
+    setup: SetupFixture, iterated: list[WebSocketLike]
 ) -> None:
     """Assert that iteration excludes the specified websocket."""
     _, ws1, ws2, loop = setup
@@ -236,7 +208,7 @@ def assert_iterated_excluding(
 
 @then("no connections are yielded for an empty room")
 def assert_iterated_empty_room(
-    setup: SetupFixture, iterated: list[DummyWebSocket]
+    setup: SetupFixture, iterated: list[WebSocketLike]
 ) -> None:
     """Assert that iteration over an empty room yields nothing."""
     _, _, _, loop = setup

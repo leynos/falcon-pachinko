@@ -67,11 +67,15 @@ async def test_start_and_stop_runs_workers(controller: WorkerController) -> None
 async def test_stop_propagates_worker_exception(controller: WorkerController) -> None:
     """Exceptions raised by workers should bubble up when stopping."""
 
-    async def boom() -> None:  # ruff: ignore[unused-async]  # WorkerFn requires a coroutine
+    async def boom() -> None:
+        await asyncio.sleep(0)
         raise RuntimeError("boom")
 
     await controller.start(boom)
-    await asyncio.sleep(0)  # Let the task run and fail
+    # Two scheduler ticks: one to run the worker up to its await, one to let
+    # it resume and raise.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
     with pytest.raises(RuntimeError, match="boom"):
         await controller.stop()
 

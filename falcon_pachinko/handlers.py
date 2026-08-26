@@ -25,6 +25,13 @@ type Handler = cabc.Callable[..., cabc.Awaitable[None]]
 _MIN_HANDLER_PARAMS = 3
 
 
+class _BindableHandler(typ.Protocol):
+    """Descriptor surface of the function objects registered as handlers."""
+
+    def __get__(self, instance: object, owner: type | None = None, /) -> Handler:
+        """Bind the handler to ``instance``."""
+
+
 @dc.dataclass(frozen=True, slots=True)
 class HandlerInfo:
     """Information about a message handler and its payload type."""
@@ -61,7 +68,7 @@ def select_payload_param(
 
 def get_payload_type(func: Handler) -> type | None:
     """Validate ``func``'s signature and return the payload annotation."""
-    func_name = typ.cast("typ.Any", func).__qualname__
+    func_name: str = getattr(func, "__qualname__", repr(func))
     if not inspect.iscoroutinefunction(func):
         raise HandlerNotAsyncError(func_name)
 
@@ -95,6 +102,8 @@ class _HandlesMessageDescriptor:
         self.owner = owner
         self.name = name
 
+        # cast: the descriptor protocol fixes ``owner`` as ``type``, but the
+        # decorator is only meaningful on WebSocketResource subclasses.
         typed_owner = typ.cast("type[WebSocketResource]", owner)
         current = typed_owner.__dict__.get("handlers")
         if current is None:
@@ -119,10 +128,10 @@ class _HandlesMessageDescriptor:
     ) -> Handler | _HandlesMessageDescriptor:
         if instance is None:
             return self
-        return typ.cast(
-            "Handler",
-            typ.cast("typ.Any", self.func).__get__(instance, owner or self.owner),
-        )
+        # cast: ``Handler`` is a bare callable alias, so the checker cannot see
+        # the descriptor protocol of the underlying function object.
+        binder = typ.cast("_BindableHandler", self.func)
+        return binder.__get__(instance, owner or self.owner)
 
 
 def handles_message(

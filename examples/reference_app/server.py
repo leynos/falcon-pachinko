@@ -57,7 +57,7 @@ except ImportError:  # pragma: no cover - fallback when running the script
                 | None
             ) = None
 
-        def lifespan(  # type: ignore[override]  # narrows falcon.asgi.App's untyped hook to this fallback's signature
+        def lifespan(
             self, fn: cabc.Callable[[LifespanApp], cabc.AsyncIterator[None]]
         ) -> cabc.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]]:
             """Register ``fn`` as the lifespan context manager."""
@@ -75,7 +75,11 @@ except ImportError:  # pragma: no cover - fallback when running the script
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
 
-    class _SupportsWebSocketRoute(typ.Protocol):
+    class _PachinkoApp(typ.Protocol):
+        """Attributes attached to the app at runtime by :func:`install`."""
+
+        ws_connection_manager: WebSocketConnectionManager
+
         def add_websocket_route(
             self,
             uri_template: str,
@@ -104,7 +108,8 @@ def _require_token_hook(
 ) -> cabc.Callable[[HookContext], cabc.Awaitable[None]]:
     async def _hook(context: HookContext) -> None:
         params = context.params or {}
-        workspace_id = typ.cast("str | None", params.get("workspace_id"))
+        raw_workspace_id = params.get("workspace_id")
+        workspace_id = raw_workspace_id if isinstance(raw_workspace_id, str) else None
         token = context.req.get_header("x-workspace-token") if context.req else None
         try:
             await authenticator.verify(workspace_id or "default", token)
@@ -112,6 +117,15 @@ def _require_token_hook(
             raise falcon.HTTPUnauthorized(description=str(exc)) from exc
 
     return _hook
+
+
+def _resolve_as[T](container: ServiceContainer, name: str, expected: type[T]) -> T:
+    """Resolve ``name`` from ``container``, validating its concrete type."""
+    value = container.resolve(name)
+    if not isinstance(value, expected):
+        msg = f"service {name!r} is not a {expected.__name__}"
+        raise TypeError(msg)
+    return value
 
 
 def build_container(conn_mgr: WebSocketConnectionManager) -> ServiceContainer:
@@ -152,9 +166,7 @@ def build_router(
     )
     router.mount("/ws")
 
-    authenticator = typ.cast(
-        "TokenAuthenticator", container.resolve("token_authenticator")
-    )
+    authenticator = _resolve_as(container, "token_authenticator", TokenAuthenticator)
     router.global_hooks.add(
         HookEvent.BEFORE_CONNECT, _require_token_hook(authenticator)
     )
@@ -165,18 +177,17 @@ def create_app() -> LifespanApp:
     """Create the Falcon ASGI app with the full reference configuration."""
     app = LifespanApp()
     install(app)
-    conn_mgr = typ.cast(
-        "WebSocketConnectionManager",
-        app.ws_connection_manager,
-    )
+    # Cast: install() attaches these attributes at runtime, so the type
+    # checker cannot see them on falcon.asgi.App.
+    ws_app = typ.cast("_PachinkoApp", app)
+    conn_mgr = ws_app.ws_connection_manager
     container = build_container(conn_mgr)
     router = build_router(container)
 
-    ws_app = typ.cast("_SupportsWebSocketRoute", app)
     ws_app.add_websocket_route("/ws", RouterEndpoint, router=router)
 
     controller = WorkerController()
-    feed = typ.cast("AnnouncementFeed", container.resolve("announcement_feed"))
+    feed = _resolve_as(container, "announcement_feed", AnnouncementFeed)
 
     @app.lifespan
     async def lifespan(_app: LifespanApp) -> cabc.AsyncIterator[None]:

@@ -49,15 +49,11 @@ class ServiceContainer:
         self, route_factory: cabc.Callable[..., WebSocketResourceT]
     ) -> WebSocketResourceT:
         """Instantiate ``route_factory`` injecting registered dependencies."""
-        target = typ.cast(
-            "cabc.Callable[..., WebSocketResourceT]",
-            getattr(route_factory, "func", route_factory),
-        )
+        target = getattr(route_factory, "func", route_factory)
         args = getattr(route_factory, "args", ())
         kwargs = dict(getattr(route_factory, "keywords", {}) or {})
 
-        signature = self._signature_cache.get(target)
-        if signature is None:
+        if (signature := self._signature_cache.get(target)) is None:
             signature = inspect.signature(target)
             self._signature_cache[target] = signature
 
