@@ -69,7 +69,7 @@ class RecordingWS(DummyWS):
         self.closed: list[int] = []
 
     @typ.override
-    async def accept(  # pylint: disable=trivial-attribute-wrapper  # recording protocol stub
+    async def accept(
         self, subprotocol: str | None = None
     ) -> None:
         """Record the accepted subprotocol.
@@ -82,7 +82,7 @@ class RecordingWS(DummyWS):
         self.accepted.append(subprotocol)
 
     @typ.override
-    async def close(  # pylint: disable=trivial-attribute-wrapper  # recording protocol stub
+    async def close(
         self, code: int = 1000
     ) -> None:
         """Record the close code.
