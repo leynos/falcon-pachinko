@@ -69,7 +69,7 @@ class RouterScenario:
 
     router: WebSocketRouter
     service: str
-    websocket: DummyWebSocket | None = None
+    websocket: RecordingWebSocket | None = None
     parent: InjectedParent | None = None
     child: InjectedChild | None = None
 
@@ -110,7 +110,7 @@ def when_dispatch(
         (),
         {"path": "/rooms/alpha/child/beta", "path_template": ""},
     )()
-    ws = DummyWebSocket()
+    ws = RecordingWebSocket()
     event_loop.run_until_complete(context.router.on_websocket(req, ws))
     context.websocket = ws
     context.parent = InjectedParent.instances[-1]
