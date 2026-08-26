@@ -1,5 +1,6 @@
 """Tests for schema-driven dispatch using msgspec tagged unions."""
 
+import re
 import typing as typ
 
 import msgspec as ms
@@ -84,7 +85,7 @@ async def test_schema_decode_error_calls_fallback() -> None:
 
 
 def test_invalid_schema_type_raises() -> None:
-    """Only tagged msgspec.Struct types are allowed in ``schema``."""
+    """Only msgspec.Struct types are allowed in ``schema``."""
 
     class Good(ms.Struct, tag="good"):
         pass
@@ -92,10 +93,24 @@ def test_invalid_schema_type_raises() -> None:
     class Bad:
         pass
 
-    with pytest.raises(TypeError):
+    with pytest.raises(
+        TypeError, match=re.escape("schema must contain only msgspec.Struct types")
+    ):
 
         class BadResource(WebSocketResource):
             schema = Good | Bad
+
+
+def test_untagged_schema_struct_raises() -> None:
+    """Every msgspec.Struct in ``schema`` must declare a dispatch tag."""
+
+    class Untagged(ms.Struct):
+        pass
+
+    with pytest.raises(TypeError, match="schema Struct types must define a tag"):
+
+        class BadResource(WebSocketResource):
+            schema = Untagged
 
 
 def test_duplicate_payload_type_raises() -> None:
