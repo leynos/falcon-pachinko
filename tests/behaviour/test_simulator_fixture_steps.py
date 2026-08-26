@@ -50,10 +50,12 @@ class EchoResource(WebSocketResource):
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
         """Handle the echo interaction for the simulator scenario."""
-        simulator = typ.cast("WebSocketSimulator", ws)
-        payload = await simulator.receive_json(dict)
+        assert isinstance(ws, WebSocketSimulator), (
+            "the harness must inject the simulator instance"
+        )
+        payload = await ws.receive_json(dict)
         self.received.append(payload)
-        await simulator.send_json({"type": "ack", "payload": payload})
+        await ws.send_json({"type": "ack", "payload": payload})
         return False
 
 

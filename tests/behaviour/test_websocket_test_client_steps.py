@@ -9,13 +9,12 @@ import typing as typ
 import pytest
 import websockets.server as ws_server
 from pytest_bdd import given, scenario, then, when
+from websockets.typing import Subprotocol
 
 from falcon_pachinko.testing import TraceEvent, WebSocketTestClient
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-    from websockets.typing import Subprotocol
 
 
 @dc.dataclass(slots=True)
@@ -33,7 +32,7 @@ class ClientContext:
     """Shared scenario context for exercising the test client."""
 
     event_loop: asyncio.AbstractEventLoop
-    server: typ.Any
+    server: ws_server.WebSocketServer
     base_url: str
     record: EchoRecord
     client: WebSocketTestClient
@@ -69,7 +68,7 @@ def event_loop(
 def echo_service(event_loop: asyncio.AbstractEventLoop) -> cabc.Iterator[ClientContext]:
     """Run an echo server for the duration of a scenario."""
     record = EchoRecord(paths=[], headers=[], messages=[], subprotocols=[])
-    protocols: list[Subprotocol] = [typ.cast("Subprotocol", "json")]
+    protocols = [Subprotocol("json")]
 
     async def handler(websocket: ws_server.WebSocketServerProtocol, path: str) -> None:
         record.paths.append(path)

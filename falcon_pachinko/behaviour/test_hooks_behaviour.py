@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import typing as typ
-from types import SimpleNamespace
 
 import pytest
 from pytest_bdd import given, scenario, then, when
@@ -18,7 +17,7 @@ from falcon_pachinko import (
     WebSocketResource,
     WebSocketRouter,
 )
-from falcon_pachinko.unittests.helpers import DummyWS
+from falcon_pachinko.unittests.helpers import DummyWS, make_req
 
 EVENTS: list[str] = []
 AFTER_RECEIVE_ERRORS: list[tuple[str, BaseException | None]] = []
@@ -175,7 +174,7 @@ def when_client_connects(context: dict[str, typ.Any]) -> None:
     """Simulate a connection followed by a dispatched message."""
     router: WebSocketRouter = context["router"]
     ws = DummyWS()
-    req = SimpleNamespace(path="/hooks/child", path_template="")
+    req = make_req("/hooks/child")
     asyncio.run(router.on_websocket(req, ws))
 
     child = HookedChild.instances[-1]
@@ -191,7 +190,7 @@ def when_client_connects_with_error(context: dict[str, typ.Any]) -> None:
     """Simulate a connection followed by a dispatched message that raises."""
     router: WebSocketRouter = context["router"]
     ws = DummyWS()
-    req = SimpleNamespace(path="/hooks/child", path_template="")
+    req = make_req("/hooks/child")
     asyncio.run(router.on_websocket(req, ws))
 
     child = HookedChild.instances[-1]
@@ -199,7 +198,7 @@ def when_client_connects_with_error(context: dict[str, typ.Any]) -> None:
 
     try:
         asyncio.run(child.dispatch(ws, b'{"type":"error"}'))
-    except Exception as exc:  # ruff: ignore[blind-except] - surface the raised error
+    except ValueError as exc:
         context["error"] = exc
 
     context["events"] = list(EVENTS)

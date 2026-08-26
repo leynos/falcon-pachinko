@@ -16,12 +16,6 @@ class _OriginalWebSocket(_LifecycleSocket):
         super().__init__()
         self.sent: list[object] = []
 
-    async def accept(self, subprotocol: str | None = None) -> None:
-        await super().accept(subprotocol=subprotocol)
-
-    async def close(self, code: int = 1000) -> None:
-        await super().close(code)
-
     async def send_media(  # pylint: disable=trivial-attribute-wrapper  # protocol stub
         self, data: object
     ) -> None:
@@ -36,13 +30,9 @@ class _OriginalWebSocket(_LifecycleSocket):
 class _HarnessSimulator(WebSocketSimulator):
     """Simulator variant that mirrors lifecycle events to the original stub."""
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._original: _OriginalWebSocket | None = None
-
+    # pylint: disable-next=trivial-attribute-wrapper  # deliberate seam: testing.harness binds the ASGI stub through this name to keep the intent explicit
     def bind_original(self, original: _OriginalWebSocket) -> None:
         """Associate ``original`` so lifecycle events stay in sync."""
-        self._original = original
         self.bind_peer(original)
 
 

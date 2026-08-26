@@ -230,15 +230,16 @@ class TaskStreamResource(WebSocketResource):
     @handles_message("task.add")
     async def handle_add(self, ws: WebSocketLike, payload: AddTask) -> None:
         """Create a task and broadcast a note for the workspace."""
-        workspace_id = typ.cast("str", self.state["workspace_id"])
-        project_id = typ.cast("str", self.state["project_id"])
+        workspace_id: str = self.state["workspace_id"]
+        project_id: str = self.state["project_id"]
+        author: str = self.state.get("user", "guest")
         await self._repo.add_task(
             workspace_id,
             project_id,
             TaskCreationParams(
                 task_id=payload.task_id,
                 title=payload.title,
-                author=typ.cast("str", self.state.get("user", "guest")),
+                author=author,
                 assignee=payload.assignee,
             ),
         )
@@ -279,8 +280,8 @@ class TaskStreamResource(WebSocketResource):
     @handles_message("task.list", strict=False)
     async def handle_list(self, ws: WebSocketLike, payload: ListTasks) -> None:
         """Return the current task snapshot."""
-        workspace_id = typ.cast("str", self.state["workspace_id"])
-        project_id = typ.cast("str", self.state["project_id"])
+        workspace_id: str = self.state["workspace_id"]
+        project_id: str = self.state["project_id"]
         tasks = await self._repo.list_tasks(
             workspace_id,
             project_id,
@@ -294,7 +295,7 @@ class TaskStreamResource(WebSocketResource):
     @handles_message("session.note")
     async def handle_note(self, ws: WebSocketLike, payload: BroadcastNote) -> None:
         """Publish a manual note to everyone in the workspace."""
-        workspace_id = typ.cast("str", self.state["workspace_id"])
+        workspace_id: str = self.state["workspace_id"]
         await self._feed.publish(
             workspace_id,
             {
@@ -323,8 +324,8 @@ class TaskStreamResource(WebSocketResource):
         *operation_args: object,
     ) -> None:
         """Execute a task operation and send the standardized response."""
-        workspace_id = typ.cast("str", self.state["workspace_id"])
-        project_id = typ.cast("str", self.state["project_id"])
+        workspace_id: str = self.state["workspace_id"]
+        project_id: str = self.state["project_id"]
         task = await config.repo_operation(
             workspace_id,
             project_id,
@@ -338,8 +339,8 @@ class TaskStreamResource(WebSocketResource):
 
 
 async def _seed_workspace(context: HookContext) -> None:
-    resource = typ.cast("WorkspaceResource", context.resource)
-    if not context.params:
+    resource = context.resource
+    if not isinstance(resource, WorkspaceResource) or not context.params:
         return
     workspace_id = context.params.get("workspace_id")
     if not isinstance(workspace_id, str):
@@ -351,7 +352,9 @@ async def _seed_workspace(context: HookContext) -> None:
 
 
 async def _seed_project(context: HookContext) -> None:
-    resource = typ.cast("ProjectResource", context.resource)
+    resource = context.resource
+    if not isinstance(resource, ProjectResource):
+        return
     params = context.params or {}
     workspace_id = params.get("workspace_id")
     project_id = params.get("project_id")
@@ -367,8 +370,8 @@ async def _seed_project(context: HookContext) -> None:
 
 
 async def _record_receive(context: HookContext) -> None:
-    resource = typ.cast("TaskStreamResource", context.target)
-    if context.raw is None:
+    resource = context.target
+    if not isinstance(resource, TaskStreamResource) or context.raw is None:
         return
     payload = context.raw
     if isinstance(payload, bytes):
@@ -380,7 +383,9 @@ async def _record_receive(context: HookContext) -> None:
 
 
 async def _record_receive_result(context: HookContext) -> None:
-    resource = typ.cast("TaskStreamResource", context.target)
+    resource = context.target
+    if not isinstance(resource, TaskStreamResource):
+        return
     await resource._audit.record("message.processed", result=context.result)
 
 
