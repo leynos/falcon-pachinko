@@ -5,6 +5,8 @@ from __future__ import annotations
 import typing as typ
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from falcon_pachinko import WebSocketResource
     from falcon_pachinko.router import ResourceFactory
 
@@ -13,7 +15,7 @@ def resource_factory(service: object) -> ResourceFactory:
     """Return a factory injecting ``service`` into created resources."""
 
     def build(
-        route_factory: typ.Callable[..., WebSocketResource],
+        route_factory: cabc.Callable[..., WebSocketResource],
     ) -> WebSocketResource:
         target = getattr(route_factory, "func", route_factory)
         args = getattr(route_factory, "args", ())

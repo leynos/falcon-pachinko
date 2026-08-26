@@ -18,13 +18,13 @@ class LifespanApp(falcon.asgi.App):
     def __init__(self) -> None:
         super().__init__()
         self._lifespan_handler: (
-            typ.Callable[[LifespanApp], cl_typing.AbstractAsyncContextManager[None]]
+            cabc.Callable[[LifespanApp], cl_typing.AbstractAsyncContextManager[None]]
             | None
         ) = None
 
     def lifespan(
-        self, fn: typ.Callable[[LifespanApp], cabc.AsyncIterator[None]]
-    ) -> typ.Callable[[LifespanApp], cl_typing.AbstractAsyncContextManager[None]]:  # type: ignore[override]
+        self, fn: cabc.Callable[[LifespanApp], cabc.AsyncIterator[None]]
+    ) -> cabc.Callable[[LifespanApp], cl_typing.AbstractAsyncContextManager[None]]:
         """Register a lifespan context manager."""
         manager = cl.asynccontextmanager(fn)
         self._lifespan_handler = manager

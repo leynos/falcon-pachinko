@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import inspect
 import typing as typ
 
@@ -10,12 +11,14 @@ import falcon.asgi
 import pytest
 
 from falcon_pachinko import HookContext, WebSocketResource, WebSocketRouter
-from falcon_pachinko.unittests.helpers import DummyWS
+from falcon_pachinko.unittests.helpers import DummyWS, RecordingWS, make_req
 from falcon_pachinko.unittests.resource_factories import resource_factory
 
 pytest_plugins = ["falcon_pachinko.unittests.test_app_install"]
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from falcon_pachinko.unittests.test_app_install import SupportsWebSocket
 
 
@@ -60,7 +63,7 @@ async def test_router_global_hooks_wrap_lifecycle() -> None:
         async def on_unhandled(self, ws: object, message: str | bytes) -> None:
             events.append("handler.dispatch")
 
-    async def global_hook(context: HookContext) -> None:
+    def global_hook(context: HookContext) -> None:
         if context.event == "before_connect":
             if context.params is None:
                 context.params = {}
@@ -77,20 +80,22 @@ async def test_router_global_hooks_wrap_lifecycle() -> None:
     router.mount("/")
 
     ws = DummyWS()
-    req = type("Req", (), {"path": "/hooks", "path_template": ""})()
+    req = make_req("/hooks")
     await router.on_websocket(req, ws)
 
     resource = GlobalHookResource.instances[-1]
     await resource.dispatch(ws, b'{"type":"noop"}')
 
-    assert resource.params["injected"] is True
+    assert resource.params["injected"] is True, (
+        "before_connect hook should be able to amend connect params"
+    )
     assert events == [
         "global.before_connect",
         "global.after_connect",
         "global.before_receive",
         "handler.dispatch",
         "global.after_receive",
-    ]
+    ], "router-level hooks should wrap both connect and receive phases"
 
 
 async def _expect_close(
@@ -98,33 +103,30 @@ async def _expect_close(
     *,
     path: str,
     expected_exc: type[BaseException],
-    args: tuple | None = None,
     kwargs: dict[str, object] | None = None,
-) -> dict[str, object]:
-    """Invoke a route expecting an exception and closed connection."""
+) -> RecordingWS:
+    """Invoke a route expecting an exception and return the recording socket."""
     router = WebSocketRouter()
-    router.add_route(path, resource, args=args or (), kwargs=kwargs)
+    # Build the factory explicitly so caller-supplied kwargs cannot collide
+    # with ``add_route``'s reserved ``name`` keyword.
+    router.add_route(path, functools.partial(resource, **(kwargs or {})))
     router.mount("/")
 
-    ws = DummyWS()
-    closed: dict[str, object] = {}
-
-    async def close(code: int = 1000) -> None:  # pragma: no cover - simple stub
-        closed["closed"] = code
-
-    typ.cast("typ.Any", ws).close = close
-    req = type("Req", (), {"path": path, "path_template": ""})()
+    ws = RecordingWS()
+    req = make_req(path)
 
     with pytest.raises(expected_exc):
         await router.on_websocket(req, ws)
 
-    return closed
+    return ws
 
 
 def test_router_is_resource() -> None:
     """Verify the router exposes a valid ``on_websocket`` responder."""
     router = WebSocketRouter()
-    assert inspect.iscoroutinefunction(router.on_websocket)
+    assert inspect.iscoroutinefunction(router.on_websocket), (
+        "on_websocket should be a coroutine function"
+    )
 
 
 def test_deprecation_warnings(
@@ -149,14 +151,18 @@ async def test_parameterized_route_and_url_for() -> None:
     router.mount("/api")
 
     # Test non-trailing slash
-    assert router.url_for("room", room="abc") == "/rooms/abc"
-    req = type("Req", (), {"path": "/api/rooms/42", "path_template": "/api"})()
+    assert router.url_for("room", room="abc") == "/rooms/abc", (
+        "url_for should reverse the route template with the given param"
+    )
+    req = make_req("/api/rooms/42", "/api")
     await router.on_websocket(req, DummyWS())
-    assert DummyResource.instances[-1].params == {"room": "42"}
+    assert DummyResource.instances[-1].params == {"room": "42"}, (
+        "matched route should pass the path param to on_connect"
+    )
 
     with pytest.raises(KeyError) as excinfo:
         router.url_for("room")
-    assert "room" in str(excinfo.value)
+    assert "room" in str(excinfo.value), "error should name the missing param"
 
 
 @pytest.mark.asyncio
@@ -169,16 +175,24 @@ async def test_trailing_and_nontrailing_slash_routes() -> None:
     router.mount("/")
 
     # Trailing slash
-    assert router.url_for("room_trailing", room="xyz") == "/rooms/xyz/"
-    req_trailing = type("Req", (), {"path": "/rooms/123/", "path_template": ""})()
+    assert router.url_for("room_trailing", room="xyz") == "/rooms/xyz/", (
+        "url_for should preserve the trailing slash from the route template"
+    )
+    req_trailing = make_req("/rooms/123/")
     await router.on_websocket(req_trailing, DummyWS())
-    assert DummyResource.instances[-1].params == {"room": "123"}
+    assert DummyResource.instances[-1].params == {"room": "123"}, (
+        "trailing-slash route should match and extract the param"
+    )
 
     # Non-trailing slash
-    assert router.url_for("room_nontrailing", room="uvw") == "/rooms2/uvw"
-    req_non = type("Req", (), {"path": "/rooms2/456", "path_template": ""})()
+    assert router.url_for("room_nontrailing", room="uvw") == "/rooms2/uvw", (
+        "url_for should not add a trailing slash absent from the route template"
+    )
+    req_non = make_req("/rooms2/456")
     await router.on_websocket(req_non, DummyWS())
-    assert DummyResource.instances[-1].params == {"room": "456"}
+    assert DummyResource.instances[-1].params == {"room": "456"}, (
+        "non-trailing-slash route should match and extract the param"
+    )
 
 
 @pytest.mark.asyncio
@@ -187,7 +201,7 @@ async def test_not_found_raises() -> None:
     router = WebSocketRouter()
     router.add_route("/ok", DummyResource)
     router.mount("/")
-    req = type("Req", (), {"path": "/missing", "path_template": ""})()
+    req = make_req("/missing")
 
     with pytest.raises(falcon.HTTPNotFound):
         await router.on_websocket(req, DummyWS())
@@ -199,7 +213,7 @@ async def test_path_template_prefix_mismatch() -> None:
     router = WebSocketRouter()
     router.add_route("/rooms/{room}", DummyResource)
     router.mount("/")
-    req = type("Req", (), {"path": "/rooms/1", "path_template": "/api"})()
+    req = make_req("/rooms/1", "/api")
 
     with pytest.raises(falcon.HTTPNotFound):
         await router.on_websocket(req, DummyWS())
@@ -211,21 +225,17 @@ async def test_on_connect_accepts_connection() -> None:
     router = WebSocketRouter()
     router.add_route("/ok", AcceptingResource)
     router.mount("/")
-    ws = DummyWS()
-    called = {}
-
-    async def accept() -> None:
-        called["accepted"] = True
-
-    typ.cast("typ.Any", ws).accept = accept
-    req = type("Req", (), {"path": "/ok", "path_template": ""})()
+    ws = RecordingWS()
+    req = make_req("/ok")
     await router.on_websocket(req, ws)
-    assert called.get("accepted") is True
+    assert ws.accepted, "on_connect returning True should trigger ws.accept()"
 
 
 def test_add_route_requires_callable() -> None:
     """Non-callable resources must raise ``TypeError``."""
     router = WebSocketRouter()
+    # The cast smuggles a deliberately non-callable value past the signature
+    # to exercise the runtime type check.
     bad_resource = typ.cast("typ.Any", object())
     with pytest.raises(TypeError):
         router.add_route("/x", bad_resource)
@@ -271,13 +281,17 @@ async def test_mount_compiles_existing_and_new_routes() -> None:
     router.mount("/api")
     router.add_route("/after/{id}", DummyResource)
 
-    req_before = type("Req", (), {"path": "/api/before/1", "path_template": "/api"})()
+    req_before = make_req("/api/before/1", "/api")
     await router.on_websocket(req_before, DummyWS())
-    assert DummyResource.instances[-1].params == {"id": "1"}
+    assert DummyResource.instances[-1].params == {"id": "1"}, (
+        "route added before mount should match"
+    )
 
-    req_after = type("Req", (), {"path": "/api/after/2", "path_template": "/api"})()
+    req_after = make_req("/api/after/2", "/api")
     await router.on_websocket(req_after, DummyWS())
-    assert DummyResource.instances[-1].params == {"id": "2"}
+    assert DummyResource.instances[-1].params == {"id": "2"}, (
+        "route added after mount should also match"
+    )
 
 
 def test_mount_twice_raises_error() -> None:
@@ -294,14 +308,16 @@ async def test_mount_with_empty_vs_slash_prefix() -> None:
     router_slash = WebSocketRouter()
     router_slash.add_route("/x", AcceptingResource)
     router_slash.mount("/")
-    req = type("Req", (), {"path": "/x", "path_template": "/"})()
-    await router_slash.on_websocket(req, DummyWS())
+    ws_slash = RecordingWS()
+    await router_slash.on_websocket(make_req("/x", "/"), ws_slash)
+    assert ws_slash.accepted, "a router mounted at '/' should accept the connection"
 
     router_empty = WebSocketRouter()
     router_empty.add_route("/y", AcceptingResource)
     router_empty.mount("")
-    req_empty = type("Req", (), {"path": "/y", "path_template": ""})()
-    await router_empty.on_websocket(req_empty, DummyWS())
+    ws_empty = RecordingWS()
+    await router_empty.on_websocket(make_req("/y"), ws_empty)
+    assert ws_empty.accepted, "a router mounted at '' should accept the connection"
 
 
 @pytest.mark.asyncio
@@ -331,11 +347,11 @@ async def test_overlapping_routes() -> None:
     router.add_route("/over/static", Second)
     router.mount("/")
 
-    req = type("Req", (), {"path": "/over/static", "path_template": ""})()
+    req = make_req("/over/static")
     await router.on_websocket(req, DummyWS())
 
-    assert First.instances
-    assert not Second.instances
+    assert First.instances, "the earlier registered route should match first"
+    assert not Second.instances, "the overlapping later route should not be reached"
 
 
 def test_url_for_unknown_route() -> None:
@@ -356,7 +372,7 @@ def test_url_for_missing_params() -> None:
 
     with pytest.raises(KeyError) as excinfo:
         router.url_for("room")
-    assert "room" in str(excinfo.value)
+    assert "room" in str(excinfo.value), "error should name the missing param"
 
 
 @pytest.mark.asyncio
@@ -367,9 +383,11 @@ async def test_on_connect_exception_closes_ws() -> None:
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
             raise RuntimeError("boom")
 
-    closed = await _expect_close(BadResource, path="/boom", expected_exc=RuntimeError)
+    ws = await _expect_close(BadResource, path="/boom", expected_exc=RuntimeError)
 
-    assert closed.get("closed") == 1000
+    assert ws.closed == [1000], (
+        "an on_connect exception should close the ws with code 1000"
+    )
 
 
 @pytest.mark.asyncio
@@ -389,16 +407,14 @@ async def test_resource_init_args_kwargs() -> None:
             return False
 
     router = WebSocketRouter()
-    router.add_route(
-        "/p/{id}", ParamResource, args=("hey",), kwargs={"bar": 5}, name="p"
-    )
+    router.add_route("/p/{id}", ParamResource, "hey", bar=5, name="p")
     router.mount("/")
 
-    req = type("Req", (), {"path": "/p/1", "path_template": ""})()
+    req = make_req("/p/1")
     await router.on_websocket(req, DummyWS())
     inst = ParamResource.instances[-1]
-    assert inst.foo == "hey"
-    assert inst.bar == 5
+    assert inst.foo == "hey", "positional init arg should be forwarded"
+    assert inst.bar == 5, "keyword init arg should be forwarded"
 
 
 class InjectedResource(WebSocketResource):
@@ -455,18 +471,16 @@ async def test_router_resource_factory_injects_dependency() -> None:
     InjectedResource.instances.clear()
     service = object()
     router = WebSocketRouter(resource_factory=resource_factory(service))
-    router.add_route(
-        "/di/{item}", InjectedResource, kwargs={"config": "alpha"}, name="di"
-    )
+    router.add_route("/di/{item}", InjectedResource, config="alpha", name="di")
     router.mount("/")
 
-    req = type("Req", (), {"path": "/di/foo", "path_template": ""})()
+    req = make_req("/di/foo")
     await router.on_websocket(req, DummyWS())
 
     resource = InjectedResource.instances[-1]
-    assert resource.service is service
-    assert resource.config == "alpha"
-    assert resource.params == {"item": "foo"}
+    assert resource.service is service, "the factory-injected service should be used"
+    assert resource.config == "alpha", "route kwargs should still reach the resource"
+    assert resource.params == {"item": "foo"}, "route params should reach on_connect"
 
 
 @pytest.mark.asyncio
@@ -479,24 +493,23 @@ async def test_router_resource_factory_supports_nested_resources() -> None:
     router.add_route(
         "/parent/{pid}",
         InjectedParent,
-        kwargs={"label": "rooms"},
+        label="rooms",
         name="parent",
     )
     router.mount("/")
 
-    req = type(
-        "Req",
-        (),
-        {"path": "/parent/42/child/7", "path_template": ""},
-    )()
+    req = make_req("/parent/42/child/7")
     await router.on_websocket(req, DummyWS())
 
     parent = InjectedParent.instances[-1]
     child = InjectedChild.instances[-1]
-    assert parent.service is service
-    assert child.service is service
-    assert child.params == {"pid": "42", "member": "7"}
-    assert child.state is parent.state
+    assert parent.service is service, "the injected service should reach the parent"
+    assert child.service is service, "the injected service should reach the child"
+    assert child.params == {
+        "pid": "42",
+        "member": "7",
+    }, "params from every route level should be merged into the child"
+    assert child.state is parent.state, "child should share the parent's state"
 
 
 @pytest.mark.asyncio
@@ -509,7 +522,7 @@ async def test_router_resource_factory_failure_closes_connection() -> None:
         ) -> bool:  # pragma: no cover - not reached
             return True
 
-    def failing_factory(_: typ.Callable[..., WebSocketResource]) -> WebSocketResource:
+    def failing_factory(_: cabc.Callable[..., WebSocketResource]) -> WebSocketResource:
         msg = "resource factory failed"
         raise RuntimeError(msg)
 
@@ -517,20 +530,16 @@ async def test_router_resource_factory_failure_closes_connection() -> None:
     router.add_route("/boom", FailingResource)
     router.mount("/")
 
-    ws = DummyWS()
-    closed: dict[str, object] = {}
-
-    async def close(code: int = 1000) -> None:
-        closed["code"] = code
-
-    typ.cast("typ.Any", ws).close = close
-    req = type("Req", (), {"path": "/boom", "path_template": ""})()
+    ws = RecordingWS()
+    req = make_req("/boom")
 
     with pytest.raises(RuntimeError) as excinfo:
         await router.on_websocket(req, ws)
 
-    assert "resource factory failed" in str(excinfo.value)
-    assert closed.get("code") == 1000
+    assert "resource factory failed" in str(excinfo.value), (
+        "the raised error message should propagate"
+    )
+    assert ws.closed == [1000], "the router should close the ws with code 1000"
 
 
 @pytest.mark.asyncio
@@ -544,9 +553,9 @@ async def test_resource_missing_init_args() -> None:
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
             return False
 
-    closed = await _expect_close(NeedsArgs, path="/w", expected_exc=TypeError)
+    ws = await _expect_close(NeedsArgs, path="/w", expected_exc=TypeError)
 
-    assert closed.get("closed") == 1000
+    assert ws.closed == [1000], "missing init args should close the ws with code 1000"
 
 
 @pytest.mark.asyncio
@@ -557,11 +566,13 @@ async def test_resource_unexpected_init_kwargs() -> None:
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
             return False
 
-    closed = await _expect_close(
+    ws = await _expect_close(
         NoKwargs, path="/x", expected_exc=TypeError, kwargs={"oops": 1}
     )
 
-    assert closed.get("closed") == 1000
+    assert ws.closed == [1000], (
+        "unexpected init kwargs should close the ws with code 1000"
+    )
 
 
 @pytest.mark.asyncio
@@ -581,13 +592,16 @@ async def test_add_route_accepts_factory() -> None:
         return FactoryResource(value)
 
     router = WebSocketRouter()
-    router.add_route("/f/{id}", factory, args=(7,), name="factory")
+    router.add_route("/f/{id}", factory, 7, name="factory")
     router.mount("/")
 
-    req = type("Req", (), {"path": "/f/5", "path_template": ""})()
+    req = make_req("/f/5")
     await router.on_websocket(req, DummyWS())
 
-    assert created == {"init": 7, "params": {"id": "5"}}
+    assert created == {
+        "init": 7,
+        "params": {"id": "5"},
+    }, "factory-produced resource should receive route args and connect params"
 
 
 @pytest.mark.asyncio
@@ -601,35 +615,29 @@ async def test_router_mount_on_app() -> None:
     app = falcon.asgi.App()
     app.add_route("/ws", router)
 
-    req = type("Req", (), {"path": "/ws/rooms/42", "path_template": "/ws"})()
+    req = make_req("/ws/rooms/42", "/ws")
     await router.on_websocket(req, DummyWS())
-    assert DummyResource.instances[-1].params == {"room": "42"}
+    assert DummyResource.instances[-1].params == {"room": "42"}, (
+        "router mounted on a Falcon app should still route correctly"
+    )
 
 
 @pytest.mark.asyncio
-async def test_try_route_handled() -> None:
-    """_try_route should return True when the path matches."""
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [("/ok", True), ("/oops", False)],
+    ids=["matching_path", "unmatched_path"],
+)
+async def test_try_route(path: str, *, expected: bool) -> None:
+    """_try_route should report whether the path matched its route."""
     router = WebSocketRouter()
     router.add_route("/ok", AcceptingResource)
     router.mount("/")
     route = router._routes[0]
 
-    req = type("Req", (), {"path": "/ok", "path_template": "/"})()
+    req = make_req(path, "/")
     handled = await router._try_route(route, req, DummyWS())
-    assert handled is True
-
-
-@pytest.mark.asyncio
-async def test_try_route_not_handled() -> None:
-    """_try_route should return False for unmatched paths."""
-    router = WebSocketRouter()
-    router.add_route("/ok", AcceptingResource)
-    router.mount("/")
-    route = router._routes[0]
-
-    req = type("Req", (), {"path": "/oops", "path_template": "/"})()
-    handled = await router._try_route(route, req, DummyWS())
-    assert handled is False
+    assert handled is expected, f"_try_route should return {expected} for path {path!r}"
 
 
 @pytest.mark.asyncio
@@ -639,6 +647,6 @@ async def test_malformed_remaining_path_not_matched() -> None:
     router.add_route("/rooms/{room}", AcceptingResource)
     router.mount("/")
 
-    req = type("Req", (), {"path": "/rooms42", "path_template": "/"})()
+    req = make_req("/rooms42", "/")
     with pytest.raises(falcon.HTTPNotFound):
         await router.on_websocket(req, DummyWS())

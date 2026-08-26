@@ -16,8 +16,8 @@ from .exceptions import (
     HandlerSignatureError,
     SignatureInspectionError,
 )
-from .handlers import Handler, HandlerInfo, get_payload_type
-from .schema import requires_strict_validation, validate_strict_payload
+from .handlers import HandlerInfo, get_payload_type
+from .schema import validate_strict_payload
 from .utils import to_snake_case
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ class Envelope(ms.Struct, frozen=True):
     payload: typ.Any | None = None
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class HandlerInvocationContext:
     """Context for invoking a message handler."""
 
@@ -54,7 +54,7 @@ def find_conventional_handler(
     if func is None or not inspect.iscoroutinefunction(func):
         return None
     try:
-        payload_type = get_payload_type(typ.cast("Handler", func))
+        payload_type = get_payload_type(func)
     except (
         HandlerSignatureError,
         HandlerNotAsyncError,
@@ -62,7 +62,7 @@ def find_conventional_handler(
     ) as exc:
         logger.debug("Handler %s invalid: %s", name, exc)
         return None
-    return HandlerInfo(typ.cast("Handler", func), payload_type, strict=True)
+    return HandlerInfo(func, payload_type, strict=True)
 
 
 async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
@@ -71,12 +71,9 @@ async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
     payload = context.payload
     if payload_type is not None and payload is not None:
         try:
-            if requires_strict_validation(
+            validate_strict_payload(
                 payload, payload_type, strict=context.handler_info.strict
-            ):
-                validate_strict_payload(
-                    payload, payload_type, strict=context.handler_info.strict
-                )
+            )
             payload = ms.convert(
                 payload,
                 type=payload_type,
@@ -111,8 +108,10 @@ async def dispatch_with_schema(
     entry = resource.__class__._struct_handlers.get(type(message))
     if not entry:
         info = msinspect.type_info(type(message))
-        tag_val = typ.cast("msinspect.StructType", info).tag
-        conv = find_conventional_handler(resource, typ.cast("str", tag_val))
+        tag = info.tag if isinstance(info, msinspect.StructType) else None
+        conv = (
+            find_conventional_handler(resource, tag) if isinstance(tag, str) else None
+        )
         if conv is None:
             await resource.on_unhandled(ws, raw)
             return

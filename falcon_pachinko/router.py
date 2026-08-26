@@ -9,6 +9,7 @@ Falcon app and used to generate URLs for registered routes.
 
 from __future__ import annotations
 
+import collections.abc as cabc
 import contextlib
 import dataclasses as dc
 import functools
@@ -28,14 +29,14 @@ if typ.TYPE_CHECKING:
 __all__ = ["ResourceFactory", "SimulatorFactory", "WebSocketRouter"]
 
 
-ResourceFactory = typ.Callable[
-    [typ.Callable[..., "WebSocketResource"]],
-    "WebSocketResource",
+type ResourceFactory = cabc.Callable[
+    [cabc.Callable[..., WebSocketResource]],
+    WebSocketResource,
 ]
 
-SimulatorFactory = typ.Callable[
+type SimulatorFactory = cabc.Callable[
     [falcon.Request, WebSocketLike],
-    WebSocketLike | typ.Awaitable[WebSocketLike],
+    WebSocketLike | cabc.Awaitable[WebSocketLike],
 ]
 
 
@@ -44,23 +45,19 @@ class _RequestLike(typ.Protocol):
 
     @property
     def path(self) -> str:
-        """Return the request path."""
-        ...
+        """The request path."""
 
     @property
     def path_template(self) -> str:
-        """Return the mount path template."""
-        ...
-
-
-def _request_path(req: _RequestLike) -> str:
-    """Return the request path used for route matching."""
-    return req.path
+        """The mount path template."""
 
 
 def _request_path_template(req: _RequestLike) -> str:
     """Return the mounted path template, defaulting like Falcon does."""
-    return typ.cast("str", getattr(req, "path_template", ""))
+    try:
+        return req.path_template
+    except AttributeError:
+        return ""
 
 
 def _replace_param_in_template(match: re.Match[str], template: str) -> str:
@@ -108,6 +105,24 @@ def _canonical_path(path: str) -> str:
     return path
 
 
+@dc.dataclass(slots=True)
+class _RouteMatch:
+    """Captured route parameters plus the path segment still to be consumed."""
+
+    params: dict[str, str]
+    remaining: str
+
+
+@dc.dataclass(slots=True)
+class _Dispatch:
+    """Mutable per-request state threaded through the routing pipeline."""
+
+    route: WebSocketRouter._CompiledRoute
+    req: falcon.Request
+    ws: WebSocketLike
+    match: _RouteMatch
+
+
 class WebSocketRouter:
     """Route WebSocket connections to resources.
 
@@ -118,17 +133,17 @@ class WebSocketRouter:
     included in the template, generated URLs will preserve it.
     """
 
-    @dc.dataclass
+    @dc.dataclass(slots=True)
     class _RawRoute:
         template: str
         canonical: str
-        factory: typ.Callable[..., WebSocketResource]
+        factory: cabc.Callable[..., WebSocketResource]
 
-    @dc.dataclass
+    @dc.dataclass(slots=True)
     class _CompiledRoute:
         prefix: re.Pattern[str]
         pattern: re.Pattern[str]
-        factory: typ.Callable[..., WebSocketResource]
+        factory: cabc.Callable[..., WebSocketResource]
 
     def __init__(
         self,
@@ -156,7 +171,7 @@ class WebSocketRouter:
     def _compile_and_store_route(
         self,
         canonical: str,
-        factory: typ.Callable[..., WebSocketResource],
+        factory: cabc.Callable[..., WebSocketResource],
     ) -> None:
         """Compile ``canonical`` with the mount prefix and store it.
 
@@ -164,6 +179,11 @@ class WebSocketRouter:
         already holds :attr:`_mount_lock`. The router relies on this lock to
         guard all mount-related state, preventing race conditions when routes
         are added concurrently with mounting.
+
+        Raises
+        ------
+        ValueError
+            If an identical pattern is already registered.
         """
         base = self._mount_prefix.rstrip("/")
         full = f"{base}{canonical}"
@@ -196,16 +216,19 @@ class WebSocketRouter:
     def add_route(
         self,
         path: str,
-        resource: type[WebSocketResource] | typ.Callable[..., WebSocketResource],
-        *,
+        resource: type[WebSocketResource] | cabc.Callable[..., WebSocketResource],
+        *init_args: object,
         name: str | None = None,
-        args: tuple[typ.Any, ...] = (),
-        kwargs: dict[str, typ.Any] | None = None,
+        **init_kwargs: object,
     ) -> None:
-        """Register a WebSocketResource to handle ``path``."""
-        if kwargs is None:
-            kwargs = {}
+        """Register a WebSocketResource to handle ``path``.
 
+        Any ``init_args`` or ``init_kwargs`` are stored and applied when a
+        per-connection resource instance is created, so a single resource class
+        can be configured differently across routes. ``name`` is reserved for
+        the route name consumed by :meth:`url_for` and is therefore not
+        forwarded to the resource.
+        """
         self._validate_resource_type(resource)
         path, canonical = self._registration.normalize_path(path)
 
@@ -213,7 +236,7 @@ class WebSocketRouter:
         # upon the first request since it may not yet be known at this point.
         compile_uri_template(canonical)
 
-        factory = functools.partial(resource, *args, **kwargs)
+        factory = functools.partial(resource, *init_args, **init_kwargs)
 
         with self._mount_lock:
             self._registration.check_conflicts(canonical, name, path=path)
@@ -223,10 +246,17 @@ class WebSocketRouter:
             if self._mount_prefix:
                 self._compile_and_store_route(canonical, factory)
 
+    @staticmethod
     def _validate_resource_type(
-        self, resource: type[WebSocketResource] | typ.Callable[..., WebSocketResource]
+        resource: type[WebSocketResource] | cabc.Callable[..., WebSocketResource],
     ) -> None:
-        """Ensure ``resource`` can be called to create a handler."""
+        """Ensure ``resource`` can be called to create a handler.
+
+        Raises
+        ------
+        TypeError
+            If ``resource`` is not callable.
+        """
         if not callable(resource):
             msg = "resource must be callable"
             raise TypeError(msg)
@@ -249,6 +279,12 @@ class WebSocketRouter:
         ``req.path_template`` is assumed to be a prefix of ``req.path``. If the
         assumption fails, :class:`falcon.HTTPNotFound` is raised to signal that
         the requested path does not map to this router's mount point.
+
+        Raises
+        ------
+        falcon.HTTPNotFound
+            If ``req.path_template`` does not match this router's mount point,
+            or if no registered route matches ``req.path``.
         """
         # Handle missing or empty path_template by defaulting to root "/"
         prefix = _request_path_template(req).rstrip("/") or "/"
@@ -285,33 +321,31 @@ class WebSocketRouter:
            :meth:`_handle_websocket_connection` which accepts or closes the
            connection via the resource's ``on_connect`` method.
 
-        The method returns ``True`` if the request was handled by this route,
-        ``False`` otherwise.
+        Returns
+        -------
+        bool
+            ``True`` if the request was handled by this route, ``False``
+            otherwise.
         """
-        result = self._validate_and_normalize_path(route, req)
-        if result is None:
+        match = self._validate_and_normalize_path(route, req)
+        if match is None:
             return False
-        params, remaining = result
+        # cast: downstream hooks and ``on_connect`` are typed against
+        # ``falcon.Request``; the router accepts any ``_RequestLike`` so tests
+        # can supply structural stand-ins.
         return await self._execute_route_with_error_handling(
-            route, req, ws, params, remaining
+            _Dispatch(
+                route=route, req=typ.cast("falcon.Request", req), ws=ws, match=match
+            )
         )
 
-    async def _execute_route_with_error_handling(
-        self,
-        route: _CompiledRoute,
-        req: _RequestLike,
-        ws: WebSocketLike,
-        params: dict[str, str],
-        remaining: str,
-    ) -> bool:
-        """Run the routing pipeline and close ``ws`` on unexpected errors."""
-        ws_for_cleanup: WebSocketLike = ws
+    async def _execute_route_with_error_handling(self, dispatch: _Dispatch) -> bool:
+        """Run the routing pipeline and close the socket on unexpected errors."""
+        ws_for_cleanup: WebSocketLike = dispatch.ws
         try:
-            prepared = await self._prepare_websocket(req, ws)
-            ws_for_cleanup = prepared
-            return await self._process_route_resolution(
-                route, req, prepared, params, remaining
-            )
+            dispatch.ws = await self._prepare_websocket(dispatch.req, dispatch.ws)
+            ws_for_cleanup = dispatch.ws
+            return await self._process_route_resolution(dispatch)
         except Exception as exc:
             if not getattr(exc, "_pachinko_factory_closed", False):
                 with contextlib.suppress(Exception):
@@ -319,9 +353,22 @@ class WebSocketRouter:
             raise
 
     async def _prepare_websocket(
-        self, req: _RequestLike, ws: WebSocketLike
+        self, req: falcon.Request, ws: WebSocketLike
     ) -> WebSocketLike:
-        """Return the WebSocket to use for ``req``."""
+        """Return the WebSocket to use for ``req``.
+
+        Returns
+        -------
+        WebSocketLike
+            The original socket, or the object produced by a configured
+            ``simulator_factory``.
+
+        Raises
+        ------
+        TypeError
+            If a configured ``simulator_factory`` returns an object that does
+            not expose the :class:`WebSocketLike` surface.
+        """
         # When :attr:`_simulator_factory` is configured the factory may wrap or
         # replace ``ws`` with an injectable simulator. The returned object is
         # validated to expose the :class:`WebSocketLike` surface used by the
@@ -329,7 +376,7 @@ class WebSocketRouter:
         if self._simulator_factory is None:
             return ws
 
-        candidate = self._simulator_factory(typ.cast("falcon.Request", req), ws)
+        candidate = self._simulator_factory(req, ws)
         if inspect.isawaitable(candidate):
             candidate = await candidate
 
@@ -341,51 +388,47 @@ class WebSocketRouter:
                 )
                 raise TypeError(msg)
 
+        # cast: the duck-type checks above establish the ``WebSocketLike``
+        # surface, which the checker cannot infer from getattr-based checks.
         return typ.cast("WebSocketLike", candidate)
 
-    def _is_valid_websocket_method(self, obj: object, attr_name: str) -> bool:
+    @staticmethod
+    def _is_valid_websocket_method(obj: object, attr_name: str) -> bool:
         """Return ``True`` when ``obj`` exposes coroutine ``attr_name``."""
         func = getattr(obj, attr_name, None)
         if func is None or not callable(func):
             return False
         return inspect.iscoroutinefunction(func)
 
-    async def _process_route_resolution(
-        self,
-        route: _CompiledRoute,
-        req: _RequestLike,
-        ws: WebSocketLike,
-        params: dict[str, str],
-        remaining: str,
-    ) -> bool:
+    async def _process_route_resolution(self, dispatch: _Dispatch) -> bool:
         """Resolve the final resource and dispatch the connection."""
-        base_resource = await self._instantiate_resource(route.factory, ws)
-        chain = [base_resource]
-        resolution = await self._resolve_resource_and_path(
-            base_resource, remaining, params, chain, ws
+        base_resource = await self._instantiate_resource(
+            dispatch.route.factory, dispatch.ws
         )
-        if resolution is None:
+        chain = [base_resource]
+        resource = await self._resolve_resource_and_path(
+            base_resource, dispatch.match, chain, dispatch.ws
+        )
+        if resource is None:
             return False
-        resource, _, params, chain = resolution
-        if not self._validate_final_resource(resource, base_resource, route, req):
+        if not self._validate_final_resource(
+            resource, base_resource, dispatch.route, dispatch.req
+        ):
             return False
         manager = self._setup_hook_management(chain)
         return await self._handle_websocket_connection(
-            resource, req, ws, params, hook_manager=manager
+            resource, dispatch, hook_manager=manager
         )
 
+    @staticmethod
     def _validate_final_resource(
-        self,
         resource: WebSocketResource,
         base_resource: WebSocketResource,
         route: _CompiledRoute,
-        req: _RequestLike,
+        req: falcon.Request,
     ) -> bool:
         """Return ``True`` if ``resource`` is usable for ``req``."""
-        return not (
-            resource is base_resource
-            and not route.pattern.fullmatch(_request_path(req))
-        )
+        return not (resource is base_resource and not route.pattern.fullmatch(req.path))
 
     def _setup_hook_management(self, chain: list[WebSocketResource]) -> HookManager:
         """Attach a :class:`HookManager` to every resource in ``chain``."""
@@ -394,9 +437,8 @@ class WebSocketRouter:
             item.bind_hook_manager(manager)
         return manager
 
-    def _normalize_path_remaining(
-        self, remaining: str, match: re.Match[str]
-    ) -> str | None:
+    @staticmethod
+    def _normalize_path_remaining(remaining: str, match: re.Match[str]) -> str | None:
         """Normalize ``remaining`` or return ``None`` if invalid."""
         if not remaining or remaining.startswith("/"):
             return remaining
@@ -418,8 +460,10 @@ class WebSocketRouter:
                 child_factory = functools.partial(factory, **child_kwargs)
                 new_resource = await self._instantiate_resource(child_factory, ws)
                 state_mapping = context.get("state", resource.state)
+                # cast: the context value is typed ``object``; the ``state``
+                # setter validates the mapping surface at runtime.
                 new_resource.state = typ.cast(
-                    "typ.MutableMapping[str, typ.Any]",
+                    "cabc.MutableMapping[str, typ.Any]",
                     state_mapping,
                 )
                 params = match.groupdict()
@@ -429,53 +473,49 @@ class WebSocketRouter:
     async def _resolve_subroutes(
         self,
         resource: WebSocketResource,
-        path: str,
-        params: dict[str, str],
+        match: _RouteMatch,
         chain: list[WebSocketResource],
         ws: WebSocketLike,
-    ) -> tuple[WebSocketResource, str, dict[str, str]]:
-        """Traverse ``resource`` subroutes matching ``path``."""
-        while path not in ("", "/"):
-            result = await self._try_subroute_match(resource, path, ws)
+    ) -> WebSocketResource:
+        """Traverse ``resource`` subroutes, consuming ``match`` in place."""
+        while match.remaining not in {"", "/"}:
+            result = await self._try_subroute_match(resource, match.remaining, ws)
             if result is None:
                 break
-            resource, path, new_params = result
-            params |= new_params
+            resource, match.remaining, new_params = result
+            match.params |= new_params
             chain.append(resource)
 
-        return resource, path, params
+        return resource
 
     def _validate_and_normalize_path(
         self, route: _CompiledRoute, req: _RequestLike
-    ) -> tuple[dict[str, str], str] | None:
-        """Return params and remaining path or ``None`` if invalid."""
-        if not (match := route.prefix.match(_request_path(req))):
+    ) -> _RouteMatch | None:
+        """Return the path match for ``req`` or ``None`` if invalid."""
+        if not (prefix_match := route.prefix.match(req.path)):
             return None
-        params = match.groupdict()
-        remaining = _request_path(req)[match.end() :]
+        remaining = req.path[prefix_match.end() :]
         if remaining and not remaining.startswith("/"):
-            remaining = self._normalize_path_remaining(remaining, match)
-            if remaining is None:
+            normalized = self._normalize_path_remaining(remaining, prefix_match)
+            if normalized is None:
                 return None
-        return params, remaining
+            remaining = normalized
+        return _RouteMatch(params=prefix_match.groupdict(), remaining=remaining)
 
     async def _resolve_resource_and_path(
         self,
         resource: WebSocketResource,
-        remaining: str,
-        params: dict[str, str],
+        match: _RouteMatch,
         chain: list[WebSocketResource],
         ws: WebSocketLike,
-    ) -> tuple[WebSocketResource, str, dict[str, str], list[WebSocketResource]] | None:
-        """Return resolved resource, params, and traversal chain."""
-        resolved, remaining, params = await self._resolve_subroutes(
-            resource, remaining, params, chain, ws
-        )
-        return (resolved, remaining, params, chain) if remaining in ("", "/") else None
+    ) -> WebSocketResource | None:
+        """Return the resolved resource, or ``None`` if the path is unconsumed."""
+        resolved = await self._resolve_subroutes(resource, match, chain, ws)
+        return resolved if match.remaining in {"", "/"} else None
 
     async def _instantiate_resource(
         self,
-        route_factory: typ.Callable[..., WebSocketResource],
+        route_factory: cabc.Callable[..., WebSocketResource],
         ws: WebSocketLike,
     ) -> WebSocketResource:
         """Instantiate a resource using ``route_factory`` with error handling."""
@@ -483,74 +523,71 @@ class WebSocketRouter:
             return self._resource_factory(route_factory)
         except Exception as exc:  # pragma: no cover - exercise via tests
             await ws.close()
+            # cast: the checker cannot see the dynamic marker attribute used
+            # to signal that the socket was already closed for this failure.
             typ.cast("typ.Any", exc)._pachinko_factory_closed = True
             raise
 
     async def _handle_websocket_connection(
         self,
         resource: WebSocketResource,
-        req: _RequestLike,
-        ws: WebSocketLike,
-        params: dict[str, str],
+        dispatch: _Dispatch,
         *,
         hook_manager: HookManager,
     ) -> bool:
-        """Accept or close ``ws`` based on ``resource`` decision."""
-        context, params_for_handler = await self._prepare_connection_context(
-            hook_manager, resource, req, ws, params
+        """Accept or close the connection based on ``resource`` decision."""
+        context = await self._prepare_connection_context(
+            hook_manager, resource, dispatch
         )
         should_accept = await self._execute_resource_handler(
-            resource, req, ws, params_for_handler, context, hook_manager
+            resource, dispatch, context, hook_manager
         )
-        context.params = params_for_handler
         return await self._finalize_connection(
-            ws,
+            dispatch.ws,
             should_accept=should_accept,
             context=context,
             hook_manager=hook_manager,
         )
 
+    @staticmethod
     async def _prepare_connection_context(
-        self,
         hook_manager: HookManager,
         resource: WebSocketResource,
-        req: _RequestLike,
-        ws: WebSocketLike,
-        params: dict[str, str],
-    ) -> tuple[HookContext, dict[str, object]]:
-        """Return the hook context and handler parameters."""
-        params_obj: dict[str, object] = dict(params)
+        dispatch: _Dispatch,
+    ) -> HookContext:
+        """Return the hook context with the handler parameters resolved."""
+        params_obj: dict[str, object] = dict(dispatch.match.params)
         context = await hook_manager.notify_before_connect(
-            resource, req=typ.cast("falcon.Request", req), ws=ws, params=params_obj
+            resource,
+            req=dispatch.req,
+            ws=dispatch.ws,
+            params=params_obj,
         )
-        params_for_handler = (
-            context.params if context.params is not None else params_obj
-        )
-        return context, params_for_handler
+        # ``before_connect`` hooks may rewrite the parameters; fall back to the
+        # route captures when they leave them untouched.
+        if context.params is None:
+            context.params = params_obj
+        return context
 
+    @staticmethod
     async def _execute_resource_handler(
-        self,
         resource: WebSocketResource,
-        req: _RequestLike,
-        ws: WebSocketLike,
-        params: dict[str, object],
+        dispatch: _Dispatch,
         context: HookContext,
         hook_manager: HookManager,
     ) -> bool:
         """Invoke ``resource.on_connect`` handling hook error propagation."""
+        params = context.params if context.params is not None else {}
         try:
-            return await resource.on_connect(
-                typ.cast("falcon.Request", req), ws, **params
-            )
+            return await resource.on_connect(dispatch.req, dispatch.ws, **params)
         except Exception as exc:
             context.error = exc
             context.result = False
-            context.params = params
             await hook_manager.notify_after_connect(context)
             raise
 
+    @staticmethod
     async def _finalize_connection(
-        self,
         ws: WebSocketLike,
         *,
         should_accept: bool,
@@ -581,7 +618,8 @@ class _RouteRegistrationService:
         self._raw_routes = raw_routes
         self._names = names
 
-    def normalize_path(self, path: str) -> tuple[str, str]:
+    @staticmethod
+    def normalize_path(path: str) -> tuple[str, str]:
         """Return normalized and canonical variants of ``path``."""
         normalized = _normalize_path(path)
         canonical = _canonical_path(normalized)
@@ -590,7 +628,15 @@ class _RouteRegistrationService:
     def check_conflicts(
         self, canonical: str, name: str | None, *, path: str | None = None
     ) -> None:
-        """Raise if ``canonical`` or ``name`` already exists under ``lock``."""
+        """Raise if ``canonical`` or ``name`` already exists under ``lock``.
+
+        Raises
+        ------
+        RuntimeError
+            If the mount lock is not held by the caller.
+        ValueError
+            If the canonical path or the route name is already registered.
+        """
         if not self._lock.locked():
             msg = (
                 "_RouteRegistrationService.check_conflicts requires "

@@ -10,7 +10,7 @@ import msgspec.json as msjson
 import pytest
 
 from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
-from falcon_pachinko.unittests.helpers import DummyWS, bind_default_hooks
+from falcon_pachinko.unittests.helpers import DummyWS
 
 
 class EchoPayload(ms.Struct):
@@ -57,7 +57,7 @@ class EchoResource(WebSocketResource):
         self.fallback.append(message)
 
 
-async def echo_handler(
+async def echo_handler(  # ruff: ignore[unused-async]  # add_handler requires an async callable
     self: EchoResource, ws: WebSocketLike, payload: EchoPayload
 ) -> None:
     """Handle an "echo" message by recording the payload text.
@@ -107,7 +107,9 @@ class RawResource(WebSocketResource):
         self.received.append(message)
 
 
-async def raw_handler(self: RawResource, ws: WebSocketLike, payload: object) -> None:
+async def raw_handler(  # ruff: ignore[unused-async]  # add_handler requires an async callable
+    self: RawResource, ws: WebSocketLike, payload: object
+) -> None:
     """Handle incoming messages of type "raw".
 
     Handles incoming messages of type "raw" by appending the payload to the
@@ -214,26 +216,25 @@ class LenientResource(WebSocketResource):
 async def test_dispatch_calls_registered_handler() -> None:
     """Test that dispatching a message with a registered type calls the handler."""
     r = EchoResource()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     raw = msjson.encode({"type": "echo", "payload": {"text": "hi"}})
     await r.dispatch(DummyWS(), raw)
-    assert r.seen == ["hi"]
-    assert not r.fallback
+    assert r.seen == ["hi"], "registered handler should record the echo payload text"
+    assert not r.fallback, "a registered handler should not fall back"
 
 
 @pytest.mark.asyncio
 async def test_dispatch_unknown_type_calls_fallback() -> None:
-    """Test that dispatching a message with an unknown type invokes the fallback
-    handler.
+    """Unknown message types invoke the fallback handler.
 
     Verifies that when a message with an unregistered type is dispatched to
     EchoResource, the raw message is appended to the resource's fallback list.
     """
     r = EchoResource()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     raw = msjson.encode({"type": "unknown", "payload": {"text": "oops"}})
     await r.dispatch(DummyWS(), raw)
-    assert r.fallback == [raw]
+    assert r.fallback == [raw], "unregistered message types should reach on_unhandled"
 
 
 @pytest.mark.asyncio
@@ -241,13 +242,13 @@ async def test_handler_shared_across_instances() -> None:
     """Test that handlers are shared across instances of the same resource class."""
     r1 = EchoResource()
     r2 = EchoResource()
-    bind_default_hooks(r1)
-    bind_default_hooks(r2)
+    r1.bind_default_hook_manager()
+    r2.bind_default_hook_manager()
     raw = msjson.encode({"type": "echo", "payload": {"text": "hey"}})
     await r1.dispatch(DummyWS(), raw)
     await r2.dispatch(DummyWS(), raw)
-    assert r1.seen == ["hey"]
-    assert r2.seen == ["hey"]
+    assert r1.seen == ["hey"], "shared handler should record on the first instance"
+    assert r2.seen == ["hey"], "shared handler should record on the second instance"
 
 
 @pytest.mark.asyncio
@@ -260,147 +261,145 @@ async def test_handler_shared_across_instances() -> None:
     ],
 )
 async def test_payload_type_none_passes_raw(payload: object, expected: object) -> None:
-    """Tests that RawResource receives the raw payload as-is when no payload type is
-    specified.
+    """RawResource receives the raw payload as-is when no payload type is specified.
 
     Verifies that the received list contains the exact payload passed, or None if
     the payload is missing.
     """
     r = RawResource()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     msg: dict[str, typ.Any] = {"type": "raw"}
     if payload != "MISSING":
         msg["payload"] = payload
     raw = msjson.encode(msg)
     await r.dispatch(DummyWS(), raw)
-    assert r.received == [expected]
+    assert r.received == [
+        expected,
+    ], "the raw payload should pass through unchanged when no payload type is set"
 
 
 @pytest.mark.asyncio
 async def test_invalid_payload_calls_fallback() -> None:
-    """Test that an invalid payload type causes the message to be handled by the
-    fallback method.
+    """An invalid payload type causes the message to be handled by the fallback method.
 
     Sends a message with an incorrect payload type to EchoResource and verifies
     that it is appended to the fallback list and not processed by the registered
     handler.
     """
     r = EchoResource()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     raw = msjson.encode({"type": "echo", "payload": {"text": 42}})
     await r.dispatch(DummyWS(), raw)
-    assert r.fallback == [raw]
-    assert not r.seen
+    assert r.fallback == [raw], "invalid payload should be routed to on_unhandled"
+    assert not r.seen, "the registered handler should not run for an invalid payload"
 
 
 @pytest.mark.asyncio
 async def test_invalid_envelope_type_calls_fallback() -> None:
     """Non-string ``type`` fields trigger the fallback handler."""
     r = EchoResource()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     raw = msjson.encode({"type": 123, "payload": {"text": "hi"}})
     await r.dispatch(DummyWS(), raw)
-    assert r.fallback == [raw]
-    assert not r.seen
+    assert r.fallback == [
+        raw,
+    ], "a non-string type field should be routed to on_unhandled"
+    assert not r.seen, "the registered handler should not run for a bad envelope type"
 
 
 @pytest.mark.asyncio
 async def test_extra_fields_strict_true_calls_fallback() -> None:
     """Extra fields trigger fallback when strict is True."""
     r = StrictResource()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     raw = msjson.encode({"type": "extra", "payload": {"val": 1, "extra": 2}})
     await r.dispatch(DummyWS(), raw)
-    assert r.fallback == [raw]
-    assert not r.seen
+    assert r.fallback == [raw], "extra fields should fall back when strict is True"
+    assert not r.seen, "the handler should not run when validation fails"
 
 
 @pytest.mark.asyncio
 async def test_extra_fields_strict_false_processed() -> None:
     """Extra fields are ignored when strict=False."""
     r = LenientResource()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     raw = msjson.encode({"type": "extra", "payload": {"val": 3, "extra": 4}})
     await r.dispatch(DummyWS(), raw)
-    assert r.seen == [3]
-    assert not r.fallback
+    assert r.seen == [3], "extra fields should be ignored when strict is False"
+    assert not r.fallback, "a lenient conversion should not fall back"
 
 
 @pytest.mark.asyncio
 async def test_on_tag_dispatch_envelope() -> None:
     """Messages with matching ``on_{tag}`` handlers are dispatched."""
     r = ConventionalResource()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     raw = msjson.encode({"type": "echo", "payload": {"x": 1}})
     await r.dispatch(DummyWS(), raw)
-    assert r.seen == [{"x": 1}]
+    assert r.seen == [{"x": 1}], "on_echo should receive the decoded payload"
 
 
 @pytest.mark.asyncio
 async def test_on_tag_camel_case() -> None:
     """CamelCase tags are converted to snake_case."""
     r = CamelResource()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     raw = msjson.encode(CamelResource.SendMessage(text="hi"))
     await r.dispatch(DummyWS(), raw)
-    assert r.messages == ["hi"]
+    assert r.messages == ["hi"], "camelCase tag should route to the snake_case handler"
 
 
 @pytest.mark.asyncio
 async def test_sync_handler_ignored_and_fallback_behaviour() -> None:
     """Synchronous ``on_{tag}`` handlers are ignored by dispatch."""
     r = SyncHandlerResource()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     raw = msjson.encode({"type": "sync", "payload": {"val": 1}})
     await r.dispatch(DummyWS(), raw)
-    # The sync handler should not be called
-    assert r.seen == []
-    assert r.fallback == [raw]
+    assert not r.seen, "the synchronous handler should not be called by dispatch"
+    assert r.fallback == [raw], "a sync-only handler should be treated as unhandled"
 
 
-@pytest.mark.asyncio
-async def test_state_defaults_to_empty_dict() -> None:
+def test_state_defaults_to_empty_dict() -> None:
     """Each resource instance starts with an empty state mapping."""
     r = EchoResource()
-    assert isinstance(r.state, dict)
-    assert not r.state
+    assert isinstance(r.state, dict), "state should default to a dict"
+    assert not r.state, "a freshly created resource should have empty state"
     r.state["foo"] = "bar"
-    assert r.state["foo"] == "bar"
+    assert r.state["foo"] == "bar", "state should be a mutable mapping"
 
 
-@pytest.mark.asyncio
-async def test_state_custom_mapping_supported() -> None:
+def test_state_custom_mapping_supported() -> None:
     """The state attribute can be swapped for any mutable mapping."""
     r = EchoResource()
     custom: dict[str, int] = {"count": 1}
     r.state = custom
     r.state["count"] += 1
-    assert custom["count"] == 2
+    assert custom["count"] == 2, "mutating r.state should mutate the assigned mapping"
 
 
-@pytest.mark.asyncio
-async def test_state_is_unique_per_instance() -> None:
+def test_state_is_unique_per_instance() -> None:
     """Resource instances do not share state by default."""
     r1 = EchoResource()
     r2 = EchoResource()
     r1.state["foo"] = "bar"
-    assert "foo" not in r2.state
+    assert "foo" not in r2.state, "state should not be shared between instances"
 
 
-@pytest.mark.asyncio
-async def test_state_rejects_non_mapping() -> None:
+def test_state_rejects_non_mapping() -> None:
     """Assigning non-mapping to ``state`` raises ``TypeError``."""
     r = EchoResource()
+    # The cast smuggles a deliberately non-mapping value past the signature
+    # to exercise the runtime type check.
     with pytest.raises(TypeError):
         typ.cast("typ.Any", r).state = 123
 
 
-@pytest.mark.asyncio
-async def test_state_accepts_mapping_subclass() -> None:
+def test_state_accepts_mapping_subclass() -> None:
     """Valid ``MutableMapping`` subclasses are accepted."""
     r = EchoResource()
     custom = collections.defaultdict(int)
     r.state = custom
-    assert r.state is custom
+    assert r.state is custom, "assigning state should store the given mapping directly"
     r.state["count"] += 1
-    assert custom["count"] == 1
+    assert custom["count"] == 1, "mutating r.state should mutate the assigned mapping"

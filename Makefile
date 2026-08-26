@@ -1,11 +1,36 @@
 MDLINT ?= $(shell which markdownlint)
 NIXIE ?= $(shell which nixie)
 MDFORMAT_ALL ?= $(shell which mdformat-all)
-TOOLS = $(MDFORMAT_ALL) ruff ty $(MDLINT) $(NIXIE) uv
+TOOLS = $(MDFORMAT_ALL) $(MDLINT) $(NIXIE) uv
 VENV_TOOLS = pytest
 UV ?= uv
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
-RUFF_VERSION ?= 0.15.12
+# Pin Ruff so `make` invokes the same version as the `ruff==` pin in
+# .github/workflows/ci.yml. tests/test_toolchain_versions.py enforces that
+# both sites stay in sync; bump them together, because rule sets differ
+# between Ruff releases and a mismatch causes version-skew lint failures.
+RUFF_VERSION ?= 0.16.4
+RUFF ?= $(UV) tool run --from ruff==$(RUFF_VERSION) ruff
+# Pin ty so `make` and CI invoke the same typechecker release. ty is
+# pre-1.0 and diagnostics shift between releases, so an unpinned install
+# breaks the typecheck gate without any code change. Bump deliberately and
+# fix new diagnostics in the same commit.
+TY_VERSION ?= 0.0.74
+TY ?= $(UV) tool run --from ty==$(TY_VERSION) ty
+# Run Pylint with the df12-python-lints plugin on CPython 3.14, matching the
+# plugin's supported baseline. The same tool environment provides ambrleaks.
+DF12_PYTHON_LINTS_REF ?= v0.3.0
+DF12_PYTHON_LINTS = df12-python-lints @ git+https://github.com/leynos/df12-python-lints.git@$(DF12_PYTHON_LINTS_REF)
+PYLINT_PYTHON ?= 3.14
+# List falcon_pachinko/unittests and falcon_pachinko/behaviour explicitly:
+# they carry no __init__.py, so package discovery from falcon_pachinko does
+# not descend into them.
+PYLINT_TARGETS ?= falcon_pachinko falcon_pachinko/unittests \
+	falcon_pachinko/behaviour tests examples scripts
+PYLINT = $(UV_ENV) $(UV) tool run --python $(PYLINT_PYTHON) \
+	--from pylint --with '$(DF12_PYTHON_LINTS)' pylint
+AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(PYLINT_PYTHON) \
+	--from '$(DF12_PYTHON_LINTS)' ambrleaks
 PATHSPEC_VERSION ?= 1.1.1
 TYPOS_VERSION ?= 1.48.0
 TYPOS_CONFIG_BUILDER_COMMIT := d6da92f02240a79a945c835f69bdd08a888da1d0
@@ -63,20 +88,22 @@ $(TOOLS): ## Verify required CLI tools
 $(VENV_TOOLS): ## Verify required CLI tools in venv
 	$(call ensure_tool_venv,$@)
 
-fmt: ruff $(MDFORMAT_ALL) ## Format sources
-	ruff format
-	ruff check --select I --fix
+fmt: uv $(MDFORMAT_ALL) ## Format sources
+	$(RUFF) format
+	$(RUFF) check --select I --fix
 	$(MDFORMAT_ALL)
 
-check-fmt: ruff ## Verify formatting
-	ruff format --check
+check-fmt: uv ## Verify formatting
+	$(RUFF) format --check
 	# mdformat-all doesn't currently do checking
 
-lint: ruff ## Run linters
-	ruff check
+lint: uv ## Run linters
+	$(RUFF) check
+	$(PYLINT) $(PYLINT_TARGETS)
+	$(AMBRLEAKS) tests
 
-typecheck: build ty ## Run typechecking
-	ty check falcon_pachinko tests
+typecheck: build uv ## Run typechecking
+	$(TY) check falcon_pachinko tests
 
 markdownlint: spelling $(MDLINT) ## Lint Markdown files and enforce spelling
 	find . -type f -name '*.md' \

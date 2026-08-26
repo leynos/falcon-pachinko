@@ -12,6 +12,7 @@ from falcon_pachinko import SimulatorConnection, WebSocketResource, WebSocketSim
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing only
     import asyncio
+    import collections.abc as cabc
 
     import falcon
 
@@ -27,7 +28,7 @@ def test_simulator_fixture() -> None:  # pragma: no cover - scenario registratio
 @pytest.fixture
 def event_loop(
     event_loop_policy: asyncio.AbstractEventLoopPolicy,
-) -> typ.Iterator[asyncio.AbstractEventLoop]:
+) -> cabc.Iterator[asyncio.AbstractEventLoop]:
     """Provide an isolated event loop for behaviour scenarios."""
     loop = event_loop_policy.new_event_loop()
     try:
@@ -49,14 +50,16 @@ class EchoResource(WebSocketResource):
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
         """Handle the echo interaction for the simulator scenario."""
-        simulator = typ.cast("WebSocketSimulator", ws)
-        payload = await simulator.receive_json(dict)
+        assert isinstance(ws, WebSocketSimulator), (
+            "the harness must inject the simulator instance"
+        )
+        payload = await ws.receive_json(dict)
         self.received.append(payload)
-        await simulator.send_json({"type": "ack", "payload": payload})
+        await ws.send_json({"type": "ack", "payload": payload})
         return False
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class FixtureContext:
     """Store shared state for simulator fixture scenarios."""
 
@@ -88,7 +91,7 @@ def when_connect(
     context: FixtureContext, event_loop: asyncio.AbstractEventLoop
 ) -> FixtureContext:
     """Establish a connection using the harness fixture."""
-    assert context.payload is not None
+    assert context.payload is not None, "the seed payload must be set before connecting"
     frames: list[tuple[object, typ.Literal["json"]]] = [
         (context.payload, "json"),
     ]
@@ -109,23 +112,27 @@ def when_connect(
 @then("the resource should receive the queued payload")
 def then_resource_received(context: FixtureContext) -> None:
     """Assert that the echo resource consumed the seeded payload."""
-    assert context.resource is not None
-    assert context.resource.received == [{"type": "ping"}]
+    assert context.resource is not None, "the echo resource must have been constructed"
+    assert context.resource.received == [{"type": "ping"}], (
+        "the resource must have received the seeded payload"
+    )
 
 
 @then("the simulator helper exposes the ack frame")
 def then_simulator_records_ack(context: FixtureContext) -> None:
     """Ensure the helper decodes outbound JSON frames."""
-    assert context.connection is not None
+    assert context.connection is not None, "a connection must have been opened"
     assert context.connection.pop_sent_json() == {
         "type": "ack",
         "payload": {"type": "ping"},
-    }
+    }, "the connection must expose the decoded ack frame"
 
 
 @then("the connection is closed by the fixture")
 def then_fixture_closes(context: FixtureContext) -> None:
     """Verify the fixture performs connection teardown automatically."""
-    assert context.connection is not None
-    assert context.connection.closed is True
-    assert context.connection.websocket.closed is True
+    assert context.connection is not None, "a connection must have been opened"
+    assert context.connection.closed is True, "the connection must be marked closed"
+    assert context.connection.websocket.closed is True, (
+        "the underlying websocket must be closed"
+    )

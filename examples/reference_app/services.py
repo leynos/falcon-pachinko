@@ -6,6 +6,9 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 __all__ = [
     "AnnouncementFeed",
     "AuditTrail",
@@ -126,9 +129,11 @@ class WorkspaceRepository:
             project = self._ensure_project_locked(workspace_id, project_id)
             tasks = list(project.tasks.values())
 
-        if include_completed:
-            return [dc.replace(task) for task in tasks]
-        return [dc.replace(task) for task in tasks if not task.completed]
+        return [
+            dc.replace(task)
+            for task in tasks
+            if include_completed or not task.completed
+        ]
 
     async def snapshot(self) -> dict[str, Workspace]:
         """Return a deep-ish copy of the repository contents for inspection."""
@@ -153,8 +158,7 @@ class WorkspaceRepository:
             }
 
     def _get_or_create_workspace(self, workspace_id: str) -> Workspace:
-        workspace = self._workspaces.get(workspace_id)
-        if workspace is None:
+        if (workspace := self._workspaces.get(workspace_id)) is None:
             workspace = Workspace(
                 workspace_id=workspace_id,
                 name=workspace_id.replace("-", " ").title(),
@@ -163,9 +167,9 @@ class WorkspaceRepository:
             self._workspaces[workspace_id] = workspace
         return workspace
 
-    def _get_or_create_project(self, workspace: Workspace, project_id: str) -> Project:
-        project = workspace.projects.get(project_id)
-        if project is None:
+    @staticmethod
+    def _get_or_create_project(workspace: Workspace, project_id: str) -> Project:
+        if (project := workspace.projects.get(project_id)) is None:
             project = Project(
                 project_id=project_id,
                 name=project_id.replace("-", " ").title(),
@@ -188,7 +192,7 @@ class AuditTrail:
 
     @property
     def records(self) -> list[dict[str, object]]:
-        """Return a copy of the recorded events."""
+        """A copy of the recorded events."""
         return list(self._records)
 
     async def record(self, event: str, **metadata: object) -> None:
@@ -223,7 +227,7 @@ class AuthenticationError(PermissionError):
 class TokenAuthenticator:
     """Trivial header-based authenticator wired into global hooks."""
 
-    def __init__(self, secrets: typ.Mapping[str, str]) -> None:
+    def __init__(self, secrets: cabc.Mapping[str, str]) -> None:
         self._secrets = dict(secrets)
 
     async def verify(self, workspace_id: str, token: str | None) -> None:
@@ -233,4 +237,3 @@ class TokenAuthenticator:
             return
         if token != expected:
             raise AuthenticationError(workspace_id)
-        return

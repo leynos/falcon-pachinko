@@ -19,6 +19,8 @@ from falcon_pachinko.hooks import HookContext, HookEvent
 from .services import Task, TaskCreationParams
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
+    import collections.abc as cabc
+
     import falcon
 
     from .services import AnnouncementFeed, AuditTrail, WorkspaceRepository
@@ -134,9 +136,9 @@ class ProjectResource(WebSocketResource):
 class TaskOperationConfig:
     """Configuration for a task operation handler."""
 
-    repo_operation: typ.Callable[..., typ.Awaitable[Task]]
+    repo_operation: cabc.Callable[..., cabc.Awaitable[Task]]
     response_type: str
-    payload_builder: typ.Callable[[Task], dict[str, object]]
+    payload_builder: cabc.Callable[[Task], dict[str, object]]
 
 
 class TaskStreamResource(WebSocketResource):
@@ -176,7 +178,7 @@ class TaskStreamResource(WebSocketResource):
 
     async def on_connect(
         self,
-        req: "falcon.Request",  # noqa: UP037
+        req: falcon.Request,
         ws: WebSocketLike,
         *,
         workspace_id: str,
@@ -199,21 +201,18 @@ class TaskStreamResource(WebSocketResource):
                 project=project_id,
                 user=self.state["user"],
             )
-            await ws.send_media(
-                {
-                    "type": "session.ready",
-                    "payload": {
-                        "workspace": workspace_id,
-                        "project": project_id,
-                    },
-                }
-            )
+            await ws.send_media({
+                "type": "session.ready",
+                "payload": {
+                    "workspace": workspace_id,
+                    "project": project_id,
+                },
+            })
         except Exception:
             await self._conn_mgr.remove_connection(conn_id)
             self._conn_id = None
             raise
-        else:
-            return True
+        return True
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Remove the websocket from the connection manager on disconnect."""
@@ -231,27 +230,26 @@ class TaskStreamResource(WebSocketResource):
     @handles_message("task.add")
     async def handle_add(self, ws: WebSocketLike, payload: AddTask) -> None:
         """Create a task and broadcast a note for the workspace."""
-        workspace_id = typ.cast("str", self.state["workspace_id"])
-        project_id = typ.cast("str", self.state["project_id"])
+        workspace_id: str = self.state["workspace_id"]
+        project_id: str = self.state["project_id"]
+        author: str = self.state.get("user", "guest")
         await self._repo.add_task(
             workspace_id,
             project_id,
             TaskCreationParams(
                 task_id=payload.task_id,
                 title=payload.title,
-                author=typ.cast("str", self.state.get("user", "guest")),
+                author=author,
                 assignee=payload.assignee,
             ),
         )
-        await ws.send_media(
-            {
-                "type": "task.added",
-                "payload": {
-                    "task_id": payload.task_id,
-                    "project_id": project_id,
-                },
-            }
-        )
+        await ws.send_media({
+            "type": "task.added",
+            "payload": {
+                "task_id": payload.task_id,
+                "project_id": project_id,
+            },
+        })
         await self._feed.publish(
             workspace_id,
             {
@@ -282,24 +280,22 @@ class TaskStreamResource(WebSocketResource):
     @handles_message("task.list", strict=False)
     async def handle_list(self, ws: WebSocketLike, payload: ListTasks) -> None:
         """Return the current task snapshot."""
-        workspace_id = typ.cast("str", self.state["workspace_id"])
-        project_id = typ.cast("str", self.state["project_id"])
+        workspace_id: str = self.state["workspace_id"]
+        project_id: str = self.state["project_id"]
         tasks = await self._repo.list_tasks(
             workspace_id,
             project_id,
             include_completed=payload.include_completed,
         )
-        await ws.send_media(
-            {
-                "type": "task.list",
-                "payload": [dc.asdict(task) for task in tasks],
-            }
-        )
+        await ws.send_media({
+            "type": "task.list",
+            "payload": [dc.asdict(task) for task in tasks],
+        })
 
     @handles_message("session.note")
     async def handle_note(self, ws: WebSocketLike, payload: BroadcastNote) -> None:
         """Publish a manual note to everyone in the workspace."""
-        workspace_id = typ.cast("str", self.state["workspace_id"])
+        workspace_id: str = self.state["workspace_id"]
         await self._feed.publish(
             workspace_id,
             {
@@ -312,14 +308,13 @@ class TaskStreamResource(WebSocketResource):
         )
         await ws.send_media({"type": "session.note", "payload": payload.text})
 
+    @typ.override
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Send a helpful error response for unexpected payloads."""
-        await ws.send_media(
-            {
-                "type": "error",
-                "payload": "unsupported message",
-            }
-        )
+        await ws.send_media({
+            "type": "error",
+            "payload": "unsupported message",
+        })
 
     async def _execute_task_operation(
         self,
@@ -329,25 +324,23 @@ class TaskStreamResource(WebSocketResource):
         *operation_args: object,
     ) -> None:
         """Execute a task operation and send the standardized response."""
-        workspace_id = typ.cast("str", self.state["workspace_id"])
-        project_id = typ.cast("str", self.state["project_id"])
+        workspace_id: str = self.state["workspace_id"]
+        project_id: str = self.state["project_id"]
         task = await config.repo_operation(
             workspace_id,
             project_id,
             task_id,
             *operation_args,
         )
-        await ws.send_media(
-            {
-                "type": config.response_type,
-                "payload": config.payload_builder(task),
-            }
-        )
+        await ws.send_media({
+            "type": config.response_type,
+            "payload": config.payload_builder(task),
+        })
 
 
 async def _seed_workspace(context: HookContext) -> None:
-    resource = typ.cast("WorkspaceResource", context.resource)
-    if not context.params:
+    resource = context.resource
+    if not isinstance(resource, WorkspaceResource) or not context.params:
         return
     workspace_id = context.params.get("workspace_id")
     if not isinstance(workspace_id, str):
@@ -359,7 +352,9 @@ async def _seed_workspace(context: HookContext) -> None:
 
 
 async def _seed_project(context: HookContext) -> None:
-    resource = typ.cast("ProjectResource", context.resource)
+    resource = context.resource
+    if not isinstance(resource, ProjectResource):
+        return
     params = context.params or {}
     workspace_id = params.get("workspace_id")
     project_id = params.get("project_id")
@@ -375,8 +370,8 @@ async def _seed_project(context: HookContext) -> None:
 
 
 async def _record_receive(context: HookContext) -> None:
-    resource = typ.cast("TaskStreamResource", context.target)
-    if context.raw is None:
+    resource = context.target
+    if not isinstance(resource, TaskStreamResource) or context.raw is None:
         return
     payload = context.raw
     if isinstance(payload, bytes):
@@ -388,7 +383,9 @@ async def _record_receive(context: HookContext) -> None:
 
 
 async def _record_receive_result(context: HookContext) -> None:
-    resource = typ.cast("TaskStreamResource", context.target)
+    resource = context.target
+    if not isinstance(resource, TaskStreamResource):
+        return
     await resource._audit.record("message.processed", result=context.result)
 
 

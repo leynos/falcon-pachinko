@@ -6,11 +6,14 @@ import typing as typ
 
 import pytest
 
-import falcon_pachinko.di as di
+from falcon_pachinko import WebSocketResource, di
 from falcon_pachinko.di import ServiceContainer, ServiceNotFoundError
 
+if typ.TYPE_CHECKING:  # pragma: no cover - used only for type checking
+    import collections.abc as cabc
 
-class _SentinelResource:
+
+class _SentinelResource(WebSocketResource):
     """Example resource used to verify injection behaviour."""
 
     def __init__(self, *, value: object) -> None:
@@ -24,7 +27,9 @@ def test_register_and_resolve_returns_service() -> None:
 
     container.register("sentinel", sentinel)
 
-    assert container.resolve("sentinel") is sentinel
+    assert container.resolve("sentinel") is sentinel, (
+        "resolve() must return the exact object registered under the name"
+    )
 
 
 def test_resolve_missing_raises_service_not_found() -> None:
@@ -34,8 +39,12 @@ def test_resolve_missing_raises_service_not_found() -> None:
     with pytest.raises(ServiceNotFoundError) as excinfo:
         container.resolve("missing")
 
-    assert isinstance(excinfo.value, ServiceNotFoundError)
-    assert excinfo.value.name == "missing"
+    assert isinstance(excinfo.value, ServiceNotFoundError), (
+        "raised exception must be a ServiceNotFoundError"
+    )
+    assert excinfo.value.name == "missing", (
+        "exception must record the name of the missing service"
+    )
 
 
 def test_create_resource_injects_registered_dependencies() -> None:
@@ -46,8 +55,12 @@ def test_create_resource_injects_registered_dependencies() -> None:
 
     resource = container.create_resource(_SentinelResource)
 
-    assert isinstance(resource, _SentinelResource)
-    assert resource.value is sentinel
+    assert isinstance(resource, _SentinelResource), (
+        "create_resource() must return an instance of the requested resource"
+    )
+    assert resource.value is sentinel, (
+        "the registered 'value' dependency must be injected into the resource"
+    )
 
 
 def test_create_resource_reuses_cached_signatures(
@@ -59,7 +72,7 @@ def test_create_resource_reuses_cached_signatures(
     calls: list[object] = []
     original = di.inspect.signature
 
-    def _tracking_signature(target: typ.Callable[..., object]) -> object:
+    def _tracking_signature(target: cabc.Callable[..., object]) -> object:
         calls.append(target)
         return original(target)
 
@@ -68,4 +81,6 @@ def test_create_resource_reuses_cached_signatures(
     container.create_resource(_SentinelResource)
     container.create_resource(_SentinelResource)
 
-    assert calls.count(_SentinelResource) == 1
+    assert calls.count(_SentinelResource) == 1, (
+        "inspect.signature() must be called exactly once per distinct target callable"
+    )

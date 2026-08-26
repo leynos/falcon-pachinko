@@ -58,9 +58,9 @@ async def test_start_and_stop_runs_workers(controller: WorkerController) -> None
     stopped = asyncio.Event()
     await controller.start(_logging_worker, log=log, started=started, stopped=stopped)
     await asyncio.wait_for(started.wait(), 0.1)
-    assert log
+    assert log, "the worker should have logged at least one tick before stop"
     await controller.stop()
-    assert stopped.is_set()
+    assert stopped.is_set(), "stopping should cancel the worker and let it clean up"
 
 
 @pytest.mark.asyncio
@@ -68,10 +68,14 @@ async def test_stop_propagates_worker_exception(controller: WorkerController) ->
     """Exceptions raised by workers should bubble up when stopping."""
 
     async def boom() -> None:
+        await asyncio.sleep(0)
         raise RuntimeError("boom")
 
     await controller.start(boom)
-    await asyncio.sleep(0)  # Let the task run and fail
+    # Two scheduler ticks: one to run the worker up to its await, one to let
+    # it resume and raise.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
     with pytest.raises(RuntimeError, match="boom"):
         await controller.stop()
 

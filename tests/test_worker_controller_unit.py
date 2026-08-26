@@ -17,12 +17,11 @@ if typ.TYPE_CHECKING:  # pragma: no cover - used only for type checking
 
 @worker
 async def _sample_worker(*, flag: dict[str, bool]) -> None:
+    """Set ``flag['ran']`` then block until cancelled."""
     flag["ran"] = True
-    try:
-        while True:
-            await asyncio.sleep(0)
-    except asyncio.CancelledError:
-        pass
+    never_set = asyncio.Event()
+    with contextlib.suppress(asyncio.CancelledError):
+        await never_set.wait()
 
 
 @worker
@@ -54,7 +53,7 @@ async def test_worker_controller_runs_and_stops(
     flag: dict[str, bool] = {}
     await controller.start(_sample_worker, flag=flag)
     await asyncio.sleep(0)
-    assert flag["ran"] is True
+    assert flag["ran"] is True, "worker must run and set the flag before being stopped"
     await controller.stop()
 
 

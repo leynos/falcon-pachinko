@@ -30,12 +30,8 @@ def initialize(path: Path, files: dict[str, str]) -> None:
     git = shutil.which("git")
     if git is None:
         pytest.fail("git executable not found on PATH")
-    subprocess.run(  # noqa: S603 - Git is resolved and argv is fixed.
-        [git, "init", "--quiet"], cwd=path, check=True
-    )
-    subprocess.run(  # noqa: S603 - Git is resolved and argv is fixed.
-        [git, "add", "."], cwd=path, check=True
-    )
+    subprocess.run([git, "init", "--quiet"], cwd=path, check=True)
+    subprocess.run([git, "add", "."], cwd=path, check=True)
 
 
 def policy_files(*, local_phrase: str = "") -> dict[str, str]:
