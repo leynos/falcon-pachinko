@@ -15,18 +15,30 @@ if typ.TYPE_CHECKING:  # pragma: no cover - used for type hints
     from .resource import WebSocketResource
 
 
+def _require_struct_type(candidate: object) -> type[ms.Struct]:
+    """Return ``candidate`` narrowed to a :class:`msgspec.Struct` subclass."""
+    if not (inspect.isclass(candidate) and issubclass(candidate, ms.Struct)):
+        msg = "schema must contain only msgspec.Struct types"
+        raise TypeError(msg)
+    return candidate
+
+
+def _require_struct_tag(struct: type[ms.Struct]) -> None:
+    """Ensure ``struct`` declares the tag schema dispatch relies upon."""
+    info = msinspect.type_info(struct)
+    if not isinstance(info, msinspect.StructType) or info.tag is None:
+        msg = "schema Struct types must define a tag"
+        raise TypeError(msg)
+
+
 def validate_schema_types(schema: type) -> None:
     """Ensure all schema types are :class:`msgspec.Struct` with tags."""
     types = typ.get_args(schema) or (schema,)
     for t in types:
-        if not (inspect.isclass(t) and issubclass(t, ms.Struct)):
-            msg = "schema must contain only msgspec.Struct types"
-            raise TypeError(msg)
-
-        info = msinspect.type_info(t)
-        if not isinstance(info, msinspect.StructType) or info.tag is None:
-            msg = "schema Struct types must define a tag"
-            raise TypeError(msg)
+        # Narrow before inspecting metadata: a non-struct member must fail on
+        # the membership check rather than inside ``msgspec.inspect``.
+        struct = _require_struct_type(t)
+        _require_struct_tag(struct)
 
 
 def populate_struct_handlers(cls: type[WebSocketResource]) -> dict[type, HandlerInfo]:
