@@ -19,6 +19,8 @@ import falcon.asgi as falcon_asgi
 
 from falcon_pachinko import (
     ServiceContainer,
+    WebSocketConnectionManager,
+    WebSocketLike,
     WebSocketResource,
     WebSocketRouter,
     WorkerController,
@@ -38,6 +40,8 @@ from .workers import announcement_worker
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
     import collections.abc as cabc
+
+    from falcon_pachinko.router import SimulatorFactory
 
 try:  # pragma: no cover - used when tests are available
     from tests.behaviour._lifespan import LifespanApp
@@ -70,18 +74,6 @@ except ImportError:  # pragma: no cover - fallback when running the script
 
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
-    from falcon_pachinko.protocols import WebSocketLike
-    from falcon_pachinko.router import SimulatorFactory
-    from falcon_pachinko.websocket import WebSocketConnectionManager
-else:  # pragma: no cover - runtime aliases for annotations
-    # `object` (a builtin, not an imported name) keeps these bindings out of
-    # both `typing.Any` (which ruff's any-type rule forbids) and the
-    # reexport-by-assignment pattern (assigning an attribute reached
-    # through an imported name); annotations are never evaluated at
-    # runtime because of `from __future__ import annotations`.
-    WebSocketLike = object  # type: ignore[assignment]  # runtime placeholder only; real type is import-time only
-    SimulatorFactory = object  # type: ignore[assignment]  # runtime placeholder only; real type is import-time only
-    WebSocketConnectionManager = object  # type: ignore[assignment]  # runtime placeholder only; real type is import-time only
 
     class _SupportsWebSocketRoute(typ.Protocol):
         def add_websocket_route(

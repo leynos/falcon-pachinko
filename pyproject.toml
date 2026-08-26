@@ -20,7 +20,16 @@ classifiers = [
 urls = { "Homepage" = "https://github.com/leynos/falcon-pachinko" }
 
 [dependency-groups]
-dev = ["pathspec==1.1.1", "pytest", "pytest-asyncio", "pytest-bdd", "ruff", "pyright[nodejs]", "websockets>=11,<13"]
+dev = [
+    "pathspec==1.1.1",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-bdd",
+    "ruff",
+    "pyright[nodejs]",
+    "websockets>=11,<13",
+    "hypothesis>=6.165.10",
+]
 
 [project.optional-dependencies]
 examples = ["aiosqlite", "uvicorn", "websocket-client"]

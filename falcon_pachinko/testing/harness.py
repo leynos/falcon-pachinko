@@ -93,14 +93,15 @@ class SimulatorConnection:
                 data = bytes(raw)
             case _:  # pragma: no cover - safeguarded by simulator helpers
                 raise TypeError(_JSON_FRAME_REQUIRED_MSG)
+        return self._decoder_for(payload_type).decode(data)
+
+    def _decoder_for(self, payload_type: type[object] | None) -> msjson.Decoder:
+        """Return a cached decoder for ``payload_type``."""
         if payload_type is None:
-            decoder = self._json_decoder
-        else:
-            decoder = self._decoders.get(payload_type)
-            if decoder is None:
-                decoder = msjson.Decoder(payload_type)
-                self._decoders[payload_type] = decoder
-        return decoder.decode(data)
+            return self._json_decoder
+        if (decoder := self._decoders.get(payload_type)) is None:
+            decoder = self._decoders[payload_type] = msjson.Decoder(payload_type)
+        return decoder
 
     async def push_json(self, payload: object) -> None:
         """Queue a JSON payload for the resource to consume."""

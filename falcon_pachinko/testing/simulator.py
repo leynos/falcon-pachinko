@@ -55,10 +55,8 @@ class WebSocketSimulator(_LifecycleSocket):
         """Return a cached decoder for ``payload_type``."""
         if payload_type is None:
             return self._default_decoder
-        decoder = self._decoders.get(payload_type)
-        if decoder is None:
-            decoder = msjson.Decoder(payload_type)
-            self._decoders[payload_type] = decoder
+        if (decoder := self._decoders.get(payload_type)) is None:
+            decoder = self._decoders[payload_type] = msjson.Decoder(payload_type)
         return decoder
 
     async def send_media(self, data: object) -> None:
@@ -144,15 +142,15 @@ class WebSocketSimulator(_LifecycleSocket):
         await self._inbound.put(data)
 
     def _prepare_inbound_payload(self, payload: object, kind: FrameKind) -> object:
-        if kind == "text":
-            return self._prepare_text_payload(payload)
-        if kind == "bytes":
-            return self._prepare_bytes_payload(payload)
-        if kind == "json":
-            return self._json_encoder.encode(payload)
-        raise ValueError(
-            _UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=kind)
-        )  # pragma: no cover - safeguarded by FrameKind literal
+        match kind:
+            case "text":
+                return self._prepare_text_payload(payload)
+            case "bytes":
+                return self._prepare_bytes_payload(payload)
+            case "json":
+                return self._json_encoder.encode(payload)
+            case _:  # pragma: no cover - safeguarded by FrameKind literal
+                raise ValueError(_UNSUPPORTED_FRAME_KIND_MSG.format(frame_kind=kind))
 
     @staticmethod
     def _prepare_text_payload(payload: object) -> str:

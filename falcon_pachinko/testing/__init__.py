@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ._common import MissingDependencyError
 from .client import TraceEvent, WebSocketTestClient
-from .fixtures import websocket_simulator as websocket_simulator
+from .fixtures import websocket_simulator
 from .harness import SimulatorConnection, SimulatorRouterHarness
 from .simulator import WebSocketSimulator
 
@@ -15,4 +15,5 @@ __all__ = [
     "TraceEvent",
     "WebSocketSimulator",
     "WebSocketTestClient",
+    "websocket_simulator",
 ]
