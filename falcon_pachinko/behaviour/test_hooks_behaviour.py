@@ -169,9 +169,8 @@ def given_router_global_only(context: dict[str, typ.Any]) -> None:
     context["router"] = router
 
 
-@when("a client connects and sends a message")
-def when_client_connects(context: dict[str, typ.Any]) -> None:
-    """Simulate a connection followed by a dispatched message."""
+def _connect_client(context: dict[str, typ.Any]) -> tuple[HookedChild, DummyWS]:
+    """Run the connect lifecycle and record the params hooks injected."""
     router: WebSocketRouter = context["router"]
     ws = DummyWS()
     req = make_req("/hooks/child")
@@ -179,30 +178,35 @@ def when_client_connects(context: dict[str, typ.Any]) -> None:
 
     child = HookedChild.instances[-1]
     context["child_params"] = child.params
+    return child, ws
 
-    asyncio.run(child.dispatch(ws, b'{"type":"noop"}'))
+
+def _record_hook_observations(context: dict[str, typ.Any]) -> None:
+    """Snapshot the hook event log and the errors after_receive observed."""
     context["events"] = list(EVENTS)
     context["after_errors"] = list(AFTER_RECEIVE_ERRORS)
+
+
+@when("a client connects and sends a message")
+def when_client_connects(context: dict[str, typ.Any]) -> None:
+    """Simulate a connection followed by a dispatched message."""
+    child, ws = _connect_client(context)
+
+    asyncio.run(child.dispatch(ws, b'{"type":"noop"}'))
+    _record_hook_observations(context)
 
 
 @when("a client connects and sends a message that triggers an error")
 def when_client_connects_with_error(context: dict[str, typ.Any]) -> None:
     """Simulate a connection followed by a dispatched message that raises."""
-    router: WebSocketRouter = context["router"]
-    ws = DummyWS()
-    req = make_req("/hooks/child")
-    asyncio.run(router.on_websocket(req, ws))
-
-    child = HookedChild.instances[-1]
-    context["child_params"] = child.params
+    child, ws = _connect_client(context)
 
     try:
         asyncio.run(child.dispatch(ws, b'{"type":"error"}'))
     except ValueError as exc:
         context["error"] = exc
 
-    context["events"] = list(EVENTS)
-    context["after_errors"] = list(AFTER_RECEIVE_ERRORS)
+    _record_hook_observations(context)
 
 
 @then("the hook log should show layered connect order")
