@@ -22,7 +22,6 @@ from .resource import WebSocketResource
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    import contextlib
 
     from .protocols import WebSocketLike
 
@@ -96,6 +95,17 @@ class RouteSpec:
     resource_cls: type[WebSocketResource]
     args: tuple[typ.Any, ...] = ()
     kwargs: dict[str, typ.Any] = dc.field(default_factory=_kwargs_factory)
+
+
+class _WebSocketApp(typ.Protocol):
+    """State :func:`install` attaches to the host application.
+
+    The deprecated route helpers are bound to arbitrary application objects,
+    so this protocol captures the only attributes they actually touch.
+    """
+
+    _websocket_routes: dict[str, RouteSpec]
+    _websocket_route_lock: ThreadLock
 
 
 class ConnectionBackend(abc.ABC):
@@ -320,7 +330,7 @@ class WebSocketConnectionManager:
         websockets = [ws for cid, ws in snapshot if cid not in excluded]
 
         send_fn = self._create_send_function(data, timeout)
-        errors = await self._execute_broadcast(websockets, send_fn)
+        errors = await self._broadcast(websockets, send_fn)
         self._handle_broadcast_errors(errors)
 
     @staticmethod
@@ -335,62 +345,31 @@ class WebSocketConnectionManager:
 
         return _send
 
-    async def _execute_broadcast(
-        self,
-        websockets: list[WebSocketLike],
-        send_fn: cabc.Callable[[WebSocketLike], cabc.Awaitable[None]],
-    ) -> list[Exception]:
-        """Dispatch send tasks using the best available concurrency primitive."""
-        task_group_factory = getattr(asyncio, "TaskGroup", None)
-        if task_group_factory is None:
-            return await self._broadcast_with_gather(websockets, send_fn)
-        return await self._broadcast_with_task_group(
-            websockets, send_fn, task_group_factory
-        )
-
     @staticmethod
-    async def _broadcast_with_task_group(
+    async def _broadcast(
         websockets: list[WebSocketLike],
         send_fn: cabc.Callable[[WebSocketLike], cabc.Awaitable[None]],
-        task_group_factory: cabc.Callable[
-            [], contextlib.AbstractAsyncContextManager[typ.Any]
-        ],
     ) -> list[Exception]:
-        """Execute a broadcast using ``asyncio.TaskGroup`` and collect failures."""
+        """Send to every socket concurrently and collect the failures."""
         errors: list[Exception] = []
 
         async def _send_with_capture(ws: WebSocketLike) -> None:
             try:
                 await send_fn(ws)
-            except Exception as exc:  # ruff: ignore[blind-except] - aggregate all failures
+            except Exception as exc:  # ruff: ignore[blind-except] - every recipient failure is aggregated and re-raised
                 errors.append(exc)
 
-        async with task_group_factory() as tg:  # pragma: no branch - coverage
+        async with asyncio.TaskGroup() as tg:  # pragma: no branch - coverage
             for ws in websockets:
                 tg.create_task(_send_with_capture(ws))
         return errors
 
     @staticmethod
-    async def _broadcast_with_gather(
-        websockets: list[WebSocketLike],
-        send_fn: cabc.Callable[[WebSocketLike], cabc.Awaitable[None]],
-    ) -> list[Exception]:
-        """Execute a broadcast using ``asyncio.gather`` and collect failures."""
-        coroutines = [send_fn(ws) for ws in websockets]
-        results = await asyncio.gather(*coroutines, return_exceptions=True)
-        return [exc for exc in results if isinstance(exc, Exception)]
-
-    def _handle_broadcast_errors(self, errors: list[Exception]) -> None:
+    def _handle_broadcast_errors(errors: list[Exception]) -> None:
         if not errors:
             return
         if len(errors) == 1:
             raise errors[0]
-        self._raise_exception_group(errors)
-
-    @staticmethod
-    def _raise_exception_group(errors: list[Exception]) -> None:
-        # ``ExceptionGroup`` is a builtin from Python 3.11; the 3.12 baseline
-        # means no fallback is required.
         msg = "broadcast_to_room errors"
         raise ExceptionGroup(msg, errors)
 
@@ -507,13 +486,18 @@ def _validate_route_path(path: object) -> None:
         raise InvalidWebSocketRoutePathError(str(path))
 
 
-def _validate_resource_cls(resource_cls: object) -> None:
+def _validate_resource_cls(resource_cls: object) -> type[WebSocketResource]:
     """Validate that the provided class is a subclass of WebSocketResource.
 
     Parameters
     ----------
     resource_cls : object
         The class to validate
+
+    Returns
+    -------
+    type of WebSocketResource
+        The validated class, narrowed for the type checker.
 
     Raises
     ------
@@ -529,10 +513,11 @@ def _validate_resource_cls(resource_cls: object) -> None:
             f"{resource_cls!r}"
         )
         raise TypeError(msg)
+    return resource_cls
 
 
 def _add_websocket_route(
-    self: typ.Any,  # ruff: ignore[any-type] - bound to arbitrary app objects
+    self: _WebSocketApp,
     path: str,
     resource_cls: object,
     *init_args: object,
@@ -549,7 +534,7 @@ def _add_websocket_route(
 
     Parameters
     ----------
-    self : typ.Any
+    self : _WebSocketApp
         The application instance
     path : str
         The WebSocket route path
@@ -571,21 +556,21 @@ def _add_websocket_route(
         stacklevel=2,
     )
     _validate_route_path(path)
-    _validate_resource_cls(resource_cls)
+    resource_type = _validate_resource_cls(resource_cls)
     with self._websocket_route_lock:
         if path in self._websocket_routes:
             msg = f"WebSocket route already registered for path: {path}"
             raise ValueError(msg)
 
         self._websocket_routes[path] = RouteSpec(
-            typ.cast("type[WebSocketResource]", resource_cls),
+            resource_type,
             init_args,
             dict(init_kwargs),
         )
 
 
 def _create_websocket_resource(
-    self: typ.Any,  # ruff: ignore[any-type] - bound to arbitrary app objects
+    self: _WebSocketApp,
     path: str,
 ) -> WebSocketResource:
     """Instantiate and return the WebSocket resource registered for ``path``.
@@ -598,7 +583,7 @@ def _create_websocket_resource(
 
     Parameters
     ----------
-    self : typ.Any
+    self : _WebSocketApp
         The application instance
     path : str
         The route path for which to create the resource
