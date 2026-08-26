@@ -15,7 +15,7 @@ from falcon_pachinko import (
     WebSocketRouter,
 )
 from falcon_pachinko.resource import _receive_hooks
-from falcon_pachinko.unittests.helpers import DummyWS
+from falcon_pachinko.unittests.helpers import DummyWS, make_req
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -26,6 +26,26 @@ if typ.TYPE_CHECKING:
 def dummy_hook(context: HookContext) -> None:
     """No-op hook used for validation tests."""
     _ = context
+
+
+CONNECT_EVENTS = [
+    "global.before_connect",
+    "parent.before_connect",
+    "child.before_connect",
+    "child.after_connect",
+    "parent.after_connect",
+    "global.after_connect",
+]
+
+RECEIVE_EVENTS = [
+    "global.before_receive",
+    "parent.before_receive",
+    "child.before_receive",
+    "handler.child",
+    "child.after_receive",
+    "parent.after_receive",
+    "global.after_receive",
+]
 
 
 class HookChild(WebSocketResource):
@@ -214,7 +234,7 @@ class HookTestEnvironment:
     async def open_connection(self) -> HookChild:
         """Create a connection and return the instantiated child resource."""
         self._ws = DummyWS()
-        req = type("Req", (), {"path": "/hooks/child", "path_template": ""})()
+        req = make_req("/hooks/child")
         await self.router.on_websocket(req, self._ws)
         return HookChild.instances[-1]
 
@@ -260,22 +280,7 @@ async def test_hooks_execute_in_layered_order(
     child = await hook_test_environment.open_connection()
     await hook_test_environment.dispatch_noop(child)
 
-    expected_order = [
-        "global.before_connect",
-        "parent.before_connect",
-        "child.before_connect",
-        "child.after_connect",
-        "parent.after_connect",
-        "global.after_connect",
-        "global.before_receive",
-        "parent.before_receive",
-        "child.before_receive",
-        "handler.child",
-        "child.after_receive",
-        "parent.after_receive",
-        "global.after_receive",
-    ]
-    assert hook_test_environment.events == expected_order, (
+    assert hook_test_environment.events == CONNECT_EVENTS + RECEIVE_EVENTS, (
         "hooks should fire in onion order across all three scopes"
     )
 
@@ -303,15 +308,9 @@ async def test_message_processing_hooks_capture_handler_events(
     child = await hook_test_environment.open_connection()
     await hook_test_environment.dispatch_noop(child)
 
-    assert hook_test_environment.events[6:] == [
-        "global.before_receive",
-        "parent.before_receive",
-        "child.before_receive",
-        "handler.child",
-        "child.after_receive",
-        "parent.after_receive",
-        "global.after_receive",
-    ], "receive hooks should surround handler dispatch in onion order"
+    assert hook_test_environment.events[len(CONNECT_EVENTS) :] == RECEIVE_EVENTS, (
+        "receive hooks should surround handler dispatch in onion order"
+    )
 
 
 def test_hookcollection_add_unsupported_event() -> None:
@@ -324,7 +323,9 @@ def test_hookcollection_add_unsupported_event() -> None:
 def test_hookcollection_add_non_callable() -> None:
     """Registering a non-callable hook raises ``TypeError``."""
     collection = HookCollection()
-    bad_hook = typ.cast("HookCallable", typ.cast("object", "not_a_callable"))
+    # The cast smuggles a deliberately non-callable value past the signature
+    # to exercise the runtime type check.
+    bad_hook = typ.cast("HookCallable", "not_a_callable")
     with pytest.raises(TypeError, match="hook must be callable"):
         collection.add("before_connect", bad_hook)
 
@@ -406,7 +407,7 @@ async def test_after_receive_reports_errors() -> None:
     router.mount("/")
 
     ws = DummyWS()
-    req = type("Req", (), {"path": "/boom", "path_template": ""})()
+    req = make_req("/boom")
     await router.on_websocket(req, ws)
 
     resource = BoomResource.instances[-1]

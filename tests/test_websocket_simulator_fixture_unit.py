@@ -32,10 +32,12 @@ class EchoResource(WebSocketResource):
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
         """Handle the simulated connection for the test resource."""
-        simulator = typ.cast("WebSocketSimulator", ws)
-        payload = await simulator.receive_json(dict)
+        assert isinstance(ws, WebSocketSimulator), (
+            "the harness must inject the simulator instance"
+        )
+        payload = await ws.receive_json(dict)
         self.received.append(payload)
-        await simulator.send_json({"type": "ack", "payload": payload})
+        await ws.send_json({"type": "ack", "payload": payload})
         return False
 
 
@@ -46,8 +48,10 @@ class GreeterResource(WebSocketResource):
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
         """Greet the client and accept the simulated connection."""
-        simulator = typ.cast("WebSocketSimulator", ws)
-        await simulator.send_text("welcome aboard")
+        assert isinstance(ws, WebSocketSimulator), (
+            "the harness must inject the simulator instance"
+        )
+        await ws.send_text("welcome aboard")
         return True
 
 

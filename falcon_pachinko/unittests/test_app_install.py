@@ -94,7 +94,7 @@ def dummy_app() -> SupportsWebSocket:
         WebSocket integration methods and attributes added
     """
     app = DummyApp()
-    install(app)  # type: ignore[arg-type]  # DummyApp lacks the protocol until installed
+    install(app)
     return typ.cast("SupportsWebSocket", app)
 
 
@@ -180,7 +180,7 @@ def test_install_is_idempotent(dummy_app: SupportsWebSocket) -> None:
     first_create_fn = dummy_app.create_websocket_resource
     first_lock = dummy_app._websocket_route_lock  # pyright: ignore[reportPrivateUsage]  # test inspects the installed private lock
 
-    install(dummy_app)  # type: ignore[arg-type]  # DummyApp lacks the protocol until installed
+    install(dummy_app)
     assert dummy_app.ws_connection_manager is first_manager, (
         "re-install() should not replace the connection manager"
     )
@@ -209,7 +209,7 @@ def test_install_detects_partial_state(dummy_app: SupportsWebSocket) -> None:
     del dummy_app._websocket_route_lock
 
     with pytest.raises(RuntimeError):
-        install(dummy_app)  # type: ignore[arg-type]  # DummyApp lacks the protocol until installed
+        install(dummy_app)
 
 
 def test_add_websocket_route_duplicate_raises(
@@ -224,23 +224,41 @@ def test_add_websocket_route_duplicate_raises(
 
 @pytest.mark.parametrize(
     "path",
-    ["ws", "", " /ws", "/ws ", "/ws\n", 123],
+    ["ws", "", " /ws", "/ws ", "/ws\n"],
+    ids=[
+        "missing_leading_slash",
+        "empty",
+        "leading_whitespace",
+        "trailing_whitespace",
+        "embedded_newline",
+    ],
 )
 def test_add_websocket_route_invalid_path(
     dummy_app: SupportsWebSocket,
     dummy_resource_cls: type[WebSocketResource],
-    path: object,
+    path: str,
 ) -> None:
     """
     Tests that add_websocket_route raises ValueError when given an invalid path.
 
     Verifies that attempting to register a WebSocket route with an invalid path value
-    (such as missing a leading slash, being empty, containing only whitespace, or
-    being a non-string)
+    (such as missing a leading slash, being empty, or containing whitespace)
     results in a ValueError.
     """
     with pytest.raises(ValueError, match="Invalid WebSocket route path"):
-        dummy_app.add_websocket_route(typ.cast("str", path), dummy_resource_cls)
+        dummy_app.add_websocket_route(path, dummy_resource_cls)
+
+
+def test_add_websocket_route_non_string_path(
+    dummy_app: SupportsWebSocket,
+    dummy_resource_cls: type[WebSocketResource],
+) -> None:
+    """Non-string paths are rejected with ValueError at runtime."""
+    # The cast smuggles a deliberately invalid value past the signature to
+    # exercise the runtime type check.
+    bad_path = typ.cast("str", 123)
+    with pytest.raises(ValueError, match="Invalid WebSocket route path"):
+        dummy_app.add_websocket_route(bad_path, dummy_resource_cls)
 
 
 def test_create_websocket_resource_returns_new_instances(
@@ -278,9 +296,11 @@ def test_route_specific_init_args(dummy_app: SupportsWebSocket) -> None:
     dummy_app.add_websocket_route("/one", ConfigResource, 1)
     dummy_app.add_websocket_route("/two", ConfigResource, 2)
 
-    r1 = typ.cast("ConfigResource", dummy_app.create_websocket_resource("/one"))
-    r2 = typ.cast("ConfigResource", dummy_app.create_websocket_resource("/two"))
+    r1 = dummy_app.create_websocket_resource("/one")
+    r2 = dummy_app.create_websocket_resource("/two")
 
+    assert isinstance(r1, ConfigResource), "resource for /one should be ConfigResource"
+    assert isinstance(r2, ConfigResource), "resource for /two should be ConfigResource"
     assert r1.value == 1, "resource created for /one should receive its route args"
     assert r2.value == 2, "resource created for /two should receive its route args"
 
@@ -296,7 +316,4 @@ def test_create_websocket_resource_unregistered_path(
 def test_add_websocket_route_type_check(dummy_app: SupportsWebSocket) -> None:
     """Test that add_websocket_route raises TypeError given a non-WebSocketResource."""
     with pytest.raises(TypeError):
-        dummy_app.add_websocket_route(
-            "/ws",
-            object,  # type: ignore[arg-type]  # deliberately not a WebSocketResource subclass
-        )
+        dummy_app.add_websocket_route("/ws", object)

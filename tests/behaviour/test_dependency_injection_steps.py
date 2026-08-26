@@ -10,6 +10,7 @@ from pytest_bdd import given, scenario, then, when
 
 from falcon_pachinko import WebSocketResource, WebSocketRouter
 from falcon_pachinko.unittests.resource_factories import resource_factory
+from tests._stubs import RecordingWebSocket
 
 if typ.TYPE_CHECKING:
     import asyncio
@@ -26,34 +27,6 @@ def event_loop(
         yield loop
     finally:
         loop.close()
-
-
-class DummyWebSocket:
-    """Minimal websocket stub recording lifecycle calls."""
-
-    def __init__(self) -> None:
-        self.closed = False
-        self.accepted = False
-        self.close_code: int | None = None
-
-    async def accept(
-        self, subprotocol: str | None = None
-    ) -> None:  # pragma: no cover - not exercised
-        """Record that the connection was accepted."""
-        self.accepted = True
-
-    async def close(self, code: int = 1000) -> None:
-        """Record that the connection was closed."""
-        self.closed = True
-        self.close_code = code
-
-    async def send_media(self, data: object) -> None:  # pragma: no cover - unused
-        """Record that media was sent on the connection."""
-        self.last_media = data
-
-    async def receive_media(self) -> object:  # pragma: no cover - unused
-        """Return a placeholder payload."""
-        return None
 
 
 class InjectedChild(WebSocketResource):

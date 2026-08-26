@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import msgspec.json as msjson
 import pytest
+from hypothesis import example, given
+from hypothesis import strategies as st
 
 from falcon_pachinko.testing import WebSocketSimulator
 
@@ -43,11 +47,8 @@ async def test_send_media_records_outbound_payloads() -> None:
         "popping the first sent message must return the raw payload"
     )
     payload = await simulator.next_sent()
-    if isinstance(payload, bytes | bytearray | memoryview):
-        buffer = bytes(payload)
-    else:
-        buffer = msjson.encode(payload)
-    assert msjson.decode(buffer) == {"type": "json"}, (
+    assert isinstance(payload, bytes), "send_json must enqueue an encoded JSON frame"
+    assert msjson.decode(payload) == {"type": "json"}, (
         "the next sent payload must decode to the JSON message"
     )
 
@@ -64,14 +65,20 @@ async def test_push_and_receive_json_payload() -> None:
     assert simulator.received_messages, "raw bytes must be recorded"
 
 
-@pytest.mark.asyncio
-async def test_push_and_receive_text_payload() -> None:
-    """Text payloads round-trip without conversion."""
-    simulator = WebSocketSimulator()
+@given(messages=st.lists(st.text(), max_size=10))
+@example(messages=["hello"])
+def test_push_and_receive_text_round_trips_in_order(messages: list[str]) -> None:
+    """Queued text payloads round-trip unchanged and in FIFO order."""
 
-    await simulator.push_text("hello")
-    assert await simulator.receive_text() == "hello", (
-        "the queued text payload must round-trip unchanged"
+    async def _exercise() -> list[str]:
+        simulator = WebSocketSimulator()
+        for message in messages:
+            await simulator.push_text(message)
+        return [await simulator.receive_text() for _ in messages]
+
+    received = asyncio.run(_exercise())
+    assert received == messages, (
+        "queued text payloads must round-trip unchanged, in order"
     )
 
 

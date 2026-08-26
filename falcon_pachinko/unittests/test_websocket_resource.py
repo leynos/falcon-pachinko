@@ -389,6 +389,8 @@ def test_state_is_unique_per_instance() -> None:
 def test_state_rejects_non_mapping() -> None:
     """Assigning non-mapping to ``state`` raises ``TypeError``."""
     r = EchoResource()
+    # The cast smuggles a deliberately non-mapping value past the signature
+    # to exercise the runtime type check.
     with pytest.raises(TypeError):
         typ.cast("typ.Any", r).state = 123
 
