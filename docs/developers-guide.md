@@ -62,6 +62,18 @@ directory. Without `--clear`, modern `uv` exits with an error when `.venv`
 exists, causing downstream gates such as `make typecheck` to fail before they
 reach analysis.
 
+The development dependency group includes `PyYAML>=6,<7` for the GitHub Actions
+workflow-policy tests. `uv sync --group dev` installs it with the rest of the
+development tools.
+
 Prefer Makefile targets over invoking tools directly. When changing the
 Makefile, run `mbake validate Makefile` and the relevant commit gates before
 committing.
+
+## GitHub Actions runners
+
+Repository-owned Linux jobs use the uncached shared Namespace profile
+`namespace-profile-default` (Ubuntu 22.04, amd64, 4 vCPU, 16 GB). The profile
+has no cache volume. The reusable wheel-building workflow keeps its matrix of
+GitHub-hosted Linux, Windows, and macOS runners because it owns native platform
+and architecture selection; callers cannot replace that selection.
