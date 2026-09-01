@@ -40,13 +40,12 @@ These concepts are summarized in the design document:
 
 ```python
 # pass route-specific options to the resource
-app.add_websocket_route('/ws/chat/{room_name}', ChatRoomResource, history_size=100)
+app.add_websocket_route("/ws/chat/{room_name}", ChatRoomResource, history_size=100)
 ```
 
 ```python
 @handles_message("new_chat_message")
-async def handle_new_chat_message(self, ws, payload):
-    ...
+async def handle_new_chat_message(self, ws, payload): ...
 ```
 
 Use ``conn_mgr.connections()`` to iterate over active WebSocket connections.
@@ -59,6 +58,7 @@ import asyncio
 from falcon_pachinko import WorkerController, worker
 
 controller = WorkerController()
+
 
 @worker
 async def heartbeat(*, conn_mgr):
@@ -76,6 +76,7 @@ async def heartbeat(*, conn_mgr):
     except asyncio.CancelledError:
         # Cleanly exit when controller.stop() is called
         pass
+
 
 @app.lifespan
 async def lifespan(app):
