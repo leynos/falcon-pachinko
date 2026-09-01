@@ -62,6 +62,10 @@ directory. Without `--clear`, modern `uv` exits with an error when `.venv`
 exists, causing downstream gates such as `make typecheck` to fail before they
 reach analysis.
 
+The development dependency group includes `PyYAML>=6,<7` for the GitHub Actions
+workflow-policy tests. `uv sync --group dev` installs it with the rest of the
+development tools.
+
 Prefer Makefile targets over invoking tools directly. When changing the
 Makefile, run `mbake validate Makefile` and the relevant commit gates before
 committing.

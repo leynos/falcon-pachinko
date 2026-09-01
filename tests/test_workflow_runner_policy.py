@@ -35,7 +35,7 @@ def load_workflow(name: str) -> dict[str, object]:
 
 def require_mapping(value: object) -> dict[str, object]:
     """Assert that one YAML node is a string-keyed mapping."""
-    assert isinstance(value, dict)
+    assert isinstance(value, dict), "Expected a workflow mapping"
     return typ.cast("dict[str, object]", value)
 
 
@@ -47,7 +47,9 @@ def test_repository_owned_linux_jobs_use_namespace_profile(workflow_name: str) -
 
     for job_name in NAMESPACE_LINUX_JOBS[workflow_name]:
         job = require_mapping(jobs[job_name])
-        assert job["runs-on"] == NAMESPACE_PROFILE
+        assert job["runs-on"] == NAMESPACE_PROFILE, (
+            f"{workflow_name}:{job_name} must use {NAMESPACE_PROFILE}"
+        )
 
 
 def test_native_wheel_workflow_retains_caller_selected_runners() -> None:
@@ -56,7 +58,9 @@ def test_native_wheel_workflow_retains_caller_selected_runners() -> None:
     jobs = require_mapping(workflow["jobs"])
 
     build_job = require_mapping(jobs["build"])
-    assert build_job["runs-on"] == "${{ matrix.os }}"
+    assert build_job["runs-on"] == "${{ matrix.os }}", (
+        "Native wheel builds must use the matrix-selected runner"
+    )
     strategy = require_mapping(build_job["strategy"])
     matrix = require_mapping(strategy["matrix"])
-    assert matrix["include"] == WHEEL_MATRIX
+    assert matrix["include"] == WHEEL_MATRIX, "Native wheel matrix changed"
