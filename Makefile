@@ -28,16 +28,30 @@ TY_VERSION ?= 0.0.74
 TY ?= $(UV) tool run --from ty==$(TY_VERSION) ty
 # Run Pylint with the df12-python-lints plugin on CPython 3.14, matching the
 # plugin's supported baseline. The same tool environment provides ambrleaks.
+# CPython is deliberate: a PyPy-backed run would lag the project's syntax
+# baseline and silently skip files it cannot parse.
 DF12_PYTHON_LINTS_REF ?= v0.3.0
 DF12_PYTHON_LINTS = df12-python-lints @ git+https://github.com/leynos/df12-python-lints.git@$(DF12_PYTHON_LINTS_REF)
 PYLINT_PYTHON ?= 3.14
+# Fan Pylint out across a tenth of the available cores, with a floor of two.
+# This host is shared with other agents, so a full-width fan-out would starve
+# them; the floor keeps the gate off Pylint's single-process default.
+#
+# Caveat: with --jobs > 1, df12-python-lints v0.3.0 reports each of its own
+# messages twice, because its register() hook runs again in every worker and
+# registers the checkers a second time. Pylint's builtin messages are
+# unaffected, and the exit status stays correct, so the gate still passes or
+# fails accurately -- only plugin findings appear duplicated. Set
+# PYLINT_JOBS=1 when counting them matters.
+PYLINT_JOBS ?= $(shell n=$$(nproc 2>/dev/null || echo 2); \
+	echo $$(( n / 10 > 2 ? n / 10 : 2 )))
 # List falcon_pachinko/unittests and falcon_pachinko/behaviour explicitly:
 # they carry no __init__.py, so package discovery from falcon_pachinko does
 # not descend into them.
 PYLINT_TARGETS ?= falcon_pachinko falcon_pachinko/unittests \
 	falcon_pachinko/behaviour tests examples
 PYLINT = $(UV_ENV) $(UV) tool run --python $(PYLINT_PYTHON) \
-	--from pylint --with '$(DF12_PYTHON_LINTS)' pylint
+	--from pylint --with '$(DF12_PYTHON_LINTS)' pylint --jobs $(PYLINT_JOBS)
 AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(PYLINT_PYTHON) \
 	--from '$(DF12_PYTHON_LINTS)' ambrleaks
 
