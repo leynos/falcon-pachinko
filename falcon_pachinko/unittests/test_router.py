@@ -650,3 +650,19 @@ async def test_malformed_remaining_path_not_matched() -> None:
     req = make_req("/rooms42", "/")
     with pytest.raises(falcon.HTTPNotFound):
         await router.on_websocket(req, DummyWS())
+
+
+@pytest.mark.parametrize("alias_name", ["ResourceFactory", "SimulatorFactory"])
+def test_exported_type_aliases_are_runtime_evaluable(alias_name: str) -> None:
+    """Every exported PEP 695 alias must resolve when introspected.
+
+    These aliases evaluate lazily, so a name referenced only under
+    ``TYPE_CHECKING`` raises NameError on first access to ``__value__`` --
+    a trap for any runtime consumer that inspects the public API.
+    """
+    from falcon_pachinko import router
+
+    alias = getattr(router, alias_name)
+    assert alias.__value__ is not None, (
+        f"{alias_name}.__value__ should evaluate without raising"
+    )
