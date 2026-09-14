@@ -203,6 +203,30 @@ async def test_receive_json_with_custom_type(
     assert reply.message == "hello", "the decoded payload must preserve the message"
 
 
+@pytest.mark.asyncio
+async def test_receive_json_wraps_typed_validation_failure(
+    echo_server: tuple[str, EchoState],
+) -> None:
+    """Payloads that parse but do not match the type raise RuntimeError.
+
+    msgspec signals a type mismatch with ``ValidationError``, which subclasses
+    ``DecodeError``. This pins the wrapping contract so narrowing the handler
+    to ``DecodeError`` cannot start leaking the vendor exception.
+    """
+    base_url, _state = echo_server
+    client = WebSocketTestClient(base_url, allow_insecure=True)
+
+    @dc.dataclass(slots=True)
+    class Payload:
+        count: int
+
+    async with client.connect("/typed") as session:
+        # Valid JSON, but ``count`` is a string where an int is required.
+        await session.send_json({"count": "not-an-int"})
+        with pytest.raises(RuntimeError, match="Failed to decode JSON payload"):
+            await session.receive_json(Payload)
+
+
 def test_insecure_base_url_requires_opt_in() -> None:
     """Disallow insecure websocket URLs without explicit opt-in."""
     with pytest.raises(
