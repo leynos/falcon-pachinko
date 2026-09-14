@@ -23,8 +23,11 @@ import falcon
 from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
 
-if typ.TYPE_CHECKING:
-    from .resource import WebSocketResource
+# Imported at runtime, not under TYPE_CHECKING: ``ResourceFactory`` below is a
+# PEP 695 alias whose value is evaluated lazily on access. Exporting an alias
+# that raises NameError when introspected would be a trap for runtime
+# consumers, so the name it references has to resolve at runtime too.
+from .resource import WebSocketResource
 
 __all__ = ["ResourceFactory", "SimulatorFactory", "WebSocketRouter"]
 
