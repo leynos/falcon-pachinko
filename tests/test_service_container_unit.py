@@ -8,9 +8,10 @@ import pytest
 
 import falcon_pachinko.di as di
 from falcon_pachinko.di import ServiceContainer, ServiceNotFoundError
+from falcon_pachinko.resource import WebSocketResource
 
 
-class _SentinelResource:
+class _SentinelResource(WebSocketResource):
     """Example resource used to verify injection behaviour."""
 
     def __init__(self, *, value: object) -> None:
