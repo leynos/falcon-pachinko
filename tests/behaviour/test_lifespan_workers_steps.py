@@ -43,7 +43,7 @@ def create_app_with_worker() -> AppWithWorker:
             stopped.set()
 
     @app.lifespan
-    async def lifespan(app_instance: LifespanApp) -> cabc.AsyncIterator[None]:
+    async def lifespan(app_instance: LifespanApp) -> cabc.AsyncGenerator[None, None]:
         await controller.start(
             run_until_cancelled, state=state, started=started, stopped=stopped
         )
