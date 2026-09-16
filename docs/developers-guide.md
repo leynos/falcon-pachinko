@@ -5,17 +5,19 @@ public user guide.
 
 ## Spelling policy
 
-The tracked `typos.toml` is generated from the shared estate dictionary and the
-repository-specific `typos.local.toml` overlay. Never edit generated entries by
-hand. Add only narrow repository terminology to the overlay, then generate the
-configuration with:
+Run the spelling gate with:
 
 ```bash
-make spelling-config-write
+make spelling
 ```
 
-Use `make spelling-config` to verify that the generated file is current. The
-shared `typos-config-builder` CLI refreshes the estate dictionary into an
+The tracked `typos.toml` is regenerated on every run from the live shared
+dictionary and the repository-specific `typos.local.toml` overlay. Never edit
+generated entries by hand; add only narrow repository terminology to the
+overlay. Because the dictionary is live, `typos.toml` must never be drift
+checked in continuous integration.
+
+The shared `typos-config-builder` CLI refreshes the estate dictionary into an
 untracked local cache only when the authoritative copy is newer. A valid cache
 remains usable when the network is unavailable. Quoted APIs and identifiers
 retain their upstream spelling; put them in backticks or fenced code blocks

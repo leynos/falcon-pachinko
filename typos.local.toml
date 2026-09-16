@@ -11,7 +11,11 @@ accepted = []
 [words.corrections]
 
 [patterns]
-ignore = ['\bbuild-test-analyze\b']
+ignore = [
+  '\bbuild-test-analyze\b',
+  # Inline code spans are masked; the shared dictionary does not mask them yet.
+  '`[^`\n]+`',
+]
 
 [files]
 exclude = []
