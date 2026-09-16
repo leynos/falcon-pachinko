@@ -190,8 +190,9 @@ import falcon.asgi
 import falcon_pachinko  # The proposed extension library
 
 app = falcon.asgi.App()
-falcon_pachinko.install(app) # This would initialize and attach app.ws_connection_manager
-
+falcon_pachinko.install(
+    app
+)  # This would initialize and attach app.ws_connection_manager
 ```
 
 This `install` function would instantiate the `WebSocketConnectionManager` and
@@ -210,11 +211,10 @@ originally provided `app.add_websocket_route()` to associate a URL path with a
 
 ```python
 app.add_websocket_route(
-    '/ws/chat/{room_name}',
+    "/ws/chat/{room_name}",
     ChatRoomResource,
     history_size=100,
 )
-
 ```
 
 When a WebSocket upgrade request matches this path, Falcon-Pachinko will
@@ -247,8 +247,7 @@ class registered for `path` or raises `ValueError` if no such route exists.
 > used to instantiate resources.
 
 ```python
-chat_resource = app.create_websocket_resource('/ws/chat/{room_name}')
-
+chat_resource = app.create_websocket_resource("/ws/chat/{room_name}")
 ```
 
 Each call yields a fresh instance so that connection-specific state can be
@@ -354,8 +353,10 @@ avoids a monolithic receive loop with extensive conditional logic.
   from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
   import msgspec as ms
 
+
   class NewChatMessage(ms.Struct):
       text: str
+
 
   class ChatMessageHandler(WebSocketResource):
       # Dispatched explicitly by decorator (canonical approach)
@@ -364,8 +365,6 @@ avoids a monolithic receive loop with extensive conditional logic.
           self, ws: WebSocketLike, payload: NewChatMessage
       ) -> None:
           print(f"NEW MESSAGE: {payload.text}")
-
-
   ```
 
 - **Automatic Deserialization and Strictness**: For routed messages where the
@@ -377,8 +376,7 @@ avoids a monolithic receive loop with extensive conditional logic.
 
   ```python
   @handles_message("type", strict=False)
-  async def on_type(self, ws, payload: SomeStruct) -> None:
-      ...
+  async def on_type(self, ws, payload: SomeStruct) -> None: ...
   ```
 
 #### 3.6.1. Descriptor Implementation of `handles_message`
@@ -426,14 +424,15 @@ class _MessageHandlerDescriptor:
         return self.func.__get__(instance, owner or self.owner)
 
 
-def handles_message(msg_type: str) -> typ.Callable[[typ.Callable], _MessageHandlerDescriptor]:
+def handles_message(
+    msg_type: str,
+) -> typ.Callable[[typ.Callable], _MessageHandlerDescriptor]:
     """Decorator factory returning the descriptor wrapper."""
 
     def decorator(func: typ.Callable) -> _MessageHandlerDescriptor:
         return _MessageHandlerDescriptor(msg_type, func)
 
     return decorator
-
 ```
 
 ### 3.7. `WebSocketConnectionManager`
@@ -461,10 +460,8 @@ backend interface to support both single-process and distributed deployments.
     iterators, making them highly composable.
 
     ```python
-    async for ws in conn_mgr.connections(room='general'):
+    async for ws in conn_mgr.connections(room="general"):
         await ws.send_media(...)
-
-
     ```
 
 - Pluggable Backends for Multi-Worker Support:
@@ -522,6 +519,7 @@ WorkerFn: typ.TypeAlias = cabc.Callable[[typ.Any], cabc.Awaitable[None]]
 
 class WorkerController:
     """Manages a set of long-running asyncio tasks tied to an ASGI lifespan."""
+
     __slots__: typ.Final = ("_tasks", "_stack")
 
     def __init__(self) -> None:
@@ -545,12 +543,12 @@ class WorkerController:
         if self._stack:
             await self._stack.__aexit__(None, None, None)
 
+
 # Optional syntactic sugar
 def worker(fn: WorkerFn) -> WorkerFn:
     """Marks *fn* as a valid worker. Purely cosmetic but documents intent."""
     fn.__pachinko_worker__ = True
     return fn
-
 ```
 
 #### 3.8.3. Application Usage
@@ -571,6 +569,7 @@ app = falcon.asgi.App()
 pachinko.install(app)
 conn_mgr = app.ws_connection_manager
 
+
 # 1. Define workers as ordinary async functions with explicit dependencies
 @worker
 async def announcement_worker(
@@ -583,8 +582,10 @@ async def announcement_worker(
         )  # Assuming a broadcast_to_all method
         await asyncio.sleep(30)
 
+
 # 2. Bind the worker lifecycle to the ASGI lifespan
 controller = WorkerController()
+
 
 @app.lifespan
 async def lifespan(app_instance):
@@ -596,7 +597,6 @@ async def lifespan(app_instance):
     yield
     # --- app is live ---
     await controller.stop()
-
 ```
 
 This pattern eliminates the need for a bespoke worker registry, making the
@@ -709,6 +709,7 @@ A `ChatRoomResource` class would be defined, inheriting from
 import falcon.asgi
 from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
 
+
 class ChatRoomResource(WebSocketResource):
     async def on_connect(
         self,
@@ -719,21 +720,23 @@ class ChatRoomResource(WebSocketResource):
         # Assume authentication middleware has set req.context.user
         self.user = req.context.get("user")
         if not self.user:
-            return False # Reject connection
+            return False  # Reject connection
 
         self.room_name = room_name
-        
+
         await self.join_room(self.room_name)
 
-        await ws.send_media({
-            "type": "serverSystemMessage",
-            "payload": {"text": f"Welcome {self.user.name} to room '{room_name}'!"}
-        })
+        await ws.send_media(
+            {
+                "type": "serverSystemMessage",
+                "payload": {"text": f"Welcome {self.user.name} to room '{room_name}'!"},
+            }
+        )
 
         await self.broadcast_to_room(
             self.room_name,
             {"type": "serverUserJoined", "payload": {"user": self.user.name}},
-            exclude_self=True
+            exclude_self=True,
         )
         return True
 
@@ -749,7 +752,7 @@ class ChatRoomResource(WebSocketResource):
                     "user": self.user.name,
                     "text": message_text,
                 },
-            }
+            },
         )
 
     @handles_message("clientStartTyping")
@@ -763,7 +766,7 @@ class ChatRoomResource(WebSocketResource):
                     "isTyping": True,
                 },
             },
-            exclude_self=True
+            exclude_self=True,
         )
 
     @handles_message("clientStopTyping")
@@ -777,15 +780,15 @@ class ChatRoomResource(WebSocketResource):
                     "isTyping": False,
                 },
             },
-            exclude_self=True
+            exclude_self=True,
         )
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int):
-        if hasattr(self, 'room_name') and hasattr(self, 'user'):
+        if hasattr(self, "room_name") and hasattr(self, "user"):
             await self.broadcast_to_room(
                 self.room_name,
                 {"type": "serverUserLeft", "payload": {"user": self.user.name}},
-                exclude_self=True 
+                exclude_self=True,
             )
             await self.leave_room(self.room_name)
         print(
@@ -799,11 +802,12 @@ class ChatRoomResource(WebSocketResource):
             "Received unhandled message from "
             f"{self.user.name} in {self.room_name}: {message}"
         )
-        await ws.send_media({
-            "type": "serverError",
-            "payload": {"error": "Unrecognized message format or type."}
-        })
-
+        await ws.send_media(
+            {
+                "type": "serverError",
+                "payload": {"error": "Unrecognized message format or type."},
+            }
+        )
 ```
 
 This example demonstrates how the `WebSocketResource` streamlines the
@@ -828,30 +832,36 @@ falcon_pachinko.install(app)
 conn_mgr = app.ws_connection_manager
 
 # Add the WebSocket route
-app.add_websocket_route('/ws/chat/{room_name}', ChatRoomResource)
+app.add_websocket_route("/ws/chat/{room_name}", ChatRoomResource)
+
 
 # Define a background worker
 async def system_announcement_worker(
     conn_mgr: falcon_pachinko.WebSocketConnectionManager,
 ) -> None:
     while True:
-        await asyncio.sleep(3600) # Every hour
+        await asyncio.sleep(3600)  # Every hour
         announcement_text = "System maintenance is scheduled for 2 AM UTC."
         chat_room_ids = await conn_mgr.get_rooms_by_prefix("chat_")
         for room_id in chat_room_ids:
             await conn_mgr.broadcast_to_room(
                 room_id,
-                {"type": "serverSystemAnnouncement", "payload": {"text": announcement_text}}
+                {
+                    "type": "serverSystemAnnouncement",
+                    "payload": {"text": announcement_text},
+                },
             )
+
 
 # Manage the worker with the ASGI lifespan
 controller = WorkerController()
+
+
 @app.lifespan
 async def lifespan(app_instance):
     await controller.start(system_announcement_worker, conn_mgr=conn_mgr)
     yield
     await controller.stop()
-
 ```
 
 ### 4.4. Client-Side Interaction (Conceptual)
@@ -949,19 +959,18 @@ at a URL prefix using Falcon's standard `app.add_route()` method. This makes the
 
 ```python
 import falcon.asgi
-from falcon_pachinko.router import WebSocketRouter # New component
+from falcon_pachinko.router import WebSocketRouter  # New component
 
 app = falcon.asgi.App()
 chat_router = WebSocketRouter()
 
 # The WebSocketRouter instance is mounted like any other Falcon resource.
 # It will handle all WebSocket connections under the '/ws/chat/' prefix.
-app.add_route('/ws/chat', chat_router)
+app.add_route("/ws/chat", chat_router)
 
 # To achieve this, the WebSocketRouter will implement the on_websocket
 # responder method, which will contain the logic to dispatch the connection
 # to the correct sub-route defined on the router itself.
-
 ```
 
 This creates a clean architectural boundary and leverages Falcon's existing,
@@ -988,22 +997,18 @@ sub-routes. These paths are *relative* to the router's mount point.
 
 ```python
 # Continuing the previous example:
-chat_router = WebSocketRouter(name='chat') # Give the router a name for reversal
+chat_router = WebSocketRouter(name="chat")  # Give the router a name for reversal
 
 # Add a route to the router, giving it a name for url_for.
 chat_router.add_route(
-    '/{room_id}', 
-    ChatResource,
-    name='room',
-    init_args={'history_size': 100}
+    "/{room_id}", ChatResource, name="room", init_args={"history_size": 100}
 )
 
-app.add_route('/ws/chat', chat_router)
+app.add_route("/ws/chat", chat_router)
 
 # Generate a URL:
 # url = app.url_for('chat:room', room_id='general') # Hypothetical top-level reversal
 # -> '/ws/chat/general'
-
 ```
 
 The router is responsible for matching the incoming connection URI against its
@@ -1102,16 +1107,16 @@ class ProjectResource(WebSocketResource):
         # ... project-specific setup using project_id ...
 
         # Mount sub-resources
-        self.add_subroute('tasks', TasksResource)
-        self.add_subroute('files', FilesResource)
+        self.add_subroute("tasks", TasksResource)
+        self.add_subroute("files", FilesResource)
+
 
 # --- In the main application ---
 # This assumes a router is already defined.
-router.add_route('/projects/{project_id}', ProjectResource)
+router.add_route("/projects/{project_id}", ProjectResource)
 
 # A connection to "wss://.../projects/123/tasks" would be handled
 # by an instance of TasksResource, with the context of project "123".
-
 ```
 
 #### 5.2.2. Path Composition and State Management
@@ -1247,30 +1252,33 @@ where each `Struct` represents a distinct message.
 import msgspec as ms
 import typing as typ
 
+
 # Define individual message structures
-class Join(ms.Struct, tag='join'):
+class Join(ms.Struct, tag="join"):
     room: str
 
-class SendMessage(ms.Struct, tag='sendMessage'): # Note CamelCase tag
+
+class SendMessage(ms.Struct, tag="sendMessage"):  # Note CamelCase tag
     text: str
+
 
 # Create a tagged union of all possible messages
 MessageUnion = typ.Union[Join, SendMessage]
 
+
 class ChatResource(WebSocketResource):
     # Associate the schema with the resource
     schema = MessageUnion
-    
+
     # Handler by decorator (canonical) for tag='join'
-    @handles_message('join')
+    @handles_message("join")
     async def on_join(self, req, ws, msg: Join):
         print(f"Joining room: {msg.room}")
-    
+
     # Handler by convention (convenience) for tag='sendMessage'
     # The framework converts 'sendMessage' to 'on_send_message'
     async def on_send_message(self, req, ws, msg: SendMessage):
         print(f"Message received: {msg.text}")
-
 ```
 
 #### 5.3.2. Automated Dispatch Logic
@@ -1649,9 +1657,9 @@ already provides a reliable asyncio client with excellent RFC coverage.
   protocol so tests read naturally:
 
   ```python
-  async with WebSocketTestClient(
-      "wss://example.com", allow_insecure=True
-  ).connect("/ws/chat") as session:
+  async with WebSocketTestClient("wss://example.com", allow_insecure=True).connect(
+      "/ws/chat"
+  ) as session:
       await session.send_json({"type": "ping"})
       reply = await session.receive_json()
   ```
