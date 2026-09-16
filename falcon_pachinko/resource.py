@@ -265,7 +265,7 @@ async def _receive_hooks(
     *,
     ws: WebSocketLike,
     raw: str | bytes,
-) -> typ.AsyncIterator[None]:
+) -> typ.AsyncGenerator[None, None]:
     """Balance before/after receive hooks while guarding original errors."""
     context = await manager.notify_before_receive(target, ws=ws, raw=raw)
     try:

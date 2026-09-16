@@ -185,8 +185,7 @@ implementation. Swap in your own to support clustering or observability.
 from falcon_pachinko.websocket import ConnectionBackend, WebSocketConnectionManager
 
 
-class RedisBackend(ConnectionBackend):
-    ...
+class RedisBackend(ConnectionBackend): ...
 
 
 conn_mgr = WebSocketConnectionManager(backend=RedisBackend(...))
@@ -216,10 +215,12 @@ from falcon_pachinko import WorkerController, worker
 
 controller = WorkerController()
 
+
 @worker
 async def broadcaster(*, conn_mgr):
     async for ws in conn_mgr.connections():
         await ws.send_media({"type": "ping"})
+
 
 @app.lifespan
 async def lifespan(app):
