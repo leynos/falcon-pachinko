@@ -259,6 +259,16 @@ play. The exemption is a named set of GitHub-hosted labels rather than a
 provider prefix: a prefix rule would silently exempt a second paid provider's
 labels, which is the question the registry exists to ask.
 
+The in-use set accounts for every workflow that declares a label, including
+`build-wheels.yml`, which is `workflow_call` and which nothing in this
+repository calls. The alternative was a rule excluding callerless
+`workflow_call` files, and it was rejected: such a file is one line away from
+gaining a caller, and "callerless" is not even a local property, since a caller
+may live in another repository. A rule that skipped it would quietly stop
+asking the registry question for a workflow that could run tomorrow. A contract
+names the workflows the traversal must reach, so dropping one fails there
+rather than silently shrinking what the registry is held to.
+
 Two contracts read the `on:` block rather than the jobs, because the placement
 rules rest on claims about events: that a fork can reach `lint-test`, and that
 no fork can reach the other three. A contract reading only `runs-on` asserts
