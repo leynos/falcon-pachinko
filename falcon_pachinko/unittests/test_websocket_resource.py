@@ -386,13 +386,22 @@ def test_state_is_unique_per_instance() -> None:
     assert "foo" not in r2.state, "state should not be shared between instances"
 
 
-def test_state_rejects_non_mapping() -> None:
-    """Assigning non-mapping to ``state`` raises ``TypeError``."""
+@pytest.mark.parametrize(
+    ("value", "case"),
+    [(123, "scalar"), ([1, 2, 3], "sequence")],
+    ids=["scalar", "sequence"],
+)
+def test_state_rejects_non_mapping(value: object, case: str) -> None:
+    """Assigning a non-mapping to ``state`` raises ``TypeError``.
+
+    The sequence case matters: a list supplies ``__getitem__``,
+    ``__setitem__``, and ``__iter__``, so a method-probing check accepted it.
+    """
     r = EchoResource()
     # The cast smuggles a deliberately non-mapping value past the signature
     # to exercise the runtime type check.
-    with pytest.raises(TypeError):
-        typ.cast("typ.Any", r).state = 123
+    with pytest.raises(TypeError, match="state must be a MutableMapping"):
+        typ.cast("typ.Any", r).state = value
 
 
 def test_state_accepts_mapping_subclass() -> None:
