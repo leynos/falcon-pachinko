@@ -75,7 +75,7 @@ ______________________________________________________________________
 - Use a class when:
 
   - There is internal state or methods tied to the resource lifecycle.
-  - You need to support re-entry or more advanced context features.
+  - Re-entry or more advanced context features need to be supported.
 
 ______________________________________________________________________
 
@@ -106,6 +106,6 @@ with open("file.txt", encoding="utf-8") as f:
     process(f)
 ```
 
-Context managers make your intent and error handling explicit. Prefer them
+Context managers make intent and error handling explicit. Prefer them
 over manual `try/finally` for clearer, safer code. The `consider-using-with`
 Pylint message flags resource-owning calls that skip the `with` form.

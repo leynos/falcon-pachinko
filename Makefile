@@ -34,6 +34,12 @@ TY ?= $(UV) tool run --from ty==$(TY_VERSION) ty
 DF12_PYTHON_LINTS_REF ?= v0.3.0
 DF12_PYTHON_LINTS = df12-python-lints @ git+https://github.com/leynos/df12-python-lints.git@$(DF12_PYTHON_LINTS_REF)
 PYLINT_PYTHON ?= 3.14
+# Pin Pylint itself, not just the plugin: df12-python-lints only constrains
+# pylint>=3.3,<5, so an unpinned `uv tool run --from pylint` would drift across
+# releases and change the rule set under the gate. CI installs no pylint of its
+# own, so this pin is the single declaration; tests/test_toolchain_versions.py
+# checks the PYLINT command honours it.
+PYLINT_VERSION ?= 4.0.8
 # Fan Pylint out across a tenth of the available cores, with a floor of two.
 # This host is shared with other agents, so a full-width fan-out would starve
 # them; the floor keeps the gate off Pylint's single-process default.
@@ -52,7 +58,8 @@ PYLINT_JOBS ?= $(shell n=$$(nproc 2>/dev/null || echo 2); \
 PYLINT_TARGETS ?= falcon_pachinko falcon_pachinko/unittests \
 	falcon_pachinko/behaviour tests examples
 PYLINT = $(UV_ENV) $(UV) tool run --python $(PYLINT_PYTHON) \
-	--from pylint --with '$(DF12_PYTHON_LINTS)' pylint --jobs $(PYLINT_JOBS)
+	--from pylint==$(PYLINT_VERSION) --with '$(DF12_PYTHON_LINTS)' \
+	pylint --jobs $(PYLINT_JOBS)
 AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(PYLINT_PYTHON) \
 	--from '$(DF12_PYTHON_LINTS)' ambrleaks
 

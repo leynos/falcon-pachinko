@@ -31,8 +31,8 @@ class Role(enum.StrEnum):
     GUEST = enum.auto()
 ```
 
-Use `auto()` when exact values are unimportant and you want to avoid
-duplication. Avoid `auto()` in `IntEnum` where numeric meaning matters.
+Use `auto()` when exact values are unimportant and duplication should be
+avoided. Avoid `auto()` in `IntEnum` where numeric meaning matters.
 
 ## `match` / `case` (Structural Pattern Matching)
 

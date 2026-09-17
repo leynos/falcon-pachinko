@@ -231,9 +231,18 @@ class TokenAuthenticator:
         self._secrets = dict(secrets)
 
     async def verify(self, workspace_id: str, token: str | None) -> None:
-        """Ensure ``token`` matches the configured secret for the workspace."""
+        """Ensure ``token`` matches the configured secret for the workspace.
+
+        A workspace with no configured secret is rejected rather than allowed
+        through: treating an unknown workspace as open would let any caller
+        reach it without presenting a token at all.
+
+        Raises
+        ------
+        AuthenticationError
+            If the workspace has no configured secret, or the token does not
+            match the configured one.
+        """
         expected = self._secrets.get(workspace_id)
-        if expected is None:
-            return
-        if token != expected:
+        if expected is None or token != expected:
             raise AuthenticationError(workspace_id)

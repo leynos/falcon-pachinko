@@ -12,13 +12,13 @@ boilerplate.
 from __future__ import annotations
 
 import asyncio
+import collections.abc as cabc
 import functools
 import inspect
 import typing as typ
 from contextlib import asynccontextmanager, suppress
 
 if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints
-    import collections.abc as cabc
     import re
 
     import falcon
@@ -139,12 +139,11 @@ class WebSocketResource:
 
     @state.setter
     def state(self, mapping: cabc.MutableMapping[str, typ.Any]) -> None:
-        required_methods = ("__getitem__", "__setitem__", "__iter__")
-        if not all(hasattr(mapping, method) for method in required_methods):
-            msg = (
-                "state must be a mapping-like object implementing "
-                f"{required_methods}, got {type(mapping).__name__}"
-            )
+        # Probing for __getitem__/__setitem__/__iter__ admitted any subscriptable
+        # iterable: a list satisfies all three and was silently accepted as
+        # state. MutableMapping registers only genuine mappings.
+        if not isinstance(mapping, cabc.MutableMapping):
+            msg = f"state must be a MutableMapping, got {type(mapping).__name__}"
             raise TypeError(msg)
         self._state = mapping
 
