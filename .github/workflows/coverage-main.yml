@@ -1,12 +1,9 @@
 name: Coverage (main)
 
 # CodeScene accepts `cs-coverage upload` only for analysed branches, so
-# main-branch coverage is uploaded here on push; pull requests run the
-# coverage generation (and, in a future fast-follow, the changed-line
-# `cs-coverage check` gate) in ci.yml instead. This workflow also
-# advances the coverage ratchet baseline: caches saved on main are
-# readable by every pull-request run, so the baseline written here is
-# the one PR ratchet checks compare against.
+# main-branch coverage is uploaded here on push. Pull requests generate
+# coverage locally with the ratchet that this workflow advances, without
+# receiving CodeScene credentials or invoking CodeScene.
 
 on:
   push:
@@ -48,5 +45,6 @@ jobs:
         with:
           format: cobertura
           path: coverage.xml
+          mode: upload
           access-token: ${{ env.CS_ACCESS_TOKEN }}
           installer-checksum: ${{ env.CODESCENE_CLI_SHA256 }}
