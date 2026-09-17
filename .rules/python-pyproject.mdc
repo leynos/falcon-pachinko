@@ -64,9 +64,11 @@ dependencies = [
   [Python Packaging][4])
 * **`requires-python`:** Constrains which Python interpreters your package
   supports (e.g. `>=3.10`). ([Python Packaging][4], [Reddit][5])
-* **`license = { text = "MIT" }`:** You can specify a license either as a SPDX
-  identifier (via `license = { text = "MIT" }`) or by pointing to a file (e.g.
-  `license = { file = "LICENSE" }`). ([Python Packaging][4], [Reddit][5])
+* **`license = "MIT"`:** Declare the license as a top-level SPDX license
+  expression string (e.g. `license = "MIT"`) and list the license files
+  separately with `license-files = ["LICENSE"]`, per PEP 639. The legacy
+  `license = { text = ... }` and `license = { file = ... }` table forms are
+  deprecated. ([Python Packaging][4], [Reddit][5])
 * **`authors`:** A list of tables with `name` and `email`. Many registries
   (e.g., PyPI) pull this for display. ([Python Packaging][4], [Reddit][5])
 * **`keywords` and `classifiers`:** These help search engines and package
@@ -98,9 +100,9 @@ docs = [
 ```
 
 * **`[project.optional-dependencies]`:** Each table key (e.g. `dev`, `docs`)
-  defines a “dependency group.” You can install a group via
-  `uv add --group dev` or `uv sync --include dev`. ([Python Packaging][4],
-  [DevsJC][6])
+  defines an “extra” that ships with the published package. Add a dependency to
+  one with `uv add --optional dev <package>` and install it with
+  `uv sync --extra dev`. ([Python Packaging][4], [DevsJC][6])
 * **Why use groups?** You keep the lockfile deterministic (via `uv.lock`) while
   still separating concerns (test‐only vs. production). ([Medium][7],
   [DevsJC][6])
@@ -135,18 +137,18 @@ ______________________________________________________________________
 ## 5. Declaring a Build System
 
 PEP 517/518 require a `[build-system]` table to tell tools how to build and
-install your project. A “modern” convention is to specify `setuptools>=61.0`
-(for editable installs without `setup.py`) or a lighter alternative like
+install your project. A “modern” convention is to specify `setuptools>=64.0`
+(for PEP 660 editable installs without `setup.py`) or a lighter alternative like
 `flit_core`. Below is the typical setup using setuptools:
 
 ```toml
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=64.0", "wheel"]
 build-backend = "setuptools.build_meta"
 ```
 
 * **`requires`:** A list of packages needed at build time. For editable
-  installs in `uv`, you need at least `setuptools>=61.0` and `wheel`. (
+  installs in `uv`, you need at least `setuptools>=64.0` and `wheel`. (
   [Python Packaging][4], [Astral Docs][8])
 * **`build-backend`:** The entry point for your build backend.
   `setuptools.build_meta` is the PEP 517-compliant backend for setuptools. (

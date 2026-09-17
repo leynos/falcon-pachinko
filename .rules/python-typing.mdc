@@ -162,9 +162,12 @@ This replaces `StrDict = TypeAlias = ...` and is preferred in modern Python.
 
 #### `from __future__ import annotations`
 
-Use this import in modules with type annotations to defer evaluation of
-annotation expressions to runtime. This prevents issues with forward references
-and circular imports.
+Use this import in modules with type annotations to prevent annotation
+expressions from being evaluated at definition time; instead, they are stored
+as strings in `__annotations__`. Python does not evaluate these strings
+automatically later, so runtime consumers must resolve them explicitly, for
+example with `typing.get_type_hints()`. This prevents issues with forward
+references and circular imports.
 
 ```python
 from __future__ import annotations

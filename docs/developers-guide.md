@@ -23,6 +23,16 @@ remains usable when the network is unavailable. Quoted APIs and identifiers
 retain their upstream spelling; put them in backticks or fenced code blocks
 where practical rather than adding broad word-level exceptions.
 
+## Markdown formatting
+
+`make fmt` and `make check-fmt` run `mdtablefix` (version 0.6.0, the same
+release CI installs); install it once with
+`cargo install --locked mdtablefix --version 0.6.0`. `make fmt` also runs
+`markdownlint-cli2`, which CI provides through its GitHub action; locally
+install it with `bun install -g markdownlint-cli2` (or `npm install -g`).
+Neither tool is a Python package, so `uv sync --group dev` does not install
+them.
+
 ## Router Request Boundary
 
 `WebSocketRouter` is mounted as a Falcon resource, but its internal dispatch
