@@ -9,15 +9,12 @@ from falcon_pachinko import worker
 
 from .resources import _workspace_room
 
-__all__ = ["announcement_worker"]
-
-if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
+if typ.TYPE_CHECKING:
     from falcon_pachinko import WebSocketConnectionManager
 
     from .services import AnnouncementFeed
-else:  # pragma: no cover - runtime aliases for annotations
-    AnnouncementFeed = typ.Any  # type: ignore[assignment]
-    WebSocketConnectionManager = typ.Any  # type: ignore[assignment]
+
+__all__ = ["announcement_worker"]
 
 
 @worker

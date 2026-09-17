@@ -49,6 +49,48 @@ Test request doubles should expose both `path` and `path_template`. Use an empty
 `path_template` for root-mounted router tests, matching the runtime default
 used by Falcon-style request objects that do not provide a template.
 
+## Lint and Typecheck Toolchain
+
+`make lint` runs ruff check, then Pylint, then ambrleaks. `make typecheck`
+runs `ty check falcon_pachinko tests`.
+
+Ruff is pinned at 0.16.4 via `RUFF_VERSION` in the Makefile, and the same
+version is installed in `.github/workflows/ci.yml` with
+`uv tool install ruff==0.16.4`. Ruff runs in preview mode, targets py312, and
+also formats Python code blocks embedded in Markdown.
+
+`ty` is pinned at 0.0.74 via `TY_VERSION` in the Makefile, with a matching
+`uv tool install ty==0.0.74` step in CI. `ty` is pre-1.0 and its diagnostics
+shift between releases, which is why the version is pinned rather than left
+floating.
+
+`tests/test_toolchain_versions.py` is a contract test asserting that the
+Makefile pins and the CI pins name the same version, without hard-coding a
+version itself. Bump both sites together when upgrading either tool.
+
+Pylint runs on CPython 3.14 (`PYLINT_PYTHON`), loading the
+`df12-python-lints` plugin pinned by `DF12_PYTHON_LINTS_REF` (`v0.3.0`). The
+plugin supplies the df12 house-style checkers. No PyPy shim is used.
+
+`PYLINT_JOBS` derives a worker count from a tenth of the host's cores, with a
+floor of two, because the build host is shared. With more than one job,
+df12-python-lints v0.3.0 reports each of its own messages twice, because its
+`register()` hook runs again in every worker; Pylint's builtin messages are
+unaffected, and the exit status stays correct, so the gate still passes and
+fails accurately. Set `PYLINT_JOBS=1` as an escape hatch when counting
+findings matters. This double-counting is tracked upstream as
+
+<https://github.com/leynos/df12-python-lints/issues/24>.
+
+`ambrleaks`, also from df12-python-lints, runs as part of `make lint` and
+scans syrupy `.ambr` snapshots for unredacted values.
+
+### Suppression policy
+
+Every `noqa`, `pylint: disable`, or `type: ignore` pragma must carry a reason
+in the same comment. The df12-python-lints C9106 and C9107 checkers reject
+bare pragmas.
+
 ## Build Environment
 
 The `build` target owns the local virtual environment. It depends on the

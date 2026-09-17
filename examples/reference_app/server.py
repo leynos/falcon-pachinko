@@ -19,6 +19,8 @@ import falcon.asgi as falcon_asgi
 
 from falcon_pachinko import (
     ServiceContainer,
+    WebSocketConnectionManager,
+    WebSocketLike,
     WebSocketResource,
     WebSocketRouter,
     WorkerController,
@@ -36,6 +38,11 @@ from .services import (
 )
 from .workers import announcement_worker
 
+if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
+    import collections.abc as cabc
+
+    from falcon_pachinko.router import SimulatorFactory
+
 try:  # pragma: no cover - used when tests are available
     from tests.behaviour._lifespan import LifespanApp
 except ImportError:  # pragma: no cover - fallback when running the script
@@ -46,12 +53,13 @@ except ImportError:  # pragma: no cover - fallback when running the script
         def __init__(self) -> None:
             super().__init__()
             self._lifespan_handler: (
-                typ.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]] | None
+                cabc.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]]
+                | None
             ) = None
 
-        def lifespan(  # type: ignore[override]
-            self, fn: typ.Callable[[LifespanApp], typ.AsyncIterator[None]]
-        ) -> typ.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]]:
+        def lifespan(
+            self, fn: cabc.Callable[[LifespanApp], cabc.AsyncIterator[None]]
+        ) -> cabc.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]]:
             """Register ``fn`` as the lifespan context manager."""
             manager = cl.asynccontextmanager(fn)
             self._lifespan_handler = manager
@@ -66,19 +74,16 @@ except ImportError:  # pragma: no cover - fallback when running the script
 
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
-    from falcon_pachinko.protocols import WebSocketLike
-    from falcon_pachinko.router import SimulatorFactory
-    from falcon_pachinko.websocket import WebSocketConnectionManager
-else:  # pragma: no cover - runtime aliases for annotations
-    WebSocketLike = typ.Any  # type: ignore[assignment]
-    SimulatorFactory = typ.Any  # type: ignore[assignment]
-    WebSocketConnectionManager = typ.Any  # type: ignore[assignment]
 
-    class _SupportsWebSocketRoute(typ.Protocol):
+    class _PachinkoApp(typ.Protocol):
+        """Attributes attached to the app at runtime by :func:`install`."""
+
+        ws_connection_manager: WebSocketConnectionManager
+
         def add_websocket_route(
             self,
             uri_template: str,
-            resource: type[WebSocketResource] | typ.Callable[..., WebSocketResource],
+            resource: type[WebSocketResource] | cabc.Callable[..., WebSocketResource],
             *args: object,
             **kwargs: object,
         ) -> None: ...
@@ -100,10 +105,11 @@ class RouterEndpoint(WebSocketResource):
 
 def _require_token_hook(
     authenticator: TokenAuthenticator,
-) -> typ.Callable[[HookContext], typ.Awaitable[None]]:
+) -> cabc.Callable[[HookContext], cabc.Awaitable[None]]:
     async def _hook(context: HookContext) -> None:
         params = context.params or {}
-        workspace_id = typ.cast("str | None", params.get("workspace_id"))
+        raw_workspace_id = params.get("workspace_id")
+        workspace_id = raw_workspace_id if isinstance(raw_workspace_id, str) else None
         token = context.req.get_header("x-workspace-token") if context.req else None
         try:
             await authenticator.verify(workspace_id or "default", token)
@@ -111,6 +117,15 @@ def _require_token_hook(
             raise falcon.HTTPUnauthorized(description=str(exc)) from exc
 
     return _hook
+
+
+def _resolve_as[T](container: ServiceContainer, name: str, expected: type[T]) -> T:
+    """Resolve ``name`` from ``container``, validating its concrete type."""
+    value = container.resolve(name)
+    if not isinstance(value, expected):
+        msg = f"service {name!r} is not a {expected.__name__}"
+        raise TypeError(msg)
+    return value
 
 
 def build_container(conn_mgr: WebSocketConnectionManager) -> ServiceContainer:
@@ -132,8 +147,8 @@ def build_router(
     container: ServiceContainer,
     *,
     simulator_factory: SimulatorFactory | None = None,
-    resource_factory: typ.Callable[
-        [typ.Callable[..., WebSocketResource]], WebSocketResource
+    resource_factory: cabc.Callable[
+        [cabc.Callable[..., WebSocketResource]], WebSocketResource
     ]
     | None = None,
 ) -> WebSocketRouter:
@@ -151,9 +166,7 @@ def build_router(
     )
     router.mount("/ws")
 
-    authenticator = typ.cast(
-        "TokenAuthenticator", container.resolve("token_authenticator")
-    )
+    authenticator = _resolve_as(container, "token_authenticator", TokenAuthenticator)
     router.global_hooks.add(
         HookEvent.BEFORE_CONNECT, _require_token_hook(authenticator)
     )
@@ -164,21 +177,20 @@ def create_app() -> LifespanApp:
     """Create the Falcon ASGI app with the full reference configuration."""
     app = LifespanApp()
     install(app)
-    conn_mgr = typ.cast(
-        "WebSocketConnectionManager",
-        app.ws_connection_manager,
-    )
+    # Cast: install() attaches these attributes at runtime, so the type
+    # checker cannot see them on falcon.asgi.App.
+    ws_app = typ.cast("_PachinkoApp", app)
+    conn_mgr = ws_app.ws_connection_manager
     container = build_container(conn_mgr)
     router = build_router(container)
 
-    ws_app = typ.cast("_SupportsWebSocketRoute", app)
     ws_app.add_websocket_route("/ws", RouterEndpoint, router=router)
 
     controller = WorkerController()
-    feed = typ.cast("AnnouncementFeed", container.resolve("announcement_feed"))
+    feed = _resolve_as(container, "announcement_feed", AnnouncementFeed)
 
     @app.lifespan
-    async def lifespan(_app: LifespanApp) -> typ.AsyncIterator[None]:
+    async def lifespan(_app: LifespanApp) -> cabc.AsyncIterator[None]:
         await controller.start(
             announcement_worker,
             conn_mgr=conn_mgr,
