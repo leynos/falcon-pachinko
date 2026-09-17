@@ -158,20 +158,17 @@ def _has_ratcheted_coverage(steps: list[dict[typ.Any, typ.Any]]) -> bool:
     )
 
 
-def _requests_full_history(step: dict[typ.Any, typ.Any]) -> bool:
-    """Return whether a step asks checkout for the full Git history."""
-    inputs = step.get("with")
-    return isinstance(inputs, dict) and inputs.get("fetch-depth") in {0, "0"}
-
-
 def _checkout_steps_avoid_full_history(
     steps: list[dict[typ.Any, typ.Any]],
 ) -> bool:
-    """Return whether every checkout step avoids fetching full history."""
+    """Return whether checkout steps avoid a full-history request."""
     return all(
-        not _requests_full_history(step)
+        not _uses(step, "actions/checkout")
+        or not (
+            isinstance(step.get("with"), dict)
+            and step["with"].get("fetch-depth") in {0, "0"}
+        )
         for step in steps
-        if _uses(step, "actions/checkout")
     )
 
 
