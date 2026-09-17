@@ -21,7 +21,6 @@ urls = { "Homepage" = "https://github.com/leynos/falcon-pachinko" }
 
 [dependency-groups]
 dev = [
-    "pathspec==1.1.1",
     "pytest",
     "pytest-asyncio",
     "pytest-bdd",
@@ -47,13 +46,6 @@ package = true
 line-length = 88
 preview = true
 target-version = "py312"
-extend-exclude = [
-  # The shared spelling-rollout helpers carry their own pinned Ruff policy,
-  # linted in isolation by the Makefile's spelling-helper-test target.
-  "scripts/typos_rollout_check.py",
-  "scripts/tests/test_typos_rollout_check.py",
-]
-
 [tool.ruff.lint]
 select = [
     "F",        # Pyflakes rules
@@ -215,11 +207,6 @@ recursive = true
 max-module-lines = 800
 # Load the df12 house-style checkers alongside the stock Pylint messages.
 load-plugins = ["df12_python_lints"]
-# The shared rollout helpers have their own pinned Ruff and coverage policy.
-ignore = [
-    "typos_rollout_check.py",
-    "test_typos_rollout_check.py",
-]
 
 [tool.pylint.design]
 # Keep function call surfaces small enough to understand without memorising
