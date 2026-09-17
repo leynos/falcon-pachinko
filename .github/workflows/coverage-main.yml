@@ -33,7 +33,10 @@ concurrency:
 
 jobs:
   coverage-upload:
-    runs-on: ubuntu-latest
+    # Push-only, so no fork can reach it and the label needs no guard.
+    runs-on: ubicloud-standard-2
+    # The longest observed run of this job is 34 s.
+    timeout-minutes: 15
     permissions:
       contents: read
     env:
