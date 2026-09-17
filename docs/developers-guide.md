@@ -129,6 +129,7 @@ The two measured ceilings are sized from real runs rather than chosen:
 | CI, push, 2026-09-16              | `lint-test`       | 3 s   | 19 s     |
 | Coverage (main), push, 2026-09-16 | `coverage-upload` | 3 s   | 34 s     |
 | Coverage (main), push, 2026-08-13 | `coverage-upload` | 588 s | 30 s     |
+| CI, PR, 2026-09-17, Ubicloud      | `lint-test`       | 11 s  | 44 s     |
 
 *Table: the runs the ceilings are sized from.*
 
@@ -137,6 +138,11 @@ room for a cold cache and for Ubicloud's two vCPUs. The release lanes have no
 recorded run at all, so their thirty minutes is not measured; it is set wide on
 the principle that a release killed part-way is worse than one that runs long.
 Re-size on the third Ubicloud run of each lane.
+
+The last row is the first run on Ubicloud, and it is slower than the
+GitHub-hosted run above it: 44 s against 36 s, on an 11 s queue against 2 s.
+One sample decides nothing, but it is what the paragraph below predicts, and it
+is recorded rather than quietly dropped.
 
 The second coverage sample is the reason this repository is worth moving at
 all. Its 588 s queue against a 30 s run is the queueing the migration targets;
