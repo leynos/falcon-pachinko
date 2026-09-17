@@ -25,9 +25,9 @@ where practical rather than adding broad word-level exceptions.
 
 ## Coverage ownership
 
-Pull-request coverage uses the local ratchet in the shared
-`generate-coverage` action. It does not fetch full Git history, invoke
-CodeScene, carry a CodeScene project URL, or receive `CS_ACCESS_TOKEN`.
+Pull-request coverage uses the local ratchet in the shared `generate-coverage`
+action. It does not fetch full Git history, invoke CodeScene, carry a CodeScene
+project URL, or receive `CS_ACCESS_TOKEN`.
 
 The `coverage-main.yml` workflow owns CodeScene publication. It runs on pushes
 to `main`, generates the same ratcheted report, and calls
