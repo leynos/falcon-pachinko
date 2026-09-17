@@ -9,16 +9,10 @@ jobs:
   lint-test:
     runs-on: ubuntu-latest
     env:
-      CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
-      CODESCENE_CLI_SHA256: ${{ vars.CODESCENE_CLI_SHA256 }}
       UV_PYTHON: '3.13'
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
-        with:
-          # Full history so `cs-coverage check` can reach the pull
-          # request's merge base.
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -51,10 +45,9 @@ jobs:
       - name: Run typechecker
         run: make typecheck
 
-      # Coverage runs on pull requests only. Pushes to main upload their
-      # own coverage (and advance the ratchet baseline) via
-      # coverage-main.yml, so generating it here as well would duplicate
-      # the work and the CodeScene upload for the same commit.
+      # Pull requests compare against the local baseline restored by the
+      # shared action. Pushes to main write that baseline and publish coverage
+      # through coverage-main.yml.
       - name: Generate coverage
         if: github.event_name == 'pull_request'
         uses: leynos/shared-actions/.github/actions/generate-coverage@e0d9b652b137eb15314fff188f09e1ba18d3cc5b
@@ -68,15 +61,3 @@ jobs:
           # fork isolation the old `--forked` run provided is dropped.
           pytest-workers: ''
           with-ratchet: 'true'
-
-      - name: Check coverage against CodeScene gates
-        env:
-          CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
-        if: env.CS_ACCESS_TOKEN != '' && github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@c3141c3d4cb2a2828d2abbcf3d94b15197740c58
-        with:
-          format: cobertura
-          mode: check
-          project-url: https://api.codescene.io/v2/projects/68790
-          access-token: ${{ env.CS_ACCESS_TOKEN }}
-          installer-checksum: ${{ vars.CODESCENE_CLI_SHA256 }}

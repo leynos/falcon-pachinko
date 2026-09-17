@@ -23,6 +23,18 @@ remains usable when the network is unavailable. Quoted APIs and identifiers
 retain their upstream spelling; put them in backticks or fenced code blocks
 where practical rather than adding broad word-level exceptions.
 
+## Coverage ownership
+
+Pull-request coverage uses the local ratchet in the shared `generate-coverage`
+action. It does not fetch full Git history, invoke CodeScene, carry a CodeScene
+project URL, or receive `CS_ACCESS_TOKEN`.
+
+The `coverage-main.yml` workflow owns CodeScene publication. It runs on pushes
+to `main`, generates the same ratcheted report, and calls
+`upload-codescene-coverage` with `mode: upload`. The focused contract in
+`tests/workflow_contracts/test_main_owned_codescene_coverage.py` checks both
+sides of this boundary.
+
 ## Router Request Boundary
 
 `WebSocketRouter` is mounted as a Falcon resource, but its internal dispatch
