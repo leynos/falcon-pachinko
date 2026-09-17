@@ -37,6 +37,11 @@ app.add_route("/ws", router)
 ```
 
 - Route paths are now **relative to the router mount point**.
+- Resource initializer arguments moved from `args=`/`kwargs=` parameters to
+  `*init_args`/`**init_kwargs` positional and keyword capture. Before:
+  `router.add_route(path, Resource, args=(1,), kwargs={"n": 2})`; after:
+  `router.add_route(path, Resource, 1, n=2)`. The `name` keyword is reserved
+  for the route name and is never forwarded to the resource initializer.
 
 1) **Adopt resource composition and state sharing:**
 

@@ -52,6 +52,37 @@ router.mount("/ws")
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
 
+### The `add_route` signature
+
+```python
+def add_route(
+    self,
+    path: str,
+    resource: type[WebSocketResource] | cabc.Callable[..., WebSocketResource],
+    *init_args: object,
+    name: str | None = None,
+    **init_kwargs: object,
+) -> None: ...
+```
+
+- `*init_args` and `**init_kwargs` are stored and passed to `resource` when a
+  connection instantiates it, alongside the path parameters. Example passing
+  both a positional and a keyword initializer argument:
+
+  ```python
+  router.add_route("/rooms/{room}", ChatResource, "lobby", history_size=100)
+  ```
+
+- `name` is reserved for naming the route itself and is never forwarded to
+  the resource initializer.
+- `resource` accepts any callable returning a `WebSocketResource`, not only a
+  class, so a `functools.partial` factory covers a resource whose own
+  initializer needs a parameter called `name`:
+
+  ```python
+  router.add_route("/p", functools.partial(MyResource, name="x"), name="route")
+  ```
+
 ## 3. Resource Lifecycle & State
 
 - `on_connect(req, ws, **params) -> bool | None`

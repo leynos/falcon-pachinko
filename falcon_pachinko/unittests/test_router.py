@@ -666,3 +666,44 @@ def test_exported_type_aliases_are_runtime_evaluable(alias_name: str) -> None:
     assert alias.__value__ is not None, (
         f"{alias_name}.__value__ should evaluate without raising"
     )
+
+
+@pytest.mark.asyncio
+async def test_resource_initializer_may_require_its_own_name() -> None:
+    """A resource needing a ``name`` kwarg is served via a factory.
+
+    ``add_route`` reserves ``name`` for the route name, so the keyword cannot
+    reach the initializer directly. Passing a factory is the documented escape
+    hatch, and it must leave route naming intact.
+    """
+    built: list[str] = []
+
+    class NamedResource(WebSocketResource):
+        def __init__(self, *, name: str) -> None:
+            built.append(name)
+            self.resource_name = name
+
+        async def on_connect(
+            self, req: falcon.Request, ws: object, **params: object
+        ) -> bool:
+            """Accept so the router instantiates and retains the resource."""
+            return True
+
+    router = WebSocketRouter()
+    router.add_route(
+        "/named",
+        functools.partial(NamedResource, name="resource-name"),
+        name="route-name",
+    )
+    router.mount("/")
+
+    assert router.url_for("route-name") == "/named", (
+        "the route name must stay registered for reverse lookup"
+    )
+
+    await router.on_websocket(make_req("/named", "/"), DummyWS())
+
+    assert built == ["resource-name"], (
+        "the factory must forward the initializer's own name, distinct from "
+        "the route name"
+    )

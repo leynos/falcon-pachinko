@@ -231,6 +231,15 @@ class WebSocketRouter:
         can be configured differently across routes. ``name`` is reserved for
         the route name consumed by :meth:`url_for` and is therefore not
         forwarded to the resource.
+
+        A resource whose own initializer takes a parameter called ``name``
+        cannot receive it through ``init_kwargs``, because the keyword binds to
+        the route name instead. Pass a factory for those, since ``resource``
+        accepts any callable returning a :class:`WebSocketResource`::
+
+            router.add_route(
+                "/p", functools.partial(MyResource, name="alpha"), name="route"
+            )
         """
         self._validate_resource_type(resource)
         path, canonical = self._registration.normalize_path(path)

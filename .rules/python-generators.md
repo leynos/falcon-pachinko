@@ -61,8 +61,8 @@ def top_active_emails(users):
 
 ## Use Generators When
 
-- You're iterating and filtering/mapping data.
-- You want to make early returns or short-circuit behaviour clearer.
+- The code is iterating and filtering/mapping data.
+- Early returns or short-circuit behaviour need to be clearer.
 - The function logically produces a sequence over time.
 
 ## Avoid Overcomplicating
@@ -88,8 +88,8 @@ def iter_even_doubles():
 
 ______________________________________________________________________
 
-**Rule of thumb:** If your `for` loop has multiple branches, mutations, or
-is hard to explain in one sentence—try rewriting it as a generator.
+**Rule of thumb:** If a `for` loop has multiple branches, mutations, or is
+hard to explain in one sentence—rewrite it as a generator.
 
 Prefer clear, linear data flows over deeply nested conditionals and loop
 bodies. The `use-yield-from` Pylint message and the Ruff comprehension rules

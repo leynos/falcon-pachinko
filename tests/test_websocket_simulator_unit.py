@@ -62,7 +62,9 @@ async def test_push_and_receive_json_payload() -> None:
     payload = await simulator.receive_json()
 
     assert payload == {"type": "ping"}, "the queued JSON payload must be decoded"
-    assert simulator.received_messages, "raw bytes must be recorded"
+    assert simulator.received_messages == [msjson.Encoder().encode({"type": "ping"})], (
+        "the raw frame recorded must be exactly the bytes push_json encoded"
+    )
 
 
 @given(messages=st.lists(st.text(), max_size=10))

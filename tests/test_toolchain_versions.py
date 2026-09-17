@@ -52,3 +52,32 @@ def test_makefile_and_ci_pin_same_version(makefile_variable: str, tool: str) -> 
         f"{makefile_version} but ci.yml installs {tool}=={ci_version}; "
         "bump both sites together"
     )
+
+
+def _makefile_variable_block(variable: str) -> str:
+    """Return a Makefile assignment including its backslash continuations."""
+    text = MAKEFILE.read_text(encoding="utf-8")
+    match = re.search(
+        rf"^{re.escape(variable)}\s*[:?]?=(?:[^\n]*\\\n)*[^\n]*$",
+        text,
+        flags=re.MULTILINE,
+    )
+    if match is None:
+        pytest.fail(f"Makefile does not define {variable}")
+    return match.group(0)
+
+
+def test_pylint_command_uses_the_pinned_version() -> None:
+    """The PYLINT command must invoke the pinned Pylint, not a floating one.
+
+    CI installs no Pylint of its own, so unlike ruff and ty there is no second
+    site to compare against; the contract is that the command honours the
+    Makefile's own pin rather than resolving whatever release is newest.
+    """
+    version = _makefile_pin("PYLINT_VERSION")
+    assert version, "PYLINT_VERSION must name a release"
+
+    command = _makefile_variable_block("PYLINT")
+    assert "--from pylint==$(PYLINT_VERSION)" in command, (
+        f"the PYLINT command must pin Pylint via PYLINT_VERSION, but reads:\n{command}"
+    )
