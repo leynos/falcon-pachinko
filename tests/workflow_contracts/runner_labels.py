@@ -203,34 +203,73 @@ def _runs_on_refs(
             return
 
 
-def _matrix_os_refs(
-    workflow_name: str, job_name: str, job_document: dict[str, object]
-) -> typ.Iterator[LabelRef]:
-    """Yield the ``os`` labels a job's matrix include rows declare.
+def _matrix_include(job_document: dict[str, object]) -> list[object]:
+    """Return a job's matrix include rows, or none when it declares no matrix.
 
-    A ``runs-on: ${{ matrix.os }}`` resolves from these, so the labels a
-    workflow really uses are not all written under ``runs-on``.
+    Parameters
+    ----------
+    job_document : dict[str, object]
+        A job mapping.
 
-    Yields
-    ------
-    LabelRef
-        Each label an include row declares, in declaration order.
+    Returns
+    -------
+    list[object]
+        The include rows, empty when the job declares no matrix or the matrix
+        declares no include list.
     """
     strategy = as_mapping(job_document.get("strategy"))
     matrix = as_mapping(strategy.get("matrix")) if strategy else None
     include = matrix.get("include") if matrix else None
     if not isinstance(include, list):
-        return
-    for position, row in enumerate(include):
-        entry = as_mapping(row)
-        label = entry.get("os") if entry else None
-        if isinstance(label, str):
-            yield LabelRef(
-                workflow_name,
-                job_name,
-                f"strategy.matrix.include[{position}].os",
-                label,
-            )
+        return []
+    return list(include)
+
+
+def _declared_os(row: object) -> str | None:
+    """Return an include row's ``os`` label when it declares one.
+
+    Parameters
+    ----------
+    row : object
+        One matrix include row, which YAML permits to be anything.
+
+    Returns
+    -------
+    str | None
+        The declared label, or None when the row declares no string ``os``.
+    """
+    entry = as_mapping(row)
+    label = entry.get("os") if entry else None
+    return label if isinstance(label, str) else None
+
+
+def _matrix_os_refs(
+    workflow_name: str, job_name: str, job_document: dict[str, object]
+) -> typ.Iterator[LabelRef]:
+    """Return the ``os`` labels a job's matrix include rows declare.
+
+    A ``runs-on: ${{ matrix.os }}`` resolves from these, so the labels a
+    workflow really uses are not all written under ``runs-on``.
+
+    Returns
+    -------
+    typ.Iterator[LabelRef]
+        Each label an include row declares, in declaration order.
+    """
+    labels = (
+        (position, _declared_os(row))
+        for position, row in enumerate(_matrix_include(job_document))
+    )
+    return (
+        LabelRef(
+            workflow_name,
+            job_name,
+            f"strategy.matrix.include[{position}].os",
+            label,
+        )
+        for position, label in labels
+        if label is not None
+    )
 
 
 def declared_labels() -> list[LabelRef]:

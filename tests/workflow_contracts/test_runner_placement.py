@@ -232,6 +232,45 @@ def test_the_ceiling_contract_sees_the_lanes_it_guards() -> None:
     )
 
 
+#: Every workflow that declares a runner label anywhere. `build-wheels.yml`
+#: is in this set deliberately: it is `workflow_call` and nothing in this
+#: repository calls it today, and it is still asked the registry question.
+LABEL_DECLARING_WORKFLOWS = frozenset(
+    {
+        "build-wheels.yml",
+        "ci.yml",
+        "coverage-main.yml",
+        "delayed-pr-comment.yml",
+        "get-codescene-sha.yml",
+        "release.yml",
+    }
+)
+
+
+def test_the_registry_reads_every_workflow_that_declares_a_label() -> None:
+    """Account for a callerless `workflow_call` file rather than exempting it.
+
+    `build-wheels.yml` declares six labels and nothing calls it. The registry
+    could either account for its labels or exclude callerless
+    `workflow_call` files by rule; this repository accounts for them. A file
+    is one line away from gaining a caller, and "callerless" is not even a
+    local property, since a caller may live in another repository, so a rule
+    that skipped the file would quietly stop asking the registry question for
+    a workflow that could run tomorrow.
+
+    The set is named rather than derived, so dropping a workflow from the
+    traversal fails here instead of silently shrinking what the registry is
+    held to.
+    """
+    reached = {reference.workflow for reference in declared_labels()}
+
+    assert reached == LABEL_DECLARING_WORKFLOWS, (
+        "the label traversal must reach every workflow that declares one, "
+        "including callerless workflow_call files; reached "
+        f"{sorted(reached)}"
+    )
+
+
 def test_the_registry_matches_the_labels_in_use() -> None:
     """Hold equality in both directions between registry and use.
 
