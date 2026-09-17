@@ -68,9 +68,11 @@ When implementing changes, adhere to the following testing procedures:
   tests. Use `make build` to create the local virtual environment with both the
   `dev` and `examples` dependency groups. Prefer these targets over invoking
   tools directly. When editing `Makefile`, run `mbake validate Makefile` to
-  confirm the syntax is correct. The `dev` dependency group includes all CLI
-  tooling such as linters and markdown checks, so `make build` installs
-  everything required for development and CI.
+  confirm the syntax is correct. The `dev` dependency group includes the Python
+  CLI tooling (linters, type checker, tests). `mdtablefix` and
+  `markdownlint-cli2` are not Python packages and are installed separately; see
+  [the Developer Guide's Markdown formatting section](docs/developers-guide.md#markdown-formatting)
+  for the commands.
 
 - **Atomicity:** Aim for small, focused, atomic changes. Each change (and
   subsequent commit) should represent a single logical unit of work.
