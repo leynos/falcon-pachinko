@@ -23,27 +23,40 @@ Run with:
 
 from __future__ import annotations
 
+import re
+
 import pytest
-import yaml
 
 from .runner_labels import (
     collapse_label_whitespace,
     declared_labels,
+    job_labels,
     labels_in_use,
     runner_expression,
 )
 from .workflow_support import (
-    ACTIONLINT_CONFIG,
     FORK_FIELD,
+    GITHUB_HOSTED_LABELS,
     GITHUB_HOSTED_LINUX,
+    REPOSITORY,
+    ROOT,
     UBICLOUD_LINUX_LABEL,
-    jobs,
-    workflow_names,
 )
 
 #: The lane that serves pull requests, and so the only one that can be
 #: reached by a fork.
 FORK_FALLBACK_LANE = ("ci.yml", "lint-test")
+#: Each Ubicloud lane's ceiling in minutes, as the developer guide's table
+#: publishes it. The values are restated here rather than derived, because
+#: the contract's job is to hold the guide and the workflow to one another:
+#: a ceiling widened in the workflow alone leaves the guide describing a lane
+#: that no longer exists, and the guide is what the next re-sizing reads.
+LANE_CEILINGS = {
+    ("ci.yml", "lint-test"): 15,
+    ("coverage-main.yml", "coverage-upload"): 15,
+    ("release.yml", "pure-wheel"): 30,
+    ("release.yml", "release"): 30,
+}
 #: Lanes that run on Ubicloud from a push or a tag only. A fork cannot reach
 #: them, so they name their label outright; a guard here would be noise that
 #: reads as protection.
@@ -77,7 +90,7 @@ def _job(workflow_name: str, job_name: str) -> dict[str, object]:
     dict[str, object]
         The job mapping.
     """
-    declared = jobs(workflow_name)
+    declared = REPOSITORY.jobs(workflow_name)
     assert job_name in declared, (
         f"{workflow_name} must declare a {job_name!r} job; it declares "
         f"{sorted(declared)}"
@@ -93,7 +106,7 @@ def test_the_traversal_finds_every_workflow() -> None:
     contracts are exactly the kind that would then stay green through a
     rename.
     """
-    found = workflow_names()
+    found = REPOSITORY.names()
     assert len(found) >= len(GITHUB_HOSTED_JOBS) + 1, (
         f"the traversal must reach this repository's workflows; found {found}"
     )
@@ -173,15 +186,18 @@ def test_named_jobs_stay_github_hosted(workflow_name: str, job_name: str) -> Non
     dispatch-only or `workflow_call` job were moved onto a paid runner too,
     which is the mistake the placement rule exists to prevent.
     """
-    declared = _job(workflow_name, job_name).get("runs-on")
+    job_document = _job(workflow_name, job_name)
     reason = GITHUB_HOSTED_JOBS[workflow_name, job_name]
-    resolved = (
-        collapse_label_whitespace(declared) if isinstance(declared, str) else declared
-    )
+    resolved = job_labels(workflow_name, job_name, job_document)
 
-    assert UBICLOUD_LINUX_LABEL not in str(resolved), (
-        f"{workflow_name}:{job_name} stays GitHub-hosted ({reason}); it "
-        f"declares {resolved!r}"
+    assert resolved, (
+        f"{workflow_name}:{job_name} must resolve to at least one label, or "
+        "this contract asserts nothing about it"
+    )
+    elsewhere = resolved - GITHUB_HOSTED_LABELS
+    assert not elsewhere, (
+        f"{workflow_name}:{job_name} stays GitHub-hosted ({reason}); it can "
+        f"run on {sorted(elsewhere)}, which GitHub does not host"
     )
 
 
@@ -194,8 +210,8 @@ def test_every_ubicloud_lane_declares_a_ceiling() -> None:
     absence is invisible until the first hung job.
     """
     unbounded = []
-    for workflow_name in workflow_names():
-        for job_name, job_document in jobs(workflow_name).items():
+    for workflow_name in REPOSITORY.names():
+        for job_name, job_document in REPOSITORY.jobs(workflow_name).items():
             declared = job_document.get("runs-on")
             if not isinstance(declared, str):
                 continue
@@ -218,8 +234,8 @@ def test_the_ceiling_contract_sees_the_lanes_it_guards() -> None:
     """
     visited = {
         (workflow_name, job_name)
-        for workflow_name in workflow_names()
-        for job_name, job_document in jobs(workflow_name).items()
+        for workflow_name in REPOSITORY.names()
+        for job_name, job_document in REPOSITORY.jobs(workflow_name).items()
         if isinstance(job_document.get("runs-on"), str)
         and UBICLOUD_LINUX_LABEL
         in collapse_label_whitespace(str(job_document.get("runs-on")))
@@ -280,17 +296,79 @@ def test_the_registry_matches_the_labels_in_use() -> None:
     which is the substantive question the registry exists to ask, so the
     exemption is a named set of GitHub-hosted labels instead.
     """
-    document = yaml.safe_load(ACTIONLINT_CONFIG.read_text(encoding="utf-8"))
-    assert isinstance(document, dict), ".github/actionlint.yaml must be a mapping"
-    section = document.get("self-hosted-runner")
-    assert isinstance(section, dict), (
-        ".github/actionlint.yaml must declare self-hosted-runner"
-    )
-    registered = section.get("labels")
-    assert isinstance(registered, list), "self-hosted-runner must declare a labels list"
+    registered = REPOSITORY.registered_labels()
 
     assert set(registered) == labels_in_use(), (
         "every label GitHub does not host must be registered, and every "
         f"registration must still be used; registered {sorted(registered)}, "
         f"in use {sorted(labels_in_use())}"
     )
+
+
+@pytest.mark.parametrize(("workflow_name", "job_name"), sorted(LANE_CEILINGS))
+def test_each_lane_declares_its_documented_ceiling(
+    workflow_name: str, job_name: str
+) -> None:
+    """Hold each ceiling to the figure the developer guide publishes.
+
+    The contract above refuses a lane with no ceiling at all. It says nothing
+    about the number, so a ceiling widened from fifteen minutes to six hours
+    would pass it while making the lane's bound meaningless and the guide's
+    table wrong.
+    """
+    declared = _job(workflow_name, job_name).get("timeout-minutes")
+    expected = LANE_CEILINGS[workflow_name, job_name]
+
+    assert declared == expected, (
+        f"{workflow_name}:{job_name} is documented at {expected} minutes; it "
+        f"declares {declared!r}. Change the developer guide's table in the "
+        "same commit, or the next re-sizing reads a figure that is not in "
+        "force."
+    )
+
+
+def test_the_ceiling_table_covers_every_ubicloud_lane() -> None:
+    """Refuse a ceiling table that has fallen behind the lanes.
+
+    The table above is named rather than derived, which is what lets it hold
+    the guide. A lane added to the migration and not to the table would
+    simply not be checked, so the two sets are compared.
+    """
+    assert set(LANE_CEILINGS) == {FORK_FALLBACK_LANE, *PUSH_ONLY_UBICLOUD_LANES}, (
+        "every Ubicloud lane must carry a documented ceiling; the table names "
+        f"{sorted(LANE_CEILINGS)}"
+    )
+
+
+#: Paths named in prose, as ``path`` or ``path::test_name``.
+_NAMED_TEST_PATH = re.compile(r"tests/[\w./-]+\.py(?:::(?P<test>\w+))?")
+
+
+def test_the_registry_comment_names_a_contract_that_exists() -> None:
+    """Keep the registry's comment pointing at the rule that holds it.
+
+    `.github/actionlint.yaml` tells its next reader which contract enforces
+    the equality it declares. That is the only signpost from the registry to
+    the rule, and nothing else would notice it going stale: a renamed or
+    merged contract file leaves the comment naming a path that is not there,
+    and the reader concludes the equality is unenforced.
+    """
+    text = REPOSITORY.text(REPOSITORY.actionlint_config)
+    named = list(_NAMED_TEST_PATH.finditer(text))
+
+    assert named, (
+        ".github/actionlint.yaml must name the contract that holds its "
+        "registry to the labels in use"
+    )
+    for match in named:
+        path = ROOT / match.group(0).split("::")[0]
+        assert path.is_file(), (
+            f".github/actionlint.yaml names {match.group(0)}, which is not a file"
+        )
+        test_name = match.group("test")
+        if test_name is not None:
+            body = path.read_text(encoding="utf-8")
+            assert f"def {test_name}(" in body, (
+                f".github/actionlint.yaml names {match.group(0)}, but "
+                f"{path.name} defines no {test_name}"
+            )

@@ -20,7 +20,7 @@ from .test_runner_placement import (
     FORK_FALLBACK_LANE,
     PUSH_ONLY_UBICLOUD_LANES,
 )
-from .workflow_support import NotAMappingError, as_mapping, workflow
+from .workflow_support import REPOSITORY, NotAMappingError, as_mapping
 
 #: `on` is the YAML 1.1 boolean `True`, so a parsed workflow keys its trigger
 #: block under the boolean and not the string. Reading `"on"` returns None
@@ -46,7 +46,7 @@ def triggers(workflow_name: str) -> dict[str, object]:
     NotAMappingError
         If the workflow declares no trigger mapping.
     """
-    declared = as_mapping(workflow(workflow_name).get(ON_KEY))
+    declared = as_mapping(REPOSITORY.document(workflow_name).get(ON_KEY))
     if declared is None:
         raise NotAMappingError(f"{workflow_name}:on")
     return declared
@@ -60,7 +60,7 @@ def test_on_is_read_under_the_boolean_key() -> None:
     treats the workflow as declaring no events, and passes. This names the
     hazard so a later simplification back to the string fails here first.
     """
-    document = workflow("ci.yml")
+    document = REPOSITORY.document("ci.yml")
 
     assert ON_KEY in document, "a workflow's trigger block is keyed under True"
     assert "on" not in document, (
@@ -104,4 +104,52 @@ def test_bare_label_workflows_never_serve_a_pull_request(
     assert not reachable_by_a_fork & set(declared), (
         f"{workflow_name} names a bare Ubicloud label, so it must not trigger "
         f"on a pull request; it declares {sorted(declared)}"
+    )
+
+
+#: The event filter each push-triggered Ubicloud workflow is documented to
+#: carry: the key under its `push` trigger, and the exact list of patterns.
+#: Restated rather than derived, for the reason the ceiling table is.
+PUSH_FILTERS = {
+    "ci.yml": ("branches", ["main"]),
+    "coverage-main.yml": ("branches", ["main"]),
+    "release.yml": ("tags", ["v*.*.*"]),
+}
+
+
+@pytest.mark.parametrize("workflow_name", sorted(PUSH_FILTERS))
+def test_each_push_trigger_carries_its_documented_filter(workflow_name: str) -> None:
+    """Hold the filters the placement argument rests on.
+
+    The contracts above ask only whether a pull request can reach a lane.
+    That leaves the filters themselves unasserted, and they carry the rest of
+    the argument: a `coverage-main.yml` that lost `branches: [main]` would
+    upload coverage from every branch, and a `release.yml` whose tag filter
+    widened to `*` would publish a wheel from any tag at all. Both stay green
+    under every other rule here.
+    """
+    declared = triggers(workflow_name).get("push")
+    push = as_mapping(declared)
+    expected_key, expected_patterns = PUSH_FILTERS[workflow_name]
+
+    assert push is not None, (
+        f"{workflow_name} must filter its push trigger; it declares {declared!r}"
+    )
+    assert push.get(expected_key) == expected_patterns, (
+        f"{workflow_name} is documented to push-trigger on {expected_key} "
+        f"{expected_patterns}; it declares {push!r}"
+    )
+
+
+def test_the_filter_table_covers_every_push_triggered_ubicloud_workflow() -> None:
+    """Refuse a filter table that has fallen behind the workflows.
+
+    The table is named, so a workflow added to the migration and not to it
+    would be filtered by nothing and checked by nothing.
+    """
+    ubicloud = {FORK_FALLBACK_LANE[0]} | {name for name, _ in PUSH_ONLY_UBICLOUD_LANES}
+
+    assert set(PUSH_FILTERS) == ubicloud, (
+        "every Ubicloud workflow's push filter must be asserted; the table "
+        f"names {sorted(PUSH_FILTERS)}, the lanes are in {sorted(ubicloud)}"
     )
