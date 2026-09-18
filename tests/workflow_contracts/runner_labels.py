@@ -24,6 +24,9 @@ from .workflow_support import (
     as_mapping,
 )
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 # Collapses the folding whitespace a block scalar leaves in a label. Spelled
 # out rather than written `\s`, which in Python also matches U+001C to
 # U+001F; those are not whitespace to a runner label and must not be absorbed
@@ -182,7 +185,7 @@ def runner_expression(raw: str) -> RunnerLabel:
 
 
 def _runs_on_refs(
-    workflow_name: str, job_name: str, job_document: dict[str, object]
+    workflow_name: str, job_name: str, job_document: cabc.Mapping[str, object]
 ) -> typ.Iterator[LabelRef]:
     """Yield a job's own ``runs-on`` labels.
 
@@ -259,17 +262,17 @@ def is_matrix_reference(raw: str) -> bool:
     return bool(matrix_keys(collapse_label_whitespace(raw)))
 
 
-def _matrix(job_document: dict[str, object]) -> dict[str, object]:
+def _matrix(job_document: cabc.Mapping[str, object]) -> cabc.Mapping[str, object]:
     """Return a job's matrix mapping, empty when it declares none.
 
     Parameters
     ----------
-    job_document : dict[str, object]
+    job_document : cabc.Mapping[str, object]
         A job mapping.
 
     Returns
     -------
-    dict[str, object]
+    cabc.Mapping[str, object]
         The matrix, or an empty mapping.
     """
     strategy = as_mapping(job_document.get("strategy"))
@@ -301,13 +304,13 @@ def _axis_values(axis: object, key: str) -> typ.Iterator[tuple[str, str]]:
 
 
 def _include_values(
-    matrix: dict[str, object], key: str
+    matrix: cabc.Mapping[str, object], key: str
 ) -> typ.Iterator[tuple[str, str]]:
     """Yield the include rows' values for one matrix key, with their sites.
 
     Parameters
     ----------
-    matrix : dict[str, object]
+    matrix : cabc.Mapping[str, object]
         A job's matrix mapping.
     key : str
         The matrix key to read from each row.
@@ -328,7 +331,7 @@ def _include_values(
 
 
 def _matrix_refs(
-    workflow_name: str, job_name: str, job_document: dict[str, object]
+    workflow_name: str, job_name: str, job_document: cabc.Mapping[str, object]
 ) -> typ.Iterator[LabelRef]:
     """Yield the labels a job's matrix supplies to its ``runs-on``.
 
@@ -356,7 +359,7 @@ def _matrix_refs(
 
 
 def job_label_refs(
-    workflow_name: str, job_name: str, job_document: dict[str, object]
+    workflow_name: str, job_name: str, job_document: cabc.Mapping[str, object]
 ) -> list[LabelRef]:
     """Return every label declaration one job carries.
 
@@ -366,7 +369,7 @@ def job_label_refs(
         File name of the declaring workflow.
     job_name : str
         The job key.
-    job_document : dict[str, object]
+    job_document : cabc.Mapping[str, object]
         The job mapping.
 
     Returns
@@ -442,7 +445,7 @@ def resolve(reference: LabelRef) -> frozenset[str]:
 
 
 def job_labels(
-    workflow_name: str, job_name: str, job_document: dict[str, object]
+    workflow_name: str, job_name: str, job_document: cabc.Mapping[str, object]
 ) -> frozenset[str]:
     """Return every label one job can run on.
 
@@ -452,7 +455,7 @@ def job_labels(
         File name of the declaring workflow.
     job_name : str
         The job key.
-    job_document : dict[str, object]
+    job_document : cabc.Mapping[str, object]
         The job mapping.
 
     Returns
