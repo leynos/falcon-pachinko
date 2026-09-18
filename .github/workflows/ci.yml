@@ -26,13 +26,21 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v8.3.2
 
+      - name: Install mdtablefix
+        # `make check-fmt` runs `mdtablefix --check --git --include-untracked`;
+        # 0.6.0 is the first release carrying `--check` and `--git`. The action
+        # installs a prebuilt release through a hardened cargo-binstall rather
+        # than building from source.
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@a5765019912a8ab6882b12db049c7cde635f3a85
+        with:
+          version: "0.6.0"
+
       - name: Check spelling
         run: make spelling
 
       - name: Install CLI tools
         run: |
           for tool in mbake ty ruff; do uv tool install ${tool}; done
-          npm install -g markdownlint-cli2
 
       - name: Validate Makefile
         run: mbake validate Makefile
@@ -48,6 +56,18 @@ jobs:
 
       - name: Run typechecker
         run: make typecheck
+
+      # Markdown is linted through the upstream action rather than a `run:`
+      # step, because the action's release carries the linter's whole
+      # dependency graph: nothing is resolved from the npm registry while the
+      # gate is running, so a registry outage or a moved tag cannot change
+      # what this lane enforces. The rules and exclusions live in
+      # `.markdownlint-cli2.jsonc`, copied verbatim from the estate canon, so
+      # the action needs only the glob.
+      - name: Lint Markdown
+        uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff  # v24.2.0
+        with:
+          globs: '**/*.md'
 
       # Coverage runs on pull requests only. Pushes to main upload their
       # own coverage (and advance the ratchet baseline) via
