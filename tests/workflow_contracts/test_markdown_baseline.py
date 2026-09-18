@@ -50,6 +50,9 @@ REQUIRED_TARGETS = ("fmt", "check-fmt")
 SELECT_FLAGS = ("--git", "--include-untracked")
 #: The upstream action, and the only way CI may lint Markdown.
 LINT_ACTION = "DavidAnson/markdownlint-cli2-action"
+#: The action that provisions the table formatter. `check-fmt` now requires
+#: `mdtablefix`, so the lane running it must install it.
+MDTABLEFIX_ACTION = "install-mdtablefix"
 FULL_SHA = re.compile(r"[0-9a-f]{40}")
 
 #: The canonical rule configuration, from the estate canon. A repository may
@@ -459,6 +462,42 @@ def test_ci_lints_markdown_through_the_pinned_action() -> None:
             f"{reference} must lint every Markdown file; it declares "
             f"globs={inputs.get('globs')!r}"
         )
+
+
+def test_ci_installs_the_table_formatter_it_depends_on() -> None:
+    """Provision `mdtablefix` wherever `check-fmt` runs.
+
+    `check-fmt` now names `mdtablefix` as a prerequisite, so on a runner
+    without it the target fails before it reads a single file. The failure is
+    loud, which is right, but it is also entirely avoidable and it costs a full
+    CI cycle to discover. A lane that runs the gate and does not install its
+    tool is a defect in the workflow, not in the gate.
+    """
+    documents = _workflow_documents()
+    running = {
+        name
+        for name, document in documents.items()
+        for step in _steps(document)
+        if "check-fmt" in str(step.get("run", ""))
+    }
+
+    assert running, "some workflow must run make check-fmt"
+    for name in sorted(running):
+        installing = [
+            step
+            for step in _steps(documents[name])
+            if MDTABLEFIX_ACTION in str(step.get("uses", ""))
+        ]
+        assert installing, (
+            f"{name} runs make check-fmt, which requires mdtablefix, and "
+            "installs it nowhere"
+        )
+        for step in installing:
+            reference = str(step["uses"])
+            digest = reference.rsplit("@", 1)[-1]
+            assert FULL_SHA.fullmatch(digest), (
+                f"{reference} must be pinned to a full commit SHA"
+            )
 
 
 def test_no_ci_step_runs_the_linter_itself() -> None:
