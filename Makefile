@@ -11,11 +11,12 @@ TYPOS_CONFIG_BUILDER = $(UV_ENV) $(UV) tool run --python 3.14 --from \
 	typos-config-builder
 
 .PHONY: help all clean build build-release lint fmt check-fmt \
-	markdownlint nixie spelling test typecheck $(TOOLS) $(VENV_TOOLS)
+	markdownlint nixie spelling test test-workflow-contracts typecheck \
+	$(TOOLS) $(VENV_TOOLS)
 
 .DEFAULT_GOAL := all
 
-all: build check-fmt test typecheck spelling
+all: build check-fmt test test-workflow-contracts typecheck spelling
 
 .venv: pyproject.toml
 	uv venv --clear
@@ -82,6 +83,12 @@ nixie: $(NIXIE) ## Validate Mermaid diagrams
 
 test: build uv pytest ## Run tests
 	uv run pytest -v
+
+# The workflow contracts read the workflow documents rather than any Python
+# source, so they are fast and worth running on their own while editing a
+# workflow. `test` collects them too, which is what makes them a gate.
+test-workflow-contracts: build uv pytest ## Check the CI workflows' shape
+	uv run pytest tests/workflow_contracts -v
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | \

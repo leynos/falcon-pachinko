@@ -7,7 +7,21 @@ on:
 
 jobs:
   lint-test:
-    runs-on: ubuntu-latest
+    # This lane serves pull requests as well as pushes to `main`. A pull
+    # request from a fork cannot obtain an Ubicloud runner, so it falls back
+    # to GitHub-hosted compute. A same-repository pull request sets the fork
+    # field to `false` and a push leaves it null; both are falsy, so both
+    # reach Ubicloud. Keep the continuation at this indent: a deeper one
+    # keeps its line break and puts a newline inside the expression, which
+    # GitHub evaluates anyway.
+    runs-on: >-
+      ${{ github.event.pull_request.head.repo.fork
+      && 'ubuntu-latest' || 'ubicloud-standard-2' }}
+    # Ubicloud runners register as just-in-time self-hosted runners, so
+    # GitHub's six-hour limit does not apply and the lane needs its own
+    # ceiling. The longest observed run of this job is 36 s; see the runner
+    # placement section of the developer guide for the measurements.
+    timeout-minutes: 15
     env:
       CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
       CODESCENE_CLI_SHA256: ${{ vars.CODESCENE_CLI_SHA256 }}
