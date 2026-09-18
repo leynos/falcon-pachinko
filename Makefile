@@ -1,7 +1,17 @@
-MDLINT ?= $(shell which markdownlint)
+# The linter is `markdownlint-cli2`, not `markdownlint`: they are different
+# programs. Naming the wrong one left every local run silently linting
+# nothing, because `markdownlint` resolved to nothing and the target then ran
+# `xargs` with no command at all. Named rather than resolved here, so a
+# missing binary is reported by `ensure_tool` under the name a reader can
+# install.
+MDLINT ?= markdownlint-cli2
 NIXIE ?= $(shell which nixie)
-MDFORMAT_ALL ?= $(shell which mdformat-all)
-TOOLS = $(MDFORMAT_ALL) ruff ty $(MDLINT) $(NIXIE) uv
+# `fmt` and `check-fmt` call mdtablefix directly. `--git` selects the tracked
+# Markdown set and `--include-untracked` adds new files, so a document is
+# neither missed because it is new nor rewritten twice.
+MDTABLEFIX ?= mdtablefix
+MDTABLEFIX_SELECT = --git --include-untracked
+TOOLS = ruff ty $(MDLINT) $(MDTABLEFIX) $(NIXIE) uv
 VENV_TOOLS = pytest
 UV ?= uv
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
@@ -52,14 +62,15 @@ $(TOOLS): ## Verify required CLI tools
 $(VENV_TOOLS): ## Verify required CLI tools in venv
 	$(call ensure_tool_venv,$@)
 
-fmt: ruff $(MDFORMAT_ALL) ## Format sources
+fmt: ruff $(MDTABLEFIX) $(MDLINT) ## Format sources
 	ruff format
 	ruff check --select I --fix
-	$(MDFORMAT_ALL)
+	$(MDTABLEFIX) --in-place $(MDTABLEFIX_SELECT)
+	@unset FORCE_COLOR; $(MDLINT) --fix "**/*.md"
 
-check-fmt: ruff ## Verify formatting
+check-fmt: ruff $(MDTABLEFIX) ## Verify formatting
 	ruff format --check
-	# mdformat-all doesn't currently do checking
+	$(MDTABLEFIX) --check $(MDTABLEFIX_SELECT)
 
 lint: ruff ## Run linters
 	ruff check
@@ -67,10 +78,13 @@ lint: ruff ## Run linters
 typecheck: build ty ## Run typechecking
 	ty check falcon_pachinko tests
 
+# Local convenience only. CI lints Markdown through
+# DavidAnson/markdownlint-cli2-action, whose release carries the linter's
+# whole dependency graph, so nothing is resolved from the registry at run
+# time. The globs and exclusions live in `.markdownlint-cli2.jsonc`, which is
+# why this no longer builds a file list of its own.
 markdownlint: spelling $(MDLINT) ## Lint Markdown files and enforce spelling
-	find . -type f -name '*.md' \
-	  -not -path './.venv/*' -not -path './.uv-cache/*' \
-	  -not -path './.uv-tools/*' -print0 | xargs -0 $(MDLINT)
+	$(MDLINT) "**/*.md"
 
 spelling: ## Enforce en-GB-oxendict spelling
 	$(TYPOS_CONFIG_BUILDER) gate --repository .
