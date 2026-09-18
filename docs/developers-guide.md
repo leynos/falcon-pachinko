@@ -67,3 +67,45 @@ reach analysis.
 Prefer Makefile targets over invoking tools directly. When changing the
 Makefile, run `mbake validate Makefile` and the relevant commit gates before
 committing.
+
+## Coverage and CodeScene
+
+`coverage-main.yml` owns both persistent coverage outputs: the CodeScene
+upload and the ratchet baseline. `ci.yml` generates coverage on a pull request
+only, for its own ratchet check, and no workflow a pull request can reach names
+a CodeScene action, runs a `cs-coverage` command or carries `CS_ACCESS_TOKEN`.
+That separation is the estate rule CV-005.
+
+It is not tidiness. Between 2026-09-16 and 2026-09-18 an unpinned `cs-coverage`
+could not parse its own cobertura output. Because the check ran as a step of
+the pull-request lane, every pull request in this repository was blocked on a
+failure that had nothing to say about the change under review and that no pull
+request could fix. A lane that cannot contact CodeScene cannot be stopped by
+CodeScene.
+
+Both lanes must measure the same thing, or the baseline the trunk writes is not
+the baseline a pull request should be compared against.
+`tests/workflow_contracts/test_codescene_coverage.py` holds their
+`generate-coverage` inputs equal field by field, and holds the list of compared
+fields equal to the set both lanes declare, so an input added to both and not
+to the list cannot drift unnoticed. The pull-request lane declines the report
+artefact; the publisher keeps the action's default and uploads what it wrote.
+
+Both shared actions are pinned to one revision, and the upload passes no
+`installer-checksum`. From shared-actions `f68e8e2e` the action pins
+`cs-coverage` through its own manifest and rejects a non-empty value for that
+input; `archive-checksum` replaces it. That pin is what fixed the parse break,
+and a repin without the input change is a red lane rather than a warning.
+
+The contracts scan whole parsed workflow documents rather than a list of step
+keys, because a credential can be declared at workflow scope, at job scope, on
+a step, or as an action input. Each of the three markers is proved against a
+document carrying only its own interaction: the scan clears a workflow by
+finding nothing, so a marker that had stopped matching would clear the very
+thing it exists to catch while the others kept the suite green.
+
+One consequence to retire deliberately. `get-codescene-sha.yml` refreshes the
+`CODESCENE_CLI_SHA256` repository variable, and `installer-checksum` was its
+only consumer. Nothing reads it now. The workflow is left in place rather than
+deleted here, and a contract holds it to naming `cs-coverage` in a download URL
+and nothing more: it may not acquire the credential or call the action.

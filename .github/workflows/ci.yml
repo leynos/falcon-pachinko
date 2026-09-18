@@ -9,14 +9,12 @@ jobs:
   lint-test:
     runs-on: ubuntu-latest
     env:
-      CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
-      CODESCENE_CLI_SHA256: ${{ vars.CODESCENE_CLI_SHA256 }}
       UV_PYTHON: '3.13'
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
-          # Full history so `cs-coverage check` can reach the pull
+          # Full history so the coverage action can reach the pull
           # request's merge base.
           fetch-depth: 0
 
@@ -57,7 +55,7 @@ jobs:
       # the work and the CodeScene upload for the same commit.
       - name: Generate coverage
         if: github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/generate-coverage@e0d9b652b137eb15314fff188f09e1ba18d3cc5b
+        uses: leynos/shared-actions/.github/actions/generate-coverage@a5765019912a8ab6882b12db049c7cde635f3a85
         with:
           output-path: coverage.xml
           format: cobertura
@@ -67,16 +65,11 @@ jobs:
           # confirmed xdist-clean. Note: serial mode is in-process, so the
           # fork isolation the old `--forked` run provided is dropped.
           pytest-workers: ''
+          # Compare changed-line coverage against the baseline that
+          # coverage-main.yml writes on the trunk.
           with-ratchet: 'true'
-
-      - name: Check coverage against CodeScene gates
-        env:
-          CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
-        if: env.CS_ACCESS_TOKEN != '' && github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@c3141c3d4cb2a2828d2abbcf3d94b15197740c58
-        with:
-          format: cobertura
-          mode: check
-          project-url: https://api.codescene.io/v2/projects/68790
-          access-token: ${{ env.CS_ACCESS_TOKEN }}
-          installer-checksum: ${{ vars.CODESCENE_CLI_SHA256 }}
+          # This lane measures and compares; it does not publish. The action
+          # archives the report it generated under a step of its own, which
+          # no scanner over this file's steps can see, so declining that
+          # archive is the only way the boundary is observable here.
+          publish-artefact: 'false'
