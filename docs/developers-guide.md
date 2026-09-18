@@ -135,3 +135,37 @@ One consequence to retire deliberately. `get-codescene-sha.yml` refreshes the
 only consumer. Nothing reads it now. The workflow is left in place rather than
 deleted here, and a contract holds it to naming `cs-coverage` in a download URL
 and nothing more: it may not acquire the credential or call the action.
+
+## Markdown formatting and linting
+
+`make fmt` rewrites Markdown and `make check-fmt` verifies it, both by calling
+`mdtablefix` directly over `--git --include-untracked`. That selection is the
+tracked Markdown set plus anything new, so a document is neither missed because
+it has not been committed yet nor rewritten twice. `make fmt` also runs
+`markdownlint-cli2 --fix`, because the two tools fix different things and a
+contributor who ran only one would learn the rest from CI.
+
+The rules and exclusions live in `.markdownlint-cli2.jsonc`, copied verbatim
+from the estate canon. A repository may add rules and globs alongside them; it
+may not weaken one. An alternate file name does not count, because
+`markdownlint-cli2` reads several and a repository carrying two would enforce
+whichever it found first.
+
+CI lints Markdown through `DavidAnson/markdownlint-cli2-action` pinned to a
+full commit SHA, and nothing else may. The action's release carries the
+linter's whole dependency graph, so nothing is resolved from the npm registry
+while the gate is running: a moved tag or a registry outage cannot change what
+the gate enforces without changing this repository. A `run:` step that invokes
+the linter, or drives `make markdownlint`, is the defect this replaces.
+
+Before this, CI installed `markdownlint-cli2` and then linted no Markdown at
+any point, and the Makefile named `markdownlint`, which is a different program.
+It resolved to nothing, so the local target ran `xargs` with no command and
+exited zero having linted the empty set. A gate that reports success while
+checking nothing is worse than no gate, because it is believed.
+
+`tests/workflow_contracts/test_markdown_baseline.py` holds each of those
+facts, and each is proved by removing the thing it asserts. It reads the
+Makefile rather than running it, expanding variable references first: a
+contract matching the literal text `$(MDLINT)` would pass with that variable
+pointing anywhere at all.
