@@ -50,11 +50,21 @@ PULL_REQUEST_EVENTS = frozenset({"pull_request", "pull_request_target"})
 #: credential is named separately from the action because a lane can be given
 #: it without calling the action, and a credential a pull request's head can
 #: reach is what CV-005 is really about.
+#: Markers matched against any scalar in the document. A credential can be
+#: written anywhere, and a `cs-coverage` invocation can be buried in a shell
+#: script, so neither is scoped to a key.
 MARKERS: typ.Final[dict[str, str]] = {
-    "a CodeScene action": "upload-codescene-coverage",
     "a cs-coverage command": "cs-coverage",
     "the CodeScene credential": "CS_ACCESS_TOKEN",
 }
+#: The action marker is scoped to `uses` values, and matches any CodeScene
+#: action rather than the one this repository happens to call today. Applied
+#: to every scalar it would report a step named "check CodeScene coverage" as
+#: an invocation, and scoped to one action reference it would miss a second
+#: CodeScene action entirely; both readings are wrong in the direction that
+#: matters.
+ACTION_MARKER: typ.Final[str] = "codescene"
+ACTION_DESCRIPTION: typ.Final[str] = "a CodeScene action"
 
 #: Inputs that select what is measured. Publication differs between the two
 #: lanes by design and is asserted separately.
@@ -138,6 +148,8 @@ def references_in(document: object, subject: str) -> list[str]:
             for description, marker in MARKERS.items()
             if marker.lower() in lowered
         )
+        if path.endswith(".uses") and ACTION_MARKER in lowered:
+            found.append(f"{ACTION_DESCRIPTION} at {path}")
     return sorted(set(found))
 
 
@@ -299,7 +311,7 @@ def pull_request_workflows() -> list[str]:
 #: scope. A marker is proved against its own document, not against the
 #: repository's files, which pass a broken scanner just as readily.
 MARKER_FIXTURES = {
-    "a CodeScene action": {
+    ACTION_DESCRIPTION: {
         "jobs": {
             "gate": {
                 "steps": [
@@ -329,7 +341,48 @@ MARKER_FIXTURES = {
 }
 
 
-@pytest.mark.parametrize("marker", sorted(MARKERS))
+#: Documents that name CodeScene without invoking it. Reporting either would
+#: make the rule unusable: the first forbids an unrelated action whose name
+#: happens to resemble it, the second forbids describing the rule in a step
+#: name or a comment-like string.
+NOT_AN_INVOCATION = {
+    "a similarly named action": {
+        "jobs": {
+            "gate": {
+                "steps": [
+                    {
+                        "uses": (
+                            "leynos/shared-actions/.github/actions/"
+                            "upload-coverage@" + "0" * 40
+                        )
+                    }
+                ]
+            }
+        }
+    },
+    "the rule named in prose": {
+        "jobs": {"gate": {"steps": [{"name": "No CodeScene here", "run": "make test"}]}}
+    },
+}
+#: A second CodeScene action, which the marker must also find: scoping it to
+#: the one reference this repository calls today would miss any other.
+ANOTHER_CODESCENE_ACTION = {
+    "jobs": {
+        "gate": {
+            "steps": [
+                {
+                    "uses": (
+                        "leynos/shared-actions/.github/actions/"
+                        "codescene-delta@" + "0" * 40
+                    )
+                }
+            ]
+        }
+    }
+}
+
+
+@pytest.mark.parametrize("marker", [*sorted(MARKERS), ACTION_DESCRIPTION])
 def test_each_marker_finds_its_own_interaction(marker: str) -> None:
     """Prove every marker separately.
 
@@ -341,6 +394,84 @@ def test_each_marker_finds_its_own_interaction(marker: str) -> None:
 
     assert any(entry.startswith(marker) for entry in found), (
         f"{marker} must be recognized; the scan of its own fixture found {found}"
+    )
+
+
+@pytest.mark.parametrize("case", sorted(NOT_AN_INVOCATION))
+def test_naming_codescene_is_not_invoking_it(case: str) -> None:
+    """Refuse a marker that forbids describing the rule.
+
+    A whole-document match on the action name reports a step called "No
+    CodeScene here" as an invocation, and an action merely named
+    `upload-coverage` escapes a marker scoped to one exact reference. Both
+    readings make the rule unusable, in opposite directions.
+    """
+    found = references_in(NOT_AN_INVOCATION[case], "fixture.yml")
+    actions = [entry for entry in found if entry.startswith(ACTION_DESCRIPTION)]
+
+    assert not actions, f"{case} is not an invocation; the scan reported {actions}"
+
+
+def test_a_second_codescene_action_is_found() -> None:
+    """Find any CodeScene action, not the one called today.
+
+    Scoping the marker to `upload-codescene-coverage` would clear a workflow
+    that reached CodeScene through a different action in the same suite, which
+    is the interaction the rule exists to forbid.
+    """
+    found = references_in(ANOTHER_CODESCENE_ACTION, "fixture.yml")
+
+    assert any(entry.startswith(ACTION_DESCRIPTION) for entry in found), (
+        f"a second CodeScene action must be found; the scan reported {found}"
+    )
+
+
+def test_the_upload_is_restricted_to_the_main_ref() -> None:
+    """Publish only from `main`, whatever the event selected.
+
+    `workflow_dispatch` can select any branch or tag. The push trigger's
+    `branches: [main]` says nothing about a dispatch, so without a ref guard on
+    the step itself a dispatch from a feature branch publishes that branch's
+    coverage through the main-owned upload, and CodeScene records it as the
+    trunk's. The shared action already holds the ratchet baseline to a push to
+    `refs/heads/main`; this brings the report under the same rule.
+    """
+    uploads = [
+        step
+        for step in steps(PUBLISHER, PUBLISHER_JOB)
+        if "upload-codescene-coverage@" in str(step.get("uses", ""))
+    ]
+
+    assert uploads, f"{PUBLISHER} must upload the trunk report"
+    for step in uploads:
+        guard = str(step.get("if", ""))
+        assert "github.ref == 'refs/heads/main'" in guard, (
+            f"{PUBLISHER}'s upload must publish only from main; its guard is {guard!r}"
+        )
+
+
+def test_the_publisher_serializes_its_trunk_generations() -> None:
+    """Let one trunk generation finish before the next starts.
+
+    The shared action saves a fresh ratchet-baseline cache per successful push
+    and later runs restore the newest match. Two overlapping pushes to `main`
+    would both publish, and the older commit finishing last would leave its
+    baseline as the one every pull request is then measured against. Nothing
+    is cancelled: a trunk generation that has started is the one that should
+    finish.
+    """
+    declared = workflow(PUBLISHER).get("concurrency")
+
+    assert isinstance(declared, dict), (
+        f"{PUBLISHER} must declare a concurrency group; it declares {declared!r}"
+    )
+    assert declared.get("cancel-in-progress") is False, (
+        f"{PUBLISHER} must not cancel a running trunk generation; it declares "
+        f"cancel-in-progress={declared.get('cancel-in-progress')!r}"
+    )
+    assert "github.ref" in str(declared.get("group")), (
+        f"{PUBLISHER}'s group must serialize per ref so two pushes to main "
+        f"queue; it declares {declared.get('group')!r}"
     )
 
 

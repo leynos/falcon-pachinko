@@ -97,9 +97,30 @@ Both shared actions are pinned to one revision, and the upload passes no
 input; `archive-checksum` replaces it. That pin is what fixed the parse break,
 and a repin without the input change is a red lane rather than a warning.
 
+`tests/workflow_contracts/` needs two development dependencies the library
+itself does not. **PyYAML** parses the GitHub Actions documents and
+**Hypothesis** generates the documents the scanner is held to. Both are in the
+`dev` dependency group, so `make build`, which runs `uv sync --group dev`,
+installs them; `uv sync --group dev` on its own does as well. `make test`
+collects the contracts, which is what makes them a gate rather than a
+convenience, and `uv run pytest tests/workflow_contracts` runs them alone.
+Running them without those dependencies fails at import.
+
 The contracts scan whole parsed workflow documents rather than a list of step
 keys, because a credential can be declared at workflow scope, at job scope, on
-a step, or as an action input. Each of the three markers is proved against a
+a step, or as an action input. The action marker is the exception: it is scoped
+to `uses` values, because applied to every scalar it would report a step named
+"check CodeScene coverage" as an invocation, and scoped to one action reference
+it would miss a second CodeScene action entirely.
+
+The upload carries a ref guard as well as its trigger. `workflow_dispatch` can
+select any branch or tag, and the push trigger's `branches: [main]` says
+nothing about a dispatch, so without the guard a dispatch from a feature branch
+would publish that branch's coverage through the main-owned upload. The
+workflow also serializes per ref and cancels nothing: the shared action saves a
+fresh baseline cache per successful push and later runs restore the newest
+match, so two overlapping pushes would let the older commit's baseline become
+the one every pull request is measured against. Each of the three markers is proved against a
 document carrying only its own interaction: the scan clears a workflow by
 finding nothing, so a marker that had stopped matching would clear the very
 thing it exists to catch while the others kept the suite green.

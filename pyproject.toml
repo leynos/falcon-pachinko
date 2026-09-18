@@ -29,6 +29,7 @@ dev = [
     "pyright[nodejs]",
     "websockets>=11,<13",
     "pyyaml>=6.0.3",
+    "hypothesis>=6.168.0",
 ]
 
 [project.optional-dependencies]
