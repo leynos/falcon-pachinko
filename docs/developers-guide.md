@@ -116,14 +116,19 @@ it would miss a second CodeScene action entirely.
 The upload carries a ref guard as well as its trigger. `workflow_dispatch` can
 select any branch or tag, and the push trigger's `branches: [main]` says
 nothing about a dispatch, so without the guard a dispatch from a feature branch
-would publish that branch's coverage through the main-owned upload. The
-workflow also serializes per ref and cancels nothing: the shared action saves a
-fresh baseline cache per successful push and later runs restore the newest
-match, so two overlapping pushes would let the older commit's baseline become
-the one every pull request is measured against. Each of the three markers is proved against a
-document carrying only its own interaction: the scan clears a workflow by
-finding nothing, so a marker that had stopped matching would clear the very
-thing it exists to catch while the others kept the suite green.
+would publish that branch's coverage through the main-owned upload.
+
+The workflow also serializes per ref and cancels nothing. The shared action
+saves a fresh baseline cache per successful push and later runs restore the
+newest match, so two overlapping pushes would let the older commit's baseline
+become the one every pull request is measured against.
+
+Each of the three markers is proved against a document carrying only its own
+interaction: the scan clears a workflow by finding nothing, so a marker that
+had stopped matching would clear the very thing it exists to catch while the
+others kept the suite green. The reader is proved the same way, over temporary
+directories, because a reader that returned an empty list for a missing
+directory would clear the whole estate by finding no workflows in it.
 
 One consequence to retire deliberately. `get-codescene-sha.yml` refreshes the
 `CODESCENE_CLI_SHA256` repository variable, and `installer-checksum` was its

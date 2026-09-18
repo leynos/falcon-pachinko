@@ -22,6 +22,7 @@ Run with:
 
 from __future__ import annotations
 
+import dataclasses as dc
 import pathlib
 import re
 import typing as typ
@@ -153,36 +154,234 @@ def references_in(document: object, subject: str) -> list[str]:
     return sorted(set(found))
 
 
-def workflow(name: str) -> dict[object, object]:
-    """Parse one workflow document.
+class WorkflowShapeError(AssertionError):
+    """A workflow is not shaped the way these contracts require.
+
+    Derives from :class:`AssertionError` so a shape violation reads as a
+    failed expectation rather than an unexpected crash.
+    """
+
+
+class UnreadableWorkflowError(WorkflowShapeError):
+    """A file or directory these contracts must read could not be read.
+
+    Covers an absent file, a directory that cannot be listed and a permission
+    failure alike: to a contract they are one event, an input it was promised
+    and did not get.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The path that could not be read.
+    """
+
+    def __init__(self, path: pathlib.Path) -> None:
+        super().__init__(f"{path} must be readable")
+
+
+class UndecodableWorkflowError(WorkflowShapeError):
+    """A file these contracts must read was not valid UTF-8.
+
+    Separate from :class:`UnreadableWorkflowError` because the remedy differs:
+    the bytes arrived, and it is their encoding that is wrong.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The path that could not be decoded.
+    """
+
+    def __init__(self, path: pathlib.Path) -> None:
+        super().__init__(f"{path} must be UTF-8")
+
+
+class UnparsableWorkflowError(WorkflowShapeError):
+    """A workflow document is not parsable YAML.
+
+    Parameters
+    ----------
+    name : str
+        The file that failed to parse.
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"{name} must parse as YAML")
+
+
+class NotAWorkflowMappingError(WorkflowShapeError):
+    """A document parsed, but not to a mapping.
+
+    Parameters
+    ----------
+    name : str
+        The file that parsed to something else.
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"{name} must parse to a mapping")
+
+
+@dc.dataclass(frozen=True, slots=True)
+class WorkflowSource:
+    """A directory of workflow documents.
+
+    Named rather than assumed, so the rules can be driven over a directory
+    holding a document written for one case. Driven over
+    ``.github/workflows`` alone they would show only that the current files
+    pass, which they do whether or not the scan recognizes anything.
+
+    Attributes
+    ----------
+    directory : pathlib.Path
+        The directory holding the workflow documents.
+    """
+
+    directory: pathlib.Path
+
+    def names(self) -> list[str]:
+        """Return every workflow file name, sorted.
+
+        Returns
+        -------
+        list[str]
+            File names such as ``ci.yml``.
+
+        Raises
+        ------
+        UnreadableWorkflowError
+            If the directory cannot be listed.
+        """
+        try:
+            entries = list(self.directory.iterdir())
+        except OSError as error:
+            raise UnreadableWorkflowError(self.directory) from error
+        return sorted(path.name for path in entries if path.suffix in {".yml", ".yaml"})
+
+    @staticmethod
+    def _text(path: pathlib.Path) -> str:
+        """Read one file as UTF-8.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            The file to read.
+
+        Returns
+        -------
+        str
+            The decoded contents.
+
+        Raises
+        ------
+        UndecodableWorkflowError
+            If the bytes are not valid UTF-8.
+        UnreadableWorkflowError
+            If the file cannot be opened or read.
+        """
+        try:
+            return path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as error:
+            raise UndecodableWorkflowError(path) from error
+        except OSError as error:
+            raise UnreadableWorkflowError(path) from error
+
+    @staticmethod
+    def _parse(name: str, text: str) -> object:
+        """Parse one YAML document.
+
+        Parameters
+        ----------
+        name : str
+            What to name in a failure.
+        text : str
+            The document's text.
+
+        Returns
+        -------
+        object
+            Whatever the document parsed to.
+
+        Raises
+        ------
+        UnparsableWorkflowError
+            If the text is not parsable YAML.
+        """
+        try:
+            return yaml.safe_load(text)
+        except yaml.YAMLError as error:
+            raise UnparsableWorkflowError(name) from error
+
+    def document(self, name: str) -> dict[object, object]:
+        """Parse one workflow document.
+
+        Parameters
+        ----------
+        name : str
+            The workflow file name.
+
+        Returns
+        -------
+        dict[object, object]
+            The parsed document, keyed by object: YAML 1.1 reads the bare word
+            ``on`` as the boolean ``True``, so a trigger block is not under a
+            string key at all.
+
+        Raises
+        ------
+        UnreadableWorkflowError
+            If the file cannot be opened or read.
+        UndecodableWorkflowError
+            If the bytes are not valid UTF-8.
+        UnparsableWorkflowError
+            If the file is not parsable YAML.
+        NotAWorkflowMappingError
+            If the document does not parse to a mapping.
+        """
+        document = self._parse(name, self._text(self.directory / name))
+        if not isinstance(document, dict):
+            raise NotAWorkflowMappingError(name)
+        # Copied rather than returned as parsed, so the declared type is true
+        # rather than approximately true: the loader's result is untyped.
+        return dict(document.items())
+
+
+#: This repository's own workflows. The contracts read through this; the rules
+#: that prove the readers build their own.
+REPOSITORY: typ.Final[WorkflowSource] = WorkflowSource(WORKFLOW_DIR)
+
+
+def workflow(name: str, source: WorkflowSource = REPOSITORY) -> dict[object, object]:
+    """Parse one workflow document from *source*.
 
     Parameters
     ----------
     name : str
         The workflow file name.
+    source : WorkflowSource
+        Where to read. Defaults to this repository.
 
     Returns
     -------
     dict[object, object]
-        The parsed document, keyed by object: YAML 1.1 reads the bare word
-        ``on`` as the boolean ``True``.
+        The parsed document, keyed by object.
     """
-    document = yaml.safe_load((WORKFLOW_DIR / name).read_text(encoding="utf-8"))
-    assert isinstance(document, dict), f"{name} must parse to a mapping"
-    return document
+    return source.document(name)
 
 
-def workflow_names() -> list[str]:
-    """Return every workflow file name, sorted.
+def workflow_names(source: WorkflowSource = REPOSITORY) -> list[str]:
+    """Return every workflow file name in *source*, sorted.
+
+    Parameters
+    ----------
+    source : WorkflowSource
+        Where to read. Defaults to this repository.
 
     Returns
     -------
     list[str]
         File names such as ``ci.yml``.
     """
-    return sorted(
-        path.name for path in WORKFLOW_DIR.iterdir() if path.suffix in {".yml", ".yaml"}
-    )
+    return source.names()
 
 
 def triggers(name: str) -> dict[str, object]:
