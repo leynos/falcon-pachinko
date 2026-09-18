@@ -103,8 +103,15 @@ runs-on: >-
   && 'ubuntu-latest' || 'ubicloud-standard-2' }}
 ```
 
-Every other event, `push` to `main` included, leaves the fork field null and
-reaches Ubicloud. Two rules follow, and a green run demonstrates neither:
+The guard reads one field, and it takes three values. A pull request from a
+fork sets it to `true` and takes the GitHub-hosted arm. A pull request from a
+branch of this repository sets it to `false`. Any other event, `push` to `main`
+included, carries no `pull_request` object at all, so the field is null. `false`
+and null are both falsy, so both reach Ubicloud; the distinction matters only
+because a reader who believed non-fork pull requests left the field null would
+conclude the expression had a case it does not handle.
+
+Two rules follow, and a green run demonstrates neither:
 
 - Keep the continuation at the same indent as the first line. A continuation
   indented one level deeper keeps its line break, so the folded scalar parses
@@ -153,6 +160,47 @@ the 19 s and 36 s lanes will be dominated by runner start-up either way.
 `tests/workflow_contracts/` holds the rules above, and
 `make test-workflow-contracts` runs them on their own. `make test` collects
 them too, which is what makes them a gate rather than a convenience.
+
+They need two development dependencies that the library itself does not.
+**PyYAML** parses the GitHub Actions documents, and **Hypothesis** generates
+the declarations the label readers are held to. Both are in the `dev`
+dependency group, so `make build`, which runs `uv sync --group dev`, installs
+them; `uv sync --group dev` on its own does as well. Running
+`make test-workflow-contracts` or `make all` without them fails at import.
+
+The readers take the directory they read rather than reaching for a module
+global, and the rules that prove the readers pass a directory of their own.
+A rule parametrized over `.github/workflows` can only show that the current
+files pass, which they do whether or not the rule discriminates anything:
+a reader tied to the wrong matrix key, or blind to a direct matrix axis, would
+leave every such rule green. So the readers are driven over documents written
+for one question each, and each of those documents is one the estate does not
+contain.
+
+Every failure the reader can meet is translated into a named error: a
+directory that cannot be listed, a file that cannot be read, one that is not
+UTF-8, one that is not YAML, and one that is YAML but not a mapping. A
+contract that meets any of them fails saying so, rather than surfacing an
+`OSError` from inside a generator. A runner label the reader cannot parse is
+raised rather than skipped, because a skipped label leaves the registry
+equality holding over a smaller set than the estate uses, which is the one
+thing that equality exists to refuse.
+
+A job's matrix is read only for the keys its `runs-on` names, and for each of
+those both shapes are read: the axis the matrix declares as a list under the
+key, and any `include` row carrying the same key. Reading every `os` in sight
+would enter a test parameter named `os` into the labels in use and demand a
+registration for a runner no job can request. Reading only `include` rows
+would miss `matrix: {os: [ubuntu-latest, windows-latest]}` entirely, and leave
+its labels unregistered.
+
+The ceilings and trigger filters in the tables above are restated in the
+contracts rather than derived from the workflows. The rule that every Ubicloud
+lane declares a ceiling says nothing about the number, so a ceiling widened to
+six hours would pass it while leaving this guide's table wrong; the same holds
+for `coverage-main.yml`'s `branches: [main]` and `release.yml`'s `v*.*.*`
+tags, which carry the rest of the placement argument. Change a figure in a
+workflow and this guide in the same commit, or the contract fails.
 
 The registry in `.github/actionlint.yaml` is held to an equality with the
 labels actually in use, in both directions. A subset assertion would miss a

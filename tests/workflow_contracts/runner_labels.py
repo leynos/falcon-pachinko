@@ -18,10 +18,10 @@ import typing as typ
 
 from .workflow_support import (
     GITHUB_HOSTED_LABELS,
+    REPOSITORY,
     WorkflowShapeError,
+    WorkflowSource,
     as_mapping,
-    jobs,
-    workflow_names,
 )
 
 # Collapses the folding whitespace a block scalar leaves in a label. Spelled
@@ -29,6 +29,10 @@ from .workflow_support import (
 # U+001F; those are not whitespace to a runner label and must not be absorbed
 # here.
 _LABEL_WHITESPACE = re.compile(r"[ \t\n\r]+")
+# A ``runs-on`` that names a matrix key resolves its label from the matrix
+# rather than declaring one. GitHub's context names allow letters, digits,
+# hyphens and underscores.
+_MATRIX_REFERENCE = re.compile(r"\bmatrix\.([A-Za-z_][A-Za-z0-9_-]*)")
 _RUNNER_EXPRESSION = re.compile(
     r"\$\{\{ *(?P<guard>.+?) *&& *'(?P<when_true>[^']*)'"
     r" *\|\| *'(?P<when_false>[^']*)' *\}\}"
@@ -203,8 +207,60 @@ def _runs_on_refs(
             return
 
 
-def _matrix_include(job_document: dict[str, object]) -> list[object]:
-    """Return a job's matrix include rows, or none when it declares no matrix.
+def matrix_keys(raw: str) -> frozenset[str]:
+    """Return the matrix keys a ``runs-on`` declaration resolves from.
+
+    A job whose ``runs-on`` never mentions the matrix resolves no label from
+    it, however many axes the matrix declares. Reading every ``os`` in sight
+    instead would let an unrelated test parameter named ``os`` register as a
+    runner label, and the registry equality would then fail on a label no job
+    can ever request.
+
+    Parameters
+    ----------
+    raw : str
+        The label as declared.
+
+    Returns
+    -------
+    frozenset[str]
+        Each matrix key the declaration reads.
+
+    Examples
+    --------
+    >>> sorted(matrix_keys("${{ matrix.os }}"))
+    ['os']
+    >>> matrix_keys("ubuntu-latest")
+    frozenset()
+    """
+    return frozenset(_MATRIX_REFERENCE.findall(raw))
+
+
+def is_matrix_reference(raw: str) -> bool:
+    """Say whether a declaration resolves its label from the matrix.
+
+    Parameters
+    ----------
+    raw : str
+        The label as declared.
+
+    Returns
+    -------
+    bool
+        True when the declaration reads at least one matrix key.
+
+    Examples
+    --------
+    >>> is_matrix_reference("${{ matrix.os }}")
+    True
+    >>> is_matrix_reference("ubicloud-standard-2")
+    False
+    """
+    return bool(matrix_keys(collapse_label_whitespace(raw)))
+
+
+def _matrix(job_document: dict[str, object]) -> dict[str, object]:
+    """Return a job's matrix mapping, empty when it declares none.
 
     Parameters
     ----------
@@ -213,71 +269,129 @@ def _matrix_include(job_document: dict[str, object]) -> list[object]:
 
     Returns
     -------
-    list[object]
-        The include rows, empty when the job declares no matrix or the matrix
-        declares no include list.
+    dict[str, object]
+        The matrix, or an empty mapping.
     """
     strategy = as_mapping(job_document.get("strategy"))
     matrix = as_mapping(strategy.get("matrix")) if strategy else None
-    include = matrix.get("include") if matrix else None
-    if not isinstance(include, list):
-        return []
-    return list(include)
+    return matrix or {}
 
 
-def _declared_os(row: object) -> str | None:
-    """Return an include row's ``os`` label when it declares one.
+def _axis_values(axis: object, key: str) -> typ.Iterator[tuple[str, str]]:
+    """Yield a direct matrix axis's string values with their sites.
 
     Parameters
     ----------
-    row : object
-        One matrix include row, which YAML permits to be anything.
+    axis : object
+        The value declared under the matrix key, which YAML permits to be
+        anything.
+    key : str
+        The matrix key, named in the declaration site.
 
-    Returns
-    -------
-    str | None
-        The declared label, or None when the row declares no string ``os``.
+    Yields
+    ------
+    tuple[str, str]
+        The declaration site and the label.
     """
-    entry = as_mapping(row)
-    label = entry.get("os") if entry else None
-    return label if isinstance(label, str) else None
+    if not isinstance(axis, list):
+        return
+    for position, entry in enumerate(axis):
+        if isinstance(entry, str):
+            yield f"strategy.matrix.{key}[{position}]", entry
 
 
-def _matrix_os_refs(
+def _include_values(
+    matrix: dict[str, object], key: str
+) -> typ.Iterator[tuple[str, str]]:
+    """Yield the include rows' values for one matrix key, with their sites.
+
+    Parameters
+    ----------
+    matrix : dict[str, object]
+        A job's matrix mapping.
+    key : str
+        The matrix key to read from each row.
+
+    Yields
+    ------
+    tuple[str, str]
+        The declaration site and the label.
+    """
+    include = matrix.get("include")
+    if not isinstance(include, list):
+        return
+    for position, row in enumerate(include):
+        entry = as_mapping(row)
+        value = entry.get(key) if entry else None
+        if isinstance(value, str):
+            yield f"strategy.matrix.include[{position}].{key}", value
+
+
+def _matrix_refs(
     workflow_name: str, job_name: str, job_document: dict[str, object]
 ) -> typ.Iterator[LabelRef]:
-    """Return the ``os`` labels a job's matrix include rows declare.
+    """Yield the labels a job's matrix supplies to its ``runs-on``.
 
-    A ``runs-on: ${{ matrix.os }}`` resolves from these, so the labels a
-    workflow really uses are not all written under ``runs-on``.
+    Only the keys the ``runs-on`` declaration actually reads are followed,
+    and for each of those both shapes are read: the direct axis, which a
+    matrix declares as a list under the key, and the ``include`` rows, which
+    may add a value the axis does not carry. Reading only ``include`` would
+    miss ``matrix: {os: [ubuntu-latest, windows-latest]}`` entirely, which is
+    the commoner of the two shapes.
+
+    Yields
+    ------
+    LabelRef
+        Each label the matrix supplies, direct axis before include rows.
+    """
+    declared = job_document.get("runs-on")
+    if not isinstance(declared, str):
+        return
+    matrix = _matrix(job_document)
+    for key in sorted(matrix_keys(collapse_label_whitespace(declared))):
+        for source, label in _axis_values(matrix.get(key), key):
+            yield LabelRef(workflow_name, job_name, source, label)
+        for source, label in _include_values(matrix, key):
+            yield LabelRef(workflow_name, job_name, source, label)
+
+
+def job_label_refs(
+    workflow_name: str, job_name: str, job_document: dict[str, object]
+) -> list[LabelRef]:
+    """Return every label declaration one job carries.
+
+    Parameters
+    ----------
+    workflow_name : str
+        File name of the declaring workflow.
+    job_name : str
+        The job key.
+    job_document : dict[str, object]
+        The job mapping.
 
     Returns
     -------
-    typ.Iterator[LabelRef]
-        Each label an include row declares, in declaration order.
+    list[LabelRef]
+        The ``runs-on`` declaration and, when it reads the matrix, the values
+        the matrix supplies to it.
     """
-    labels = (
-        (position, _declared_os(row))
-        for position, row in enumerate(_matrix_include(job_document))
-    )
-    return (
-        LabelRef(
-            workflow_name,
-            job_name,
-            f"strategy.matrix.include[{position}].os",
-            label,
-        )
-        for position, label in labels
-        if label is not None
-    )
+    return [
+        *_runs_on_refs(workflow_name, job_name, job_document),
+        *_matrix_refs(workflow_name, job_name, job_document),
+    ]
 
 
-def declared_labels() -> list[LabelRef]:
+def declared_labels(source: WorkflowSource = REPOSITORY) -> list[LabelRef]:
     """Return every runner label the workflow estate declares.
 
-    Covers the direct ``runs-on`` declaration and the matrix ``os`` values a
+    Covers the direct ``runs-on`` declaration and the matrix values a
     ``runs-on: ${{ matrix.os }}`` resolves from, because a label is in use
     whichever key it is written under.
+
+    Parameters
+    ----------
+    source : WorkflowSource
+        Where to read. Defaults to this repository.
 
     Returns
     -------
@@ -285,20 +399,81 @@ def declared_labels() -> list[LabelRef]:
         Each declared label, with its workflow, job and declaration site.
     """
     found: list[LabelRef] = []
-    for name in workflow_names():
-        for job_name, job_document in jobs(name).items():
-            found.extend(_runs_on_refs(name, job_name, job_document))
-            found.extend(_matrix_os_refs(name, job_name, job_document))
+    for name in source.names():
+        for job_name, job_document in source.jobs(name).items():
+            found.extend(job_label_refs(name, job_name, job_document))
     return found
 
 
-def labels_in_use() -> set[str]:
+def resolve(reference: LabelRef) -> frozenset[str]:
+    """Return the labels one declaration can select.
+
+    A declaration that reads the matrix selects nothing by itself: its labels
+    are declared in the matrix and reported as references of their own, so
+    counting it here would add the literal text ``${{ matrix.os }}`` to the
+    set of labels in use.
+
+    Parameters
+    ----------
+    reference : LabelRef
+        One declaration.
+
+    Returns
+    -------
+    frozenset[str]
+        Every label the declaration can select.
+
+    Raises
+    ------
+    NotARunnerExpressionError
+        If the declaration is an expression that is neither a matrix
+        reference nor a two-armed conditional. Raised rather than skipped:
+        a skipped declaration leaves the registry equality holding over a
+        smaller set than the estate actually uses, which is the one thing
+        the equality exists to refuse.
+    """
+    raw = collapse_label_whitespace(reference.raw)
+    if matrix_keys(raw):
+        return frozenset()
+    if not raw.startswith("${{"):
+        return frozenset({raw})
+    label = runner_expression(raw)
+    return frozenset({label.when_true, label.when_false})
+
+
+def job_labels(
+    workflow_name: str, job_name: str, job_document: dict[str, object]
+) -> frozenset[str]:
+    """Return every label one job can run on.
+
+    Parameters
+    ----------
+    workflow_name : str
+        File name of the declaring workflow.
+    job_name : str
+        The job key.
+    job_document : dict[str, object]
+        The job mapping.
+
+    Returns
+    -------
+    frozenset[str]
+        The resolved labels, with both arms of a conditional counted because
+        either can be selected.
+    """
+    resolved: set[str] = set()
+    for reference in job_label_refs(workflow_name, job_name, job_document):
+        resolved.update(resolve(reference))
+    return frozenset(resolved)
+
+
+def labels_in_use(source: WorkflowSource = REPOSITORY) -> set[str]:
     """Return every non-GitHub-hosted label the workflows resolve to.
 
-    Both arms of a conditional label count, because either can be selected.
-    A label that is not a literal and not a two-armed conditional is left
-    alone: the shape contract refuses those, and inventing a reading here
-    would hide it.
+    Parameters
+    ----------
+    source : WorkflowSource
+        Where to read. Defaults to this repository.
 
     Returns
     -------
@@ -306,14 +481,6 @@ def labels_in_use() -> set[str]:
         The labels that need a registry entry.
     """
     resolved: set[str] = set()
-    for reference in declared_labels():
-        raw = collapse_label_whitespace(reference.raw)
-        if raw.startswith("${{"):
-            try:
-                label = runner_expression(raw)
-            except NotARunnerExpressionError:
-                continue
-            resolved.update({label.when_true, label.when_false})
-        else:
-            resolved.add(raw)
+    for reference in declared_labels(source):
+        resolved.update(resolve(reference))
     return {label for label in resolved if label not in GITHUB_HOSTED_LABELS}
