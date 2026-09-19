@@ -43,15 +43,15 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
+        uses: astral-sh/setup-uv@v10.1.0
 
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@a5765019912a8ab6882b12db049c7cde635f3a85
+        uses: leynos/shared-actions/.github/actions/generate-coverage@82feb2b7aac45b7efff40c9c4bb632551b14521c
         with:
           output-path: coverage.xml
           format: cobertura
@@ -74,7 +74,7 @@ jobs:
         # f68e8e2e the action rejects a non-empty value and pins `cs-coverage`
         # through its own manifest, which is what fixed the parse break.
         if: ${{ github.ref == 'refs/heads/main' && env.CS_ACCESS_TOKEN != '' }}
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@a5765019912a8ab6882b12db049c7cde635f3a85
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@82feb2b7aac45b7efff40c9c4bb632551b14521c
         with:
           format: cobertura
           mode: upload
