@@ -196,6 +196,10 @@ max-args = 4
 max-bool-expr = 2
 max-locals = 10
 
+# Classic Pylint checks. `make lint` runs these with vanilla Pylint on PyPy
+# 8.0.0's Python 3.12 build, reading this file through `--rcfile`. The
+# df12-python-lints checkers run in a separate CPython 3.14 pass configured by
+# pylintrc-df12.toml; no plugin is loaded here, so this pass cannot inherit it.
 [tool.pylint.main]
 # Activate rules whose behaviour depends on the project's Python baseline.
 py-version = "3.12"
@@ -205,8 +209,6 @@ recursive = true
 # Keep Pylint's module-size check active without forcing an unrelated module
 # split while importing the second-tier lint action.
 max-module-lines = 800
-# Load the df12 house-style checkers alongside the stock Pylint messages.
-load-plugins = ["df12_python_lints"]
 
 [tool.pylint.design]
 # Keep function call surfaces small enough to understand without memorising
@@ -223,26 +225,26 @@ max-positional-arguments = 4
 
 [tool.pylint."messages control"]
 # Keep this Pylint pass focused on the explicitly selected messages.
-disable = ["all"]
+#
+# unknown-option-value (W0012) is disabled here because inline pragmas such as
+# `# pylint: disable=trivial-attribute-wrapper` name df12 messages, which this
+# pass never registers. Pylint reports W0012 despite `disable = ["all"]`, so it
+# is named explicitly. No coverage is lost: the df12 pass enables W0012 and
+# registers both the core and df12 messages, so it checks every pragma name
+# against the complete vocabulary and still catches a genuine typo.
+disable = ["all", "unknown-option-value"]
 enable = [
-    # Surface unparseable files instead of silently skipping them; the gate
-    # runs on CPython 3.14, which parses the project's 3.12 baseline syntax.
+    # Fail, rather than skip, when a file cannot be parsed or analysed. Pylint
+    # still reports these under `disable = ["all"]`, but an explicit disable of
+    # any of them lets an unparsable or unanalysable module pass with exit
+    # status 0. They are enabled by name to pin the behaviour, and
+    # tests/test_toolchain_versions.py rejects configuration that disables them.
     "syntax-error",
-
-    # df12 house-style checkers (df12_python_lints).
-    "assert-missing-message",
-    "lint-suppression-without-explanation",
-    "prefer-match-over-constant-chain",
-    "prefer-slots-for-dataclass",
-    "prefer-snapshot-assertion",
-    "prefer-snapshot-substring",
-    "prefer-structural-pattern-matching",
-    "prefer-type-statement",
-    "redundant-future-annotations",
-    "reexport-by-assignment",
-    "trivial-alias-wrapper",
-    "trivial-attribute-wrapper",
-    "typecheck-suppression-without-explanation",
+    "fatal",
+    "astroid-error",
+    "parse-error",
+    "config-parse-error",
+    "method-check-failed",
 
     # Logging format safety.
     "logging-format-interpolation",
@@ -362,6 +364,9 @@ enable = [
 [tool.pytest.ini_options]
 # Ensure asyncio fixtures create a new event loop for each test
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "lint_toolchain: drives the real PyPy and CPython Pylint passes through the Makefile",
+]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
