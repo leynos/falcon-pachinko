@@ -51,8 +51,9 @@ used by Falcon-style request objects that do not provide a template.
 
 ## Lint and Typecheck Toolchain
 
-`make lint` runs ruff check, then Pylint, then ambrleaks. `make typecheck`
-runs `ty check falcon_pachinko tests`.
+`make lint` runs Ruff, then two Pylint passes, then ambrleaks. `make typecheck`
+runs `ty check falcon_pachinko tests tools`. Both perform their complete
+checks locally and in CI; neither needs a wrapper or a second manual step.
 
 Ruff is pinned at 0.16.4 via `RUFF_VERSION` in the Makefile, and the same
 version is installed in `.github/workflows/ci.yml` with
@@ -66,24 +67,114 @@ floating.
 
 `tests/test_toolchain_versions.py` is a contract test asserting that the
 Makefile pins and the CI pins name the same version, without hard-coding a
-version itself. Bump both sites together when upgrading either tool.
+version itself. Bump both sites together when upgrading either tool. The same
+file pins the structure of the Pylint passes described below.
 
-Pylint runs on CPython 3.14 (`PYLINT_PYTHON`), loading the
-`df12-python-lints` plugin pinned by `DF12_PYTHON_LINTS_REF` (`v0.3.0`). The
-plugin supplies the df12 house-style checkers. No PyPy shim is used.
+### Pylint passes
 
-`PYLINT_JOBS` derives a worker count from a tenth of the host's cores, with a
-floor of two, because the build host is shared. With more than one job,
-df12-python-lints v0.3.0 reports each of its own messages twice, because its
-`register()` hook runs again in every worker; Pylint's builtin messages are
-unaffected, and the exit status stays correct, so the gate still passes and
-fails accurately. Set `PYLINT_JOBS=1` as an escape hatch when counting
-findings matters. This double-counting is tracked upstream as
+Pylint runs twice, in two isolated `uv tool run` environments. Neither pass
+touches the project `.venv`, whose interpreter, supported Python versions,
+and test matrix are unaffected.
 
-<https://github.com/leynos/df12-python-lints/issues/24>.
+Table 1. Pylint passes run by `make lint`.
 
-`ambrleaks`, also from df12-python-lints, runs as part of `make lint` and
-scans syrupy `.ambr` snapshots for unredacted values.
+| Target | Interpreter | Configuration | Checks |
+| --- | --- | --- | --- |
+| `make lint-pylint` | PyPy 8.0.0, Python 3.12.14 build | `pyproject.toml` | Classic, built-in Pylint messages |
+| `make lint-df12` | CPython 3.14 | `pylintrc-df12.toml` | df12-python-lints checkers, then ambrleaks |
+
+The linter's interpreter and the source's Python baseline are separate
+settings. Both configuration files pin `py-version = "3.12"`, so
+version-sensitive checks follow the project's 3.12 baseline rather than the
+host interpreter. In particular, the df12 pass runs on 3.14 without flagging
+the `from __future__ import annotations` imports that baseline-3.12 modules
+need: `redundant-future-annotations` (C9112) stays dormant below a 3.14
+baseline.
+
+Both passes run one Pylint worker (`--jobs=1`) and pin Pylint 4.0.8 and
+`astroid` 4.0.4 through `PYLINT_VERSION` and `ASTROID_VERSION`. Pylint 4.0.8
+is the newest release, and it declares `astroid>=4.0.2,<=4.1.dev0`, which
+excludes `astroid` 4.3.x. The upgrade to `astroid` 4.3.1 is therefore
+deferred until a Pylint release accepts it, and a test asserts that
+`make lint-pylint ASTROID_VERSION=4.3.1` fails dependency resolution.
+
+#### The classic pass on PyPy
+
+PyPy 8.0.0 is the first PyPy release with a Python 3.12 build, and its
+maintainers label that build beta quality. The pass establishes lint-toolchain
+compatibility only; it says nothing about running the application on PyPy.
+
+The pass needs no shim. PyPy 7.3.22 raised `TypeError` on
+`types.FunctionType.__text_signature__`
+([pypy/pypy#5458](https://github.com/pypy/pypy/issues/5458)), which crashed
+the `astroid` bootstrap on every run; the estate's pylint-pypy-shim existed
+to work around that. The bug was fixed twice: PyPy stopped raising from
+7.3.23, and `astroid` 4.3.0 learned to tolerate it. This repository relies on
+the PyPy fix, so vanilla `astroid` 4.0.4 bootstraps and inspects live objects
+on PyPy 8.0.0. The `astroid` fix, and its related `__class_getitem__`
+robustness fix, arrive with the deferred 4.3.1 upgrade. This repository never
+used the shim, so the PyPy pass is an initial adoption rather than a shim
+removal.
+
+uv's built-in interpreter catalogue does not yet list PyPy 3.12, so
+`tools/pypy-downloads.json` names the official PyPy 8.0.0 tarballs and their
+published SHA-256 sums for Linux (x86-64 and AArch64, glibc 2.28 or newer) and
+macOS (Apple silicon and Intel). `make lint-pylint` passes that manifest to
+uv, which refuses any download that does not match, installs the interpreter
+into `.uv-python` rather than uv's shared store, and keeps it off `PATH` with
+`--no-bin`. Other platforms, including Windows and musl-based Linux, fail with
+uv's "No download found" error.
+
+To use another interpreter, set `PYLINT_PYTHON` to its path. Before Pylint
+runs, `tools/check_lint_runtime.py` inspects the interpreter inside the tool
+environment and rejects anything other than PyPy 8.0.0 on Python 3.12 with
+the pinned Pylint and `astroid`, whether or not the variable was overridden.
+The df12 pass runs the same check for CPython 3.14.
+
+#### Failed analysis fails the gate
+
+Both configuration files enable `syntax-error` and the fatal diagnostics
+(`fatal`, `astroid-error`, `parse-error`, `config-parse-error`, and
+`method-check-failed`) by name. Pylint reports these even under
+`disable = ["all"]`, but an explicit disable of any of them lets an
+unparsable or unanalysable module pass with exit status 0. The contract
+tests reject any configuration or Makefile command that disables them.
+
+#### Plugin isolation and pragma validation
+
+Only `pylintrc-df12.toml` loads `df12_python_lints`, so the PyPy pass cannot
+inherit the plugin through shared configuration, and its tool environment
+does not contain the plugin at all. Inline pragmas such as
+`# pylint: disable=trivial-attribute-wrapper` name df12 messages that the
+classic pass never registers, so that pass disables `unknown-option-value`
+(W0012). The df12 pass registers both the core and the df12 messages and
+enables W0012, so every pragma name is still checked for typos exactly once.
+
+#### State and caches
+
+Each pass keeps its persisted Pylint state in its own directory under
+`.cache/pylint`, named for its runtime, so neither reads the other's
+statistics. CI caches `.uv-python` under a key derived from
+`tools/pypy-downloads.json`, and the lint tool environments in `.uv-cache`
+under a key that also covers the Makefile and `pylintrc-df12.toml`, so a pin
+change never restores a stale toolchain.
+
+#### Coverage and tests
+
+`PYLINT_TARGETS` covers `falcon_pachinko` (listing its `unittests` and
+`behaviour` directories explicitly, because they carry no `__init__.py`),
+`tests`, `examples`, and `tools`, which is every tracked Python file. None
+needs syntax newer than Python 3.12, so no separate CPython classic pass
+exists. The three inline script blocks under `examples` declare dependencies
+but no Python version.
+
+`tests/test_lint_toolchain_integration.py` (marker `lint_toolchain`) runs the
+Makefile's own commands against the real interpreters. The tests provision
+PyPy on their first run, so they need network access once, and they never
+skip. CI runs them as a dedicated step after `make lint`.
+
+`ambrleaks`, also from df12-python-lints, runs at the end of `make lint-df12`
+and scans syrupy `.ambr` snapshots for unredacted values.
 
 ### Suppression policy
 
