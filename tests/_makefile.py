@@ -27,39 +27,37 @@ _INHERITED_ONLY = ("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "VIRTUAL_ENV")
 type CompletedRun = subprocess.CompletedProcess[str]
 
 
+def _find_makefile_match(pattern: str, failure: str) -> re.Match[str]:
+    """Search the Makefile for *pattern*, failing the test with *failure*."""
+    text = MAKEFILE.read_text(encoding="utf-8")
+    match = re.search(pattern, text, flags=re.MULTILINE)
+    if match is None:
+        pytest.fail(failure)
+    return match
+
+
 def makefile_pin(variable: str) -> str:
     """Return the value of a single-line ``VARIABLE ?= value`` pin."""
-    text = MAKEFILE.read_text(encoding="utf-8")
-    match = re.search(
-        rf"^{re.escape(variable)}\s*\?=\s*(\S+)\s*$", text, flags=re.MULTILINE
-    )
-    if match is None:
-        pytest.fail(f"Makefile does not define {variable}")
-    return match.group(1)
+    return _find_makefile_match(
+        rf"^{re.escape(variable)}\s*\?=\s*(\S+)\s*$",
+        f"Makefile does not define {variable}",
+    ).group(1)
 
 
 def makefile_variable_block(variable: str) -> str:
     """Return a Makefile assignment including its backslash continuations."""
-    text = MAKEFILE.read_text(encoding="utf-8")
-    match = re.search(
+    return _find_makefile_match(
         rf"^{re.escape(variable)}\s*[:?]?=(?:[^\n]*\\\n)*[^\n]*$",
-        text,
-        flags=re.MULTILINE,
-    )
-    if match is None:
-        pytest.fail(f"Makefile does not define {variable}")
-    return match.group(0)
+        f"Makefile does not define {variable}",
+    ).group(0)
 
 
 def makefile_recipe(target: str) -> str:
     """Return the tab-indented recipe lines of a Makefile rule."""
-    text = MAKEFILE.read_text(encoding="utf-8")
-    match = re.search(
-        rf"^{re.escape(target)}:[^\n]*\n((?:\t[^\n]*\n)+)", text, flags=re.MULTILINE
-    )
-    if match is None:
-        pytest.fail(f"Makefile has no recipe for {target}")
-    return match.group(1)
+    return _find_makefile_match(
+        rf"^{re.escape(target)}:[^\n]*\n((?:\t[^\n]*\n)+)",
+        f"Makefile has no recipe for {target}",
+    ).group(1)
 
 
 def tool_environment() -> dict[str, str]:
