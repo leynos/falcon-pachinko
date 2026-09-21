@@ -173,24 +173,25 @@ def test_the_publisher_uploads_rather_than_checks() -> None:
         )
 
 
-def test_no_caller_passes_the_deprecated_installer_checksum() -> None:
-    """Refuse the input the shared action now rejects.
+def test_no_caller_passes_a_codescene_checksum() -> None:
+    """Leave CLI archive verification to the action's own manifest.
 
     From shared-actions f68e8e2e the CodeScene CLI is pinned through a manifest
-    and a non-empty ``installer-checksum`` fails the run outright.
-    ``archive-checksum`` replaces it, so passing the old input is a red lane
-    rather than a deprecation warning.
+    and a non-empty ``installer-checksum`` fails the run outright. The action
+    verifies the archive against the manifest's own digest, so an
+    ``archive-checksum`` can only agree with it or go stale and fail the upload
+    on the trunk, where no pull request would see it.
     """
     offending = [
         f"{name}: {path}"
         for name in REPOSITORY.names()
-        for path, text in _walk(REPOSITORY.document(name), name)
-        if path.endswith(".installer-checksum") and text
+        for path, _text in _walk(REPOSITORY.document(name), name)
+        if path.endswith((".installer-checksum", ".archive-checksum"))
     ]
 
     assert not offending, (
-        f"installer-checksum is rejected when non-empty; use archive-checksum: "
-        f"{offending}"
+        f"the upload verifies its CLI against its own manifest; pass no "
+        f"checksum input: {offending}"
     )
 
 

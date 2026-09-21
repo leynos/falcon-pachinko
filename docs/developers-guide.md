@@ -93,10 +93,18 @@ to the list cannot drift unnoticed. The pull-request lane declines the report
 artefact; the publisher keeps the action's default and uploads what it wrote.
 
 Both shared actions are pinned to one revision, and the upload passes no
-`installer-checksum`. From shared-actions `f68e8e2e` the action pins
-`cs-coverage` through its own manifest and rejects a non-empty value for that
-input; `archive-checksum` replaces it. That pin is what fixed the parse break,
-and a repin without the input change is a red lane rather than a warning.
+checksum input. From shared-actions `f68e8e2e` the action pins `cs-coverage`
+through its own manifest, which is what fixed the parse break, and rejects a
+non-empty `installer-checksum`. Its optional `archive-checksum` adds no
+assurance: the action verifies the downloaded archive against the
+`archive_sha256` in its own `cli-manifest.json`, so a caller-supplied digest can
+only agree with that manifest or go stale and fail. A contract refuses both
+inputs.
+
+Neither lane fetches full Git history. The ratchet compares the measured
+percentage with a stored baseline and reads no commits. The full clone the
+pull-request lane once requested dates from the CodeScene check step, which has
+left it.
 
 `tests/workflow_contracts/` needs two development dependencies the library
 itself does not. **PyYAML** parses the GitHub Actions documents and
