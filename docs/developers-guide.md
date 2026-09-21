@@ -82,10 +82,10 @@ committing.
 
 ## Coverage and CodeScene
 
-`coverage-main.yml` owns both persistent coverage outputs: the CodeScene
-upload and the ratchet baseline. `ci.yml` generates coverage on a pull request
-only, for its own ratchet check, and no workflow a pull request can reach names
-a CodeScene action, runs a `cs-coverage` command or carries `CS_ACCESS_TOKEN`.
+`coverage-main.yml` owns both persistent coverage outputs: the CodeScene upload
+and the ratchet baseline. `ci.yml` generates coverage on a pull request only,
+for its own ratchet check, and no workflow a pull request can reach names a
+CodeScene action, runs a `cs-coverage` command or carries `CS_ACCESS_TOKEN`.
 That separation is the estate rule CV-005.
 
 It is not tidiness. Between 2026-09-16 and 2026-09-18 an unpinned `cs-coverage`
@@ -110,13 +110,14 @@ input; `archive-checksum` replaces it. That pin is what fixed the parse break,
 and a repin without the input change is a red lane rather than a warning.
 
 `tests/workflow_contracts/` needs two development dependencies the library
-itself does not. **PyYAML** parses the GitHub Actions documents and
-**Hypothesis** generates the documents the scanner is held to. Both are in the
-`dev` dependency group, so `make build`, which runs `uv sync --group dev`,
-installs them; `uv sync --group dev` on its own does as well. `make test`
-collects the contracts, which is what makes them a gate rather than a
-convenience, and `uv run pytest tests/workflow_contracts` runs them alone.
-Running them without those dependencies fails at import.
+itself does not. **PyYAML** (`pyyaml>=6.0.3`) parses the GitHub Actions
+documents and **Hypothesis** (`hypothesis>=6.168.0`) generates the documents
+the scanner is held to. Both are in the `dev` dependency group, so
+`make build`, which runs `uv sync --group dev`, installs them;
+`uv sync --group dev` on its own does as well. `make test` collects the
+contracts, which is what makes them a gate rather than a convenience, and
+`uv run pytest tests/workflow_contracts` runs them alone. Running them without
+those dependencies fails at import.
 
 The contracts scan whole parsed workflow documents rather than a list of step
 keys, because a credential can be declared at workflow scope, at job scope, on

@@ -3,6 +3,12 @@
 Pull requests use the local ratchet produced by the shared coverage action.
 Only the main-branch publisher may contact CodeScene, which keeps pull-request
 jobs independent of external changed-line coverage state and its secret.
+
+A pull-request lane that declares no coverage step of its own is exempt from
+the ratchet requirement, because a job that delegates wholesale to a reusable
+workflow exposes none of its steps to this scan. ``dependabot-automerge.yml``
+is the one such lane, and a companion test pins the exempt set so the
+requirement cannot quietly stop applying to a lane that does own coverage.
 """
 
 from __future__ import annotations
@@ -20,9 +26,15 @@ WORKFLOWS_DIR = Path(__file__).resolve().parents[2] / ".github" / "workflows"
 CODE_SCENE_COMMAND_RE = re.compile(r"\bcs-coverage\s+(?:check|upload)\b")
 PULL_REQUEST_EVENTS = ("pull_request", "pull_request_target")
 PULL_REQUEST_EVENT_SET = set(PULL_REQUEST_EVENTS)
-RATCHET_ACTION = "leynos/shared-actions/.github/actions/generate-coverage@abc123"
-UPLOAD_ACTION = "leynos/shared-actions/.github/actions/upload-codescene-coverage@abc123"
-CHECKOUT_ACTION = "actions/checkout@v7"
+# Identity checks match the action *path* only: the trailing ``@ref`` is a pin
+# that must not change whether a step is recognised as the expected action.
+RATCHET_ACTION_PATH = "leynos/shared-actions/.github/actions/generate-coverage"
+UPLOAD_ACTION_PATH = "leynos/shared-actions/.github/actions/upload-codescene-coverage"
+CHECKOUT_ACTION_PATH = "actions/checkout"
+CODE_SCENE_FRAGMENT = "codescene"
+RATCHET_ACTION = f"{RATCHET_ACTION_PATH}@abc123"
+UPLOAD_ACTION = f"{UPLOAD_ACTION_PATH}@abc123"
+CHECKOUT_ACTION = f"{CHECKOUT_ACTION_PATH}@v7"
 MAIN_ONLY_TRIGGER: dict[typ.Any, typ.Any] = {"push": {"branches": ["main"]}}
 PULL_REQUEST_TRIGGER: dict[typ.Any, typ.Any] = {"pull_request": None}
 
@@ -118,23 +130,38 @@ def _is_main_only_trigger(workflow: dict[typ.Any, typ.Any]) -> bool:
     return push.get("branches") == ["main"]
 
 
-def _uses(step: dict[typ.Any, typ.Any], action: str) -> bool:
-    """Return whether an inline step references ``action``."""
+def _uses(step: dict[typ.Any, typ.Any], action_path: str) -> bool:
+    """Return whether a step invokes exactly ``action_path``.
+
+    Only the path before any ``@`` is compared, so a repinned action stays
+    recognised. A substring test would also match a look-alike action that
+    merely embeds the expected path.
+    """
     uses = step.get("uses")
-    return isinstance(uses, str) and action in uses
+    return isinstance(uses, str) and uses.partition("@")[0] == action_path
+
+
+def _uses_fragment(step: dict[typ.Any, typ.Any], fragment: str) -> bool:
+    """Return whether a step's action reference contains ``fragment``.
+
+    Reserved for the deliberately loose CodeScene sweep, which is meant to
+    catch any owner, action, or ref that mentions the vendor.
+    """
+    uses = step.get("uses")
+    return isinstance(uses, str) and fragment in uses
 
 
 def _ratcheting_coverage(step: dict[typ.Any, typ.Any]) -> bool:
     """Return whether a coverage step enables the local ratchet."""
     inputs = step.get("with")
-    if not _uses(step, "generate-coverage") or not isinstance(inputs, dict):
+    if not _uses(step, RATCHET_ACTION_PATH) or not isinstance(inputs, dict):
         return False
     return inputs.get("with-ratchet") in {True, "true"}
 
 
 def _uploads_codescene_coverage(step: dict[typ.Any, typ.Any]) -> bool:
     """Return whether a step explicitly uploads coverage to CodeScene."""
-    if not _uses(step, "upload-codescene-coverage"):
+    if not _uses(step, UPLOAD_ACTION_PATH):
         return False
     inputs = step.get("with")
     return isinstance(inputs, dict) and inputs.get("mode") == "upload"
@@ -151,25 +178,30 @@ def _is_main_publisher(workflow: dict[typ.Any, typ.Any]) -> bool:
 
 
 def _has_ratcheted_coverage(steps: list[dict[typ.Any, typ.Any]]) -> bool:
-    """Return whether coverage steps are absent or at least one is ratcheted."""
-    coverage_steps = [step for step in steps if _uses(step, "generate-coverage")]
-    return not coverage_steps or any(
-        _ratcheting_coverage(step) for step in coverage_steps
-    )
+    """Return whether at least one coverage step enables the local ratchet."""
+    return any(_ratcheting_coverage(step) for step in steps)
 
 
-def _checkout_steps_avoid_full_history(
+def _owns_coverage_here(steps: list[dict[typ.Any, typ.Any]]) -> bool:
+    """Return whether this workflow declares its own coverage step."""
+    return any(_uses_fragment(step, "generate-coverage") for step in steps)
+
+
+def _checkout_step_history_depths(
     steps: list[dict[typ.Any, typ.Any]],
-) -> bool:
-    """Return whether checkout steps avoid a full-history request."""
-    return all(
-        not _uses(step, "actions/checkout")
-        or not (
-            isinstance(step.get("with"), dict)
-            and step["with"].get("fetch-depth") in {0, "0"}
-        )
+) -> list[object]:
+    """Return the ``fetch-depth`` each checkout step sets, or ``None``.
+
+    A depth of zero means full history. That is legitimate here: the coverage
+    action needs the pull request's merge base to measure changed lines. The
+    depths are therefore reported rather than judged, so the contract below
+    can state which of them the estate actually relies on.
+    """
+    return [
+        step["with"].get("fetch-depth") if isinstance(step.get("with"), dict) else None
         for step in steps
-    )
+        if _uses(step, CHECKOUT_ACTION_PATH)
+    ]
 
 
 def _step(
@@ -224,6 +256,36 @@ def test_steps_collect_direct_job_level_steps_only() -> None:
         {"uses": CHECKOUT_ACTION},
         {"uses": RATCHET_ACTION},
     ]
+
+
+def test_uses_matches_the_action_path_exactly() -> None:
+    """Match the path before ``@`` and ignore the pinning ref."""
+    assert _uses({"uses": RATCHET_ACTION_PATH}, RATCHET_ACTION_PATH)
+    assert _uses({"uses": f"{RATCHET_ACTION_PATH}@0000000"}, RATCHET_ACTION_PATH)
+
+
+def test_uses_rejects_a_look_alike_action() -> None:
+    """Reject an action whose path merely embeds the expected one."""
+    assert not _uses(_step(f"evil/{RATCHET_ACTION_PATH}"), RATCHET_ACTION_PATH)
+    assert not _uses(_step(f"{RATCHET_ACTION_PATH}-extra"), RATCHET_ACTION_PATH)
+    assert not _uses(_step(UPLOAD_ACTION), RATCHET_ACTION_PATH)
+    assert not _uses({"uses": 7}, RATCHET_ACTION_PATH)
+    assert not _uses({"with": {}}, RATCHET_ACTION_PATH)
+
+
+def test_uses_fragment_matches_any_reference_mentioning_it() -> None:
+    """Keep the loose sweep for the intentionally broad CodeScene check."""
+    assert _uses_fragment(_step("evil/codescene-action@v1"), CODE_SCENE_FRAGMENT)
+    assert _uses_fragment(_step("codescene-upload"), CODE_SCENE_FRAGMENT)
+    assert not _uses_fragment(_step(CHECKOUT_ACTION), CODE_SCENE_FRAGMENT)
+    assert not _uses_fragment({"uses": 7}, CODE_SCENE_FRAGMENT)
+
+
+def test_owns_coverage_here_detects_a_declared_coverage_step() -> None:
+    """Recognise coverage by fragment, so any pinning ref still counts."""
+    assert _owns_coverage_here([_step(CHECKOUT_ACTION), _step(RATCHET_ACTION)])
+    assert not _owns_coverage_here([_step(CHECKOUT_ACTION)])
+    assert not _owns_coverage_here([])
 
 
 def test_uploads_codescene_coverage_requires_the_upload_action() -> None:
@@ -300,10 +362,10 @@ def test_is_main_publisher_ignores_steps_offered_to_a_reusable_workflow() -> Non
     assert not _is_main_publisher(workflow)
 
 
-def test_has_ratcheted_coverage_accepts_absent_coverage_steps() -> None:
-    """Accept steps that contain no coverage step at all."""
-    assert _has_ratcheted_coverage([])
-    assert _has_ratcheted_coverage([_step(CHECKOUT_ACTION)])
+def test_has_ratcheted_coverage_rejects_absent_coverage_steps() -> None:
+    """Reject step lists that never generate coverage at all."""
+    assert not _has_ratcheted_coverage([])
+    assert not _has_ratcheted_coverage([_step(CHECKOUT_ACTION)])
 
 
 def test_has_ratcheted_coverage_accepts_a_ratcheted_step() -> None:
@@ -331,40 +393,24 @@ def test_has_ratcheted_coverage_rejects_an_unratcheted_step() -> None:
     )
 
 
-def test_checkout_steps_avoid_full_history_accepts_non_checkout_steps() -> None:
-    """Accept a step list that contains no checkout step."""
-    assert _checkout_steps_avoid_full_history([])
-    assert _checkout_steps_avoid_full_history([_step(RATCHET_ACTION)])
+def test_checkout_step_history_depths_reports_only_checkout_steps() -> None:
+    """Report the depth of each checkout step and ignore every other step."""
+    steps = [_step(RATCHET_ACTION), _step(CHECKOUT_ACTION, {"fetch-depth": 0})]
+
+    assert _checkout_step_history_depths(steps) == [0]
+    assert _checkout_step_history_depths([]) == []
+    assert _checkout_step_history_depths([_step(RATCHET_ACTION)]) == []
 
 
-def test_checkout_steps_avoid_full_history_accepts_shallow_checkouts() -> None:
-    """Accept checkout steps that never request zero fetch depth."""
-    assert _checkout_steps_avoid_full_history([_step(CHECKOUT_ACTION)])
-    assert _checkout_steps_avoid_full_history(
-        [_step(CHECKOUT_ACTION, {"fetch-depth": 1})]
-    )
-    assert _checkout_steps_avoid_full_history(
-        [_step(CHECKOUT_ACTION, {"fetch-depth": "1"})]
-    )
+def test_checkout_step_history_depths_defaults_to_none() -> None:
+    """Report ``None`` when a checkout step sets no depth or no mapping."""
+    steps = [
+        _step(CHECKOUT_ACTION, {"fetch-depth": "0"}),
+        _step(CHECKOUT_ACTION),
+        {"uses": CHECKOUT_ACTION, "with": "0"},
+    ]
 
-
-def test_checkout_steps_avoid_full_history_treats_non_mapping_with_as_safe() -> None:
-    """Accept a checkout step whose ``with`` value is not a mapping."""
-    assert _checkout_steps_avoid_full_history([{"uses": CHECKOUT_ACTION, "with": "0"}])
-
-
-def test_checkout_steps_avoid_full_history_rejects_numeric_zero_depth() -> None:
-    """Reject a checkout step that requests full history with an int zero."""
-    steps = [_step(CHECKOUT_ACTION, {"fetch-depth": 0})]
-
-    assert not _checkout_steps_avoid_full_history(steps)
-
-
-def test_checkout_steps_avoid_full_history_rejects_quoted_zero_depth() -> None:
-    """Reject a checkout step that requests full history with a quoted zero."""
-    steps = [_step(CHECKOUT_ACTION, {"fetch-depth": "0"})]
-
-    assert not _checkout_steps_avoid_full_history(steps)
+    assert _checkout_step_history_depths(steps) == ["0", None, None]
 
 
 def test_pull_request_workflows_use_the_local_ratchet_only() -> None:
@@ -372,7 +418,14 @@ def test_pull_request_workflows_use_the_local_ratchet_only() -> None:
     pull_request_workflows = [
         (path, workflow)
         for path, workflow in _workflows()
+        # Exempt a workflow that declares no coverage step here. Such a
+        # workflow delegates wholesale to a reusable workflow, as
+        # dependabot-automerge.yml does, so this file's scan cannot see what
+        # it ultimately runs and must not invent a ratchet requirement for it.
+        # Coverage-owning pull-request workflows remain covered, and the
+        # non-empty assertion below fails if this ever exempts them all.
         if _has_pull_request_trigger(workflow)
+        and _owns_coverage_here(list(_steps(workflow)))
     ]
     assert pull_request_workflows, "at least one pull-request workflow is required"
 
@@ -381,7 +434,7 @@ def test_pull_request_workflows_use_the_local_ratchet_only() -> None:
         assert _has_ratcheted_coverage(steps), (
             f"{path} pull-request coverage must enable with-ratchet"
         )
-        assert not any(_uses(step, "codescene") for step in steps), (
+        assert not any(_uses_fragment(step, CODE_SCENE_FRAGMENT) for step in steps), (
             f"{path} must not invoke a CodeScene action"
         )
         assert not any(
@@ -395,9 +448,35 @@ def test_pull_request_workflows_use_the_local_ratchet_only() -> None:
         assert not _contains_text(workflow, re.compile(r"CS_ACCESS_TOKEN")), (
             f"{path} must not receive CS_ACCESS_TOKEN"
         )
-        assert _checkout_steps_avoid_full_history(steps), (
-            f"{path} must not request full history for CodeScene"
+        # Checkout depth is deliberately not asserted here. ci.yml requests
+        # full history so the coverage action can reach the pull request's
+        # merge base, and that depth serves the local ratchet, not CodeScene.
+        # The boundary defended above is the absent CodeScene call, command,
+        # project URL, and credential.
+        assert 0 in _checkout_step_history_depths(steps), (
+            f"{path} must request full history: the ratchet needs the merge base"
         )
+
+
+def test_only_the_named_lane_generates_pull_request_coverage() -> None:
+    """Pin both sides of the delegation exemption in the test above.
+
+    That exemption is only safe while it exempts the delegating automerge lane
+    and no lane that actually generates coverage. Naming the expected set
+    turns drift in either direction into a failure here, rather than into an
+    assertion that quietly drops out of the loop.
+    """
+    owners = sorted(
+        path.name
+        for path, workflow in _workflows()
+        if _has_pull_request_trigger(workflow)
+        and _owns_coverage_here(list(_steps(workflow)))
+    )
+
+    assert owners == ["ci.yml"], (
+        "ci.yml must be the only pull-request workflow that generates "
+        f"coverage here; found {owners!r}"
+    )
 
 
 def test_main_publisher_is_main_only_ratcheted_and_explicitly_uploads() -> None:
@@ -409,4 +488,22 @@ def test_main_publisher_is_main_only_ratcheted_and_explicitly_uploads() -> None:
     assert publishers == [WORKFLOWS_DIR / "coverage-main.yml"], (
         "exactly coverage-main.yml must publish ratcheted coverage on main; "
         f"found {publishers!r}"
+    )
+
+
+def test_the_publisher_ratchets_its_own_report() -> None:
+    """Require the publisher's coverage step to enable the ratchet itself.
+
+    The publisher test above only asks whether *some* step ratchets, so it
+    would still pass if the publisher kept its upload while dropping the
+    ratchet from its generation step. The baseline the pull-request lane is
+    measured against is written by that step, and a baseline that is not
+    ratcheted is not the measurement the ratchet compares against.
+    """
+    publisher = _load(WORKFLOWS_DIR / "coverage-main.yml")
+    ratcheting = [step for step in _steps(publisher) if _ratcheting_coverage(step)]
+
+    assert ratcheting, (
+        "coverage-main.yml must generate coverage with with-ratchet enabled; "
+        "no ratcheting generate-coverage step was found"
     )
