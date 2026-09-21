@@ -17,6 +17,7 @@
     "**/target/**",
     ".terraform/**",
     ".uv-cache/**",
+    ".uv-python/**",
     "memories/**",
     "CRUSH.md"
   ]

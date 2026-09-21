@@ -1,0 +1,57 @@
+# Configuration for the df12-python-lints pass, which `make lint` runs on
+# CPython 3.14 through `--rcfile=pylintrc-df12.toml`.
+#
+# The classic Pylint checks live in pyproject.toml and run on PyPy. This file is
+# deliberately separate: the plugin is loaded here and nowhere else, so the
+# PyPy pass cannot inherit it through shared configuration.
+
+[tool.pylint.main]
+# The linter runs on CPython 3.14, but the project's Python baseline is 3.12.
+# The df12 checkers that depend on the baseline read `py-version`, not the host
+# interpreter, so pinning it here keeps them honest: in particular,
+# redundant-future-annotations (C9112) stays dormant below a 3.14 baseline,
+# and baseline-3.12 modules keep their required
+# `from __future__ import annotations` imports.
+py-version = "3.12"
+# Expand directory targets like tests and examples even when a target is not
+# a package.
+recursive = true
+load-plugins = ["df12_python_lints"]
+
+[tool.pylint."messages control"]
+# Keep this pass focused on the df12 house-style checkers; the classic
+# messages run in the PyPy pass.
+disable = ["all"]
+enable = [
+    # Fail, rather than skip, when a file cannot be parsed or analysed. Pylint
+    # still reports these under `disable = ["all"]`, but an explicit disable of
+    # any of them lets an unparsable or unanalysable module pass with exit
+    # status 0. They are enabled by name to pin the behaviour, and
+    # tests/test_toolchain_versions.py rejects configuration that disables them.
+    "syntax-error",
+    "fatal",
+    "astroid-error",
+    "parse-error",
+    "config-parse-error",
+    "method-check-failed",
+
+    # Validate every inline pragma name. This pass registers both the core and
+    # df12 messages, so it is the one that can tell a genuine typo from a df12
+    # name; the classic pass disables W0012 for exactly that reason.
+    "unknown-option-value",
+
+    # df12 house-style checkers (df12_python_lints).
+    "assert-missing-message",
+    "lint-suppression-without-explanation",
+    "prefer-match-over-constant-chain",
+    "prefer-slots-for-dataclass",
+    "prefer-snapshot-assertion",
+    "prefer-snapshot-substring",
+    "prefer-structural-pattern-matching",
+    "prefer-type-statement",
+    "redundant-future-annotations",
+    "reexport-by-assignment",
+    "trivial-alias-wrapper",
+    "trivial-attribute-wrapper",
+    "typecheck-suppression-without-explanation",
+]
