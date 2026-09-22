@@ -1,0 +1,9 @@
+# Labels that are not GitHub-hosted must be registered here, or actionlint
+# reports every use of one as an unknown runner label. The registry is held
+# to an equality with the labels actually in use by
+# `tests/workflow_contracts/test_runner_placement.py::test_the_registry_matches_the_labels_in_use`:
+# a label in use and not registered fails, and a registration that no workflow
+# uses fails too.
+self-hosted-runner:
+  labels:
+    - ubicloud-standard-2
