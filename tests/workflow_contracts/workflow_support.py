@@ -30,6 +30,8 @@ import typing as typ
 
 import yaml
 
+from .strict_yaml import StrictLoader
+
 #: Repository root, three levels above this file.
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
@@ -121,6 +123,21 @@ class NotAMappingError(WorkflowShapeError):
 
     def __init__(self, subject: str) -> None:
         super().__init__(f"{subject} must parse to a mapping")
+
+
+class NotALabelError(WorkflowShapeError):
+    """A registry entry that should be a runner label is not a string.
+
+    Parameters
+    ----------
+    subject : str
+        The entry's location.
+    value : object
+        What was found.
+    """
+
+    def __init__(self, subject: str, value: object) -> None:
+        super().__init__(f"{subject} must be a runner label; got {value!r}")
 
 
 def as_mapping(value: object) -> dict[str, object] | None:
@@ -238,11 +255,14 @@ class WorkflowSource:
         Raises
         ------
         UnparsableWorkflowError
-            If the file is not parsable YAML.
+            If the file is not parsable YAML, repeats a key within one
+            mapping, or uses a list or mapping as a key. PyYAML alone keeps
+            the last of two equal keys in silence, so a lane could carry a
+            paid label in the discarded half and read as hosted here.
         """
         text = self.text(path)
         try:
-            return yaml.safe_load(text)
+            return yaml.load(text, Loader=StrictLoader)  # noqa: S506 - strict SafeLoader subclass
         except yaml.YAMLError as error:
             raise UnparsableWorkflowError(subject) from error
 
@@ -291,7 +311,9 @@ class WorkflowSource:
         Raises
         ------
         NotAMappingError
-            If the workflow's ``jobs`` key is not a mapping.
+            If the workflow's ``jobs`` key, or any one job, is not a mapping.
+            A job left out here would be left out of every traversal built on
+            this, and each rule would pass over it.
         """
         declared = as_mapping(self.document(name).get("jobs"))
         if declared is None:
@@ -299,8 +321,9 @@ class WorkflowSource:
         found: dict[str, dict[str, object]] = {}
         for key, value in declared.items():
             job_document = as_mapping(value)
-            if job_document is not None:
-                found[key] = job_document
+            if job_document is None:
+                raise NotAMappingError(f"{name}:jobs.{key}")
+            found[key] = job_document
         return found
 
     @staticmethod
@@ -351,6 +374,10 @@ class WorkflowSource:
         NotAMappingError
             If the configuration, its ``self-hosted-runner`` section or its
             ``labels`` list is not shaped as `actionlint` requires.
+        NotALabelError
+            If an entry in the list is not a string. Filtering it out would
+            hold the registry equality over a smaller set than the file
+            declares.
         """
         subject = self.actionlint_config.name
         section = self._runner_section(
@@ -359,7 +386,12 @@ class WorkflowSource:
         registered = section.get("labels")
         if not isinstance(registered, list):
             raise NotAMappingError(f"{subject}:self-hosted-runner.labels")
-        return [entry for entry in registered if isinstance(entry, str)]
+        for position, entry in enumerate(registered):
+            if not isinstance(entry, str):
+                raise NotALabelError(
+                    f"{subject}:self-hosted-runner.labels[{position}]", entry
+                )
+        return list(registered)
 
 
 #: This repository's own workflows and registry. The contracts read through

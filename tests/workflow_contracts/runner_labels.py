@@ -16,26 +16,23 @@ import dataclasses as dc
 import re
 import typing as typ
 
+from .runner_matrix import (
+    collapse_label_whitespace,
+    matrix_keys,
+    matrix_values,
+    sole_matrix_key,
+)
+from .runs_on_forms import declared_labels_in
 from .workflow_support import (
     GITHUB_HOSTED_LABELS,
     REPOSITORY,
     WorkflowShapeError,
     WorkflowSource,
-    as_mapping,
 )
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-# Collapses the folding whitespace a block scalar leaves in a label. Spelled
-# out rather than written `\s`, which in Python also matches U+001C to
-# U+001F; those are not whitespace to a runner label and must not be absorbed
-# here.
-_LABEL_WHITESPACE = re.compile(r"[ \t\n\r]+")
-# A ``runs-on`` that names a matrix key resolves its label from the matrix
-# rather than declaring one. GitHub's context names allow letters, digits,
-# hyphens and underscores.
-_MATRIX_REFERENCE = re.compile(r"\bmatrix\.([A-Za-z_][A-Za-z0-9_-]*)")
 _RUNNER_EXPRESSION = re.compile(
     r"\$\{\{ *(?P<guard>.+?) *&& *'(?P<when_true>[^']*)'"
     r" *\|\| *'(?P<when_false>[^']*)' *\}\}"
@@ -114,31 +111,6 @@ class LabelRef:
         return f"{self.workflow}:{self.job}:{self.source}"
 
 
-def collapse_label_whitespace(raw: str) -> str:
-    r"""Collapse a label's folding whitespace to single spaces.
-
-    A folded scalar leaves a space where it joined two lines. Contracts that
-    assert what a label *says* read it through here, so only the contract
-    asserting how it was *written* can fail on the difference.
-
-    Parameters
-    ----------
-    raw : str
-        The label as declared.
-
-    Returns
-    -------
-    str
-        The label with runs of spaces, tabs and line breaks collapsed.
-
-    Examples
-    --------
-    >>> collapse_label_whitespace("${{ a\n      && 'x' }}")
-    "${{ a && 'x' }}"
-    """
-    return _LABEL_WHITESPACE.sub(" ", raw).strip()
-
-
 def runner_expression(raw: str) -> RunnerLabel:
     """Parse a two-armed conditional runner label.
 
@@ -189,173 +161,43 @@ def _runs_on_refs(
 ) -> typ.Iterator[LabelRef]:
     """Yield a job's own ``runs-on`` labels.
 
-    GitHub accepts a single label or a list of them, and a job that calls a
-    reusable workflow declares neither.
+    GitHub accepts a single label, a list of them, or a mapping naming a
+    runner group and labels. A job that calls a reusable workflow declares
+    none, because the called workflow places its own jobs.
 
     Yields
     ------
     LabelRef
         Each label the job declares under ``runs-on``.
     """
-    match job_document.get("runs-on"):
-        case str() as declared:
-            yield LabelRef(workflow_name, job_name, "runs-on", declared)
-        case list() as declared:
-            for position, entry in enumerate(declared):
-                if isinstance(entry, str):
-                    yield LabelRef(
-                        workflow_name, job_name, f"runs-on[{position}]", entry
-                    )
-        case _:
-            return
-
-
-def matrix_keys(raw: str) -> frozenset[str]:
-    """Return the matrix keys a ``runs-on`` declaration resolves from.
-
-    A job whose ``runs-on`` never mentions the matrix resolves no label from
-    it, however many axes the matrix declares. Reading every ``os`` in sight
-    instead would let an unrelated test parameter named ``os`` register as a
-    runner label, and the registry equality would then fail on a label no job
-    can ever request.
-
-    Parameters
-    ----------
-    raw : str
-        The label as declared.
-
-    Returns
-    -------
-    frozenset[str]
-        Each matrix key the declaration reads.
-
-    Examples
-    --------
-    >>> sorted(matrix_keys("${{ matrix.os }}"))
-    ['os']
-    >>> matrix_keys("ubuntu-latest")
-    frozenset()
-    """
-    return frozenset(_MATRIX_REFERENCE.findall(raw))
-
-
-def is_matrix_reference(raw: str) -> bool:
-    """Say whether a declaration resolves its label from the matrix.
-
-    Parameters
-    ----------
-    raw : str
-        The label as declared.
-
-    Returns
-    -------
-    bool
-        True when the declaration reads at least one matrix key.
-
-    Examples
-    --------
-    >>> is_matrix_reference("${{ matrix.os }}")
-    True
-    >>> is_matrix_reference("ubicloud-standard-2")
-    False
-    """
-    return bool(matrix_keys(collapse_label_whitespace(raw)))
-
-
-def _matrix(job_document: cabc.Mapping[str, object]) -> cabc.Mapping[str, object]:
-    """Return a job's matrix mapping, empty when it declares none.
-
-    Parameters
-    ----------
-    job_document : cabc.Mapping[str, object]
-        A job mapping.
-
-    Returns
-    -------
-    cabc.Mapping[str, object]
-        The matrix, or an empty mapping.
-    """
-    strategy = as_mapping(job_document.get("strategy"))
-    matrix = as_mapping(strategy.get("matrix")) if strategy else None
-    return matrix or {}
-
-
-def _axis_values(axis: object, key: str) -> typ.Iterator[tuple[str, str]]:
-    """Yield a direct matrix axis's string values with their sites.
-
-    Parameters
-    ----------
-    axis : object
-        The value declared under the matrix key, which YAML permits to be
-        anything.
-    key : str
-        The matrix key, named in the declaration site.
-
-    Yields
-    ------
-    tuple[str, str]
-        The declaration site and the label.
-    """
-    if not isinstance(axis, list):
+    if "runs-on" not in job_document:
         return
-    for position, entry in enumerate(axis):
-        if isinstance(entry, str):
-            yield f"strategy.matrix.{key}[{position}]", entry
-
-
-def _include_values(
-    matrix: cabc.Mapping[str, object], key: str
-) -> typ.Iterator[tuple[str, str]]:
-    """Yield the include rows' values for one matrix key, with their sites.
-
-    Parameters
-    ----------
-    matrix : cabc.Mapping[str, object]
-        A job's matrix mapping.
-    key : str
-        The matrix key to read from each row.
-
-    Yields
-    ------
-    tuple[str, str]
-        The declaration site and the label.
-    """
-    include = matrix.get("include")
-    if not isinstance(include, list):
-        return
-    for position, row in enumerate(include):
-        entry = as_mapping(row)
-        value = entry.get(key) if entry else None
-        if isinstance(value, str):
-            yield f"strategy.matrix.include[{position}].{key}", value
+    for source, label in declared_labels_in("runs-on", job_document["runs-on"]):
+        yield LabelRef(workflow_name, job_name, source, label)
 
 
 def _matrix_refs(
-    workflow_name: str, job_name: str, job_document: cabc.Mapping[str, object]
+    workflow_name: str,
+    job_name: str,
+    declaration: LabelRef,
+    job_document: cabc.Mapping[str, object],
 ) -> typ.Iterator[LabelRef]:
-    """Yield the labels a job's matrix supplies to its ``runs-on``.
-
-    Only the keys the ``runs-on`` declaration actually reads are followed,
-    and for each of those both shapes are read: the direct axis, which a
-    matrix declares as a list under the key, and the ``include`` rows, which
-    may add a value the axis does not carry. Reading only ``include`` would
-    miss ``matrix: {os: [ubuntu-latest, windows-latest]}`` entirely, which is
-    the commoner of the two shapes.
+    """Yield the labels a job's matrix supplies to one declaration.
 
     Yields
     ------
     LabelRef
-        Each label the matrix supplies, direct axis before include rows.
+        Each label the named axis supplies. A declaration composing a label
+        from the matrix and anything else fails with
+        :class:`runner_matrix.CompositeMatrixDeclarationError`.
     """
-    declared = job_document.get("runs-on")
-    if not isinstance(declared, str):
+    key = sole_matrix_key(
+        f"{workflow_name}:{job_name}:{declaration.source}", declaration.raw
+    )
+    if key is None:
         return
-    matrix = _matrix(job_document)
-    for key in sorted(matrix_keys(collapse_label_whitespace(declared))):
-        for source, label in _axis_values(matrix.get(key), key):
-            yield LabelRef(workflow_name, job_name, source, label)
-        for source, label in _include_values(matrix, key):
-            yield LabelRef(workflow_name, job_name, source, label)
+    for source, label in matrix_values(job_document, key):
+        yield LabelRef(workflow_name, job_name, source, label)
 
 
 def job_label_refs(
@@ -378,9 +220,16 @@ def job_label_refs(
         The ``runs-on`` declaration and, when it reads the matrix, the values
         the matrix supplies to it.
     """
+    declared = list(_runs_on_refs(workflow_name, job_name, job_document))
     return [
-        *_runs_on_refs(workflow_name, job_name, job_document),
-        *_matrix_refs(workflow_name, job_name, job_document),
+        *declared,
+        *(
+            reference
+            for declaration in declared
+            for reference in _matrix_refs(
+                workflow_name, job_name, declaration, job_document
+            )
+        ),
     ]
 
 

@@ -70,7 +70,6 @@ PUSH_ONLY_UBICLOUD_LANES = (
 #: targets, and public-repository minutes are free there.
 GITHUB_HOSTED_JOBS = {
     ("delayed-pr-comment.yml", "delay_and_comment"): "workflow_dispatch only",
-    ("get-codescene-sha.yml", "refresh-sha"): "workflow_dispatch only",
     ("build-wheels.yml", "build"): "workflow_call, and Windows and macOS legs",
 }
 
@@ -257,7 +256,6 @@ LABEL_DECLARING_WORKFLOWS = frozenset(
         "ci.yml",
         "coverage-main.yml",
         "delayed-pr-comment.yml",
-        "get-codescene-sha.yml",
         "release.yml",
     }
 )

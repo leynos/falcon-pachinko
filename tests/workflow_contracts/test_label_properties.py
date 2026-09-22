@@ -25,12 +25,14 @@ from __future__ import annotations
 
 import hypothesis as hyp
 import hypothesis.strategies as st
+import pytest
 
 from .runner_labels import (
     collapse_label_whitespace,
     job_labels,
     runner_expression,
 )
+from .runner_matrix import CompositeMatrixDeclarationError
 
 #: The characters a YAML folded scalar can leave in a label.
 FOLDING_WHITESPACE = " \t\n\r"
@@ -145,23 +147,48 @@ def test_an_expression_survives_any_folding(drawn: tuple[str, str, str, str]) ->
     ),
     data=st.data(),
 )
-def test_a_job_resolves_exactly_the_axes_its_declaration_names(
+def test_a_job_resolves_exactly_the_axis_its_declaration_names(
     matrix: dict[str, list[str]], data: st.DataObject
 ) -> None:
-    """Resolve the named axes and no others.
+    """Resolve the named axis and no other.
 
     This is the invariant behind the registry equality. Resolving an axis the
     declaration does not name would demand a registration for a runner no job
-    can request; failing to resolve one it does name would let a paid runner
+    can request; failing to resolve the one it names would let a paid runner
     go unregistered, which is the case the registry exists to catch.
     """
-    keys = sorted(matrix)
-    named = data.draw(st.lists(st.sampled_from(keys), min_size=1, unique=True))
+    named = data.draw(st.sampled_from(sorted(matrix)))
+    job = {"runs-on": f"${{{{ matrix.{named} }}}}", "strategy": {"matrix": matrix}}
+
+    resolved = job_labels("ci.yml", "build", job)
+
+    assert resolved == set(matrix[named])
+
+
+@hyp.given(
+    matrix=st.dictionaries(
+        matrix_key_names,
+        st.lists(labels, min_size=1, max_size=4),
+        min_size=2,
+        max_size=4,
+    ),
+    data=st.data(),
+)
+def test_a_declaration_naming_several_axes_is_refused(
+    matrix: dict[str, list[str]], data: st.DataObject
+) -> None:
+    """Refuse a composed declaration, whichever axes it names.
+
+    GitHub renders it into one label per combination, which is none of the
+    axis values, so a union of the axes would be the wrong answer.
+    """
+    named = data.draw(
+        st.lists(st.sampled_from(sorted(matrix)), min_size=2, unique=True)
+    )
     job = {
         "runs-on": " ".join(f"${{{{ matrix.{key} }}}}" for key in named),
         "strategy": {"matrix": matrix},
     }
 
-    resolved = job_labels("ci.yml", "build", job)
-
-    assert resolved == {label for key in named for label in matrix[key]}
+    with pytest.raises(CompositeMatrixDeclarationError):
+        job_labels("ci.yml", "build", job)
