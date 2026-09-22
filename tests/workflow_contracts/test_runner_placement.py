@@ -77,6 +77,9 @@ GITHUB_HOSTED_JOBS = {
 def _job(workflow_name: str, job_name: str) -> dict[str, object]:
     """Return one job document, failing with its location if it is absent.
 
+    This module is where the repository's source is composed; the readers
+    it calls take their source explicitly.
+
     Parameters
     ----------
     workflow_name : str
@@ -121,7 +124,7 @@ def test_no_declared_label_spans_lines() -> None:
     """
     broken = [
         f"{reference.where} declares {reference.raw!r}"
-        for reference in declared_labels()
+        for reference in declared_labels(REPOSITORY)
         if "\n" in reference.raw
     ]
     assert not broken, (
@@ -276,7 +279,7 @@ def test_the_registry_reads_every_workflow_that_declares_a_label() -> None:
     traversal fails here instead of silently shrinking what the registry is
     held to.
     """
-    reached = {reference.workflow for reference in declared_labels()}
+    reached = {reference.workflow for reference in declared_labels(REPOSITORY)}
 
     assert reached == LABEL_DECLARING_WORKFLOWS, (
         "the label traversal must reach every workflow that declares one, "
@@ -296,10 +299,10 @@ def test_the_registry_matches_the_labels_in_use() -> None:
     """
     registered = REPOSITORY.registered_labels()
 
-    assert set(registered) == labels_in_use(), (
+    assert set(registered) == labels_in_use(REPOSITORY), (
         "every label GitHub does not host must be registered, and every "
         f"registration must still be used; registered {sorted(registered)}, "
-        f"in use {sorted(labels_in_use())}"
+        f"in use {sorted(labels_in_use(REPOSITORY))}"
     )
 
 
@@ -360,12 +363,12 @@ def test_the_registry_comment_names_a_contract_that_exists() -> None:
     )
     for match in named:
         path = ROOT / match.group(0).split("::")[0]
-        assert path.is_file(), (
-            f".github/actionlint.yaml names {match.group(0)}, which is not a file"
-        )
+        # Read through the source's own boundary, so a missing, unreadable or
+        # undecodable file fails as a named contract error rather than a raw
+        # `OSError` or `UnicodeDecodeError`.
+        body = REPOSITORY.text(path)
         test_name = match.group("test")
         if test_name is not None:
-            body = path.read_text(encoding="utf-8")
             assert f"def {test_name}(" in body, (
                 f".github/actionlint.yaml names {match.group(0)}, but "
                 f"{path.name} defines no {test_name}"

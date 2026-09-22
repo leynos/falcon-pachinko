@@ -25,7 +25,6 @@ from .runner_matrix import (
 from .runs_on_forms import declared_labels_in
 from .workflow_support import (
     GITHUB_HOSTED_LABELS,
-    REPOSITORY,
     WorkflowShapeError,
     WorkflowSource,
 )
@@ -233,7 +232,7 @@ def job_label_refs(
     ]
 
 
-def declared_labels(source: WorkflowSource = REPOSITORY) -> list[LabelRef]:
+def declared_labels(source: WorkflowSource) -> list[LabelRef]:
     """Return every runner label the workflow estate declares.
 
     Covers the direct ``runs-on`` declaration and the matrix values a
@@ -243,7 +242,8 @@ def declared_labels(source: WorkflowSource = REPOSITORY) -> list[LabelRef]:
     Parameters
     ----------
     source : WorkflowSource
-        Where to read. Defaults to this repository.
+        Where to read. Required: only the tests compose this repository's
+        source, so no reader can fall back to it unnoticed.
 
     Returns
     -------
@@ -319,13 +319,14 @@ def job_labels(
     return frozenset(resolved)
 
 
-def labels_in_use(source: WorkflowSource = REPOSITORY) -> set[str]:
+def labels_in_use(source: WorkflowSource) -> set[str]:
     """Return every non-GitHub-hosted label the workflows resolve to.
 
     Parameters
     ----------
     source : WorkflowSource
-        Where to read. Defaults to this repository.
+        Where to read. Required: only the tests compose this repository's
+        source, so no reader can fall back to it unnoticed.
 
     Returns
     -------

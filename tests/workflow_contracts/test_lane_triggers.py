@@ -16,40 +16,12 @@ from __future__ import annotations
 
 import pytest
 
+from .lane_triggers import ON_KEY, triggers
 from .test_runner_placement import (
     FORK_FALLBACK_LANE,
     PUSH_ONLY_UBICLOUD_LANES,
 )
-from .workflow_support import REPOSITORY, NotAMappingError, as_mapping
-
-#: `on` is the YAML 1.1 boolean `True`, so a parsed workflow keys its trigger
-#: block under the boolean and not the string. Reading `"on"` returns None
-#: and every trigger contract then passes on an empty mapping.
-ON_KEY = True
-
-
-def triggers(workflow_name: str) -> dict[str, object]:
-    """Return a workflow's trigger block.
-
-    Parameters
-    ----------
-    workflow_name : str
-        The workflow file name.
-
-    Returns
-    -------
-    dict[str, object]
-        The events the workflow declares, mapped to their filters.
-
-    Raises
-    ------
-    NotAMappingError
-        If the workflow declares no trigger mapping.
-    """
-    declared = as_mapping(REPOSITORY.document(workflow_name).get(ON_KEY))
-    if declared is None:
-        raise NotAMappingError(f"{workflow_name}:on")
-    return declared
+from .workflow_support import REPOSITORY, as_mapping
 
 
 def test_on_is_read_under_the_boolean_key() -> None:
@@ -77,7 +49,7 @@ def test_the_fork_fallback_lane_serves_pull_requests() -> None:
     reader would find a fork fallback guarding nothing.
     """
     workflow_name, _ = FORK_FALLBACK_LANE
-    declared = triggers(workflow_name)
+    declared = triggers(REPOSITORY, workflow_name)
 
     assert "pull_request" in declared, (
         f"{workflow_name} must trigger on pull_request, or its lane's fork "
@@ -98,7 +70,7 @@ def test_bare_label_workflows_never_serve_a_pull_request(
     leave a fork's pull request asking for a runner it can never obtain, and
     the job would queue rather than fail.
     """
-    declared = triggers(workflow_name)
+    declared = triggers(REPOSITORY, workflow_name)
 
     reachable_by_a_fork = {"pull_request", "pull_request_target"}
     assert not reachable_by_a_fork & set(declared), (
@@ -128,7 +100,7 @@ def test_each_push_trigger_carries_its_documented_filter(workflow_name: str) -> 
     widened to `*` would publish a wheel from any tag at all. Both stay green
     under every other rule here.
     """
-    declared = triggers(workflow_name).get("push")
+    declared = triggers(REPOSITORY, workflow_name).get("push")
     push = as_mapping(declared)
     expected_key, expected_patterns = PUSH_FILTERS[workflow_name]
 
