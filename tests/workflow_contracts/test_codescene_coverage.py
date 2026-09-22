@@ -72,22 +72,18 @@ ACTION_DESCRIPTION: typ.Final[str] = "a CodeScene action"
 SELECTION_INPUTS = ("output-path", "format", "pytest-workers", "with-ratchet")
 
 #: Workflows allowed to trip a marker outside the publisher, each with the
-#: reason and the single marker it may trip. Exempting a whole file would let
-#: it acquire the credential too, which is the thing the scan exists to find;
-#: the exemption is therefore per marker.
-#:
-#: `get-codescene-sha.yml` is dispatch-only and names CodeScene in a download
-#: URL that happens to contain `cs-coverage`. It invokes no action and
-#: receives no credential. Its output, the `CODESCENE_CLI_SHA256` repository
-#: variable, no longer has a consumer: `installer-checksum` is the input that
-#: read it, and the shared action now rejects that input. The workflow is kept
-#: for the user to retire deliberately rather than deleted here.
-SCAN_EXEMPT: typ.Final[dict[str, tuple[str, str]]] = {
-    "get-codescene-sha.yml": (
-        "workflow_dispatch only; names cs-coverage in a download URL",
-        "a cs-coverage command",
-    )
-}
+#: reason and the single marker it may trip. Empty, and that is the point: the
+#: publisher is now the only workflow in this repository that names CodeScene
+#: at all. The table stays because the alternative to a per-marker exemption
+#: is a per-file one, and a file-wide exemption would let an exempt workflow
+#: acquire the credential, which is the thing the scan exists to find.
+SCAN_EXEMPT: typ.Final[dict[str, tuple[str, str]]] = {}
+
+#: The repository variable that held the CodeScene installer script's digest.
+#: `installer-checksum` was its only consumer, and the shared action rejects
+#: that input from f68e8e2e onwards, so a workflow reading this variable feeds
+#: a rejected input and one refreshing it maintains a value nothing reads.
+DEPRECATED_DIGEST_VARIABLE: typ.Final[str] = "CODESCENE_CLI_SHA256"
 
 
 def _walk(value: object, path: str) -> typ.Iterator[tuple[str, str]]:
@@ -742,6 +738,30 @@ def test_only_the_publisher_and_the_named_exemptions_name_codescene() -> None:
     assert naming == {PUBLISHER} | set(SCAN_EXEMPT), (
         "every workflow naming CodeScene must be the publisher or a recorded "
         f"exemption; found {sorted(naming)}"
+    )
+
+
+def test_no_workflow_reads_the_deprecated_cli_digest() -> None:
+    """Leave no workflow maintaining or reading a value nothing consumes.
+
+    `CODESCENE_CLI_SHA256` held the digest of the CodeScene installer script,
+    and `installer-checksum` was its only consumer. From shared-actions
+    `f68e8e2e` that input is rejected when non-empty and the CLI is pinned
+    through the action's own manifest instead. A workflow still reading the
+    variable therefore feeds a rejected input, which fails only when the action
+    runs; one still refreshing it maintains a value nothing reads, which never
+    fails at all. Neither is visible without this rule.
+    """
+    offending = sorted(
+        f"{name}: {path}"
+        for name in workflow_names()
+        for path, text in _walk(workflow(name), name)
+        if DEPRECATED_DIGEST_VARIABLE in text
+    )
+
+    assert not offending, (
+        f"no workflow may read or refresh {DEPRECATED_DIGEST_VARIABLE}; the "
+        f"shared action pins the CLI through its own manifest: {offending}"
     )
 
 

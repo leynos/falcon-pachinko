@@ -130,8 +130,10 @@ others kept the suite green. The reader is proved the same way, over temporary
 directories, because a reader that returned an empty list for a missing
 directory would clear the whole estate by finding no workflows in it.
 
-One consequence to retire deliberately. `get-codescene-sha.yml` refreshes the
-`CODESCENE_CLI_SHA256` repository variable, and `installer-checksum` was its
-only consumer. Nothing reads it now. The workflow is left in place rather than
-deleted here, and a contract holds it to naming `cs-coverage` in a download URL
-and nothing more: it may not acquire the credential or call the action.
+The publisher is now the only workflow here that names CodeScene at all.
+`get-codescene-sha.yml` refreshed the `CODESCENE_CLI_SHA256` repository
+variable, and `installer-checksum` was its only consumer; since the shared
+action rejects that input and pins the CLI through its own manifest, the
+workflow maintained a value nothing read. It is deleted, and a contract refuses
+any workflow that reads or refreshes the variable. The repository variable
+itself can be removed whenever convenient, because nothing reads it.
