@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege for the whole workflow. Every step, including the two
+# third-party actions this lane now calls, receives this scope: linting
+# Markdown and installing a formatter need to read the checkout and nothing
+# else. Declared at workflow level so a job added later inherits it rather
+# than silently taking the repository default.
+permissions:
+  contents: read
+
 jobs:
   lint-test:
     runs-on: ubuntu-latest
