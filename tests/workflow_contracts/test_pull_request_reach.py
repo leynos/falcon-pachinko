@@ -16,7 +16,12 @@ from __future__ import annotations
 import pytest
 
 from .codescene_scan import references_in
-from .guard_conditions import UnsupportedGuardError, conjuncts
+from .guard_conditions import (
+    UnknownContextError,
+    UnsupportedGuardError,
+    admits,
+    conjuncts,
+)
 from .pull_request_reach import (
     MissingCalledWorkflowError,
     TriggerShapeError,
@@ -86,6 +91,7 @@ def _caller(reference: str) -> dict[str, object]:
 @pytest.mark.parametrize(
     "reference",
     [
+        "$/.github/workflows/called.yml",
         "./.github/workflows/called.yml",
         ".github/workflows/called.yml",
         "./.github/workflows/../workflows/called.yml",
@@ -131,7 +137,7 @@ def test_a_step_level_uses_is_an_action_not_a_call() -> None:
 
 @pytest.mark.parametrize(
     "reference",
-    ["$/.github/workflows/called.yml", "../elsewhere/called.yml", "called.yml"],
+    ["$/.github/workflows/called.yml@main", "../elsewhere/called.yml", "called.yml"],
 )
 def test_an_unrecognized_call_is_refused(reference: str) -> None:
     """Fail on a call this reader cannot place.
@@ -252,8 +258,9 @@ def test_a_folded_guard_splits_into_its_conjuncts() -> None:
         "github.ref == 'refs/heads/main' && (env.T != '')",
         "!cancelled()",
         "github.ref == 'refs/heads/main' && ",
+        "github.ref == 'refs/heads/main' && env.T != '' && )",
     ],
-    ids=["disjunction", "group", "negation", "empty conjunct"],
+    ids=["disjunction", "group", "negation", "empty conjunct", "stray parenthesis"],
 )
 def test_a_guard_that_is_not_a_conjunction_is_refused(condition: str) -> None:
     """Refuse rather than approximate; the disjunction is the case that matters.
@@ -263,3 +270,58 @@ def test_a_guard_that_is_not_a_conjunction_is_refused(condition: str) -> None:
     """
     with pytest.raises(UnsupportedGuardError):
         conjuncts(condition)
+
+
+@pytest.mark.parametrize(
+    ("context", "expected"),
+    [
+        ({"github.ref": "refs/heads/main", "env.T": "set"}, True),
+        ({"github.ref": "refs/heads/feature", "env.T": "set"}, False),
+        ({"github.ref": "refs/heads/main", "env.T": ""}, False),
+    ],
+    ids=["main with a value", "another ref", "no value"],
+)
+def test_a_conjunction_holds_only_when_every_conjunct_does(
+    context: dict[str, str], expected: object
+) -> None:
+    """Admit only when all conjuncts hold."""
+    guard = "${{ github.ref == 'refs/heads/main' && env.T != '' }}"
+
+    assert admits(guard, context) is expected, (
+        f"{guard!r} must evaluate to {expected} in {context}"
+    )
+
+
+def test_string_comparison_ignores_case() -> None:
+    """Compare strings the way GitHub's expression language does."""
+    assert admits("runner.os == 'windows'", {"runner.os": "Windows"}), (
+        "string comparison must ignore case"
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [("true", True), ("", False), ("false", False)]
+)
+def test_a_bare_reference_reads_as_truthiness(value: str, expected: object) -> None:
+    """Read a bare value as GitHub reads it."""
+    assert admits("${{ matrix.tools }}", {"matrix.tools": value}) is expected, (
+        f"a bare reference holding {value!r} must read as {expected}"
+    )
+
+
+def test_status_functions_and_an_empty_guard_admit() -> None:
+    """Treat `always()` and a missing guard as running the step."""
+    assert admits("${{ always() }}", {}), "always() must admit"
+    assert admits("", {}), "a step with no guard must run"
+
+
+def test_an_unnamed_reference_is_refused() -> None:
+    """Refuse to default a context value the caller did not state."""
+    with pytest.raises(UnknownContextError):
+        admits("github.ref == 'refs/heads/main'", {})
+
+
+def test_an_unsupported_conjunct_is_refused() -> None:
+    """Refuse a comparison this reader does not evaluate, never guess."""
+    with pytest.raises(UnsupportedGuardError):
+        admits("github.ref >= 'refs/heads/main'", {"github.ref": "x"})

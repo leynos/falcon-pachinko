@@ -28,7 +28,7 @@ from .codescene_scan import (
     steps,
     triggers,
 )
-from .guard_conditions import conjuncts
+from .guard_conditions import admits, conjuncts
 from .pull_request_reach import PULL_REQUEST_EVENTS
 from .workflow_support import REPOSITORY
 
@@ -64,15 +64,59 @@ def test_the_upload_is_restricted_to_the_main_ref() -> None:
         )
 
 
+def _start(event: str, ref: str, token: str) -> dict[str, str]:
+    """Return the context a workflow started by *event* on *ref* evaluates in."""
+    return {"github.event_name": event, "github.ref": ref, "env.CS_ACCESS_TOKEN": token}
+
+
+@pytest.mark.parametrize(
+    ("context", "expected"),
+    [
+        (_start("push", "refs/heads/main", "set"), True),
+        (_start("workflow_dispatch", "refs/heads/main", "set"), True),
+        (_start("workflow_dispatch", "refs/heads/feature", "set"), False),
+        (_start("workflow_dispatch", "refs/tags/v1.0.0", "set"), False),
+        (_start("push", "refs/heads/main", ""), False),
+    ],
+    ids=[
+        "push to main",
+        "dispatch on main",
+        "dispatch on a branch",
+        "dispatch on a tag",
+        "no token",
+    ],
+)
+def test_the_upload_runs_only_for_the_trunk(
+    context: dict[str, str], expected: object
+) -> None:
+    """Evaluate the upload's guard for each way the workflow can be started.
+
+    The behavioural question a workflow runner would answer, asked of the
+    guard as GitHub evaluates it.
+    """
+    guards = [
+        str(step.get("if", ""))
+        for step in steps(REPOSITORY, PUBLISHER, PUBLISHER_JOB)
+        if "upload-codescene-coverage@" in str(step.get("uses", ""))
+    ]
+
+    assert len(guards) == 1, f"{PUBLISHER} must upload exactly once"
+    assert admits(guards[0], context) is expected, (
+        f"{PUBLISHER}'s upload must {'run' if expected else 'not run'} in {context}"
+    )
+
+
 def test_the_publisher_serializes_its_trunk_generations() -> None:
     """Let one trunk generation finish before the next starts.
 
     The shared action saves a fresh ratchet-baseline cache per successful push
     and later runs restore the newest match. Two overlapping pushes to `main`
     would both publish, and the older commit finishing last would leave its
-    baseline as the one every pull request is then measured against. Nothing
-    is cancelled: a trunk generation that has started is the one that should
-    finish.
+    baseline as the one every pull request is then measured against. A
+    running generation is never cancelled, because one that has started
+    should finish. The group is not a durable queue: GitHub keeps one pending
+    run per group, so a newer push replaces an older pending one, which skips
+    an intermediate commit no pull request should be measured against.
     """
     declared = REPOSITORY.document(PUBLISHER).get("concurrency")
 

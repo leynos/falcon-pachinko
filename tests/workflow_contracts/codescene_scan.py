@@ -215,32 +215,6 @@ def triggers(source: WorkflowSource, name: str) -> dict[str, object]:
     return {str(key): value for key, value in declared.items()}
 
 
-def _jobs(source: WorkflowSource, name: str) -> dict[object, object]:
-    """Return a workflow's jobs mapping.
-
-    Parameters
-    ----------
-    source : WorkflowSource
-        Where to read.
-    name : str
-        The workflow file name.
-
-    Returns
-    -------
-    dict[object, object]
-        Job name to job.
-
-    Raises
-    ------
-    NotAMappingError
-        If the workflow declares no jobs mapping.
-    """
-    declared = source.document(name).get("jobs")
-    if not isinstance(declared, dict):
-        raise NotAMappingError(f"{name}:jobs")
-    return declared
-
-
 def steps(source: WorkflowSource, name: str, job_name: str) -> list[dict[str, object]]:
     """Return one job's steps.
 
@@ -263,8 +237,8 @@ def steps(source: WorkflowSource, name: str, job_name: str) -> list[dict[str, ob
     MissingStepError
         If the job, or its steps list, is not declared.
     """
-    job = _jobs(source, name).get(job_name)
-    declared = job.get("steps") if isinstance(job, dict) else None
+    job = source.jobs(name).get(job_name)
+    declared = job.get("steps") if job is not None else None
     if not isinstance(declared, list):
         raise MissingStepError(name, job_name, "a steps list")
     return [step for step in declared if isinstance(step, dict)]
@@ -291,8 +265,8 @@ def declared_steps(
     dict[str, object]
         Each declared step.
     """
-    for job in _jobs(source, name).values():
-        declared = job.get("steps") if isinstance(job, dict) else None
+    for job in source.jobs(name).values():
+        declared = job.get("steps")
         if isinstance(declared, list):
             yield from (step for step in declared if isinstance(step, dict))
 

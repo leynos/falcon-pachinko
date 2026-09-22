@@ -112,7 +112,8 @@ What a pull request can reach is a closure, not a trigger list.
 `pull_request` or `pull_request_target` event starts, reading the trigger block
 in scalar, list or mapping form under either key, and follows each job-level
 call into this repository's workflow directory, recognized by where the
-reference resolves rather than by a list of prefixes. A `workflow_call`-only
+reference resolves rather than by a list of prefixes, GitHub's recommended `$/`
+self-repository spelling included. A `workflow_call`-only
 workflow a pull-request job calls runs on that pull request, and with `secrets:
 inherit` it holds every secret the caller does; a call the reader cannot place
 is refused rather than skipped. `test_codescene_boundary.py` scans that closure.
@@ -133,12 +134,17 @@ would publish that branch's coverage through the main-owned upload. The
 contract reads the guard as a conjunction through
 `tests/workflow_contracts/guard_conditions.py` and refuses `||`, because a
 substring check passes a guard with `|| github.event_name ==
-'workflow_dispatch'` appended.
+'workflow_dispatch'` appended. The same module's `admits` evaluates the guard
+for a push to main, dispatches on main, a branch and a tag, and a missing
+token, which is the behavioural question a workflow runner would answer.
 
-The workflow also serializes per ref and cancels nothing. The shared action
-saves a fresh baseline cache per successful push and later runs restore the
-newest match, so two overlapping pushes would let the older commit's baseline
-become the one every pull request is measured against.
+The workflow also serializes per ref and never cancels a running generation. The
+shared action saves a fresh baseline cache per successful push and later runs
+restore the newest match, so two overlapping pushes would let the older commit's
+baseline become the one every pull request is measured against. It is not a
+durable queue: GitHub keeps one pending run per group, so a newer push replaces
+an older pending one, which skips an intermediate commit no pull request should
+be measured against.
 
 The contracts read through `workflow_support.WorkflowSource`, the same source,
 strict loader and error hierarchy the placement contracts use, so a repeated
