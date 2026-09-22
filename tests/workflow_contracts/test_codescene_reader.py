@@ -21,13 +21,14 @@ import typing as typ
 import pytest
 import yaml
 
-from .test_codescene_coverage import (
-    NotAWorkflowMappingError,
+from .codescene_scan import pull_request_workflows
+from .workflow_support import (
+    REPOSITORY,
+    NotAMappingError,
     UndecodableWorkflowError,
     UnparsableWorkflowError,
     UnreadableWorkflowError,
     WorkflowSource,
-    workflow_names,
 )
 
 if typ.TYPE_CHECKING:
@@ -53,7 +54,7 @@ def source_over(
     """
     for name, document in documents.items():
         (directory / name).write_text(yaml.safe_dump(document), encoding="utf-8")
-    return WorkflowSource(directory)
+    return WorkflowSource(directory, directory / "actionlint.yaml")
 
 
 def test_a_missing_directory_fails_as_a_contract_failure(
@@ -66,7 +67,7 @@ def test_a_missing_directory_fails_as_a_contract_failure(
     above all not return an empty list, which would clear the estate by finding
     no workflows at all.
     """
-    source = WorkflowSource(tmp_path / "absent")
+    source = WorkflowSource(tmp_path / "absent", tmp_path / "actionlint.yaml")
 
     with pytest.raises(UnreadableWorkflowError):
         source.names()
@@ -105,7 +106,7 @@ def test_a_workflow_that_is_not_a_mapping_is_refused(tmp_path: pathlib.Path) -> 
     source = source_over(tmp_path, {})
     (tmp_path / "ci.yml").write_text("just a string\n", encoding="utf-8")
 
-    with pytest.raises(NotAWorkflowMappingError):
+    with pytest.raises(NotAMappingError):
         source.document("ci.yml")
 
 
@@ -121,16 +122,40 @@ def test_the_reader_lists_only_workflow_documents(tmp_path: pathlib.Path) -> Non
     assert source.names() == ["ci.yml", "other.yaml"]
 
 
-def test_the_default_source_is_this_repository() -> None:
-    """Keep the default reading the estate the contracts are about.
+def test_the_repository_source_is_this_repository() -> None:
+    """Keep the composed source reading the estate the contracts are about.
 
-    The rules above pass a source of their own. If the default had drifted to
-    one of those, every other contract in this directory would be asserting
-    something about a temporary directory.
+    The rules above pass a source of their own. If the repository's source
+    had drifted to one of those, every other contract in this directory would
+    be asserting something about a temporary directory.
     """
-    found = workflow_names()
+    found = REPOSITORY.names()
 
-    assert "ci.yml" in found, f"the default source must read this repository: {found}"
-    assert "coverage-main.yml" in found, (
-        f"the default source must reach the publisher: {found}"
+    assert "ci.yml" in found, f"the source must read this repository: {found}"
+    assert "coverage-main.yml" in found, f"the source must reach the publisher: {found}"
+
+
+def test_the_boundary_scans_the_closure_of_a_source(tmp_path: pathlib.Path) -> None:
+    """Drive the composition the boundary rule uses, not only its parts.
+
+    The closure is proved on its own elsewhere; this proves the query the
+    contracts call reaches a workflow only a call reaches. This repository
+    calls no local reusable workflow, so read from its own files a query that
+    had fallen back to the trigger list would pass.
+    """
+    source = source_over(
+        tmp_path,
+        {
+            "gate.yml": {
+                True: {"pull_request": None},
+                "jobs": {"call": {"uses": "./.github/workflows/helper.yml"}},
+            },
+            "helper.yml": {True: {"workflow_call": None}, "jobs": {}},
+        },
+    )
+
+    reached = pull_request_workflows(source)
+
+    assert reached == ["gate.yml", "helper.yml"], (
+        f"the boundary must scan the called workflow too; it scans {reached}"
     )

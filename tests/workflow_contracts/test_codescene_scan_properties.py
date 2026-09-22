@@ -28,7 +28,7 @@ from __future__ import annotations
 import hypothesis as hyp
 import hypothesis.strategies as st
 
-from .test_codescene_coverage import (
+from .codescene_scan import (
     ACTION_DESCRIPTION,
     MARKERS,
     _walk,
