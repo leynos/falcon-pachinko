@@ -73,7 +73,8 @@ committing.
 `coverage-main.yml` owns both persistent coverage outputs: the CodeScene
 upload and the ratchet baseline. `ci.yml` generates coverage on a pull request
 only, for its own ratchet check, and no workflow a pull request can reach names
-a CodeScene action, runs a `cs-coverage` command or carries `CS_ACCESS_TOKEN`.
+a CodeScene action, runs a `cs-coverage` command, calls the service's host,
+carries `CS_ACCESS_TOKEN`, or forwards every secret with `secrets: inherit`.
 That separation is the estate rule CV-005.
 
 It is not tidiness. Between 2026-09-16 and 2026-09-18 an unpinned `cs-coverage`
@@ -85,7 +86,7 @@ CodeScene.
 
 Both lanes must measure the same thing, or the baseline the trunk writes is not
 the baseline a pull request should be compared against.
-`tests/workflow_contracts/test_codescene_coverage.py` holds their
+`tests/workflow_contracts/test_codescene_publisher.py` holds their
 `generate-coverage` inputs equal field by field, and holds the list of compared
 fields equal to the set both lanes declare, so an input added to both and not
 to the list cannot drift unnoticed. The pull-request lane declines the report
@@ -106,9 +107,21 @@ collects the contracts, which is what makes them a gate rather than a
 convenience, and `uv run pytest tests/workflow_contracts` runs them alone.
 Running them without those dependencies fails at import.
 
+What a pull request can reach is a closure, not a trigger list.
+`tests/workflow_contracts/pull_request_reach.py` starts from every workflow a
+`pull_request` or `pull_request_target` event starts, reading the trigger block
+in scalar, list or mapping form under either key, and follows each job-level
+call into this repository's workflow directory, recognized by where the
+reference resolves rather than by a list of prefixes. A `workflow_call`-only
+workflow a pull-request job calls runs on that pull request, and with `secrets:
+inherit` it holds every secret the caller does; a call the reader cannot place
+is refused rather than skipped. `test_codescene_boundary.py` scans that closure.
+
 The contracts scan whole parsed workflow documents rather than a list of step
 keys, because a credential can be declared at workflow scope, at job scope, on
-a step, or as an action input. The action marker is the exception: it is scoped
+a step, as an action input, or forwarded by name, and the service's host can be
+curled from any shell script. `secrets: inherit` names nothing, so it is
+recognized by its position. The action marker is the exception: it is scoped
 to `uses` values, because applied to every scalar it would report a step named
 "check CodeScene coverage" as an invocation, and scoped to one action reference
 it would miss a second CodeScene action entirely.
@@ -116,14 +129,24 @@ it would miss a second CodeScene action entirely.
 The upload carries a ref guard as well as its trigger. `workflow_dispatch` can
 select any branch or tag, and the push trigger's `branches: [main]` says
 nothing about a dispatch, so without the guard a dispatch from a feature branch
-would publish that branch's coverage through the main-owned upload.
+would publish that branch's coverage through the main-owned upload. The
+contract reads the guard as a conjunction through
+`tests/workflow_contracts/guard_conditions.py` and refuses `||`, because a
+substring check passes a guard with `|| github.event_name ==
+'workflow_dispatch'` appended.
 
 The workflow also serializes per ref and cancels nothing. The shared action
 saves a fresh baseline cache per successful push and later runs restore the
 newest match, so two overlapping pushes would let the older commit's baseline
 become the one every pull request is measured against.
 
-Each of the three markers is proved against a document carrying only its own
+The contracts read through `workflow_support.WorkflowSource`, the same source,
+strict loader and error hierarchy the placement contracts use, so a repeated
+key cannot hide a credential and `except UnreadableWorkflowError` catches every
+reader's failure. The reusable queries live in
+`tests/workflow_contracts/codescene_scan.py` and take their source explicitly.
+
+Each marker is proved against a document carrying only its own
 interaction: the scan clears a workflow by finding nothing, so a marker that
 had stopped matching would clear the very thing it exists to catch while the
 others kept the suite green. The reader is proved the same way, over temporary
