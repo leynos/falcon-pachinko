@@ -112,7 +112,8 @@ inputs.
 Neither lane fetches full Git history. The ratchet compares the measured
 percentage with a stored baseline and reads no commits. The full clone the
 pull-request lane once requested dates from the CodeScene check step, which has
-left it.
+left it, and `test_the_pull_request_lane_fetches_no_history` keeps it from
+returning.
 
 `tests/workflow_contracts/` needs two development dependencies the library
 itself does not. **PyYAML** (`pyyaml>=6.0.3`) parses the GitHub Actions

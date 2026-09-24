@@ -37,6 +37,7 @@ from .pull_request_reach import PULL_REQUEST_EVENTS
 from .workflow_support import REPOSITORY
 
 MAIN_REF = "github.ref == 'refs/heads/main'"
+CHECKOUT_ACTION = "actions/checkout"
 
 
 def test_the_upload_is_restricted_to_the_main_ref() -> None:
@@ -230,6 +231,33 @@ def test_every_shared_coverage_action_is_sha_pinned_to_one_revision() -> None:
     )
     assert len(revisions) == 1, (
         f"both shared coverage actions must use one revision; found {revisions}"
+    )
+
+
+def _fetch_depth(step: dict[str, object]) -> object:
+    """Return the ``fetch-depth`` a checkout step requests, or None for the default."""
+    inputs = step.get("with")
+    return inputs.get("fetch-depth") if isinstance(inputs, dict) else None
+
+
+def test_the_pull_request_lane_fetches_no_history() -> None:
+    """Keep the coverage lane's checkout shallow.
+
+    `generate-coverage` compares the measured percentage with a stored baseline
+    and never runs git, so full history buys nothing. It was requested for the
+    CodeScene check step, which has left this lane, and the comment claiming
+    the ratchet needed the merge base outlived it.
+    """
+    depths = [
+        _fetch_depth(step)
+        for step in steps(REPOSITORY, PR_WORKFLOW, PR_JOB)
+        if invokes(step, CHECKOUT_ACTION)
+    ]
+
+    assert depths, f"{PR_WORKFLOW}:{PR_JOB} must check the repository out"
+    assert all(str(depth) != "0" for depth in depths), (
+        f"{PR_WORKFLOW}:{PR_JOB} fetches full history (fetch-depth {depths}); the "
+        f"ratchet reads no commits, so the default shallow clone serves it"
     )
 
 
