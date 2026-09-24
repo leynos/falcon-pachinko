@@ -16,15 +16,18 @@ from __future__ import annotations
 import pytest
 
 from .codescene_scan import (
+    COVERAGE_ACTION,
     FULL_SHA,
     PR_JOB,
     PR_WORKFLOW,
     PUBLISHER,
     PUBLISHER_JOB,
     SELECTION_INPUTS,
+    UPLOAD_ACTION,
     _walk,
     coverage_inputs,
     declared_steps,
+    invokes,
     steps,
     triggers,
 )
@@ -52,7 +55,7 @@ def test_the_upload_is_restricted_to_the_main_ref() -> None:
     uploads = [
         step
         for step in steps(REPOSITORY, PUBLISHER, PUBLISHER_JOB)
-        if "upload-codescene-coverage@" in str(step.get("uses", ""))
+        if invokes(step, UPLOAD_ACTION)
     ]
 
     assert uploads, f"{PUBLISHER} must upload the trunk report"
@@ -97,7 +100,7 @@ def test_the_upload_runs_only_for_the_trunk(
     guards = [
         str(step.get("if", ""))
         for step in steps(REPOSITORY, PUBLISHER, PUBLISHER_JOB)
-        if "upload-codescene-coverage@" in str(step.get("uses", ""))
+        if invokes(step, UPLOAD_ACTION)
     ]
 
     assert len(guards) == 1, f"{PUBLISHER} must upload exactly once"
@@ -161,7 +164,7 @@ def test_the_publisher_uploads_rather_than_checks() -> None:
     uploads = [
         step
         for step in steps(REPOSITORY, PUBLISHER, PUBLISHER_JOB)
-        if "upload-codescene-coverage@" in str(step.get("uses", ""))
+        if invokes(step, UPLOAD_ACTION)
     ]
 
     assert uploads, f"{PUBLISHER} must upload the trunk report to CodeScene"
@@ -206,8 +209,7 @@ def test_every_shared_coverage_action_is_sha_pinned_to_one_revision() -> None:
         str(step.get("uses"))
         for name in REPOSITORY.names()
         for step in declared_steps(REPOSITORY, name)
-        if "generate-coverage@" in str(step.get("uses", ""))
-        or "upload-codescene-coverage@" in str(step.get("uses", ""))
+        if invokes(step, COVERAGE_ACTION) or invokes(step, UPLOAD_ACTION)
     }
     revisions = {reference.rsplit("@", 1)[1] for reference in used}
 
@@ -255,6 +257,27 @@ def test_the_publisher_publishes_the_report() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("name", "job"),
+    [(PR_WORKFLOW, PR_JOB), (PUBLISHER, PUBLISHER_JOB)],
+    ids=["pull-request lane", "publisher"],
+)
+def test_each_lane_runs_the_ratchet(name: str, job: str) -> None:
+    """Hold both lanes to the ratchet itself, not only to agreeing about it.
+
+    With CodeScene off the pull-request lane, the ratchet is its whole coverage
+    gate, and the publisher's ratchet is what writes the baseline that gate
+    reads. The parity check below compares the two lanes with each other, so
+    turning the ratchet off in both at once satisfies it.
+    """
+    inputs = coverage_inputs(REPOSITORY, name, job)
+
+    assert inputs.get("with-ratchet") == "true", (
+        f"{name}:{job} sets with-ratchet={inputs.get('with-ratchet')!r}; without "
+        f"it the lane measures coverage and asserts nothing about it"
+    )
+
+
 @pytest.mark.parametrize("field", SELECTION_INPUTS)
 def test_both_lanes_measure_the_same_thing(field: str) -> None:
     """Hold the trunk generation and the pull-request check to one selection.
@@ -286,7 +309,7 @@ def test_the_upload_reads_the_format_that_was_generated() -> None:
     uploads = [
         step
         for step in steps(REPOSITORY, PUBLISHER, PUBLISHER_JOB)
-        if "upload-codescene-coverage@" in str(step.get("uses", ""))
+        if invokes(step, UPLOAD_ACTION)
     ]
 
     assert uploads, f"{PUBLISHER} must upload the trunk report"

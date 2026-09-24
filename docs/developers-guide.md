@@ -89,8 +89,16 @@ the baseline a pull request should be compared against.
 `tests/workflow_contracts/test_codescene_publisher.py` holds their
 `generate-coverage` inputs equal field by field, and holds the list of compared
 fields equal to the set both lanes declare, so an input added to both and not
-to the list cannot drift unnoticed. The pull-request lane declines the report
-artefact; the publisher keeps the action's default and uploads what it wrote.
+to the list cannot drift unnoticed. Agreement is not enough on its own: each
+lane must also set `with-ratchet: 'true'`, because turning the ratchet off in
+both lanes at once keeps them equal and leaves the pull request with no coverage
+gate. The pull-request lane declines the report artefact; the publisher keeps
+the action's default and uploads what it wrote.
+
+The contracts recognize a shared action by its whole path before `@`, at any
+ref. A substring search accepts `someone-else/upload-codescene-coverage` as the
+real upload, so a step repointed at a look-alike would satisfy every rule
+written about the one it replaced.
 
 Both shared actions are pinned to one revision, and the upload passes no
 checksum input. From shared-actions `f68e8e2e` the action pins `cs-coverage`
@@ -107,13 +115,13 @@ pull-request lane once requested dates from the CodeScene check step, which has
 left it.
 
 `tests/workflow_contracts/` needs two development dependencies the library
-itself does not. **PyYAML** parses the GitHub Actions documents and
-**Hypothesis** generates the documents the scanner is held to. Both are in the
-`dev` dependency group, so `make build`, which runs `uv sync --group dev`,
-installs them; `uv sync --group dev` on its own does as well. `make test`
-collects the contracts, which is what makes them a gate rather than a
-convenience, and `uv run pytest tests/workflow_contracts` runs them alone.
-Running them without those dependencies fails at import.
+itself does not. **PyYAML** (`pyyaml>=6.0.3`) parses the GitHub Actions
+documents and **Hypothesis** (`hypothesis>=6.168.0`) generates the documents the
+scanner is held to. Both are in the `dev` dependency group, so `make build`,
+which runs `uv sync --group dev`, installs them; `uv sync --group dev` on its
+own does as well. `make test` collects the contracts, which is what makes them
+a gate rather than a convenience, and `uv run pytest tests/workflow_contracts`
+runs them alone. Running them without those dependencies fails at import.
 
 What a pull request can reach is a closure, not a trigger list.
 `tests/workflow_contracts/pull_request_reach.py` starts from every workflow a

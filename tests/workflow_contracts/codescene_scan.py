@@ -30,6 +30,17 @@ if typ.TYPE_CHECKING:
 #: carry: a tag or a branch can be moved under the repository's feet.
 FULL_SHA = re.compile(r"[0-9a-f]{40}")
 
+#: The two shared actions the lanes call, named by their whole path. A step is
+#: recognized only when the path before `@` is exactly one of these: a
+#: substring match accepts `someone-else/upload-codescene-coverage` as the real
+#: upload, so a repointed step would satisfy every rule written about it.
+COVERAGE_ACTION: typ.Final[str] = (
+    "leynos/shared-actions/.github/actions/generate-coverage"
+)
+UPLOAD_ACTION: typ.Final[str] = (
+    "leynos/shared-actions/.github/actions/upload-codescene-coverage"
+)
+
 #: The workflow that owns the trunk generation and the upload.
 PUBLISHER = "coverage-main.yml"
 PUBLISHER_JOB = "coverage-upload"
@@ -271,6 +282,24 @@ def declared_steps(
             yield from (step for step in declared if isinstance(step, dict))
 
 
+def invokes(step: dict[str, object], action: str) -> bool:
+    """Return whether a step calls exactly ``action``, at whatever ref.
+
+    Parameters
+    ----------
+    step : dict[str, object]
+        One step mapping.
+    action : str
+        The action's full path, without a ref.
+
+    Returns
+    -------
+    bool
+        True when the step's ``uses`` names that path and nothing longer.
+    """
+    return str(step.get("uses", "")).partition("@")[0] == action
+
+
 def coverage_inputs(
     source: WorkflowSource, name: str, job_name: str
 ) -> dict[str, object]:
@@ -296,7 +325,7 @@ def coverage_inputs(
         If the job has no coverage step, or the step declares no inputs.
     """
     for step in steps(source, name, job_name):
-        if "generate-coverage@" in str(step.get("uses", "")):
+        if invokes(step, COVERAGE_ACTION):
             inputs = step.get("with")
             if not isinstance(inputs, dict):
                 raise MissingStepError(name, job_name, "coverage inputs")
