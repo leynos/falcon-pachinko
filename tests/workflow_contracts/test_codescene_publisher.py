@@ -17,6 +17,7 @@ import pytest
 
 from .codescene_scan import (
     COVERAGE_ACTION,
+    CREDENTIAL_OUTPUT,
     FULL_SHA,
     PR_JOB,
     PR_WORKFLOW,
@@ -67,19 +68,23 @@ def test_the_upload_is_restricted_to_the_main_ref() -> None:
         )
 
 
-def _start(event: str, ref: str, token: str) -> dict[str, str]:
-    """Return the context a workflow started by *event* on *ref* evaluates in."""
-    return {"github.event_name": event, "github.ref": ref, "env.CS_ACCESS_TOKEN": token}
+def _start(event: str, ref: str, available: str) -> dict[str, str]:
+    """Return the context a workflow started by *event* on *ref* evaluates in.
+
+    *available* is what the token check step wrote: ``'true'`` when the
+    repository holds the secret, ``'false'`` when it does not.
+    """
+    return {"github.event_name": event, "github.ref": ref, CREDENTIAL_OUTPUT: available}
 
 
 @pytest.mark.parametrize(
     ("context", "expected"),
     [
-        (_start("push", "refs/heads/main", "set"), True),
-        (_start("workflow_dispatch", "refs/heads/main", "set"), True),
-        (_start("workflow_dispatch", "refs/heads/feature", "set"), False),
-        (_start("workflow_dispatch", "refs/tags/v1.0.0", "set"), False),
-        (_start("push", "refs/heads/main", ""), False),
+        (_start("push", "refs/heads/main", "true"), True),
+        (_start("workflow_dispatch", "refs/heads/main", "true"), True),
+        (_start("workflow_dispatch", "refs/heads/feature", "true"), False),
+        (_start("workflow_dispatch", "refs/tags/v1.0.0", "true"), False),
+        (_start("push", "refs/heads/main", "false"), False),
     ],
     ids=[
         "push to main",

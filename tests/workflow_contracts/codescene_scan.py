@@ -41,6 +41,15 @@ UPLOAD_ACTION: typ.Final[str] = (
     "leynos/shared-actions/.github/actions/upload-codescene-coverage"
 )
 
+#: The publisher's token check. It binds nothing and runs one command whose
+#: expression GitHub evaluates before the shell starts, so the secret reaches
+#: no process and no `env`; the upload consumes the output it writes.
+CREDENTIAL_CHECK_ID: typ.Final[str] = "codescene-token"
+CREDENTIAL_CHECK_COMMAND: typ.Final[str] = (
+    'echo "available=${{ secrets.CS_ACCESS_TOKEN != \'\' }}" >> "$GITHUB_OUTPUT"'
+)
+CREDENTIAL_OUTPUT: typ.Final[str] = f"steps.{CREDENTIAL_CHECK_ID}.outputs.available"
+
 #: The workflow that owns the trunk generation and the upload.
 PUBLISHER = "coverage-main.yml"
 PUBLISHER_JOB = "coverage-upload"
