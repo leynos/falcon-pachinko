@@ -19,6 +19,8 @@ Run with:
 
 from __future__ import annotations
 
+import re
+
 from .codescene_scan import (
     CREDENTIAL_CHECK_COMMAND,
     CREDENTIAL_CHECK_ID,
@@ -35,6 +37,11 @@ from .workflow_support import REPOSITORY
 
 CREDENTIAL_NAME = "CS_ACCESS_TOKEN"
 CREDENTIAL_INPUT = "${{ secrets.CS_ACCESS_TOKEN }}"
+
+#: Any read of the secrets context: `secrets.NAME`, or an index such as
+#: `secrets[format('CS_{0}', 'ACCESS_TOKEN')]` that never spells the name out.
+#: Expressions are case-insensitive, so the match is too.
+SECRETS_READ = re.compile(r"\bsecrets\s*[.\[]", re.IGNORECASE)
 
 
 def test_the_token_check_is_one_exact_command() -> None:
@@ -90,15 +97,17 @@ def test_the_upload_consumes_the_check_and_takes_the_secret_directly() -> None:
 
 
 def test_no_env_in_the_publisher_carries_the_token() -> None:
-    """Refuse the token in a workflow, job or step ``env``, under any name.
+    """Refuse the token, or any secret, in a workflow, job or step ``env``.
 
-    The text of every scalar beneath an ``env`` is searched, so renaming the
-    variable does not hide the secret it is bound to.
+    Every key and scalar beneath an ``env`` is searched, so renaming the
+    variable does not hide the secret it is bound to, and neither does reaching
+    the secret by an indexed expression that never spells its name.
     """
     offending = sorted(
         path
         for path, text in _walk(REPOSITORY.document(PUBLISHER), PUBLISHER)
-        if ".env." in path and CREDENTIAL_NAME in text
+        if ".env." in path
+        and (CREDENTIAL_NAME in text or SECRETS_READ.search(text) is not None)
     )
 
     assert not offending, (

@@ -164,7 +164,9 @@ reaches no process. The upload runs only when that output is `'true'` and the
 ref is main, and passes `${{ secrets.CS_ACCESS_TOKEN }}` straight to
 `access-token`. `tests/workflow_contracts/test_codescene_token.py` asserts the
 exact command with no `if:` or `env`, the output conjunct, the direct input,
-and no `env` anywhere in the publisher carrying the token under any name. A
+and no `env` anywhere in the publisher carrying the token under any name or
+reading the secrets context at all, which an indexed expression such as
+`secrets[format(...)]` would otherwise hide. A
 guard on `env.CS_ACCESS_TOKEN != ''` would not do: with the binding deleted it
 is simply false, and the upload skips forever without failing anything.
 
