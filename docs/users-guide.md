@@ -269,6 +269,15 @@ async def lifespan(app):
 - **Pytest fixtures** – See `tests/behaviour/*.feature` and
   `falcon_pachinko/unittests` helpers for factory utilities.
 
+The `websocket_simulator` pytest fixture (from `falcon_pachinko.testing`)
+takes no parameters and yields a `SimulatorRouterHarness`: a pre-mounted
+router and app wired to inject a `WebSocketSimulator` into each connection.
+Register routes on `harness.router`, then dispatch a connection with
+`async with harness.connect(path) as connection: ...`. On teardown the
+fixture calls `harness.discard_pending_simulator()`, discarding any simulator
+staged for a connection that was never established, so tests do not need to
+assemble a router and simulator by hand.
+
 Recommended strategy:
 
 - Unit test pure resource logic with `WebSocketSimulator`.

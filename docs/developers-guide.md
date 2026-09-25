@@ -49,11 +49,34 @@ Test request doubles should expose both `path` and `path_template`. Use an empty
 `path_template` for root-mounted router tests, matching the runtime default
 used by Falcon-style request objects that do not provide a template.
 
+### `_RouteMatch` and `_Dispatch`
+
+`_RouteMatch` holds what the prefix match produced: `params: dict[str, str]`
+and `remaining: str`, the path segment still to be consumed. As
+`_resolve_subroutes` walks a resource's nested subroutes, it updates the same
+`_RouteMatch` in place, consuming `remaining` and merging each subroute's
+captured parameters into `params`.
+
+`_Dispatch` is a mutable, per-connection-attempt bundle of `route`, `req`,
+`ws`, and `match`. It is built once in `_try_route` and threaded through
+`_execute_route_with_error_handling`, resource and subroute resolution,
+hook notification (`_prepare_connection_context` fires `before_connect`;
+`_finalize_connection`, and `_execute_resource_handler` on error, fire
+`after_connect`), the resource's `on_connect` handler
+(`_execute_resource_handler`), and finalization (`_finalize_connection`).
+Bundling these fields means a step that changes route state — subroute
+resolution, or a hook that rewrites `params` — is visible to every later
+step, rather than requiring `route`, `req`, `ws`, `params`, and `remaining`
+to be threaded positionally through each helper.
+
+`req` is cast to `falcon.Request` at the point `_Dispatch` is constructed in
+`_try_route`, consistent with the cast-at-the-edge policy described above.
+
 ## Lint and Typecheck Toolchain
 
 `make lint` runs Ruff, then two Pylint passes, then ambrleaks. `make typecheck`
 runs `ty check falcon_pachinko tests tools`. Both perform their complete
-checks locally and in CI; neither needs a wrapper or a second manual step.
+checks locally and in CI, and need no wrapper and no second manual step.
 
 Ruff is pinned at 0.16.4 via `RUFF_VERSION` in the Makefile, and the same
 version is installed in `.github/workflows/ci.yml` with
@@ -97,6 +120,11 @@ is the newest release, and it declares `astroid>=4.0.2,<=4.1.dev0`, which
 excludes `astroid` 4.3.x. The upgrade to `astroid` 4.3.1 is therefore
 deferred until a Pylint release accepts it, and a test asserts that
 `make lint-pylint ASTROID_VERSION=4.3.1` fails dependency resolution.
+
+The df12 pass additionally pins `df12-python-lints` 0.3.0 through
+`DF12_PYTHON_LINTS_VERSION`, installed from the `v0.3.0` tag of the
+`df12-python-lints` repository. The runtime check refuses to run if any
+other version of `df12-python-lints` is installed.
 
 #### The classic pass on PyPy
 
