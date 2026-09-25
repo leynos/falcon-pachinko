@@ -216,11 +216,20 @@ class AnnouncementFeed:
         return await self._queue.get()
 
 
-class AuthenticationError(PermissionError):
-    """Raised when a connection presents invalid credentials."""
+#: Why a connection was refused. A fixed set, so an audit record or a counter
+#: keyed on it cannot grow with whatever a caller sends.
+type AuthenticationFailure = typ.Literal["unknown_workspace", "invalid_token"]
 
-    def __init__(self, workspace_id: str) -> None:
+
+class AuthenticationError(PermissionError):
+    """Raised when a connection presents invalid credentials.
+
+    ``reason`` says which check refused it; the token itself is never kept.
+    """
+
+    def __init__(self, workspace_id: str, reason: AuthenticationFailure) -> None:
         self.workspace_id = workspace_id
+        self.reason: AuthenticationFailure = reason
         super().__init__(f"invalid token for workspace {workspace_id!r}")
 
 
@@ -244,5 +253,7 @@ class TokenAuthenticator:
             match the configured one.
         """
         expected = self._secrets.get(workspace_id)
-        if expected is None or token != expected:
-            raise AuthenticationError(workspace_id)
+        if expected is None:
+            raise AuthenticationError(workspace_id, "unknown_workspace")
+        if token != expected:
+            raise AuthenticationError(workspace_id, "invalid_token")
