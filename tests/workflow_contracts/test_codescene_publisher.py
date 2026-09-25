@@ -16,15 +16,19 @@ from __future__ import annotations
 import pytest
 
 from .codescene_scan import (
+    COVERAGE_ACTION,
+    CREDENTIAL_OUTPUT,
     FULL_SHA,
     PR_JOB,
     PR_WORKFLOW,
     PUBLISHER,
     PUBLISHER_JOB,
     SELECTION_INPUTS,
+    UPLOAD_ACTION,
     _walk,
     coverage_inputs,
     declared_steps,
+    invokes,
     steps,
     triggers,
 )
@@ -33,6 +37,7 @@ from .pull_request_reach import PULL_REQUEST_EVENTS
 from .workflow_support import REPOSITORY
 
 MAIN_REF = "github.ref == 'refs/heads/main'"
+CHECKOUT_ACTION = "actions/checkout"
 
 
 def test_the_upload_is_restricted_to_the_main_ref() -> None:
@@ -52,7 +57,7 @@ def test_the_upload_is_restricted_to_the_main_ref() -> None:
     uploads = [
         step
         for step in steps(REPOSITORY, PUBLISHER, PUBLISHER_JOB)
-        if "upload-codescene-coverage@" in str(step.get("uses", ""))
+        if invokes(step, UPLOAD_ACTION)
     ]
 
     assert uploads, f"{PUBLISHER} must upload the trunk report"
@@ -64,19 +69,23 @@ def test_the_upload_is_restricted_to_the_main_ref() -> None:
         )
 
 
-def _start(event: str, ref: str, token: str) -> dict[str, str]:
-    """Return the context a workflow started by *event* on *ref* evaluates in."""
-    return {"github.event_name": event, "github.ref": ref, "env.CS_ACCESS_TOKEN": token}
+def _start(event: str, ref: str, available: str) -> dict[str, str]:
+    """Return the context a workflow started by *event* on *ref* evaluates in.
+
+    *available* is what the token check step wrote: ``'true'`` when the
+    repository holds the secret, ``'false'`` when it does not.
+    """
+    return {"github.event_name": event, "github.ref": ref, CREDENTIAL_OUTPUT: available}
 
 
 @pytest.mark.parametrize(
     ("context", "expected"),
     [
-        (_start("push", "refs/heads/main", "set"), True),
-        (_start("workflow_dispatch", "refs/heads/main", "set"), True),
-        (_start("workflow_dispatch", "refs/heads/feature", "set"), False),
-        (_start("workflow_dispatch", "refs/tags/v1.0.0", "set"), False),
-        (_start("push", "refs/heads/main", ""), False),
+        (_start("push", "refs/heads/main", "true"), True),
+        (_start("workflow_dispatch", "refs/heads/main", "true"), True),
+        (_start("workflow_dispatch", "refs/heads/feature", "true"), False),
+        (_start("workflow_dispatch", "refs/tags/v1.0.0", "true"), False),
+        (_start("push", "refs/heads/main", "false"), False),
     ],
     ids=[
         "push to main",
@@ -97,7 +106,7 @@ def test_the_upload_runs_only_for_the_trunk(
     guards = [
         str(step.get("if", ""))
         for step in steps(REPOSITORY, PUBLISHER, PUBLISHER_JOB)
-        if "upload-codescene-coverage@" in str(step.get("uses", ""))
+        if invokes(step, UPLOAD_ACTION)
     ]
 
     assert len(guards) == 1, f"{PUBLISHER} must upload exactly once"
@@ -161,7 +170,7 @@ def test_the_publisher_uploads_rather_than_checks() -> None:
     uploads = [
         step
         for step in steps(REPOSITORY, PUBLISHER, PUBLISHER_JOB)
-        if "upload-codescene-coverage@" in str(step.get("uses", ""))
+        if invokes(step, UPLOAD_ACTION)
     ]
 
     assert uploads, f"{PUBLISHER} must upload the trunk report to CodeScene"
@@ -173,24 +182,25 @@ def test_the_publisher_uploads_rather_than_checks() -> None:
         )
 
 
-def test_no_caller_passes_the_deprecated_installer_checksum() -> None:
-    """Refuse the input the shared action now rejects.
+def test_no_caller_passes_a_codescene_checksum() -> None:
+    """Leave CLI archive verification to the action's own manifest.
 
     From shared-actions f68e8e2e the CodeScene CLI is pinned through a manifest
-    and a non-empty ``installer-checksum`` fails the run outright.
-    ``archive-checksum`` replaces it, so passing the old input is a red lane
-    rather than a deprecation warning.
+    and a non-empty ``installer-checksum`` fails the run outright. The action
+    verifies the archive against the manifest's own digest, so an
+    ``archive-checksum`` can only agree with it or go stale and fail the upload
+    on the trunk, where no pull request would see it.
     """
     offending = [
         f"{name}: {path}"
         for name in REPOSITORY.names()
-        for path, text in _walk(REPOSITORY.document(name), name)
-        if path.endswith(".installer-checksum") and text
+        for path, _text in _walk(REPOSITORY.document(name), name)
+        if path.endswith((".installer-checksum", ".archive-checksum"))
     ]
 
     assert not offending, (
-        f"installer-checksum is rejected when non-empty; use archive-checksum: "
-        f"{offending}"
+        f"the upload verifies its CLI against its own manifest; pass no "
+        f"checksum input: {offending}"
     )
 
 
@@ -205,8 +215,7 @@ def test_every_shared_coverage_action_is_sha_pinned_to_one_revision() -> None:
         str(step.get("uses"))
         for name in REPOSITORY.names()
         for step in declared_steps(REPOSITORY, name)
-        if "generate-coverage@" in str(step.get("uses", ""))
-        or "upload-codescene-coverage@" in str(step.get("uses", ""))
+        if invokes(step, COVERAGE_ACTION) or invokes(step, UPLOAD_ACTION)
     }
     revisions = {reference.rsplit("@", 1)[1] for reference in used}
 
@@ -222,6 +231,33 @@ def test_every_shared_coverage_action_is_sha_pinned_to_one_revision() -> None:
     )
     assert len(revisions) == 1, (
         f"both shared coverage actions must use one revision; found {revisions}"
+    )
+
+
+def _fetch_depth(step: dict[str, object]) -> object:
+    """Return the ``fetch-depth`` a checkout step requests, or None for the default."""
+    inputs = step.get("with")
+    return inputs.get("fetch-depth") if isinstance(inputs, dict) else None
+
+
+def test_the_pull_request_lane_fetches_no_history() -> None:
+    """Keep the coverage lane's checkout shallow.
+
+    `generate-coverage` compares the measured percentage with a stored baseline
+    and never runs git, so full history buys nothing. It was requested for the
+    CodeScene check step, which has left this lane, and the comment claiming
+    the ratchet needed the merge base outlived it.
+    """
+    depths = [
+        _fetch_depth(step)
+        for step in steps(REPOSITORY, PR_WORKFLOW, PR_JOB)
+        if invokes(step, CHECKOUT_ACTION)
+    ]
+
+    assert depths, f"{PR_WORKFLOW}:{PR_JOB} must check the repository out"
+    assert all(str(depth) != "0" for depth in depths), (
+        f"{PR_WORKFLOW}:{PR_JOB} fetches full history (fetch-depth {depths}); the "
+        f"ratchet reads no commits, so the default shallow clone serves it"
     )
 
 
@@ -251,6 +287,27 @@ def test_the_publisher_publishes_the_report() -> None:
     assert "publish-artefact" not in inputs, (
         f"{PUBLISHER} must keep the action's default; it declares "
         f"publish-artefact={inputs.get('publish-artefact')!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "job"),
+    [(PR_WORKFLOW, PR_JOB), (PUBLISHER, PUBLISHER_JOB)],
+    ids=["pull-request lane", "publisher"],
+)
+def test_each_lane_runs_the_ratchet(name: str, job: str) -> None:
+    """Hold both lanes to the ratchet itself, not only to agreeing about it.
+
+    With CodeScene off the pull-request lane, the ratchet is its whole coverage
+    gate, and the publisher's ratchet is what writes the baseline that gate
+    reads. The parity check below compares the two lanes with each other, so
+    turning the ratchet off in both at once satisfies it.
+    """
+    inputs = coverage_inputs(REPOSITORY, name, job)
+
+    assert inputs.get("with-ratchet") == "true", (
+        f"{name}:{job} sets with-ratchet={inputs.get('with-ratchet')!r}; without "
+        f"it the lane measures coverage and asserts nothing about it"
     )
 
 
@@ -285,7 +342,7 @@ def test_the_upload_reads_the_format_that_was_generated() -> None:
     uploads = [
         step
         for step in steps(REPOSITORY, PUBLISHER, PUBLISHER_JOB)
-        if "upload-codescene-coverage@" in str(step.get("uses", ""))
+        if invokes(step, UPLOAD_ACTION)
     ]
 
     assert uploads, f"{PUBLISHER} must upload the trunk report"

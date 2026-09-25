@@ -21,7 +21,7 @@ import typing as typ
 import pytest
 import yaml
 
-from .codescene_scan import pull_request_workflows
+from .codescene_scan import UPLOAD_ACTION, invokes, pull_request_workflows
 from .workflow_support import (
     REPOSITORY,
     NotAMappingError,
@@ -159,3 +159,35 @@ def test_the_boundary_scans_the_closure_of_a_source(tmp_path: pathlib.Path) -> N
     assert reached == ["gate.yml", "helper.yml"], (
         f"the boundary must scan the called workflow too; it scans {reached}"
     )
+
+
+@pytest.mark.parametrize(
+    ("uses", "expected"),
+    [
+        (f"{UPLOAD_ACTION}@{'0' * 40}", True),
+        (f"{UPLOAD_ACTION}@v1", True),
+        (UPLOAD_ACTION, True),
+        (f"attacker/upload-codescene-coverage@{'0' * 40}", False),
+        (f"{UPLOAD_ACTION}-fork@{'0' * 40}", False),
+        (f"x/{UPLOAD_ACTION}@{'0' * 40}", False),
+        ("", False),
+    ],
+    ids=[
+        "pinned to a SHA",
+        "pinned to a tag",
+        "no ref",
+        "another owner's action of the same name",
+        "a longer path",
+        "the path nested under another",
+        "no uses at all",
+    ],
+)
+def test_an_action_is_recognized_by_its_whole_path(uses: str, expected: object) -> None:
+    """Recognize the shared action at any ref, and nothing that merely contains it.
+
+    The look-alikes carry the `upload-codescene-coverage@` substring the rules
+    once searched for, so a matcher that fell back to searching accepts them.
+    """
+    step: dict[str, object] = {"uses": uses} if uses else {"run": "true"}
+
+    assert invokes(step, UPLOAD_ACTION) is expected

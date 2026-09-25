@@ -41,8 +41,6 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-    env:
-      CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN || '' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -65,6 +63,13 @@ jobs:
           pytest-workers: ''
           with-ratchet: 'true'
 
+      # The expression is evaluated before the shell starts, so this step
+      # binds no secret and holds no shell conditional. With no
+      # CS_ACCESS_TOKEN secret, as on a fork, the upload below skips.
+      - name: Check for the CodeScene token
+        id: codescene-token
+        run: echo "available=${{ secrets.CS_ACCESS_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+
       - name: Upload coverage data to CodeScene
         # The only CodeScene contact in this repository. The ref guard is
         # load-bearing: `workflow_dispatch` can select any branch or tag, and
@@ -75,13 +80,19 @@ jobs:
         # ratchet baseline to a push to `refs/heads/main`, so this brings the
         # CodeScene report under the same rule.
         #
-        # `installer-checksum` is deliberately absent: from shared-actions
-        # f68e8e2e the action rejects a non-empty value and pins `cs-coverage`
-        # through its own manifest, which is what fixed the parse break.
-        if: ${{ github.ref == 'refs/heads/main' && env.CS_ACCESS_TOKEN != '' }}
+        # The token goes straight to the input rather than through `env`: the
+        # uploader is a composite action and hands a step's `env` to its
+        # nested upload-artifact and cache steps, which have no use for it.
+        #
+        # No checksum input is passed. From shared-actions f68e8e2e the action
+        # rejects a non-empty `installer-checksum` and pins `cs-coverage`
+        # through its own manifest, which is what fixed the parse break. It
+        # verifies the archive against that manifest's digest, so an
+        # `archive-checksum` could only agree with it or go stale and fail.
+        if: steps.codescene-token.outputs.available == 'true' && github.ref == 'refs/heads/main'
         uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@82feb2b7aac45b7efff40c9c4bb632551b14521c
         with:
           format: cobertura
           mode: upload
           path: coverage.xml
-          access-token: ${{ env.CS_ACCESS_TOKEN }}
+          access-token: ${{ secrets.CS_ACCESS_TOKEN }}
