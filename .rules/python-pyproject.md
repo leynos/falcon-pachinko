@@ -83,11 +83,11 @@ exists on a contributor's machine.
 
 Table 1. Dependency field selection.
 
-| Field | Installed for | Use it for |
-| --- | --- | --- |
-| `project.dependencies` | Everyone who installs the package | Libraries the shipped code imports at runtime |
-| `project.optional-dependencies` | End users who opt into an *extra* | Optional runtime *features* (`package[extra]`) |
-| `dependency-groups` | Local development only | Test, lint, type-check, docs, and other tooling |
+| Field                           | Installed for                     | Use it for                                      |
+| ------------------------------- | --------------------------------- | ----------------------------------------------- |
+| `project.dependencies`          | Everyone who installs the package | Libraries the shipped code imports at runtime   |
+| `project.optional-dependencies` | End users who opt into an *extra* | Optional runtime *features* (`package[extra]`)  |
+| `dependency-groups`             | Local development only            | Test, lint, type-check, docs, and other tooling |
 
 ### Required runtime dependencies — `project.dependencies`
 

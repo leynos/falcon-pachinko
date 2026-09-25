@@ -33,8 +33,11 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 #: Every command the two targets invoke by bare name, and so every command a
 #: real run must have a stub for. `make` resolves these through `PATH`, which
-#: is what lets a stub stand in for one.
-STUBBED_TOOLS = ("ruff", "mdtablefix", "markdownlint-cli2")
+#: is what lets a stub stand in for one. Ruff is reached through `uv tool run`
+#: at a pinned version rather than by its own name, so `uv` is the command to
+#: stub: a `ruff` stub alone would be bypassed and the real formatter would
+#: rewrite the checkout.
+STUBBED_TOOLS = ("uv", "mdtablefix", "markdownlint-cli2")
 #: The flags that select the Markdown set.
 SELECT_FLAGS = ("--git", "--include-untracked")
 
