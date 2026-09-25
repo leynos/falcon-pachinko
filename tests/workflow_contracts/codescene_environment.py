@@ -70,6 +70,41 @@ def _uploads(job: dict[str, object]) -> bool:
     )
 
 
+def _placement_problem(job: dict[str, object]) -> str | None:
+    """Return what is wrong with one job's environment, or None when nothing is."""
+    declares = environment_name(job) == ENVIRONMENT
+    if _uploads(job):
+        return None if declares else MISSING
+    return STRAY if declares else None
+
+
+def _placement_violations(source: WorkflowSource) -> list[str]:
+    """Report uploading jobs without the environment and other jobs with it."""
+    jobs = [
+        (name, job_id, job)
+        for name in source.names()
+        for job_id, job in source.jobs(name).items()
+    ]
+    problems = [
+        f"{name}:{job_id} {problem}"
+        for name, job_id, job in jobs
+        if (problem := _placement_problem(job)) is not None
+    ]
+    if not any(_uploads(job) for _name, _job_id, job in jobs):
+        problems.append(NO_UPLOADER)
+    return problems
+
+
+def _reachable_violations(source: WorkflowSource) -> list[str]:
+    """Report every job a pull request can start that declares the environment."""
+    return [
+        f"{name}:{job_id} {REACHABLE}"
+        for name in pull_request_workflows(source)
+        for job_id, job in source.jobs(name).items()
+        if environment_name(job) == ENVIRONMENT
+    ]
+
+
 def environment_violations(source: WorkflowSource) -> list[str]:
     """Report every departure from the ``codescene`` environment placement.
 
@@ -85,23 +120,4 @@ def environment_violations(source: WorkflowSource) -> list[str]:
         with no uploading job is itself a violation, so the rule cannot pass
         by finding nothing to check.
     """
-    problems: list[str] = []
-    uploaders = 0
-    for name in source.names():
-        for job_id, job in source.jobs(name).items():
-            declares = environment_name(job) == ENVIRONMENT
-            if _uploads(job):
-                uploaders += 1
-                if not declares:
-                    problems.append(f"{name}:{job_id} {MISSING}")
-            elif declares:
-                problems.append(f"{name}:{job_id} {STRAY}")
-    if uploaders == 0:
-        problems.append(NO_UPLOADER)
-    for name in pull_request_workflows(source):
-        problems.extend(
-            f"{name}:{job_id} {REACHABLE}"
-            for job_id, job in source.jobs(name).items()
-            if environment_name(job) == ENVIRONMENT
-        )
-    return problems
+    return _placement_violations(source) + _reachable_violations(source)
