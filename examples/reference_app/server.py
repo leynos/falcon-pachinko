@@ -104,8 +104,23 @@ class RouterEndpoint(WebSocketResource):
 
 
 def _require_token_hook(
-    authenticator: TokenAuthenticator,
+    authenticator: TokenAuthenticator, audit: AuditTrail
 ) -> cabc.Callable[[HookContext], cabc.Awaitable[None]]:
+    """Return a ``before_connect`` hook that refuses unauthenticated connections.
+
+    Each refusal is audited as ``auth.rejected`` with the failure's bounded
+    ``reason`` (``unknown_workspace`` or ``invalid_token``) before the 401 is
+    raised, so rejections can be counted and told apart the same way accepted
+    sessions are. The record never carries the presented token. A rejected
+    known workspace is named; an unknown one is not, because its identifier
+    is whatever the caller put in the path.
+
+    Returns
+    -------
+    Callable[[HookContext], Awaitable[None]]
+        The hook to register for ``HookEvent.BEFORE_CONNECT``.
+    """
+
     async def _hook(context: HookContext) -> None:
         params = context.params or {}
         raw_workspace_id = params.get("workspace_id")
@@ -114,6 +129,12 @@ def _require_token_hook(
         try:
             await authenticator.verify(workspace_id or "default", token)
         except AuthenticationError as exc:
+            if exc.reason == "invalid_token":
+                await audit.record(
+                    "auth.rejected", reason=exc.reason, workspace=exc.workspace_id
+                )
+            else:
+                await audit.record("auth.rejected", reason=exc.reason)
             raise falcon.HTTPUnauthorized(description=str(exc)) from exc
 
     return _hook
@@ -167,8 +188,9 @@ def build_router(
     router.mount("/ws")
 
     authenticator = _resolve_as(container, "token_authenticator", TokenAuthenticator)
+    audit = _resolve_as(container, "audit_trail", AuditTrail)
     router.global_hooks.add(
-        HookEvent.BEFORE_CONNECT, _require_token_hook(authenticator)
+        HookEvent.BEFORE_CONNECT, _require_token_hook(authenticator, audit)
     )
     return router
 

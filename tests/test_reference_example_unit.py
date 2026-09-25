@@ -12,6 +12,7 @@ from falcon import HTTPUnauthorized
 from examples.reference_app import build_container, build_router
 from examples.reference_app.services import (
     AnnouncementFeed,
+    AuditTrail,
     AuthenticationError,
     Task,
     TaskCreationParams,
@@ -66,6 +67,88 @@ async def test_router_accepts_with_valid_token() -> None:
     assert first["type"] == "session.ready", (
         "the first outbound message must be a session.ready event"
     )
+
+
+def _rejections(container: ServiceContainer) -> list[dict[str, object]]:
+    audit = container.resolve("audit_trail")
+    assert isinstance(audit, AuditTrail), "the container must hold the AuditTrail"
+    return [record for record in audit.records if record["event"] == "auth.rejected"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "headers", "metadata"),
+    [
+        (
+            _TASKS_PATH,
+            {"x-workspace-token": "wrong-token"},
+            {"reason": "invalid_token", "workspace": "atlas"},
+        ),
+        (
+            "/ws/workspaces/nowhere/projects/triage/tasks",
+            {"x-workspace-token": "seekrit"},
+            {"reason": "unknown_workspace"},
+        ),
+    ],
+    ids=["invalid-token", "unknown-workspace"],
+)
+async def test_router_audits_each_rejection_with_a_bounded_reason(
+    path: str, headers: dict[str, str], metadata: dict[str, object]
+) -> None:
+    """A refused connection leaves one ``auth.rejected`` record and still 401s.
+
+    The record carries a reason from a fixed set and never the presented
+    token. An unknown workspace is not named, because its identifier is
+    whatever the caller put in the path.
+    """
+    router, container = _build_router()
+    ws = RecordingWebSocket()
+
+    with pytest.raises(HTTPUnauthorized):
+        await router.on_websocket(RequestStub(path, headers=headers), ws)
+
+    rejections = _rejections(container)
+    assert rejections == [{"event": "auth.rejected", "metadata": metadata}], (
+        f"the rejection must be audited once with a bounded reason: {rejections}"
+    )
+    assert headers["x-workspace-token"] not in repr(rejections), (
+        "the audit record must not carry the presented token"
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_does_not_audit_an_accepted_connection() -> None:
+    """A verified connection records its session, not a rejection."""
+    router, container = _build_router()
+    req = RequestStub(
+        _TASKS_PATH,
+        headers={"x-workspace-token": "seekrit", "x-user": "riley"},
+    )
+
+    await router.on_websocket(req, RecordingWebSocket())
+
+    assert _rejections(container) == [], "an accepted connection is not a rejection"
+
+
+@pytest.mark.parametrize(
+    ("workspace", "token", "reason"),
+    [
+        ("atlas", "nope", "invalid_token"),
+        ("unknown", None, "unknown_workspace"),
+    ],
+    ids=["invalid-token", "unknown-workspace"],
+)
+@pytest.mark.asyncio
+async def test_token_authenticator_names_the_rejection_reason(
+    workspace: str, token: str | None, reason: str
+) -> None:
+    """Each refusal carries the reason category the audit record reports."""
+    authenticator = TokenAuthenticator({"atlas": "secret"})
+
+    with pytest.raises(AuthenticationError) as caught:
+        await authenticator.verify(workspace, token=token)
+
+    assert caught.value.reason == reason, f"the refusal must be {reason}"
 
 
 @pytest.mark.asyncio
