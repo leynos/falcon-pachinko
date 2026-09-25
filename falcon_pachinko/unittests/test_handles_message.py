@@ -26,7 +26,7 @@ from falcon_pachinko.exceptions import (
     DuplicateHandlerRegistrationError,
     HandlerSignatureError,
 )
-from falcon_pachinko.unittests.helpers import DummyWS, bind_default_hooks
+from falcon_pachinko.unittests.helpers import DummyWS
 
 
 class PingPayload(ms.Struct):
@@ -66,10 +66,10 @@ async def test_decorator_registers_handler() -> None:
     3. The payload is properly deserialized and passed to the handler
     """
     r = DecoratedResource()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     raw = msjson.encode({"type": "ping", "payload": {"text": "hi"}})
     await r.dispatch(DummyWS(), raw)
-    assert r.seen == ["hi"]
+    assert r.seen == ["hi"], "decorated handler should record the ping payload text"
 
 
 def test_duplicate_handler_raises() -> None:
@@ -80,7 +80,9 @@ def test_duplicate_handler_raises() -> None:
     """
     with pytest.raises(DuplicateHandlerRegistrationError, match="Duplicate handler"):
 
-        class BadResource(WebSocketResource):  # pyright: ignore[reportUnusedClass]
+        class BadResource(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
+            WebSocketResource
+        ):
             @handles_message("dup")
             async def h1(self, ws: WebSocketLike, payload: object) -> None: ...
 
@@ -96,8 +98,12 @@ def test_missing_payload_param_raises() -> None:
     """
     with pytest.raises(TypeError):
 
-        class BadSig(WebSocketResource):  # pyright: ignore[reportUnusedClass]
-            @handles_message("oops")  # pyright: ignore[reportArgumentType]
+        class BadSig(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
+            WebSocketResource
+        ):
+            @handles_message(  # pyright: ignore[reportArgumentType]  # deliberately bad signature under test
+                "oops"
+            )
             async def bad(self, ws: WebSocketLike) -> None: ...
 
 
@@ -105,7 +111,9 @@ def test_ambiguous_payload_param_raises() -> None:
     """Handler with multiple annotated params should raise an error."""
     with pytest.raises(HandlerSignatureError):
 
-        class Ambiguous(WebSocketResource):  # pyright: ignore[reportUnusedClass]
+        class Ambiguous(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
+            WebSocketResource
+        ):
             @handles_message("amb")
             async def bad(
                 self,
@@ -132,7 +140,6 @@ class ParentResource(WebSocketResource):
         payload : typing.Any
             The message payload
         """
-        ...
 
 
 class ChildResource(ParentResource):
@@ -161,7 +168,9 @@ class ChildResource(ParentResource):
         """
         self.invoked.append("child")
 
-    async def parent(self, ws: WebSocketLike, payload: object) -> None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    async def parent(  # pyright: ignore[reportIncompatibleVariableOverride]  # intentional undecorated override for the test
+        self, ws: WebSocketLike, payload: object
+    ) -> None:
         """Override the parent handler to record invocation.
 
         Parameters
@@ -207,10 +216,13 @@ async def test_handlers_inherited() -> None:
     4. Method overrides without decoration still work as handlers
     """
     r = ChildResource()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     await r.dispatch(DummyWS(), msjson.encode({"type": "parent"}))
     await r.dispatch(DummyWS(), msjson.encode({"type": "child"}))
-    assert r.invoked == ["parent", "child"]
+    assert r.invoked == [
+        "parent",
+        "child",
+    ], "both the overridden parent and the new child handler should run"
 
 
 @pytest.mark.asyncio
@@ -222,9 +234,9 @@ async def test_decorated_override() -> None:
     precedence over the parent's handler.
     """
     r = DecoratedOverride()
-    bind_default_hooks(r)
+    r.bind_default_hook_manager()
     await r.dispatch(DummyWS(), msjson.encode({"type": "parent"}))
-    assert r.invoked == "decorated"
+    assert r.invoked == "decorated", "re-decorated handler should override the parent"
 
 
 def test_unresolved_annotation_is_ignored() -> None:
@@ -243,7 +255,7 @@ def test_unresolved_annotation_is_ignored() -> None:
         async def handler(
             self,
             ws: WebSocketLike,
-            payload: "UnknownPayload",  # type: ignore  # noqa: F821, UP037
+            payload: UnknownPayload,  # ty: ignore[unresolved-reference]  # ruff: ignore[undefined-name]  # deliberately unresolved to test the fallback
         ) -> None:
             """Handle messages with unresolved payload type.
 
@@ -254,6 +266,7 @@ def test_unresolved_annotation_is_ignored() -> None:
             payload : UnknownPayload
                 The message payload with unresolved type
             """
-            ...
 
-    assert UnknownAnnoResource.handlers["unknown"].payload_type is None
+    assert UnknownAnnoResource.handlers["unknown"].payload_type is None, (
+        "unresolved annotations should fall back to a None payload type"
+    )

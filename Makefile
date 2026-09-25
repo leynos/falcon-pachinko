@@ -11,18 +11,106 @@ NIXIE ?= $(shell which nixie)
 # neither missed because it is new nor rewritten twice.
 MDTABLEFIX ?= mdtablefix
 MDTABLEFIX_SELECT = --git --include-untracked
-TOOLS = ruff ty $(MDLINT) $(MDTABLEFIX) $(NIXIE) uv
+TOOLS = $(MDLINT) $(MDTABLEFIX) $(NIXIE) uv
 VENV_TOOLS = pytest
 UV ?= uv
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
+# Retain the typos-config-builder gate: the bespoke spelling machinery, and
+# the PATHSPEC_VERSION and TYPOS_VERSION pins that served only it, were
+# retired in favour of this single gate subcommand. The RUFF_VERSION below is
+# a separate pin driving the repository-wide format and lint gates.
 TYPOS_CONFIG_BUILDER_VERSION ?= v0.1.1
 TYPOS_CONFIG_BUILDER = $(UV_ENV) $(UV) tool run --python 3.14 --from \
 	"git+https://github.com/leynos/typos-config-builder.git@$(TYPOS_CONFIG_BUILDER_VERSION)" \
 	typos-config-builder
+# Pin Ruff so `make` invokes the same version as the `ruff==` pin in
+# .github/workflows/ci.yml. tests/test_toolchain_versions.py enforces that
+# both sites stay in sync; bump them together, because rule sets differ
+# between Ruff releases and a mismatch causes version-skew lint failures.
+# This pin is unrelated to the retired spelling-helper RUFF_VERSION: it drives
+# the repository-wide format and lint gates.
+RUFF_VERSION ?= 0.16.4
+RUFF ?= $(UV) tool run --from ruff==$(RUFF_VERSION) ruff
+# Pin ty so `make` and CI invoke the same typechecker release. ty is
+# pre-1.0 and diagnostics shift between releases, so an unpinned install
+# breaks the typecheck gate without any code change. Bump deliberately and
+# fix new diagnostics in the same commit.
+TY_VERSION ?= 0.0.74
+TY ?= $(UV) tool run --from ty==$(TY_VERSION) ty
+# Pylint runs in two isolated tool environments, never in the project .venv:
+#
+# - Classic checks: vanilla Pylint on PyPy 8.0.0's Python 3.12 build, one
+#   worker, configured by pyproject.toml. The linter's interpreter matches the
+#   project's Python 3.12 baseline, so it parses exactly the supported syntax.
+# - df12-python-lints: CPython 3.14, configured by pylintrc-df12.toml, which
+#   pins py-version to the 3.12 baseline so running on 3.14 cannot impose it.
+#
+# Both passes share these pins. Pylint 4.0.8 is the newest release and declares
+# astroid>=4.0.2,<=4.1.dev0, which excludes Astroid 4.3.x and its descriptor
+# fix. PyPy 8.0.0 fixes the underlying runtime bug (pypy/pypy#5458), so
+# vanilla Astroid 4.0.4 bootstraps on PyPy without a shim. Move to Astroid
+# 4.3.1 once a Pylint release accepts it.
+PYLINT_VERSION ?= 4.0.8
+ASTROID_VERSION ?= 4.0.4
+# List falcon_pachinko/unittests and falcon_pachinko/behaviour explicitly:
+# they carry no __init__.py, so package discovery from falcon_pachinko does
+# not descend into them.
+PYLINT_TARGETS ?= falcon_pachinko falcon_pachinko/unittests \
+	falcon_pachinko/behaviour tests examples tools
+# Persisted Pylint state lives in one directory per runtime, so the two passes
+# never read each other's statistics.
+PYLINT_CACHE ?= .cache/pylint
 
-.PHONY: help all clean build build-release lint fmt check-fmt \
-	markdownlint nixie spelling test test-workflow-contracts typecheck \
-	$(TOOLS) $(VENV_TOOLS)
+# Classic pass. uv's built-in interpreter catalogue has no PyPy 3.12 build yet,
+# so tools/pypy-downloads.json lists the official PyPy 8.0.0 tarballs with
+# their published SHA-256 sums, and uv refuses any download that does not
+# match. The interpreter lives in PYPY_INSTALL_DIR rather than uv's shared
+# store, and --no-bin keeps it off PATH.
+PYPY_RELEASE ?= 8.0.0
+PYPY_PYTHON_VERSION ?= 3.12.14
+PYPY_DOWNLOADS_JSON ?= tools/pypy-downloads.json
+PYPY_INSTALL_DIR ?= .uv-python
+PYPY_UV = $(UV_ENV) UV_PYTHON_INSTALL_DIR=$(PYPY_INSTALL_DIR) \
+	UV_PYTHON_DOWNLOADS_JSON_URL=$(PYPY_DOWNLOADS_JSON) $(UV)
+PYPY_REQUEST = pypy@$(PYPY_PYTHON_VERSION)
+# Install the pinned build if needed, then print its executable path.
+PYPY_PROVISION = $(PYPY_UV) python install --managed-python --no-bin \
+	$(PYPY_REQUEST) >&2 && $(PYPY_UV) python find --managed-python $(PYPY_REQUEST)
+# Leave PYLINT_PYTHON empty to use the pinned PyPy build, or set it to an
+# interpreter path. Either way, tools/check_lint_runtime.py verifies the
+# interpreter inside the tool environment before Pylint runs.
+PYLINT_PYTHON ?=
+PYLINT_TOOL = PYLINTHOME=$(PYLINT_CACHE)/pypy$(PYPY_PYTHON_VERSION)-v$(PYPY_RELEASE) \
+	$(UV_ENV) $(UV) tool run --from pylint==$(PYLINT_VERSION) \
+	--with astroid==$(ASTROID_VERSION)
+PYLINT_RUNTIME_CHECK = --implementation pypy --python-version 3.12 \
+	--pypy-version $(PYPY_RELEASE) --require-dist pylint==$(PYLINT_VERSION) \
+	--require-dist astroid==$(ASTROID_VERSION) \
+	--forbid-module df12_python_lints --forbid-module pylint_pypy_shim
+
+# df12 pass: the plugin, and ambrleaks from the same package, on CPython 3.14.
+DF12_PYTHON ?= cpython@3.14
+DF12_PYTHON_VERSION ?= 3.14
+DF12_PYTHON_LINTS_VERSION ?= 0.3.0
+DF12_PYTHON_LINTS_REF ?= v$(DF12_PYTHON_LINTS_VERSION)
+DF12_PYTHON_LINTS = df12-python-lints @ git+https://github.com/leynos/df12-python-lints.git@$(DF12_PYTHON_LINTS_REF)
+DF12_TOOL = PYLINTHOME=$(PYLINT_CACHE)/cpython$(DF12_PYTHON_VERSION) \
+	$(UV_ENV) $(UV) tool run --python $(DF12_PYTHON) \
+	--from pylint==$(PYLINT_VERSION) --with astroid==$(ASTROID_VERSION) \
+	--with '$(DF12_PYTHON_LINTS)'
+DF12_RUNTIME_CHECK = --implementation cpython \
+	--python-version $(DF12_PYTHON_VERSION) \
+	--require-dist pylint==$(PYLINT_VERSION) \
+	--require-dist astroid==$(ASTROID_VERSION) \
+	--require-dist df12-python-lints==$(DF12_PYTHON_LINTS_VERSION) \
+	--require-module df12_python_lints --forbid-module pylint_pypy_shim
+AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(DF12_PYTHON) \
+	--from '$(DF12_PYTHON_LINTS)' --with pylint==$(PYLINT_VERSION) \
+	--with astroid==$(ASTROID_VERSION) ambrleaks
+
+.PHONY: help all clean build build-release lint lint-pylint lint-df12 \
+	pylint-pypy-python fmt check-fmt markdownlint nixie spelling test \
+	test-workflow-contracts typecheck $(TOOLS) $(VENV_TOOLS)
 
 .DEFAULT_GOAL := all
 
@@ -63,21 +151,40 @@ $(TOOLS): ## Verify required CLI tools
 $(VENV_TOOLS): ## Verify required CLI tools in venv
 	$(call ensure_tool_venv,$@)
 
-fmt: ruff $(MDTABLEFIX) $(MDLINT) ## Format sources
-	ruff format
-	ruff check --select I --fix
+fmt: uv $(MDTABLEFIX) $(MDLINT) ## Format sources
+	$(RUFF) format
+	$(RUFF) check --select I --fix
 	$(MDTABLEFIX) --in-place $(MDTABLEFIX_SELECT)
 	@unset FORCE_COLOR; $(MDLINT) --fix "**/*.md"
 
-check-fmt: ruff $(MDTABLEFIX) ## Verify formatting
-	ruff format --check
+check-fmt: uv $(MDTABLEFIX) ## Verify formatting
+	$(RUFF) format --check
 	$(MDTABLEFIX) --check $(MDTABLEFIX_SELECT)
 
-lint: ruff ## Run linters
-	ruff check
+lint: uv ## Run linters
+	$(RUFF) check
+	$(MAKE) --no-print-directory lint-pylint
+	$(MAKE) --no-print-directory lint-df12
 
-typecheck: build ty ## Run typechecking
-	ty check falcon_pachinko tests
+pylint-pypy-python: uv ## Print the pinned PyPy interpreter, installing it if needed
+	@$(PYPY_PROVISION)
+
+lint-pylint: uv ## Run the classic Pylint checks on PyPy 8.0.0 (Python 3.12)
+	set -eu; \
+	python='$(PYLINT_PYTHON)'; \
+	if [ -z "$$python" ]; then python=$$($(PYPY_PROVISION)); fi; \
+	$(PYLINT_TOOL) --python "$$python" \
+		python tools/check_lint_runtime.py $(PYLINT_RUNTIME_CHECK); \
+	$(PYLINT_TOOL) --python "$$python" \
+		pylint --rcfile=pyproject.toml --jobs=1 $(PYLINT_TARGETS)
+
+lint-df12: uv ## Run df12-python-lints and ambrleaks on CPython 3.14
+	$(DF12_TOOL) python tools/check_lint_runtime.py $(DF12_RUNTIME_CHECK)
+	$(DF12_TOOL) pylint --rcfile=pylintrc-df12.toml --jobs=1 $(PYLINT_TARGETS)
+	$(AMBRLEAKS) tests
+
+typecheck: build uv ## Run typechecking
+	$(TY) check falcon_pachinko tests tools
 
 # Local convenience only. CI lints Markdown through
 # DavidAnson/markdownlint-cli2-action, whose release carries the linter's
@@ -93,7 +200,8 @@ spelling: ## Enforce en-GB-oxendict spelling
 nixie: $(NIXIE) ## Validate Mermaid diagrams
 	find . -type f -name '*.md' \
 	  -not -path './.venv/*' -not -path './.uv-cache/*' \
-	  -not -path './.uv-tools/*' -print0 | xargs -0 $(NIXIE)
+	  -not -path './.uv-tools/*' -not -path './.uv-python/*' \
+	  -print0 | xargs -0 $(NIXIE)
 
 test: build uv pytest ## Run tests
 	uv run pytest -v

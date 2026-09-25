@@ -53,12 +53,38 @@ jobs:
         with:
           version: "0.6.0"
 
+      # `make lint` runs the classic Pylint checks on PyPy 8.0.0's Python 3.12
+      # build, which it provisions into .uv-python from
+      # tools/pypy-downloads.json. That manifest names the exact build and its
+      # SHA-256, so keying on it means a pin change never restores a stale
+      # interpreter.
+      - name: Cache PyPy lint interpreter
+        uses: actions/cache@v6
+        with:
+          path: .uv-python
+          key: pypy-lint-interpreter-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/pypy-downloads.json') }}
+
+      # The Pylint, Astroid, and df12-python-lints tool environments live in
+      # the Makefile's .uv-cache. Their pins are in the Makefile and the df12
+      # rcfile, so the key covers those files as well as the interpreter.
+      - name: Cache lint tool environments
+        uses: actions/cache@v6
+        with:
+          path: .uv-cache
+          key: lint-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'pylintrc-df12.toml', 'tools/pypy-downloads.json') }}
+
       - name: Check spelling
         run: make spelling
 
       - name: Install CLI tools
         run: |
-          for tool in mbake ty ruff; do uv tool install ${tool}; done
+          for tool in mbake; do uv tool install ${tool}; done
+          # Pin ruff and ty to the versions the Makefile invokes
+          # (RUFF_VERSION and TY_VERSION); the contract test
+          # tests/test_toolchain_versions.py enforces that both sites stay
+          # in sync. Bump the Makefile and these pins together.
+          uv tool install ruff==0.16.4
+          uv tool install ty==0.0.74
 
       - name: Validate Makefile
         run: mbake validate Makefile
@@ -69,8 +95,16 @@ jobs:
       - name: Check formatting
         run: make check-fmt
 
-      - name: Run ruff
+      # Runs Ruff, the classic Pylint pass on PyPy, and the df12 pass on
+      # CPython 3.14. Each Pylint pass verifies its interpreter first.
+      - name: Run linters
         run: make lint
+
+      # Drive the real PyPy and CPython Pylint passes through the Makefile. The
+      # tests never skip, so an unprovisioned interpreter fails this step
+      # instead of passing it silently.
+      - name: Test lint toolchain
+        run: uv run pytest -m lint_toolchain -p no:cacheprovider
 
       - name: Run typechecker
         run: make typecheck

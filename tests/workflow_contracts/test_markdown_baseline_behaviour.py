@@ -26,15 +26,18 @@ from __future__ import annotations
 import os
 import pathlib
 import shutil
-import subprocess
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - runs make against recording stubs
 
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 #: Every command the two targets invoke by bare name, and so every command a
 #: real run must have a stub for. `make` resolves these through `PATH`, which
-#: is what lets a stub stand in for one.
-STUBBED_TOOLS = ("ruff", "mdtablefix", "markdownlint-cli2")
+#: is what lets a stub stand in for one. Ruff is reached through `uv tool run`
+#: at a pinned version rather than by its own name, so `uv` is the command to
+#: stub: a `ruff` stub alone would be bypassed and the real formatter would
+#: rewrite the checkout.
+STUBBED_TOOLS = ("uv", "mdtablefix", "markdownlint-cli2")
 #: The flags that select the Markdown set.
 SELECT_FLAGS = ("--git", "--include-untracked")
 
@@ -62,7 +65,7 @@ def _dry_run(target: str) -> list[str]:
     # S603 is about untrusted input reaching a process. The executable is
     # resolved from PATH once at import and the only interpolated value is a
     # Make target from this module's own constants; no shell is involved.
-    result = subprocess.run(  # noqa: S603
+    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - see the comment above
         [MAKE, "--dry-run", target],
         cwd=ROOT,
         capture_output=True,
@@ -159,7 +162,7 @@ def _run_make(target: str, stub_bin: pathlib.Path) -> subprocess.CompletedProces
     # S603 is about untrusted input reaching a process. The executable is
     # resolved from PATH once at import and the only interpolated value is a
     # Make target from this module's own constants; no shell is involved.
-    return subprocess.run(  # noqa: S603
+    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - see the comment above
         [MAKE, target],
         cwd=ROOT,
         capture_output=True,

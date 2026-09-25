@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import typing as typ
 
-Direction = typ.Literal["send", "receive", "close", "error"]
-FrameKind = typ.Literal["text", "bytes", "json"]
-PayloadKind = typ.Literal["text", "bytes", "json", "close"]
+type Direction = typ.Literal["send", "receive", "close", "error"]
+type FrameKind = typ.Literal["text", "bytes", "json"]
+type PayloadKind = typ.Literal["text", "bytes", "json", "close"]
 
 _MISSING_WEBSOCKETS_MSG = (
     "WebSocketTestClient requires the 'websockets' package. Install "
@@ -46,22 +46,22 @@ class _LifecycleSocket:
 
     @property
     def accepted(self) -> bool:
-        """Return ``True`` once :meth:`accept` has been invoked."""
+        """``True`` once :meth:`accept` has been invoked."""
         return self._accepted
 
     @property
     def closed(self) -> bool:
-        """Return ``True`` once :meth:`close` has been invoked."""
+        """``True`` once :meth:`close` has been invoked."""
         return self._closed
 
     @property
     def close_code(self) -> int | None:
-        """Return the close code provided to :meth:`close`, if any."""
+        """Close code provided to :meth:`close`, if any."""
         return self._close_code
 
     @property
     def subprotocol(self) -> str | None:
-        """Return the negotiated subprotocol, if any."""
+        """Negotiated subprotocol, if any."""
         return self._subprotocol
 
     async def accept(self, subprotocol: str | None = None) -> None:

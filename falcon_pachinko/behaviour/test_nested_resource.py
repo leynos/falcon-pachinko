@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import typing as typ
-from types import SimpleNamespace
 
 import falcon
 import pytest
 from pytest_bdd import given, scenario, then, when
 
 from falcon_pachinko import WebSocketResource, WebSocketRouter
-from falcon_pachinko.unittests.helpers import DummyWS
+from falcon_pachinko.unittests.helpers import DummyWS, make_req
 
 
 @scenario("features/nested_resource.feature", "Connect to nested child resource")
@@ -200,7 +199,7 @@ def _simulate_connection(
     """Simulate a WebSocket connection."""
     router: WebSocketRouter = context["router"]
     ws = DummyWS()
-    req = SimpleNamespace(path=path, path_template="")
+    req = make_req(path)
     if capture_exceptions:
         try:
             asyncio.run(router.on_websocket(req, ws))
@@ -243,31 +242,42 @@ def connect_ctx_child(context: dict[str, typ.Any]) -> None:
 @then('the child resource should receive params {"pid": "42"}')
 def assert_child_params() -> None:
     """Verify child resource captured parent parameter."""
-    assert ChildResource.instances[-1].params == {"pid": "42"}
+    assert ChildResource.instances[-1].params == {"pid": "42"}, (
+        "child should receive the parent's path param"
+    )
 
 
 @then("HTTPNotFound should be raised")
 def assert_not_found(context: dict[str, typ.Any]) -> None:
     """Ensure ``HTTPNotFound`` was raised."""
-    assert isinstance(context.get("exception"), falcon.HTTPNotFound)
+    assert isinstance(context.get("exception"), falcon.HTTPNotFound), (
+        "an unmatched nested path should raise HTTPNotFound"
+    )
 
 
 @then('the grandchild resource should capture params {"pid": "42", "cid": "99"}')
 def assert_grandchild_params() -> None:
     """Verify grandchild resource captured all params."""
-    assert GrandchildResource.instances[-1].params == {"pid": "42", "cid": "99"}
+    assert GrandchildResource.instances[-1].params == {
+        "pid": "42",
+        "cid": "99",
+    }, "grandchild should receive params from every route level"
 
 
 @then('the shadow child resource should capture params {"pid": "2"}')
 def assert_shadow_child_params() -> None:
     """Verify that child parameter overrides the parent's value."""
-    assert ShadowChildResource.instances[-1].params == {"pid": "2"}
+    assert ShadowChildResource.instances[-1].params == {"pid": "2"}, (
+        "the child's own {pid} segment should override the parent's value"
+    )
 
 
 @then('the context child resource should receive project "acme"')
 def assert_ctx_child_project() -> None:
     """Ensure child received injected project."""
-    assert CtxChildResource.instances[-1].project == "acme"
+    assert CtxChildResource.instances[-1].project == "acme", (
+        "parent-supplied context should set the child's project"
+    )
 
 
 @then("the shared state should contain flags from both resources")
@@ -275,5 +285,8 @@ def assert_ctx_shared_state() -> None:
     """Verify that parent and child share connection state."""
     parent = CtxParentResource.instances[-1]
     child = CtxChildResource.instances[-1]
-    assert child.state is parent.state
-    assert child.state == {"parent": True, "child": True}
+    assert child.state is parent.state, "child should share the parent's state mapping"
+    assert child.state == {
+        "parent": True,
+        "child": True,
+    }, "both parent and child updates should be visible in the shared state"

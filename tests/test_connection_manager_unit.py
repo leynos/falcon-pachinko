@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import builtins
-import types
-import typing as typ
-
 import pytest
 import pytest_asyncio
 
@@ -15,58 +11,37 @@ from falcon_pachinko.websocket import (
     WebSocketConnectionManager,
     WebSocketConnectionNotFoundError,
 )
-
-if typ.TYPE_CHECKING:
-    from falcon_pachinko.protocols import WebSocketLike
+from tests._stubs import RecordingBackend, RecordingWebSocket
 
 
-class DummyWebSocket:
-    """Minimal WebSocket stub that records sent messages."""
-
-    def __init__(self) -> None:
-        self.messages: list[object] = []
-
-    async def accept(
-        self, subprotocol: str | None = None
-    ) -> None:  # pragma: no cover - not used
-        """Accept the connection."""
-        return
-
-    async def close(self, code: int = 1000) -> None:  # pragma: no cover - not used
-        """Close the connection."""
-        return
-
-    async def send_media(self, data: object) -> None:
-        """Record a message sent via the stub."""
-        self.messages.append(data)
-
-    async def receive_media(self) -> object:  # pragma: no cover - unused
-        """Return a placeholder payload."""
-        return None
-
-
-class ErrorWebSocket(DummyWebSocket):
+class ErrorWebSocket(RecordingWebSocket):
     """WebSocket stub whose send raises an error."""
 
-    async def send_media(
-        self, data: object
-    ) -> None:  # pragma: no cover - behaviour tested
+    async def send_media(self, data: object) -> None:
         """Raise to simulate a broken connection."""
         raise RuntimeError("boom")
 
 
-@pytest_asyncio.fixture
-async def room_with_two_connections() -> tuple[
-    WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
-]:
-    """Return a lobby with two connected websockets."""
+async def _lobby_manager(
+    ws1: RecordingWebSocket, ws2: RecordingWebSocket
+) -> WebSocketConnectionManager:
+    """Return a manager with ``ws1``/``ws2`` joined to the lobby as "a"/"b"."""
     mgr = WebSocketConnectionManager()
-    ws1 = DummyWebSocket()
-    ws2 = DummyWebSocket()
     await mgr.add_connection("a", ws1)
     await mgr.add_connection("b", ws2)
     await mgr.join_room("a", "lobby")
     await mgr.join_room("b", "lobby")
+    return mgr
+
+
+@pytest_asyncio.fixture
+async def room_with_two_connections() -> tuple[
+    WebSocketConnectionManager, RecordingWebSocket, RecordingWebSocket
+]:
+    """Return a lobby with two connected websockets."""
+    ws1 = RecordingWebSocket()
+    ws2 = RecordingWebSocket()
+    mgr = await _lobby_manager(ws1, ws2)
     return mgr, ws1, ws2
 
 
@@ -74,7 +49,10 @@ async def corrupt_room_membership(
     mgr: WebSocketConnectionManager, room: str, ghost_id: str
 ) -> None:
     """Inject an unknown connection ID into a room for testing."""
-    backend = typ.cast("InProcessBackend", mgr.backend)
+    backend = mgr.backend
+    assert isinstance(backend, InProcessBackend), (
+        "this helper can only corrupt the in-process backend"
+    )
     async with backend._lock:  # pragma: no cover - internal test helper
         backend._rooms.setdefault(room, set()).add(ghost_id)
 
@@ -83,12 +61,14 @@ async def corrupt_room_membership(
 async def test_send_to_connection_sends_message() -> None:
     """Send a message to a single connection."""
     mgr = WebSocketConnectionManager()
-    ws = DummyWebSocket()
+    ws = RecordingWebSocket()
     await mgr.add_connection("a", ws)
 
     await mgr.send_to_connection("a", {"hello": "world"})
 
-    assert ws.messages == [{"hello": "world"}]
+    assert ws.messages == [{"hello": "world"}], (
+        "the target connection must receive the sent message"
+    )
 
 
 @pytest.mark.asyncio
@@ -98,7 +78,7 @@ async def test_send_to_connection_propagates_error() -> None:
     ws = ErrorWebSocket()
     await mgr.add_connection("a", ws)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="boom"):
         await mgr.send_to_connection("a", "ping")
 
 
@@ -106,8 +86,8 @@ async def test_send_to_connection_propagates_error() -> None:
 async def test_add_connection_raises_on_duplicate_id() -> None:
     """Adding a duplicate connection ID fails."""
     mgr = WebSocketConnectionManager()
-    ws1 = DummyWebSocket()
-    ws2 = DummyWebSocket()
+    ws1 = RecordingWebSocket()
+    ws2 = RecordingWebSocket()
     await mgr.add_connection("a", ws1)
 
     with pytest.raises(ValueError, match="Duplicate connection ID"):
@@ -121,10 +101,11 @@ async def test_add_connection_raises_on_duplicate_id() -> None:
         (None, ["hi"], ["hi"]),
         ({"a"}, [], ["hi"]),
     ],
+    ids=["no-exclusions", "exclude-a"],
 )
 async def test_broadcast_to_room_with_exclusion_scenarios(
     room_with_two_connections: tuple[
-        WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
+        WebSocketConnectionManager, RecordingWebSocket, RecordingWebSocket
     ],
     exclude: set[str] | None,
     expected_ws1: list[str],
@@ -135,44 +116,34 @@ async def test_broadcast_to_room_with_exclusion_scenarios(
 
     await mgr.broadcast_to_room("lobby", "hi", exclude=exclude)
 
-    assert ws1.messages == expected_ws1
-    assert ws2.messages == expected_ws2
+    assert ws1.messages == expected_ws1, (
+        f"ws1 should have received {expected_ws1!r}, got {ws1.messages!r}"
+    )
+    assert ws2.messages == expected_ws2, (
+        f"ws2 should have received {expected_ws2!r}, got {ws2.messages!r}"
+    )
 
 
 @pytest.mark.asyncio
 async def test_broadcast_to_room_propagates_error() -> None:
     """Broadcasting propagates errors from any connection."""
-    mgr = WebSocketConnectionManager()
-    ws1 = DummyWebSocket()
-    ws2 = ErrorWebSocket()
-    await mgr.add_connection("a", ws1)
-    await mgr.add_connection("b", ws2)
-    await mgr.join_room("a", "lobby")
-    await mgr.join_room("b", "lobby")
+    mgr = await _lobby_manager(RecordingWebSocket(), ErrorWebSocket())
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="boom"):
         await mgr.broadcast_to_room("lobby", 42)
 
 
 @pytest.mark.asyncio
 async def test_broadcast_to_room_aggregates_multiple_errors() -> None:
     """Aggregates exceptions when several sends fail."""
-    mgr = WebSocketConnectionManager()
-    ws1 = ErrorWebSocket()
-    ws2 = ErrorWebSocket()
-    await mgr.add_connection("a", ws1)
-    await mgr.add_connection("b", ws2)
-    await mgr.join_room("a", "lobby")
-    await mgr.join_room("b", "lobby")
+    mgr = await _lobby_manager(ErrorWebSocket(), ErrorWebSocket())
 
-    eg = getattr(builtins, "ExceptionGroup", None)
-    if eg is not None:
-        with pytest.raises(eg) as excinfo:
-            await mgr.broadcast_to_room("lobby", 42)
-        assert len(getattr(excinfo.value, "exceptions", [])) == 2
-    else:  # pragma: no cover - Python < 3.11
-        with pytest.raises(RuntimeError):
-            await mgr.broadcast_to_room("lobby", 42)
+    with pytest.raises(ExceptionGroup) as excinfo:
+        await mgr.broadcast_to_room("lobby", 42)
+
+    assert len(excinfo.value.exceptions) == 2, (
+        "both connection failures must be aggregated into the exception group"
+    )
 
 
 @pytest.mark.asyncio
@@ -186,8 +157,9 @@ async def test_join_room_requires_known_connection() -> None:
 
 @pytest.mark.asyncio
 async def test_send_to_unknown_connection_raises_key_error() -> None:
-    """Sending to an unknown connection raises
-    WebSocketConnectionNotFoundError (a KeyError subclass).
+    """Sending to an unknown connection raises a not-found error.
+
+    WebSocketConnectionNotFoundError is a KeyError subclass.
     """
     mgr = WebSocketConnectionManager()
 
@@ -198,21 +170,27 @@ async def test_send_to_unknown_connection_raises_key_error() -> None:
 @pytest.mark.asyncio
 async def test_connections_handle_room_filters(
     room_with_two_connections: tuple[
-        WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
+        WebSocketConnectionManager, RecordingWebSocket, RecordingWebSocket
     ],
 ) -> None:
     """Iterating yields all connections, room members, or nothing for empty rooms."""
     mgr, ws1, ws2 = room_with_two_connections
 
-    assert {ws async for ws in mgr.connections()} == {ws1, ws2}
-    assert {ws async for ws in mgr.connections(room="lobby")} == {ws1, ws2}
-    assert [ws async for ws in mgr.connections(room="ghost")] == []
+    assert {ws async for ws in mgr.connections()} == {ws1, ws2}, (
+        "iterating without a room must yield every connection"
+    )
+    assert {ws async for ws in mgr.connections(room="lobby")} == {ws1, ws2}, (
+        "iterating the lobby room must yield its members"
+    )
+    assert [ws async for ws in mgr.connections(room="ghost")] == [], (
+        "iterating an unknown room must yield nothing"
+    )
 
 
 @pytest.mark.asyncio
 async def test_connections_iterates_room_with_exclusion(
     room_with_two_connections: tuple[
-        WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
+        WebSocketConnectionManager, RecordingWebSocket, RecordingWebSocket
     ],
 ) -> None:
     """Iterating a room honours the exclusion list."""
@@ -220,13 +198,13 @@ async def test_connections_iterates_room_with_exclusion(
 
     seen = [ws async for ws in mgr.connections(room="lobby", exclude={"a"})]
 
-    assert seen == [ws2]
+    assert seen == [ws2], "the excluded connection must not be yielded"
 
 
 @pytest.mark.asyncio
 async def test_connections_ignore_unknown_ids_in_exclude(
     room_with_two_connections: tuple[
-        WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
+        WebSocketConnectionManager, RecordingWebSocket, RecordingWebSocket
     ],
 ) -> None:
     """Unknown IDs in ``exclude`` are ignored."""
@@ -234,13 +212,13 @@ async def test_connections_ignore_unknown_ids_in_exclude(
 
     seen = [ws async for ws in mgr.connections(room="lobby", exclude={"ghost"})]
 
-    assert set(seen) == {ws1, ws2}
+    assert set(seen) == {ws1, ws2}, "an unknown excluded ID must not filter anything"
 
 
 @pytest.mark.asyncio
 async def test_connections_skip_stale_room_member(
     room_with_two_connections: tuple[
-        WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
+        WebSocketConnectionManager, RecordingWebSocket, RecordingWebSocket
     ],
 ) -> None:
     """Iterating a corrupted room skips ghost memberships."""
@@ -250,13 +228,13 @@ async def test_connections_skip_stale_room_member(
 
     seen = [ws async for ws in mgr.connections(room="lobby")]
 
-    assert set(seen) == {ws1, ws2}
+    assert set(seen) == {ws1, ws2}, "the ghost membership must be skipped"
 
 
 @pytest.mark.asyncio
 async def test_broadcast_to_room_skips_stale_members(
     room_with_two_connections: tuple[
-        WebSocketConnectionManager, DummyWebSocket, DummyWebSocket
+        WebSocketConnectionManager, RecordingWebSocket, RecordingWebSocket
     ],
 ) -> None:
     """Broadcasting ignores ghost memberships injected into the backend."""
@@ -266,99 +244,32 @@ async def test_broadcast_to_room_skips_stale_members(
 
     await mgr.broadcast_to_room("lobby", "hi")
 
-    assert ws1.messages == ["hi"]
-    assert ws2.messages == ["hi"]
+    assert ws1.messages == ["hi"], "ws1 must still receive the broadcast"
+    assert ws2.messages == ["hi"], "ws2 must still receive the broadcast"
 
 
 @pytest.mark.asyncio
 async def test_websockets_property_returns_snapshot() -> None:
     """Exposing websockets returns a stable snapshot."""
     mgr = WebSocketConnectionManager()
-    ws = DummyWebSocket()
+    ws = RecordingWebSocket()
     await mgr.add_connection("a", ws)
     snapshot = mgr.websockets
-    await mgr.add_connection("b", DummyWebSocket())
-    assert dict(snapshot) == {"a": ws}
+    await mgr.add_connection("b", RecordingWebSocket())
+    assert dict(snapshot) == {"a": ws}, (
+        "the snapshot must not reflect connections added afterwards"
+    )
 
 
 def test_default_backend_is_inprocess() -> None:
     """Ensure the default backend is used."""
     mgr = WebSocketConnectionManager()
-    assert isinstance(mgr.backend, InProcessBackend)
-    assert isinstance(mgr.backend, ConnectionBackend)
-
-
-class RecordingBackend(ConnectionBackend):
-    """Minimal custom backend used to verify delegation."""
-
-    def __init__(self) -> None:
-        self._websockets: dict[str, WebSocketLike] = {}
-        self._rooms: dict[str, set[str]] = {}
-        self.calls: list[str] = []
-
-    @property
-    def websockets(self) -> typ.Mapping[str, WebSocketLike]:
-        """Expose a read-only snapshot of active websockets."""
-        return types.MappingProxyType(self._websockets.copy())
-
-    @property
-    def rooms(self) -> typ.Mapping[str, typ.Collection[str]]:
-        """Expose a read-only snapshot of room memberships."""
-        snapshot = {room: set(ids) for room, ids in self._rooms.items()}
-        return types.MappingProxyType(snapshot)
-
-    async def add_connection(self, conn_id: str, ws: WebSocketLike) -> None:
-        """Record a connection registration."""
-        self.calls.append(f"add_connection:{conn_id}")
-        if conn_id in self._websockets:
-            msg = f"Duplicate connection ID: {conn_id!r}"
-            raise ValueError(msg)
-        self._websockets[conn_id] = ws
-
-    async def remove_connection(self, conn_id: str) -> None:
-        """Forget a connection and clean up empty rooms."""
-        self.calls.append(f"remove_connection:{conn_id}")
-        self._websockets.pop(conn_id, None)
-        for members in self._rooms.values():
-            members.discard(conn_id)
-        self._rooms = {k: v for k, v in self._rooms.items() if v}
-
-    async def join_room(self, conn_id: str, room: str) -> None:
-        """Associate a connection with a room."""
-        self.calls.append(f"join_room:{conn_id}:{room}")
-        if conn_id not in self._websockets:
-            raise WebSocketConnectionNotFoundError(conn_id)
-        self._rooms.setdefault(room, set()).add(conn_id)
-
-    async def leave_room(self, conn_id: str, room: str) -> None:
-        """Remove a connection from a room if present."""
-        self.calls.append(f"leave_room:{conn_id}:{room}")
-        members = self._rooms.get(room)
-        if members is None:
-            return
-        members.discard(conn_id)
-        if not members:
-            self._rooms.pop(room, None)
-
-    async def get_websocket(self, conn_id: str) -> WebSocketLike | None:
-        """Return the websocket for ``conn_id`` when known."""
-        self.calls.append(f"get_websocket:{conn_id}")
-        return self._websockets.get(conn_id)
-
-    async def snapshot(
-        self, room: str | None = None
-    ) -> list[tuple[str, WebSocketLike]]:
-        """Return a snapshot of members for the given room or all rooms."""
-        label = room if room is not None else "*"
-        self.calls.append(f"snapshot:{label}")
-        if room is None:
-            return list(self._websockets.items())
-        member_ids = self._rooms.get(room, set())
-        return [
-            (cid, self._websockets[cid])
-            for cid in member_ids
-            if cid in self._websockets
-        ]
+    assert isinstance(mgr.backend, InProcessBackend), (
+        "the default backend must be InProcessBackend"
+    )
+    assert isinstance(mgr.backend, ConnectionBackend), (
+        "the default backend must implement ConnectionBackend"
+    )
 
 
 @pytest.mark.asyncio
@@ -366,7 +277,7 @@ async def test_manager_uses_custom_backend() -> None:
     """Custom backends should drive storage and broadcasts."""
     backend = RecordingBackend()
     mgr = WebSocketConnectionManager(backend=backend)
-    ws = DummyWebSocket()
+    ws = RecordingWebSocket()
 
     await mgr.add_connection("alice", ws)
     await mgr.join_room("alice", "crew")
@@ -378,6 +289,10 @@ async def test_manager_uses_custom_backend() -> None:
         "join_room:alice:crew",
         "snapshot:crew",
         "get_websocket:alice",
-    ]
-    assert ws.messages == [{"msg": "hi"}, {"msg": "direct"}]
-    assert backend.rooms == {"crew": {"alice"}}
+    ], "the custom backend must receive calls in the expected order"
+    assert ws.messages == [{"msg": "hi"}, {"msg": "direct"}], (
+        "the websocket must receive both the broadcast and the direct message"
+    )
+    assert backend.rooms == {"crew": {"alice"}}, (
+        "the custom backend must report the crew room membership"
+    )

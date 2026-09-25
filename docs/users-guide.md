@@ -52,6 +52,37 @@ router.mount("/ws")
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
 
+### The `add_route` signature
+
+```python
+def add_route(
+    self,
+    path: str,
+    resource: type[WebSocketResource] | cabc.Callable[..., WebSocketResource],
+    *init_args: object,
+    name: str | None = None,
+    **init_kwargs: object,
+) -> None: ...
+```
+
+- `*init_args` and `**init_kwargs` are stored and passed to `resource` when a
+  connection instantiates it, alongside the path parameters. Example passing
+  both a positional and a keyword initializer argument:
+
+  ```python
+  router.add_route("/rooms/{room}", ChatResource, "lobby", history_size=100)
+  ```
+
+- `name` is reserved for naming the route itself and is never forwarded to
+  the resource initializer.
+- `resource` accepts any callable returning a `WebSocketResource`, not only a
+  class, so a `functools.partial` factory covers a resource whose own
+  initializer needs a parameter called `name`:
+
+  ```python
+  router.add_route("/p", functools.partial(MyResource, name="x"), name="route")
+  ```
+
 ## 3. Resource Lifecycle & State
 
 - `on_connect(req, ws, **params) -> bool | None`
@@ -237,6 +268,15 @@ async def lifespan(app):
   for fast unit tests.
 - **Pytest fixtures** – See `tests/behaviour/*.feature` and
   `falcon_pachinko/unittests` helpers for factory utilities.
+
+The `websocket_simulator` pytest fixture (from `falcon_pachinko.testing`)
+takes no parameters and yields a `SimulatorRouterHarness`: a pre-mounted
+router and app wired to inject a `WebSocketSimulator` into each connection.
+Register routes on `harness.router`, then dispatch a connection with
+`async with harness.connect(path) as connection: ...`. On teardown the
+fixture calls `harness.discard_pending_simulator()`, discarding any simulator
+staged for a connection that was never established, so tests do not need to
+assemble a router and simulator by hand.
 
 Recommended strategy:
 

@@ -117,7 +117,9 @@ def test_an_innocent_document_is_cleared(document: object) -> None:
     fixtures and fail every real workflow, which is the opposite defect and
     just as invisible from a fixture.
     """
-    assert references_in(document, "fixture.yml") == []
+    assert references_in(document, "fixture.yml") == [], (
+        "a document naming nothing must be cleared"
+    )
 
 
 @hyp.given(key=innocent_keys)

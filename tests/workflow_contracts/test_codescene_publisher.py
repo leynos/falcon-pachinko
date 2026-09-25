@@ -74,6 +74,11 @@ def _start(event: str, ref: str, available: str) -> dict[str, str]:
 
     *available* is what the token check step wrote: ``'true'`` when the
     repository holds the secret, ``'false'`` when it does not.
+
+    Returns
+    -------
+    dict[str, str]
+        The expression context, keyed by the names the guards read.
     """
     return {"github.event_name": event, "github.ref": ref, CREDENTIAL_OUTPUT: available}
 

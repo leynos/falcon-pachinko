@@ -1,13 +1,12 @@
 """Tests for nested resource composition."""
 
 import typing as typ
-from types import SimpleNamespace
 
 import falcon
 import pytest
 
 from falcon_pachinko import WebSocketResource, WebSocketRouter
-from falcon_pachinko.unittests.helpers import DummyWS
+from falcon_pachinko.unittests.helpers import DummyWS, make_req
 
 
 class Child(WebSocketResource):
@@ -45,10 +44,13 @@ async def test_nested_subroute_params() -> None:
     router = WebSocketRouter()
     router.add_route("/parent/{pid}", Parent)
     router.mount("/")
-    req = SimpleNamespace(path="/parent/1/child/2", path_template="")
+    req = make_req("/parent/1/child/2")
     await router.on_websocket(req, DummyWS())
 
-    assert Child.instances[-1].params == {"pid": "1", "cid": "2"}
+    assert Child.instances[-1].params == {
+        "pid": "1",
+        "cid": "2",
+    }, "params from every route level should be merged into the child"
 
 
 @pytest.mark.asyncio
@@ -65,7 +67,7 @@ async def test_nested_subroute_not_found(path: str, description: str) -> None:
     router = WebSocketRouter()
     router.add_route("/parent/{pid}", Parent)
     router.mount("/")
-    req = SimpleNamespace(path=path, path_template="")
+    req = make_req(path)
     with pytest.raises(falcon.HTTPNotFound):
         await router.on_websocket(req, DummyWS())
 
@@ -73,6 +75,8 @@ async def test_nested_subroute_not_found(path: str, description: str) -> None:
 def test_add_subroute_invalid_resource() -> None:
     """add_subroute must reject non-callables."""
     r = WebSocketResource()
+    # The cast smuggles a deliberately non-callable value past the signature
+    # to exercise the runtime type check.
     with pytest.raises(TypeError):
         r.add_subroute("child", typ.cast("typ.Any", object()))
 
@@ -126,7 +130,7 @@ async def _setup_and_run_nested_test(
     router = WebSocketRouter()
     router.add_route(route_path, parent_class)
     router.mount("/")
-    req = SimpleNamespace(path=request_path, path_template="")
+    req = make_req(request_path)
     await router.on_websocket(req, DummyWS())
     parent = parent_class.instances[-1]
     child = child_class.instances[-1]
@@ -139,9 +143,12 @@ async def test_context_passed_and_state_shared() -> None:
     parent, child = await _setup_and_run_nested_test(
         ContextChild, ContextParent, "/ctx", "/ctx/child"
     )
-    assert child.project == "acme"
-    assert child.state is parent.state
-    assert child.state == {"parent": True, "child": True}
+    assert child.project == "acme", "parent-supplied context should set child.project"
+    assert child.state is parent.state, "child should share the parent's state mapping"
+    assert child.state == {
+        "parent": True,
+        "child": True,
+    }, "both parent and child updates should be visible in the shared state"
 
 
 class InjectedChild(WebSocketResource):
@@ -185,6 +192,13 @@ async def test_state_injected_via_context() -> None:
     parent, child = await _setup_and_run_nested_test(
         InjectedChild, InjectingParent, "/inj", "/inj/child"
     )
-    assert child.state is not parent.state
-    assert child.state == {"injected": True, "child": True}
-    assert parent.state == {"parent": True}
+    assert child.state is not parent.state, (
+        "injected state should replace the shared state, not alias it"
+    )
+    assert child.state == {
+        "injected": True,
+        "child": True,
+    }, "child should see both the injected and its own state updates"
+    assert parent.state == {
+        "parent": True,
+    }, "parent's own state should be unaffected by the child's injected state"
