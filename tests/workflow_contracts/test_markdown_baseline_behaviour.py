@@ -26,7 +26,7 @@ from __future__ import annotations
 import os
 import pathlib
 import shutil
-import subprocess
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - runs make against recording stubs
 
 import pytest
 
@@ -69,7 +69,7 @@ def _dry_run(target: str) -> list[str]:
     # S603 is about untrusted input reaching a process. The executable is
     # resolved from PATH once at import and the only interpolated value is a
     # Make target from this module's own constants; no shell is involved.
-    result = subprocess.run(  # noqa: S603
+    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - see the comment above
         [MAKE, "--dry-run", target],
         cwd=ROOT,
         capture_output=True,
@@ -166,7 +166,7 @@ def _run_make(target: str, stub_bin: pathlib.Path) -> subprocess.CompletedProces
     # S603 is about untrusted input reaching a process. The executable is
     # resolved from PATH once at import and the only interpolated value is a
     # Make target from this module's own constants; no shell is involved.
-    return subprocess.run(  # noqa: S603
+    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - see the comment above
         [MAKE, target],
         cwd=ROOT,
         capture_output=True,

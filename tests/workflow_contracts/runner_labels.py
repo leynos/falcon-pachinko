@@ -157,7 +157,7 @@ def runner_expression(raw: str) -> RunnerLabel:
 
 def _runs_on_refs(
     workflow_name: str, job_name: str, job_document: cabc.Mapping[str, object]
-) -> typ.Iterator[LabelRef]:
+) -> cabc.Iterator[LabelRef]:
     """Yield a job's own ``runs-on`` labels.
 
     GitHub accepts a single label, a list of them, or a mapping naming a
@@ -180,7 +180,7 @@ def _matrix_refs(
     job_name: str,
     declaration: LabelRef,
     job_document: cabc.Mapping[str, object],
-) -> typ.Iterator[LabelRef]:
+) -> cabc.Iterator[LabelRef]:
     """Yield the labels a job's matrix supplies to one declaration.
 
     Yields
@@ -265,6 +265,13 @@ def resolve(reference: LabelRef) -> frozenset[str]:
     counting it here would add the literal text ``${{ matrix.os }}`` to the
     set of labels in use.
 
+    An expression that is neither a matrix reference nor a two-armed
+    conditional fails through the :class:`NotARunnerExpressionError` that
+    `runner_expression` raises. It is raised rather than skipped: a skipped
+    declaration leaves the registry equality holding over a smaller set than
+    the estate actually uses, which is the one thing the equality exists to
+    refuse.
+
     Parameters
     ----------
     reference : LabelRef
@@ -274,15 +281,6 @@ def resolve(reference: LabelRef) -> frozenset[str]:
     -------
     frozenset[str]
         Every label the declaration can select.
-
-    Raises
-    ------
-    NotARunnerExpressionError
-        If the declaration is an expression that is neither a matrix
-        reference nor a two-armed conditional. Raised rather than skipped:
-        a skipped declaration leaves the registry equality holding over a
-        smaller set than the estate actually uses, which is the one thing
-        the equality exists to refuse.
     """
     raw = collapse_label_whitespace(reference.raw)
     if matrix_keys(raw):

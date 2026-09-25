@@ -93,7 +93,9 @@ def test_an_unrelated_matrix_parameter_is_not_a_runner_label() -> None:
         "strategy": {"matrix": {"include": [{"os": "some-paid-runner", "py": "3.13"}]}},
     }
 
-    assert job_labels("ci.yml", "lint-test", job) == frozenset({"ubuntu-latest"})
+    assert job_labels("ci.yml", "lint-test", job) == frozenset({"ubuntu-latest"}), (
+        "a matrix parameter runs-on never reads must not supply a label"
+    )
 
 
 def test_a_direct_matrix_axis_supplies_labels() -> None:
@@ -108,9 +110,10 @@ def test_a_direct_matrix_axis_supplies_labels() -> None:
         "strategy": {"matrix": {"os": ["ubuntu-latest", "some-paid-runner"]}},
     }
 
-    assert job_labels("ci.yml", "build", job) == frozenset(
-        {"ubuntu-latest", "some-paid-runner"}
-    )
+    assert job_labels("ci.yml", "build", job) == frozenset({
+        "ubuntu-latest",
+        "some-paid-runner",
+    }), "a direct matrix axis must supply every label it lists"
 
 
 def test_a_matrix_axis_and_its_include_rows_are_both_read() -> None:
@@ -129,9 +132,10 @@ def test_a_matrix_axis_and_its_include_rows_are_both_read() -> None:
         },
     }
 
-    assert job_labels("wheels.yml", "build", job) == frozenset(
-        {"ubuntu-latest", "macos-latest"}
-    )
+    assert job_labels("wheels.yml", "build", job) == frozenset({
+        "ubuntu-latest",
+        "macos-latest",
+    }), "an include row must add its label to the declared axis"
 
 
 def test_the_matrix_key_read_is_the_one_the_declaration_names() -> None:
@@ -146,7 +150,9 @@ def test_the_matrix_key_read_is_the_one_the_declaration_names() -> None:
         "strategy": {"matrix": {"runner": ["some-paid-runner"], "os": ["ignored"]}},
     }
 
-    assert job_labels("ci.yml", "build", job) == frozenset({"some-paid-runner"})
+    assert job_labels("ci.yml", "build", job) == frozenset({"some-paid-runner"}), (
+        "only the matrix key the declaration names may supply labels"
+    )
 
 
 def test_a_matrix_reference_names_its_declaration_site() -> None:
@@ -165,7 +171,7 @@ def test_a_matrix_reference_names_its_declaration_site() -> None:
     assert sites == [
         "ci.yml:build:runs-on",
         "ci.yml:build:strategy.matrix.os[0]",
-    ]
+    ], "a matrix-supplied label must name the site it was written at"
 
 
 @pytest.mark.parametrize(
@@ -187,7 +193,9 @@ def test_resolution_covers_each_declaration_shape(
     matrix and reported as references of their own; counting it would enter
     the literal text of the expression into the labels in use.
     """
-    assert resolve(LabelRef("ci.yml", "lint-test", "runs-on", raw)) == expected
+    assert resolve(LabelRef("ci.yml", "lint-test", "runs-on", raw)) == expected, (
+        "each runs-on shape must resolve to the labels it can select"
+    )
 
 
 def test_an_unparsable_expression_is_raised_rather_than_skipped() -> None:
@@ -229,7 +237,9 @@ def test_labels_in_use_exempts_only_the_named_hosted_labels(
         },
     )
 
-    assert labels_in_use(source) == {"ubicloud-standard-2", "some-paid-runner"}
+    assert labels_in_use(source) == {"ubicloud-standard-2", "some-paid-runner"}, (
+        "every label GitHub does not host must be reported, from wherever it is written"
+    )
 
 
 def test_matrix_keys_reads_only_matrix_references() -> None:
@@ -238,10 +248,13 @@ def test_matrix_keys_reads_only_matrix_references() -> None:
     The fork fallback is an expression too, and reading it as a matrix
     reference would send the reader looking for a matrix the job has not got.
     """
-    assert matrix_keys(FORK_EXPRESSION) == frozenset()
-    assert matrix_keys("${{ matrix.os }}-${{ matrix.arch }}") == frozenset(
-        {"os", "arch"}
+    assert matrix_keys(FORK_EXPRESSION) == frozenset(), (
+        "the fork fallback expression is not a matrix reference"
     )
+    assert matrix_keys("${{ matrix.os }}-${{ matrix.arch }}") == frozenset({
+        "os",
+        "arch",
+    }), "each matrix reference in an expression must be read"
 
 
 def test_a_missing_workflow_directory_fails_as_a_contract_failure(
@@ -297,7 +310,9 @@ def test_the_registry_is_read_through_the_source(tmp_path: pathlib.Path) -> None
         tmp_path, {}, registry={"self-hosted-runner": {"labels": ["some-paid-runner"]}}
     )
 
-    assert source.registered_labels() == ["some-paid-runner"]
+    assert source.registered_labels() == ["some-paid-runner"], (
+        "the registry must be read through the source"
+    )
 
 
 @pytest.mark.parametrize(

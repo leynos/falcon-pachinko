@@ -24,6 +24,8 @@ from .pull_request_reach import pull_request_closure
 from .workflow_support import NotAMappingError, WorkflowShapeError
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from .workflow_support import WorkflowSource
 
 #: A full lowercase commit SHA, which is the only reference an action pin may
@@ -117,7 +119,7 @@ class MissingStepError(WorkflowShapeError):
         super().__init__(f"{workflow}:{job} must declare {wanted}")
 
 
-def _walk(value: object, path: str) -> typ.Iterator[tuple[str, str]]:
+def _walk(value: object, path: str) -> cabc.Iterator[tuple[str, str]]:
     """Yield every scalar in a parsed document with the path that reached it.
 
     Parameters
@@ -144,7 +146,7 @@ def _walk(value: object, path: str) -> typ.Iterator[tuple[str, str]]:
             yield path, str(value)
 
 
-def _interactions_at(path: str, text: str) -> typ.Iterator[str]:
+def _interactions_at(path: str, text: str) -> cabc.Iterator[str]:
     """Yield each interaction one scalar carries.
 
     Parameters
@@ -194,13 +196,11 @@ def references_in(document: object, subject: str) -> list[str]:
     list[str]
         One entry per interaction, naming what was found and where.
     """
-    return sorted(
-        {
-            found
-            for path, text in _walk(document, subject)
-            for found in _interactions_at(path, text)
-        }
-    )
+    return sorted({
+        found
+        for path, text in _walk(document, subject)
+        for found in _interactions_at(path, text)
+    })
 
 
 def triggers(source: WorkflowSource, name: str) -> dict[str, object]:
@@ -266,7 +266,7 @@ def steps(source: WorkflowSource, name: str, job_name: str) -> list[dict[str, ob
 
 def declared_steps(
     source: WorkflowSource, name: str
-) -> typ.Iterator[dict[str, object]]:
+) -> cabc.Iterator[dict[str, object]]:
     """Yield every step of every job in one workflow.
 
     A job that calls a reusable workflow declares no steps at all, so a walk

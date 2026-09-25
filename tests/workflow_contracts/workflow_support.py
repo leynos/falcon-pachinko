@@ -44,9 +44,11 @@ UBICLOUD_LINUX_LABEL: typ.Final[str] = "ubicloud-standard-2"
 #: GitHub does not host", so this set is the exemption and is named, not
 #: derived from a prefix. A prefix rule would silently exempt a second paid
 #: provider's labels, which is the question the registry exists to ask.
-GITHUB_HOSTED_LABELS: typ.Final[frozenset[str]] = frozenset(
-    {"ubuntu-latest", "windows-latest", "macos-latest"}
-)
+GITHUB_HOSTED_LABELS: typ.Final[frozenset[str]] = frozenset({
+    "ubuntu-latest",
+    "windows-latest",
+    "macos-latest",
+})
 GITHUB_HOSTED_LINUX: typ.Final[str] = "ubuntu-latest"
 #: The field that says a pull request comes from a fork, and so cannot be
 #: given an Ubicloud runner. Named separately from the whole expression
@@ -210,7 +212,8 @@ class WorkflowSource:
             raise UnreadableWorkflowError(self.workflow_dir) from error
         return sorted(path.name for path in entries if path.suffix in WORKFLOW_SUFFIXES)
 
-    def text(self, path: pathlib.Path) -> str:
+    @staticmethod
+    def text(path: pathlib.Path) -> str:
         """Read one file as UTF-8.
 
         Parameters
@@ -262,12 +265,15 @@ class WorkflowSource:
         """
         text = self.text(path)
         try:
-            return yaml.load(text, Loader=StrictLoader)  # noqa: S506 - strict SafeLoader subclass
+            return yaml.load(text, Loader=StrictLoader)  # ruff: ignore[unsafe-yaml-load] - strict SafeLoader subclass
         except yaml.YAMLError as error:
             raise UnparsableWorkflowError(subject) from error
 
     def document(self, name: str) -> dict[object, object]:
         """Parse one workflow document.
+
+        A file that cannot be read, is not valid UTF-8, or is not parsable
+        YAML fails through the errors `_load` raises.
 
         Parameters
         ----------
@@ -283,8 +289,6 @@ class WorkflowSource:
 
         Raises
         ------
-        UnparsableWorkflowError
-            If the file is not parsable YAML.
         NotAMappingError
             If the document does not parse to a mapping.
         """
@@ -360,7 +364,8 @@ class WorkflowSource:
 
         Routed through the source rather than read at its global path, so the
         registry contract can be driven over a temporary pair of directory
-        and configuration.
+        and configuration. A configuration that is not parsable YAML fails
+        through the error `_load` raises.
 
         Returns
         -------
@@ -369,8 +374,6 @@ class WorkflowSource:
 
         Raises
         ------
-        UnparsableWorkflowError
-            If the configuration is not parsable YAML.
         NotAMappingError
             If the configuration, its ``self-hosted-runner`` section or its
             ``labels`` list is not shaped as `actionlint` requires.
