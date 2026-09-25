@@ -27,36 +27,55 @@ _INHERITED_ONLY = ("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "VIRTUAL_ENV")
 type CompletedRun = subprocess.CompletedProcess[str]
 
 
-def _find_makefile_match(pattern: str, failure: str) -> re.Match[str]:
-    """Search the Makefile for *pattern*, failing the test with *failure*."""
-    text = MAKEFILE.read_text(encoding="utf-8")
+def _find_makefile_match(
+    pattern: str, failure: str, makefile: pathlib.Path = MAKEFILE
+) -> re.Match[str]:
+    """Search *makefile* for *pattern*, failing the test with *failure*.
+
+    A Makefile that cannot be read or decoded fails the test with its path,
+    rather than escaping as a raw ``OSError`` or ``UnicodeDecodeError``.
+
+    Returns
+    -------
+    re.Match of str
+        The first match, for the caller to pick its capture group from.
+    """
+    try:
+        text = makefile.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        pytest.fail(f"{makefile} is not UTF-8")
+    except OSError as error:
+        pytest.fail(f"cannot read {makefile}: {error.strerror or error}")
     match = re.search(pattern, text, flags=re.MULTILINE)
     if match is None:
         pytest.fail(failure)
     return match
 
 
-def makefile_pin(variable: str) -> str:
+def makefile_pin(variable: str, *, makefile: pathlib.Path = MAKEFILE) -> str:
     """Return the value of a single-line ``VARIABLE ?= value`` pin."""
     return _find_makefile_match(
         rf"^{re.escape(variable)}\s*\?=\s*(\S+)\s*$",
         f"Makefile does not define {variable}",
+        makefile,
     ).group(1)
 
 
-def makefile_variable_block(variable: str) -> str:
+def makefile_variable_block(variable: str, *, makefile: pathlib.Path = MAKEFILE) -> str:
     """Return a Makefile assignment including its backslash continuations."""
     return _find_makefile_match(
         rf"^{re.escape(variable)}\s*[:?]?=(?:[^\n]*\\\n)*[^\n]*$",
         f"Makefile does not define {variable}",
+        makefile,
     ).group(0)
 
 
-def makefile_recipe(target: str) -> str:
+def makefile_recipe(target: str, *, makefile: pathlib.Path = MAKEFILE) -> str:
     """Return the tab-indented recipe lines of a Makefile rule."""
     return _find_makefile_match(
         rf"^{re.escape(target)}:[^\n]*\n((?:\t[^\n]*\n)+)",
         f"Makefile has no recipe for {target}",
+        makefile,
     ).group(1)
 
 
