@@ -253,15 +253,13 @@ def test_the_ceiling_contract_sees_the_lanes_it_guards() -> None:
 #: Every workflow that declares a runner label anywhere. `build-wheels.yml`
 #: is in this set deliberately: it is `workflow_call` and nothing in this
 #: repository calls it today, and it is still asked the registry question.
-LABEL_DECLARING_WORKFLOWS = frozenset(
-    {
-        "build-wheels.yml",
-        "ci.yml",
-        "coverage-main.yml",
-        "delayed-pr-comment.yml",
-        "release.yml",
-    }
-)
+LABEL_DECLARING_WORKFLOWS = frozenset({
+    "build-wheels.yml",
+    "ci.yml",
+    "coverage-main.yml",
+    "delayed-pr-comment.yml",
+    "release.yml",
+})
 
 
 def test_the_registry_reads_every_workflow_that_declares_a_label() -> None:

@@ -119,7 +119,9 @@ def test_the_reader_lists_only_workflow_documents(tmp_path: pathlib.Path) -> Non
     source = source_over(tmp_path, {"ci.yml": {"jobs": {}}, "other.yaml": {"jobs": {}}})
     (tmp_path / "notes.md").write_text("not a workflow\n", encoding="utf-8")
 
-    assert source.names() == ["ci.yml", "other.yaml"]
+    assert source.names() == ["ci.yml", "other.yaml"], (
+        "the reader must list .yml and .yaml documents and nothing else"
+    )
 
 
 def test_the_repository_source_is_this_repository() -> None:
@@ -190,4 +192,6 @@ def test_an_action_is_recognized_by_its_whole_path(uses: str, expected: object) 
     """
     step: dict[str, object] = {"uses": uses} if uses else {"run": "true"}
 
-    assert invokes(step, UPLOAD_ACTION) is expected
+    assert invokes(step, UPLOAD_ACTION) is expected, (
+        "only the shared action's whole path, at any ref, may count as invoking it"
+    )
