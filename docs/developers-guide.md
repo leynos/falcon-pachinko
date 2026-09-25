@@ -78,10 +78,10 @@ and test matrix are unaffected.
 
 Table 1. Pylint passes run by `make lint`.
 
-| Target | Interpreter | Configuration | Checks |
-| --- | --- | --- | --- |
-| `make lint-pylint` | PyPy 8.0.0, Python 3.12.14 build | `pyproject.toml` | Classic, built-in Pylint messages |
-| `make lint-df12` | CPython 3.14 | `pylintrc-df12.toml` | df12-python-lints checkers, then ambrleaks |
+| Target             | Interpreter                      | Configuration        | Checks                                     |
+| ------------------ | -------------------------------- | -------------------- | ------------------------------------------ |
+| `make lint-pylint` | PyPy 8.0.0, Python 3.12.14 build | `pyproject.toml`     | Classic, built-in Pylint messages          |
+| `make lint-df12`   | CPython 3.14                     | `pylintrc-df12.toml` | df12-python-lints checkers, then ambrleaks |
 
 The linter's interpreter and the source's Python baseline are separate
 settings. Both configuration files pin `py-version = "3.12"`, so

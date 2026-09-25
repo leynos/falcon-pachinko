@@ -36,6 +36,7 @@ CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 PYPY_MANIFEST = REPO_ROOT / "tools" / "pypy-downloads.json"
 CLASSIC_RCFILE = REPO_ROOT / "pyproject.toml"
 DF12_RCFILE = REPO_ROOT / "pylintrc-df12.toml"
+MARKDOWNLINT_CONFIG = REPO_ROOT / ".markdownlint-cli2.jsonc"
 
 # Diagnostics that report an unparsable or unanalysable module. Disabling any
 # of them lets such a module pass with exit status 0.
@@ -250,11 +251,29 @@ def test_persisted_pylint_state_is_separated_by_runtime() -> None:
     assert "cpython" in df12.group(1), "the df12 state must name its runtime"
 
 
-@pytest.mark.parametrize("target", ["markdownlint", "nixie"])
-def test_markdown_gates_skip_the_provisioned_interpreter(target: str) -> None:
-    """PyPy ships README files that the Markdown gates must not lint."""
-    assert "-not -path './.uv-python/*'" in makefile_recipe(target), (
-        f"make {target} must exclude .uv-python"
+def test_markdown_lint_skips_the_provisioned_interpreter() -> None:
+    """PyPy ships README files that markdownlint-cli2 must not lint.
+
+    `make markdownlint` passes one glob and leaves the exclusions to the
+    configuration file, so that file is where the interpreter must be excluded.
+    """
+    config = json.loads(
+        re.sub(
+            r"^\s*//.*$",
+            "",
+            MARKDOWNLINT_CONFIG.read_text(encoding="utf-8"),
+            flags=re.MULTILINE,
+        )
+    )
+    assert ".uv-python/**" in config.get("ignores", []), (
+        f"{MARKDOWNLINT_CONFIG.name} must exclude .uv-python"
+    )
+
+
+def test_mermaid_validation_skips_the_provisioned_interpreter() -> None:
+    """PyPy ships README files that `make nixie` must not validate."""
+    assert "-not -path './.uv-python/*'" in makefile_recipe("nixie"), (
+        "make nixie must exclude .uv-python"
     )
 
 
