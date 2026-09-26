@@ -39,6 +39,10 @@ jobs:
     runs-on: ubicloud-standard-2
     # The longest observed run of this job is 34 s.
     timeout-minutes: 15
+    # The CodeScene token lives in this environment, whose deployment policy
+    # admits `main` alone; tests/workflow_contracts/codescene_environment.py
+    # holds it to this job.
+    environment: codescene
     permissions:
       contents: read
     steps:

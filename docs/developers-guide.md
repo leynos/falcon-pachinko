@@ -171,6 +171,15 @@ reading the secrets context at all, which an indexed expression such as
 guard on `env.CS_ACCESS_TOKEN != ''` would not do: with the binding deleted it
 is simply false, and the upload skips forever without failing anything.
 
+The publisher job declares `environment: codescene`. That environment admits
+deployments from `main` alone and is where the CodeScene token lives, so only
+the trunk publisher can read it.
+`tests/workflow_contracts/codescene_environment.py` holds the placement: every
+uploading job declares the environment, as a string or as `{name: codescene}`;
+no other job declares it; and no workflow a pull request can start declares it
+in any job. `tests/workflow_contracts/test_codescene_environment.py` proves each
+clause over mutated copies of the workflows.
+
 One known exception: a Dependabot pull request merged by the automerge workflow
 uses `GITHUB_TOKEN`, whose merges fire no push event, so that commit publishes
 no coverage until the next push or a dispatch on main.
