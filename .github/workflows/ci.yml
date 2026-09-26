@@ -49,7 +49,7 @@ jobs:
         # 0.6.0 is the first release carrying `--check` and `--git`. The action
         # installs a prebuilt release through a hardened cargo-binstall rather
         # than building from source.
-        uses: leynos/shared-actions/.github/actions/install-mdtablefix@a5765019912a8ab6882b12db049c7cde635f3a85
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@759da19f0379b6d2d7ddef93b7ad4c3b98154e41
         with:
           version: "0.6.0"
 
@@ -93,7 +93,7 @@ jobs:
       # the work and the CodeScene upload for the same commit.
       - name: Generate coverage
         if: github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/generate-coverage@82feb2b7aac45b7efff40c9c4bb632551b14521c
+        uses: leynos/shared-actions/.github/actions/generate-coverage@759da19f0379b6d2d7ddef93b7ad4c3b98154e41
         with:
           output-path: coverage.xml
           format: cobertura
