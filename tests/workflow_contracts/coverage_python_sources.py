@@ -119,6 +119,35 @@ def _uv_python(*scopes: dict[str, object]) -> str:
     return ""
 
 
+def _job_calls(
+    name: str, job: dict[str, object], document: dict[str, object], python_version: str
+) -> list[CoverageCall]:
+    """Return one job's coverage calls, reading its steps in order."""
+    calls: list[CoverageCall] = []
+    on_path = ""
+    for step in _mapping_list(job.get("steps")):
+        uses = str(step.get("uses", ""))
+        if uses.startswith(SETUP_PYTHON):
+            on_path = _declared_by_setup(step)
+        elif GENERATE_COVERAGE in uses:
+            versions = (
+                str(_mapping(step.get("with")).get("python-version") or ""),
+                _uv_python(step, job, document),
+                python_version,
+                on_path,
+            )
+            calls.append(CoverageCall(name, dict(zip(SOURCES, versions, strict=True))))
+    return calls
+
+
+def _mapping_list(value: object) -> list[dict[str, object]]:
+    """Return the mappings in ``value`` when it is a list, otherwise none."""
+    items = value if isinstance(value, list) else []
+    return [
+        typ.cast("dict[str, object]", item) for item in items if isinstance(item, dict)
+    ]
+
+
 def coverage_calls(workflow: str, python_version: str = "") -> list[CoverageCall]:
     """Return every generate-coverage call in a workflow with its declared sources.
 
@@ -141,24 +170,11 @@ def coverage_calls(workflow: str, python_version: str = "") -> list[CoverageCall
 
     """
     document = yaml.safe_load(workflow) or {}
-    calls: list[CoverageCall] = []
-    for name, job in (document.get("jobs") or {}).items():
-        on_path = ""
-        for step in job.get("steps") or []:
-            uses = str(step.get("uses", ""))
-            if uses.startswith(SETUP_PYTHON):
-                on_path = _declared_by_setup(step)
-            elif GENERATE_COVERAGE in uses:
-                versions = (
-                    str(_mapping(step.get("with")).get("python-version") or ""),
-                    _uv_python(step, job, document),
-                    python_version,
-                    on_path,
-                )
-                calls.append(
-                    CoverageCall(name, dict(zip(SOURCES, versions, strict=True)))
-                )
-    return calls
+    return [
+        call
+        for name, job in (document.get("jobs") or {}).items()
+        for call in _job_calls(name, job, document, python_version)
+    ]
 
 
 def rejected_versions(accepted: SpecifierSet, requested: list[str]) -> list[str]:
