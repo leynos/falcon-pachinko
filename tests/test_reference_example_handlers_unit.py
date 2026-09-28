@@ -70,6 +70,17 @@ def _connect_request() -> falcon.Request:
     return typ.cast("falcon.Request", stub)
 
 
+async def _resource_with_task(
+    params: TaskCreationParams,
+) -> tuple[TaskStreamResource, WorkspaceRepository, RecordingWebSocket]:
+    """Return a resource bound to the test project, holding one added task."""
+    resource, repo, _audit, _feed = _build_resource()
+    resource.state["workspace_id"] = _WORKSPACE
+    resource.state["project_id"] = _PROJECT
+    await repo.add_task(_WORKSPACE, _PROJECT, params)
+    return resource, repo, RecordingWebSocket()
+
+
 async def _dispatch(
     resource: TaskStreamResource, ws: WebSocketLike, payload: object
 ) -> None:
@@ -130,41 +141,33 @@ async def test_on_disconnect_removes_connection_and_audits_closure() -> None:
 @pytest.mark.asyncio
 async def test_handle_complete_marks_the_task_and_replies() -> None:
     """Completing a task updates the repository and replies with its state."""
-    resource, repo, _audit, _feed = _build_resource()
-    resource.state["workspace_id"] = _WORKSPACE
-    resource.state["project_id"] = _PROJECT
-    await repo.add_task(
-        _WORKSPACE,
-        _PROJECT,
-        TaskCreationParams(task_id="T-1", title="Fix it", author="avery"),
+    resource, repo, ws = await _resource_with_task(
+        TaskCreationParams(task_id="T-1", title="Fix it", author="avery")
     )
-    ws = RecordingWebSocket()
 
     await _dispatch(resource, ws, CompleteTask(task_id="T-1"))
 
     assert ws.messages == [
         {"type": "task.completed", "payload": {"task_id": "T-1", "completed": True}}
     ], f"the completion reply must echo the task state: {ws.messages}"
+    (stored,) = await repo.list_tasks(_WORKSPACE, _PROJECT, include_completed=True)
+    assert stored.completed is True, "the repository must record the completion"
 
 
 @pytest.mark.asyncio
 async def test_handle_assign_reassigns_the_task_and_replies() -> None:
     """Assigning a task updates the assignee and replies with the new owner."""
-    resource, repo, _audit, _feed = _build_resource()
-    resource.state["workspace_id"] = _WORKSPACE
-    resource.state["project_id"] = _PROJECT
-    await repo.add_task(
-        _WORKSPACE,
-        _PROJECT,
-        TaskCreationParams(task_id="T-2", title="Ship it", author="avery"),
+    resource, repo, ws = await _resource_with_task(
+        TaskCreationParams(task_id="T-2", title="Ship it", author="avery")
     )
-    ws = RecordingWebSocket()
 
     await _dispatch(resource, ws, AssignTask(task_id="T-2", assignee="casey"))
 
     assert ws.messages == [
         {"type": "task.assigned", "payload": {"task_id": "T-2", "assignee": "casey"}}
     ], f"the assignment reply must echo the new assignee: {ws.messages}"
+    (stored,) = await repo.list_tasks(_WORKSPACE, _PROJECT, include_completed=True)
+    assert stored.assigned_to == "casey", "the repository must record the assignee"
 
 
 @pytest.mark.asyncio
