@@ -15,6 +15,16 @@ from falcon_pachinko.websocket import (
 from tests._stubs import RecordingWebSocket
 
 
+async def _backend_with_lobby_pair() -> InProcessBackend:
+    """Return a backend where connections ``a`` and ``b`` both joined ``lobby``."""
+    backend = InProcessBackend()
+    await backend.add_connection("a", RecordingWebSocket())
+    await backend.add_connection("b", RecordingWebSocket())
+    await backend.join_room("a", "lobby")
+    await backend.join_room("b", "lobby")
+    return backend
+
+
 @pytest.mark.asyncio
 async def test_add_connection_raises_on_duplicate_id() -> None:
     """Registering the same connection ID twice raises ValueError."""
@@ -84,16 +94,12 @@ async def test_remove_connection_deletes_room_left_empty() -> None:
 @pytest.mark.asyncio
 async def test_remove_connection_keeps_room_with_other_members() -> None:
     """Removing one of several members keeps the room with the rest."""
-    backend = InProcessBackend()
-    await backend.add_connection("a", RecordingWebSocket())
-    await backend.add_connection("b", RecordingWebSocket())
-    await backend.join_room("a", "lobby")
-    await backend.join_room("b", "lobby")
+    backend = await _backend_with_lobby_pair()
 
     await backend.remove_connection("a")
 
-    lobby = backend.rooms["lobby"]
-    assert lobby == frozenset({"b"}), "the room must keep its remaining member"
+    assert backend.rooms["lobby"] == frozenset({"b"}), "lobby must keep member b"
+    assert "a" not in backend.websockets, "removal must drop a's websocket"
 
 
 @pytest.mark.asyncio
@@ -162,16 +168,12 @@ async def test_leave_room_removes_member_and_deletes_empty_room() -> None:
 @pytest.mark.asyncio
 async def test_leave_room_keeps_room_with_remaining_members() -> None:
     """Leaving a room with other members present keeps that room."""
-    backend = InProcessBackend()
-    await backend.add_connection("a", RecordingWebSocket())
-    await backend.add_connection("b", RecordingWebSocket())
-    await backend.join_room("a", "lobby")
-    await backend.join_room("b", "lobby")
+    backend = await _backend_with_lobby_pair()
 
     await backend.leave_room("a", "lobby")
 
-    lobby = backend.rooms["lobby"]
-    assert lobby == frozenset({"b"}), "the room must keep its remaining member"
+    assert backend.rooms["lobby"] == frozenset({"b"}), "lobby must keep member b"
+    assert "a" in backend.websockets, "leaving a room must keep a's connection"
 
 
 @pytest.mark.asyncio
