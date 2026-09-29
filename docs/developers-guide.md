@@ -220,9 +220,15 @@ itself can be removed whenever convenient, because nothing reads it.
 `make fmt` rewrites Markdown and `make check-fmt` verifies it, both by calling
 `mdtablefix` directly over `--git --include-untracked`. That selection is the
 tracked Markdown set plus anything new, so a document is neither missed because
-it has not been committed yet nor rewritten twice. `make fmt` also runs
-`markdownlint-cli2 --fix`, because the two tools fix different things and a
-contributor who ran only one would learn the rest from CI.
+it has not been committed yet nor rewritten twice. Both targets also pass
+`$(MDTABLEFIX_RULES)`, which is
+`--wrap --renumber --breaks --ellipsis --fences`: without those flags
+`check-fmt` would pass files that `fmt` still wraps or renumbers, and the
+80-column rule would go unenforced. The workflow contract asserts every one of
+the flags in both targets, in the Makefile and in what Make expands and runs.
+`make fmt` also runs `markdownlint-cli2 --fix`, because the two tools fix
+different things and a contributor who ran only one would learn the rest from
+CI.
 
 The rules and exclusions live in `.markdownlint-cli2.jsonc`, copied verbatim
 from the estate canon. A repository may add rules and globs alongside them; it
