@@ -45,8 +45,9 @@ jobs:
         uses: astral-sh/setup-uv@v10.1.0
 
       - name: Install mdtablefix
-        # `make check-fmt` runs `mdtablefix --check --git --include-untracked`;
-        # 0.6.0 is the first release carrying `--check` and `--git`. The action
+        # `make check-fmt` runs `mdtablefix --check` with the Git selection and
+        # rewrite flags; 0.6.0 is the first release carrying `--check` and
+        # `--git`. The action
         # installs a prebuilt release through a hardened cargo-binstall rather
         # than building from source.
         uses: leynos/shared-actions/.github/actions/install-mdtablefix@759da19f0379b6d2d7ddef93b7ad4c3b98154e41
