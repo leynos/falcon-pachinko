@@ -32,7 +32,17 @@ SOURCES: typ.Final[tuple[str, ...]] = (
 
 
 class CoverageCall(typ.NamedTuple):
-    """One generate-coverage call and the versions each source declares for it."""
+    """One generate-coverage call and the versions each source declares for it.
+
+    Parameters
+    ----------
+    job : str
+        The name of the job that contains the call.
+    sources : dict[str, str]
+        The version each resolver source declares, in priority order, with an
+        empty string where a source declares nothing.
+
+    """
 
     job: str
     sources: dict[str, str]
@@ -55,6 +65,18 @@ def verdict(call: CoverageCall) -> str:
     measure on whatever Python the runner happens to have; ``"conflicting"``
     means two sources name different versions, so a higher-priority value
     silently overrides a lower one.
+
+    Parameters
+    ----------
+    call : CoverageCall
+        The call to judge.
+
+    Returns
+    -------
+    str
+        ``"undeclared"``, ``"conflicting"``, or ``""`` when every declared
+        source agrees.
+
     """
     declared = set(call.declared.values())
     if not declared:
@@ -79,13 +101,52 @@ def requires_python(pyproject: str) -> SpecifierSet:
     return SpecifierSet(tomllib.loads(pyproject)["project"]["requires-python"])
 
 
+def read_required_text(path: Path) -> str:
+    """Return the text of a file the contract cannot run without.
+
+    With :func:`read_text_if_present`, this is the module's file boundary. A
+    missing or undecodable file raises, naming the path, so the contract fails
+    loudly instead of judging nothing.
+
+    Parameters
+    ----------
+    path : Path
+        The file to read.
+
+    Returns
+    -------
+    str
+        The file's UTF-8 text.
+
+    Raises
+    ------
+    OSError
+        If the file is missing or cannot be read.
+    UnicodeDecodeError
+        If the file is not valid UTF-8.
+
+    """
+    return path.read_text(encoding="utf-8")
+
+
 def read_text_if_present(path: Path) -> str | None:
     """Return a file's text, or ``None`` when the file does not exist.
 
-    The only file access in this module. A file that exists but cannot be read
-    raises, which fails the contract loudly rather than reading as absent.
+    Only an optional file may read as absent. A file that exists but cannot be
+    read raises, which fails the contract loudly rather than reading as absent.
+
+    Parameters
+    ----------
+    path : Path
+        The file to read.
+
+    Returns
+    -------
+    str or None
+        The file's text, or ``None`` when it is absent.
+
     """
-    return path.read_text(encoding="utf-8") if path.is_file() else None
+    return read_required_text(path) if path.is_file() else None
 
 
 def python_version_entry(text: str | None) -> str:
@@ -93,6 +154,17 @@ def python_version_entry(text: str | None) -> str:
 
     Pure: the caller reads the file (see :func:`read_text_if_present`), so the
     parsing is tested on text alone. ``None`` means the file is absent.
+
+    Parameters
+    ----------
+    text : str or None
+        The file's text, or ``None`` when the file is absent.
+
+    Returns
+    -------
+    str
+        The first entry that is not blank or a comment, or ``""``.
+
     """
     entries = (line.strip() for line in (text or "").splitlines())
     return next((entry for entry in entries if entry and not entry.startswith("#")), "")

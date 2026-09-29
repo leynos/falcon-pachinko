@@ -36,6 +36,7 @@ from .coverage_python_sources import (
     CoverageCall,
     coverage_calls,
     python_version_entry,
+    read_required_text,
     read_text_if_present,
     rejected_versions,
     requires_python,
@@ -61,9 +62,7 @@ def _lane_calls() -> dict[str, list[CoverageCall]]:
         read_text_if_present(ROOT / ".python-version")
     )
     return {
-        lane: coverage_calls(
-            (WORKFLOWS / lane).read_text(encoding="utf-8"), python_version
-        )
+        lane: coverage_calls(read_required_text(WORKFLOWS / lane), python_version)
         for lane in LANES
     }
 
@@ -75,7 +74,7 @@ def test_both_lanes_call_generate_coverage() -> None:
 
 def test_every_call_declares_one_accepted_python() -> None:
     """Each call names a Python, every source agrees, and the project accepts it."""
-    accepted = requires_python((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    accepted = requires_python(read_required_text(ROOT / "pyproject.toml"))
     for lane, calls in _lane_calls().items():
         for call in calls:
             where = f"{lane}:{call.job}"
@@ -257,6 +256,12 @@ def test_a_python_version_file_is_read_from_the_tree(tmp_path: Path) -> None:
 
     assert python_version_entry(read_text_if_present(present)) == "3.12"
     assert read_text_if_present(tmp_path / "missing" / ".python-version") is None
+
+
+def test_a_required_file_that_is_missing_fails_loudly(tmp_path: Path) -> None:
+    """A file the contract needs raises rather than reading as absent."""
+    with pytest.raises(FileNotFoundError):
+        read_required_text(tmp_path / "missing.yml")
 
 
 @pytest.mark.parametrize(

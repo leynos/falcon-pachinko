@@ -30,7 +30,7 @@ dev = [
     "websockets>=11,<13",
     "pyyaml>=6.0.3",
     "hypothesis>=6.168.0",
-    "packaging>=26.3",
+    "packaging>=26.3,<27",
 ]
 
 [project.optional-dependencies]
