@@ -132,8 +132,9 @@ def read_required_text(path: Path) -> str:
 def read_text_if_present(path: Path) -> str | None:
     """Return a file's text, or ``None`` when the file does not exist.
 
-    Only an optional file may read as absent. A file that exists but cannot be
-    read raises, which fails the contract loudly rather than reading as absent.
+    Only a missing file reads as absent. A directory, a permission failure or
+    undecodable bytes raise, which fails the contract loudly rather than
+    reading as absent.
 
     Parameters
     ----------
@@ -145,8 +146,18 @@ def read_text_if_present(path: Path) -> str | None:
     str or None
         The file's text, or ``None`` when it is absent.
 
+    Raises
+    ------
+    OSError
+        If the file exists but cannot be read, for example a directory.
+    UnicodeDecodeError
+        If the file is not valid UTF-8.
+
     """
-    return read_required_text(path) if path.is_file() else None
+    try:
+        return read_required_text(path)
+    except FileNotFoundError:
+        return None
 
 
 def python_version_entry(text: str | None) -> str:
