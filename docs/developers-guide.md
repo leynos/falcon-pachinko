@@ -70,10 +70,10 @@ committing.
 
 ## Coverage and CodeScene
 
-`coverage-main.yml` owns both persistent coverage outputs: the CodeScene
-upload and the ratchet baseline. `ci.yml` generates coverage on a pull request
-only, for its own ratchet check, and no workflow a pull request can reach names
-a CodeScene action, runs a `cs-coverage` command, calls the service's host,
+`coverage-main.yml` owns both persistent coverage outputs: the CodeScene upload
+and the ratchet baseline. `ci.yml` generates coverage on a pull request only,
+for its own ratchet check, and no workflow a pull request can reach names a
+CodeScene action, runs a `cs-coverage` command, calls the service's host,
 carries `CS_ACCESS_TOKEN`, or forwards every secret with `secrets: inherit`.
 That separation is the estate rule CV-005.
 
@@ -91,9 +91,9 @@ the baseline a pull request should be compared against.
 fields equal to the set both lanes declare, so an input added to both and not
 to the list cannot drift unnoticed. Agreement is not enough on its own: each
 lane must also set `with-ratchet: 'true'`, because turning the ratchet off in
-both lanes at once keeps them equal and leaves the pull request with no coverage
-gate. The pull-request lane declines the report artefact; the publisher keeps
-the action's default and uploads what it wrote.
+both lanes at once keeps them equal and leaves the pull request with no
+coverage gate. The pull-request lane declines the report artefact; the
+publisher keeps the action's default and uploads what it wrote.
 
 The contracts recognize a shared action by its whole path before `@`, at any
 ref. A substring search accepts `someone-else/upload-codescene-coverage` as the
@@ -105,8 +105,8 @@ checksum input. From shared-actions `f68e8e2e` the action pins `cs-coverage`
 through its own manifest, which is what fixed the parse break, and rejects a
 non-empty `installer-checksum`. Its optional `archive-checksum` adds no
 assurance: the action verifies the downloaded archive against the
-`archive_sha256` in its own `cli-manifest.json`, so a caller-supplied digest can
-only agree with that manifest or go stale and fail. A contract refuses both
+`archive_sha256` in its own `cli-manifest.json`, so a caller-supplied digest
+can only agree with that manifest or go stale and fail. A contract refuses both
 inputs.
 
 Neither lane fetches full Git history. The ratchet compares the measured
@@ -117,12 +117,13 @@ returning.
 
 `tests/workflow_contracts/` needs two development dependencies the library
 itself does not. **PyYAML** (`pyyaml>=6.0.3`) parses the GitHub Actions
-documents and **Hypothesis** (`hypothesis>=6.168.0`) generates the documents the
-scanner is held to. Both are in the `dev` dependency group, so `make build`,
-which runs `uv sync --group dev`, installs them; `uv sync --group dev` on its
-own does as well. `make test` collects the contracts, which is what makes them
-a gate rather than a convenience, and `uv run pytest tests/workflow_contracts`
-runs them alone. Running them without those dependencies fails at import.
+documents and **Hypothesis** (`hypothesis>=6.168.0`) generates the documents
+the scanner is held to. Both are in the `dev` dependency group, so
+`make build`, which runs `uv sync --group dev`, installs them;
+`uv sync --group dev` on its own does as well. `make test` collects the
+contracts, which is what makes them a gate rather than a convenience, and
+`uv run pytest tests/workflow_contracts` runs them alone. Running them without
+those dependencies fails at import.
 
 What a pull request can reach is a closure, not a trigger list.
 `tests/workflow_contracts/pull_request_reach.py` starts from every workflow a
@@ -130,17 +131,17 @@ What a pull request can reach is a closure, not a trigger list.
 in scalar, list or mapping form under either key, and follows each job-level
 call into this repository's workflow directory, recognized by where the
 reference resolves rather than by a list of prefixes, GitHub's recommended `$/`
-self-repository spelling included. A `workflow_call`-only
-workflow a pull-request job calls runs on that pull request, and with `secrets:
-inherit` it holds every secret the caller does; a call the reader cannot place
-is refused rather than skipped. `test_codescene_boundary.py` scans that closure.
+self-repository spelling included. A `workflow_call`-only workflow a
+pull-request job calls runs on that pull request, and with `secrets: inherit`
+it holds every secret the caller does; a call the reader cannot place is
+refused rather than skipped. `test_codescene_boundary.py` scans that closure.
 
 The contracts scan whole parsed workflow documents rather than a list of step
 keys, because a credential can be declared at workflow scope, at job scope, on
 a step, as an action input, or forwarded by name, and the service's host can be
 curled from any shell script. `secrets: inherit` names nothing, so it is
-recognized by its position. The action marker is the exception: it is scoped
-to `uses` values, because applied to every scalar it would report a step named
+recognized by its position. The action marker is the exception: it is scoped to
+`uses` values, because applied to every scalar it would report a step named
 "check CodeScene coverage" as an invocation, and scoped to one action reference
 it would miss a second CodeScene action entirely.
 
@@ -150,10 +151,11 @@ nothing about a dispatch, so without the guard a dispatch from a feature branch
 would publish that branch's coverage through the main-owned upload. The
 contract reads the guard as a conjunction through
 `tests/workflow_contracts/guard_conditions.py` and refuses `||`, because a
-substring check passes a guard with `|| github.event_name ==
-'workflow_dispatch'` appended. The same module's `admits` evaluates the guard
-for a push to main, dispatches on main, a branch and a tag, and a missing
-token, which is the behavioural question a workflow runner would answer.
+substring check passes a guard with
+`|| github.event_name == 'workflow_dispatch'` appended. The same module's
+`admits` evaluates the guard for a push to main, dispatches on main, a branch
+and a tag, and a missing token, which is the behavioural question a workflow
+runner would answer.
 
 The token is bound in no `env`. The uploader is a composite action that binds
 the token itself from its `access-token` input and hands a step's `env` to its
@@ -167,9 +169,9 @@ ref is main, and passes `${{ secrets.CS_ACCESS_TOKEN }}` straight to
 exact command with no `if:` or `env`, the output conjunct, the direct input,
 and no `env` anywhere in the publisher carrying the token under any name or
 reading the secrets context at all, which an indexed expression such as
-`secrets[format(...)]` would otherwise hide. A
-guard on `env.CS_ACCESS_TOKEN != ''` would not do: with the binding deleted it
-is simply false, and the upload skips forever without failing anything.
+`secrets[format(...)]` would otherwise hide. A guard on
+`env.CS_ACCESS_TOKEN != ''` would not do: with the binding deleted it is simply
+false, and the upload skips forever without failing anything.
 
 The publisher job declares `environment: codescene`. That environment admits
 deployments from `main` alone and is where the CodeScene token lives, so only
@@ -177,20 +179,20 @@ the trunk publisher can read it.
 `tests/workflow_contracts/codescene_environment.py` holds the placement: every
 uploading job declares the environment, as a string or as `{name: codescene}`;
 no other job declares it; and no workflow a pull request can start declares it
-in any job. `tests/workflow_contracts/test_codescene_environment.py` proves each
-clause over mutated copies of the workflows.
+in any job. `tests/workflow_contracts/test_codescene_environment.py` proves
+each clause over mutated copies of the workflows.
 
 One known exception: a Dependabot pull request merged by the automerge workflow
 uses `GITHUB_TOKEN`, whose merges fire no push event, so that commit publishes
 no coverage until the next push or a dispatch on main.
 
-The workflow also serializes per ref and never cancels a running generation. The
-shared action saves a fresh baseline cache per successful push and later runs
-restore the newest match, so two overlapping pushes would let the older commit's
-baseline become the one every pull request is measured against. It is not a
-durable queue: GitHub keeps one pending run per group, so a newer push replaces
-an older pending one, which skips an intermediate commit no pull request should
-be measured against.
+The workflow also serializes per ref and never cancels a running generation.
+The shared action saves a fresh baseline cache per successful push and later
+runs restore the newest match, so two overlapping pushes would let the older
+commit's baseline become the one every pull request is measured against. It is
+not a durable queue: GitHub keeps one pending run per group, so a newer push
+replaces an older pending one, which skips an intermediate commit no pull
+request should be measured against.
 
 The contracts read through `workflow_support.WorkflowSource`, the same source,
 strict loader and error hierarchy the placement contracts use, so a repeated
@@ -198,12 +200,12 @@ key cannot hide a credential and `except UnreadableWorkflowError` catches every
 reader's failure. The reusable queries live in
 `tests/workflow_contracts/codescene_scan.py` and take their source explicitly.
 
-Each marker is proved against a document carrying only its own
-interaction: the scan clears a workflow by finding nothing, so a marker that
-had stopped matching would clear the very thing it exists to catch while the
-others kept the suite green. The reader is proved the same way, over temporary
-directories, because a reader that returned an empty list for a missing
-directory would clear the whole estate by finding no workflows in it.
+Each marker is proved against a document carrying only its own interaction: the
+scan clears a workflow by finding nothing, so a marker that had stopped
+matching would clear the very thing it exists to catch while the others kept
+the suite green. The reader is proved the same way, over temporary directories,
+because a reader that returned an empty list for a missing directory would
+clear the whole estate by finding no workflows in it.
 
 The publisher is now the only workflow here that names CodeScene at all.
 `get-codescene-sha.yml` refreshed the `CODESCENE_CLI_SHA256` repository
@@ -218,9 +220,15 @@ itself can be removed whenever convenient, because nothing reads it.
 `make fmt` rewrites Markdown and `make check-fmt` verifies it, both by calling
 `mdtablefix` directly over `--git --include-untracked`. That selection is the
 tracked Markdown set plus anything new, so a document is neither missed because
-it has not been committed yet nor rewritten twice. `make fmt` also runs
-`markdownlint-cli2 --fix`, because the two tools fix different things and a
-contributor who ran only one would learn the rest from CI.
+it has not been committed yet nor rewritten twice. Both targets also pass
+`$(MDTABLEFIX_RULES)`, which is
+`--wrap --renumber --breaks --ellipsis --fences`: without those flags
+`check-fmt` would pass files that `fmt` still wraps or renumbers, and the
+80-column rule would go unenforced. The workflow contract asserts every one of
+the flags in both targets, in the Makefile and in what Make expands and runs.
+`make fmt` also runs `markdownlint-cli2 --fix`, because the two tools fix
+different things and a contributor who ran only one would learn the rest from
+CI.
 
 The rules and exclusions live in `.markdownlint-cli2.jsonc`, copied verbatim
 from the estate canon. A repository may add rules and globs alongside them; it
@@ -241,11 +249,11 @@ It resolved to nothing, so the local target ran `xargs` with no command and
 exited zero having linted the empty set. A gate that reports success while
 checking nothing is worse than no gate, because it is believed.
 
-`tests/workflow_contracts/test_markdown_baseline.py` holds each of those
-facts, and each is proved by removing the thing it asserts. It reads the
-Makefile rather than running it, expanding variable references first: a
-contract matching the literal text `$(MDLINT)` would pass with that variable
-pointing anywhere at all.
+`tests/workflow_contracts/test_markdown_baseline.py` holds each of those facts,
+and each is proved by removing the thing it asserts. It reads the Makefile
+rather than running it, expanding variable references first: a contract
+matching the literal text `$(MDLINT)` would pass with that variable pointing
+anywhere at all.
 
 ## GitHub Actions runner placement
 
@@ -284,10 +292,10 @@ runs-on: >-
 The guard reads one field, and it takes three values. A pull request from a
 fork sets it to `true` and takes the GitHub-hosted arm. A pull request from a
 branch of this repository sets it to `false`. Any other event, `push` to `main`
-included, carries no `pull_request` object at all, so the field is null. `false`
-and null are both falsy, so both reach Ubicloud; the distinction matters only
-because a reader who believed non-fork pull requests left the field null would
-conclude the expression had a case it does not handle.
+included, carries no `pull_request` object at all, so the field is null.
+`false` and null are both falsy, so both reach Ubicloud; the distinction
+matters only because a reader who believed non-fork pull requests left the
+field null would conclude the expression had a case it does not handle.
 
 Two rules follow, and a green run demonstrates neither:
 
@@ -347,24 +355,22 @@ them; `uv sync --group dev` on its own does as well. Running
 `make test-workflow-contracts` or `make all` without them fails at import.
 
 The readers take the directory they read rather than reaching for a module
-global, and the rules that prove the readers pass a directory of their own.
-A rule parametrized over `.github/workflows` can only show that the current
-files pass, which they do whether or not the rule discriminates anything:
-a reader tied to the wrong matrix key, or blind to a direct matrix axis, would
-leave every such rule green. So the readers are driven over documents written
-for one question each, and each of those documents is one the estate does not
-contain.
+global, and the rules that prove the readers pass a directory of their own. A
+rule parametrized over `.github/workflows` can only show that the current files
+pass, which they do whether or not the rule discriminates anything: a reader
+tied to the wrong matrix key, or blind to a direct matrix axis, would leave
+every such rule green. So the readers are driven over documents written for one
+question each, and each of those documents is one the estate does not contain.
 
-Every failure the reader can meet is translated into a named error: a
-directory that cannot be listed, a file that cannot be read, one that is not
-UTF-8, one that is not YAML, and one that is YAML but not a mapping. A
-contract that meets any of them fails saying so, rather than surfacing an
-`OSError` from inside a generator. A runner label the reader cannot parse is
-raised rather than skipped, because a skipped label leaves the registry
-equality holding over a smaller set than the estate uses, which is the one
-thing that equality exists to refuse. The same holds one level up: a job that
-is not a mapping, and a registry entry that is not a string, are refused
-rather than filtered out.
+Every failure the reader can meet is translated into a named error: a directory
+that cannot be listed, a file that cannot be read, one that is not UTF-8, one
+that is not YAML, and one that is YAML but not a mapping. A contract that meets
+any of them fails saying so, rather than surfacing an `OSError` from inside a
+generator. A runner label the reader cannot parse is raised rather than
+skipped, because a skipped label leaves the registry equality holding over a
+smaller set than the estate uses, which is the one thing that equality exists
+to refuse. The same holds one level up: a job that is not a mapping, and a
+registry entry that is not a string, are refused rather than filtered out.
 
 Workflows are parsed with `StrictLoader` from
 `tests/workflow_contracts/strict_yaml.py`, a `SafeLoader` that refuses a
@@ -375,25 +381,24 @@ hosted to every rule here.
 
 `runs-on` is read by `tests/workflow_contracts/runs_on_forms.py` in all three
 forms GitHub accepts: a label, a list of labels, and a mapping of `group` and
-`labels`, where a runner group counts as
-a label because it is as billable and selects a runner the same way. Any other
-shape is refused, not read as declaring no runner, because a job that declares
-none drops out of the placement, ceiling and registry rules at once. A job
-that calls a reusable workflow declares nothing, since the called workflow
-places its own jobs.
+`labels`, where a runner group counts as a label because it is as billable and
+selects a runner the same way. Any other shape is refused, not read as
+declaring no runner, because a job that declares none drops out of the
+placement, ceiling and registry rules at once. A job that calls a reusable
+workflow declares nothing, since the called workflow places its own jobs.
 
 A job's matrix is read only for the keys its `runs-on` names, and for each of
 those both shapes are read: the axis the matrix declares as a list under the
 key, and any `include` row carrying the same key. Reading every `os` in sight
 would enter a test parameter named `os` into the labels in use and demand a
-registration for a runner no job can request. Reading only `include` rows
-would miss `matrix: {os: [ubuntu-latest, windows-latest]}` entirely, and leave
-its labels unregistered. `tests/workflow_contracts/runner_matrix.py` holds
-that reading. It follows a matrix reference only when the declaration is
-exactly one `${{ matrix.<key> }}`: GitHub renders a composed declaration such
-as `${{ matrix.os }}-${{ matrix.arch }}` into one label per combination, which
-is none of the axis values, so the union of the axes would be the wrong answer
-and the composed form is refused. An axis declared as an expression, an axis
+registration for a runner no job can request. Reading only `include` rows would
+miss `matrix: {os: [ubuntu-latest, windows-latest]}` entirely, and leave its
+labels unregistered. `tests/workflow_contracts/runner_matrix.py` holds that
+reading. It follows a matrix reference only when the declaration is exactly one
+`${{ matrix.<key> }}`: GitHub renders a composed declaration such as
+`${{ matrix.os }}-${{ matrix.arch }}` into one label per combination, which is
+none of the axis values, so the union of the axes would be the wrong answer and
+the composed form is refused. An axis declared as an expression, an axis
 nothing in the matrix supplies, and a value that is not a string are refused
 for the same reason: the labels the job can run on would be unknown.
 
@@ -401,9 +406,9 @@ The ceilings and trigger filters in the tables above are restated in the
 contracts rather than derived from the workflows. The rule that every Ubicloud
 lane declares a ceiling says nothing about the number, so a ceiling widened to
 six hours would pass it while leaving this guide's table wrong; the same holds
-for `coverage-main.yml`'s `branches: [main]` and `release.yml`'s `v*.*.*`
-tags, which carry the rest of the placement argument. Change a figure in a
-workflow and this guide in the same commit, or the contract fails.
+for `coverage-main.yml`'s `branches: [main]` and `release.yml`'s `v*.*.*` tags,
+which carry the rest of the placement argument. Change a figure in a workflow
+and this guide in the same commit, or the contract fails.
 
 The registry in `.github/actionlint.yaml` is held to an equality with the
 labels actually in use, in both directions. A subset assertion would miss a

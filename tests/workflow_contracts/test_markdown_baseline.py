@@ -51,6 +51,10 @@ WORKFLOW_DIR = ROOT / ".github" / "workflows"
 REQUIRED_TARGETS = ("fmt", "check-fmt")
 #: The flags that select the Markdown set: tracked files, plus new ones.
 SELECT_FLAGS = ("--git", "--include-untracked")
+# The rewrite flags are part of the estate's check-fmt standard: a check
+# without them passes files that `make fmt` would still wrap or renumber.
+REWRITE_FLAGS = ("--wrap", "--renumber", "--breaks", "--ellipsis", "--fences")
+REQUIRED_FLAGS = SELECT_FLAGS + REWRITE_FLAGS
 #: The upstream action, and the only way CI may lint Markdown.
 LINT_ACTION = "DavidAnson/markdownlint-cli2-action"
 #: The action that provisions the table formatter. `check-fmt` now requires
@@ -401,11 +405,8 @@ class TestMakefileBaseline:
         checking = [line for line in lines if "--check" in line]
         assert checking, f"check-fmt must run mdtablefix --check; it runs {lines}"
         for line in checking:
-            for flag in SELECT_FLAGS:
-                assert flag in line, (
-                    f"check-fmt must select the Markdown set with {flag}; it "
-                    f"runs {line!r}"
-                )
+            for flag in REQUIRED_FLAGS:
+                assert flag in line, f"check-fmt must pass {flag}; it runs {line!r}"
             assert not line.lstrip().startswith("-"), (
                 f"check-fmt must let mdtablefix's status reach Make; it runs {line!r}"
             )
@@ -430,10 +431,8 @@ class TestMakefileBaseline:
         rewriting = [line for line in lines if "--in-place" in line]
         assert rewriting, f"fmt must run mdtablefix --in-place; it runs {lines}"
         for line in rewriting:
-            for flag in SELECT_FLAGS:
-                assert flag in line, (
-                    f"fmt must select the Markdown set with {flag}; it runs {line!r}"
-                )
+            for flag in REQUIRED_FLAGS:
+                assert flag in line, f"fmt must pass {flag}; it runs {line!r}"
 
     def test_fmt_applies_the_linter_s_own_fixes(
         self,

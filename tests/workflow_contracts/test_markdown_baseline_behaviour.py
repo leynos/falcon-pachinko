@@ -37,6 +37,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 STUBBED_TOOLS = ("ruff", "mdtablefix", "markdownlint-cli2")
 #: The flags that select the Markdown set.
 SELECT_FLAGS = ("--git", "--include-untracked")
+# The rewrite flags are part of the estate's check-fmt standard: a check
+# without them passes files that `make fmt` would still wrap or renumber.
+REWRITE_FLAGS = ("--wrap", "--renumber", "--breaks", "--ellipsis", "--fences")
+REQUIRED_FLAGS = SELECT_FLAGS + REWRITE_FLAGS
 
 MAKE_TIMEOUT = 300
 #: Resolved once, from the ambient PATH, so the stub directory a real run
@@ -202,7 +206,7 @@ def test_make_expands_check_fmt_to_a_table_check() -> None:
     checking = [line for line in invocations if "--check" in line]
     assert checking, f"check-fmt must run mdtablefix --check; it runs {invocations}"
     for line in checking:
-        for flag in SELECT_FLAGS:
+        for flag in REQUIRED_FLAGS:
             assert flag in line, f"check-fmt must pass {flag}; it runs {line!r}"
 
 
@@ -224,7 +228,7 @@ def test_make_expands_fmt_to_a_rewrite_and_a_lint_fix() -> None:
     assert rewriting, f"fmt must run mdtablefix --in-place; it runs {commands}"
     assert fixing, f"fmt must run markdownlint-cli2 --fix; it runs {commands}"
     for line in rewriting:
-        for flag in SELECT_FLAGS:
+        for flag in REQUIRED_FLAGS:
             assert flag in line, f"fmt must pass {flag}; it runs {line!r}"
 
 
@@ -246,6 +250,10 @@ def test_check_fmt_really_invokes_the_table_check(stub_bin: pathlib.Path) -> Non
         line for line in calls if line.startswith("mdtablefix") and "--check" in line
     ]
     assert checking, f"mdtablefix --check was never invoked; the stubs saw {calls}"
+    for flag in REQUIRED_FLAGS:
+        assert all(flag in line for line in checking), (
+            f"the real check-fmt run must pass {flag}; the stubs saw {checking}"
+        )
 
 
 def test_fmt_really_invokes_both_tools(stub_bin: pathlib.Path) -> None:
@@ -259,9 +267,14 @@ def test_fmt_really_invokes_both_tools(stub_bin: pathlib.Path) -> None:
     assert result.returncode == 0, (
         f"fmt must pass with stubbed tools; it said {result.stderr!r}"
     )
-    assert [
+    rewriting = [
         line for line in calls if line.startswith("mdtablefix") and "--in-place" in line
-    ], f"mdtablefix --in-place was never invoked; the stubs saw {calls}"
+    ]
+    assert rewriting, f"mdtablefix --in-place was never invoked; the stubs saw {calls}"
+    for flag in REQUIRED_FLAGS:
+        assert all(flag in line for line in rewriting), (
+            f"the real fmt run must pass {flag}; the stubs saw {rewriting}"
+        )
     assert [
         line
         for line in calls
