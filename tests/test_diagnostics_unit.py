@@ -1,4 +1,9 @@
-"""Bounded diagnostics must never invoke application display methods."""
+"""Verify diagnostic omission, recursive redaction, and resource bounds.
+
+Hostile objects detect accidental calls to application display and traversal
+hooks. Canary secrets establish omission independently of sample formatting.
+Run this module with ``uv run pytest tests/test_diagnostics_unit.py``.
+"""
 
 from __future__ import annotations
 
@@ -139,14 +144,13 @@ def test_sanitizer_preserves_safe_sample_and_extends_keys() -> None:
 
 def test_sanitizer_omits_unsupported_keys_bytes_and_cycles() -> None:
     """Uncertain values and binary frames never invoke decoding or display."""
-    # pylint: disable=prefer-snapshot-substring  # canary and traversal predicates are independent of sample formatting
     sample: list[object] = [Hostile(), HostileDict(token=CANARY), CANARY.encode()]
     sample.append(sample)
     rendered = DiagnosticSanitizer().format_sample({"items": sample, 1: CANARY})
     assert CANARY not in rendered, "the diagnostic safety contract must hold"
-    assert "<cycle>" in rendered, "the diagnostic safety contract must hold"
-    assert "<bytes len=" in rendered, "the diagnostic safety contract must hold"
-    assert "Hostile" in rendered, "the diagnostic safety contract must hold"
+    assert all(
+        marker in rendered for marker in ("<cycle>", "<bytes len=", "Hostile")
+    ), "samples must describe cycles, binary lengths, and unsupported types"
 
 
 def test_sanitizer_bounds_each_dimension() -> None:
@@ -307,14 +311,14 @@ def test_repeated_reference_is_not_a_cycle() -> None:
 
 def test_tuple_cycles_and_non_string_keys_are_counted() -> None:
     """Mixed containers and unknown keys are omitted without invoking methods."""
-    # pylint: disable=prefer-snapshot-substring  # canary and traversal predicates are independent of sample formatting
     nested: list[object] = []
     sample = (nested,)
     nested.append(sample)
     rendered = DiagnosticSanitizer().format_sample({Hostile(): CANARY, "tuple": sample})
     assert CANARY not in rendered, "unknown-key values must be omitted"
-    assert "<cycle>" in rendered, "cycles through tuple and list must terminate"
-    assert "<omitted entries>" in rendered, "unknown entries must be counted"
+    assert all(marker in rendered for marker in ("<cycle>", "<omitted entries>")), (
+        "tuple/list cycles must terminate and unknown entries must be counted"
+    )
 
 
 @pytest.mark.parametrize(
