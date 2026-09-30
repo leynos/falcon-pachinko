@@ -16,7 +16,7 @@ from falcon_pachinko._testing_harness import (
 )
 from falcon_pachinko.router import WebSocketRouter
 
-from ._common import _JSON_FRAME_REQUIRED_MSG, FrameKind
+from ._common import FrameKind, _decode_json
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -80,20 +80,10 @@ class SimulatorConnection:
         object
             The decoded JSON payload, using ``payload_type`` when supplied.
 
-        Raises
-        ------
-        TypeError
-            If the popped frame is neither a text nor a binary payload.
+        Unsupported frames raise ``TypeError`` through the shared decoder.
         """
         raw = self.pop_sent()
-        match raw:
-            case str():
-                data = raw.encode("utf-8")
-            case bytes() | bytearray() | memoryview():
-                data = bytes(raw)
-            case _:  # pragma: no cover - safeguarded by simulator helpers
-                raise TypeError(_JSON_FRAME_REQUIRED_MSG)
-        return self._decoder_for(payload_type).decode(data)
+        return _decode_json(self._decoder_for(payload_type), raw, payload_type)
 
     def _decoder_for(self, payload_type: type[object] | None) -> msjson.Decoder:
         """Return a cached decoder for ``payload_type``."""
