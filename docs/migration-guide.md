@@ -14,6 +14,37 @@ workflow to the composable `WebSocketRouter` architecture.
 - **Pluggable connection manager backends** enable distributed storage.
 - **Lifespan-managed workers** supersede `add_websocket_worker`.
 
+## Diagnostic compatibility
+
+Framework-generated diagnostics now omit payload values by default. Strict
+unknown-field errors report bounded field names and expected schema metadata;
+they no longer include a truncated payload prefix. Setting
+`include_payload=True` routes the sample through `DiagnosticSanitizer`; pass a
+custom `sanitizer` to supply application-specific sensitive keys or bounds.
+Redacted samples are bounded and intended for trusted local debugging.
+Conventional-handler DEBUG messages retain their lazy format but now include
+only a bounded handler name and exception class.
+
+`HookContext`, `HandlerInvocationContext`, and `TraceEvent` keep their fields,
+constructors, slots, equality behaviour and operational payload values, but
+their representations now show safe metadata instead of raw or decoded values.
+`TraceEvent.summary()` is new and returns the same kind of metadata. Code that
+relied on payload values appearing in `repr()` must read the explicit payload
+field at a trusted boundary.
+
+Client session `receive_json()` continues to raise `RuntimeError` with the
+`Failed to decode JSON payload` prefix. Its message now reports frame kind and
+length, optional expected type, and decoder exception class. The exception has
+no vendor cause or context. Simulator and harness JSON decoding continue to
+raise `msgspec.ValidationError` for validation failures and
+`msgspec.DecodeError` for other decode failures, using fresh errors without
+vendor text or chains. Unsupported frame types raise `TypeError` with only the
+safe type name.
+
+Close failures still propagate the original close exception. Their trace entry
+now records the exception class name instead of its message; caller-supplied
+close `code` and `reason` fields retain their values.
+
 ## Step-by-Step Migration
 
 1) **Install websocket support** (unchanged):
