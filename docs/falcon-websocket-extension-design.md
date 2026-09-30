@@ -507,6 +507,11 @@ and simplifies the application's mental model.
 A new module, `pachinko.workers`, will provide the core components for this
 feature.
 
+Worker startup is transactional. If a worker factory or task creation fails,
+`start()` cancels and awaits the tasks already scheduled, closes the async exit
+stack, restores the controller to a fresh state and re-raises the original
+error. The caller can retry with the same controller.
+
 ```python
 # pachinko/workers.py (new module)
 import asyncio
@@ -527,13 +532,29 @@ class WorkerController:
         self._stack: AsyncExitStack | None = None
 
     async def start(self, *workers: WorkerFn, **context: typ.Any) -> None:
-        """Create and supervise tasks. *context is injected into each worker."""
+        """Create and supervise tasks, rolling back partial startup on failure."""
         self._stack = AsyncExitStack()
-        await self._stack.__aenter__()
 
-        for fn in workers:
-            task = asyncio.create_task(fn(**context))
-            self._tasks.append(task)
+        try:
+            for fn in workers:
+                coroutine = fn(**context)
+                try:
+                    task = asyncio.create_task(coroutine)
+                except BaseException:
+                    if isinstance(coroutine, cabc.Coroutine):
+                        coroutine.close()
+                    raise
+                self._tasks.append(task)
+        except BaseException:
+            try:
+                for task in self._tasks:
+                    task.cancel()
+                await asyncio.gather(*self._tasks, return_exceptions=True)
+                await self._stack.aclose()
+            finally:
+                self._tasks.clear()
+                self._stack = None
+            raise
 
     async def stop(self) -> None:
         """Cancel tasks and propagate first exception, if any."""

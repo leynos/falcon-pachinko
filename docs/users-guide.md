@@ -240,6 +240,10 @@ Tests illustrating this pattern live in:
 - Use `WorkerController` to start/stop async tasks during ASGI lifespan.
 - Prefer `@app.lifespan` to wire startup/shutdown; workers can depend on the
   same DI container used for WebSocket resources.
+- If `start()` fails while creating or scheduling a worker, it cancels and
+  awaits tasks already scheduled, closes the async exit stack, resets the
+  controller and re-raises the original error. The same controller can then be
+  started again.
 
 ```python
 from falcon_pachinko import WorkerController, worker
