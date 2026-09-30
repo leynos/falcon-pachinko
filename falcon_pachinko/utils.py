@@ -6,9 +6,7 @@ import re
 
 import msgspec as ms
 
-# Cap the payload echoed back in validation errors so logs stay readable.
-_MAX_PAYLOAD_SNIPPET = 200
-_ELLIPSIS = "..."
+from .diagnostics import DiagnosticSanitizer, _class_name, _identifiers
 
 
 def duplicate_payload_type_msg(
@@ -21,20 +19,22 @@ def duplicate_payload_type_msg(
     return msg
 
 
-def raise_unknown_fields(
+# pylint: disable-next=too-many-arguments  # preserve compatibility while adding schema metadata and explicit sample configuration
+def raise_unknown_fields(  # ruff: ignore[too-many-arguments]  # preserve existing keywords and explicit sample configuration
     extra_fields: set[str],
     payload: dict | None = None,
     *,
     include_payload: bool = False,
+    expected_type: type | None = None,
+    sanitizer: DiagnosticSanitizer | None = None,
 ) -> None:
-    """Raise a validation error for unknown fields."""
-    details = f"Unknown fields in payload: {sorted(extra_fields)}"
+    """Raise a structural validation error, optionally adding a sanitized sample."""
+    details = f"Unknown fields in payload: {_identifiers(extra_fields)}"
+    if expected_type is not None:
+        details += f" (expected: {_class_name(expected_type)})"
     if include_payload and payload is not None:
-        snippet = str(payload)
-        if len(snippet) > _MAX_PAYLOAD_SNIPPET:
-            keep = _MAX_PAYLOAD_SNIPPET - len(_ELLIPSIS)
-            snippet = f"{snippet[:keep]}{_ELLIPSIS}"
-        details += f" -> {snippet}"
+        formatter = sanitizer if sanitizer is not None else DiagnosticSanitizer()
+        details += f" -> {formatter.format_sample(payload)}"
     raise ms.ValidationError(details)
 
 
