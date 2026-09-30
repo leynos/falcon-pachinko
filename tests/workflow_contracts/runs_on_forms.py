@@ -16,6 +16,9 @@ import typing as typ
 
 from .workflow_support import WorkflowShapeError
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 #: The keys GitHub reads from a mapping-form ``runs-on``. A runner group is
 #: as billable as a label, so both are declarations.
 _RUNS_ON_MAPPING_KEYS = ("group", "labels")
@@ -43,7 +46,7 @@ class UnsupportedRunnerDeclarationError(WorkflowShapeError):
         )
 
 
-def _label_list(where: str, declared: object) -> typ.Iterator[tuple[str, str]]:
+def _label_list(where: str, declared: object) -> cabc.Iterator[tuple[str, str]]:
     """Yield a label, or each label of a non-empty list of them.
 
     Parameters
@@ -79,7 +82,7 @@ def _label_list(where: str, declared: object) -> typ.Iterator[tuple[str, str]]:
 
 def _mapping_labels(
     where: str, declared: dict[object, object]
-) -> typ.Iterator[tuple[str, str]]:
+) -> cabc.Iterator[tuple[str, str]]:
     """Yield the labels a ``group``/``labels`` mapping declares.
 
     Parameters
@@ -111,7 +114,7 @@ def _mapping_labels(
         yield from _label_list(f"{where}.labels", declared["labels"])
 
 
-def declared_labels_in(where: str, declared: object) -> typ.Iterator[tuple[str, str]]:
+def declared_labels_in(where: str, declared: object) -> cabc.Iterator[tuple[str, str]]:
     """Yield the labels one ``runs-on`` value declares, in any accepted form.
 
     A label, a non-empty list of labels, or a mapping naming a ``group`` and

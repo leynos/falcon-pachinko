@@ -726,12 +726,10 @@ class ChatRoomResource(WebSocketResource):
 
         await self.join_room(self.room_name)
 
-        await ws.send_media(
-            {
-                "type": "serverSystemMessage",
-                "payload": {"text": f"Welcome {self.user.name} to room '{room_name}'!"},
-            }
-        )
+        await ws.send_media({
+            "type": "serverSystemMessage",
+            "payload": {"text": f"Welcome {self.user.name} to room '{room_name}'!"},
+        })
 
         await self.broadcast_to_room(
             self.room_name,
@@ -802,12 +800,10 @@ class ChatRoomResource(WebSocketResource):
             "Received unhandled message from "
             f"{self.user.name} in {self.room_name}: {message}"
         )
-        await ws.send_media(
-            {
-                "type": "serverError",
-                "payload": {"error": "Unrecognized message format or type."},
-            }
-        )
+        await ws.send_media({
+            "type": "serverError",
+            "payload": {"error": "Unrecognized message format or type."},
+        })
 ```
 
 This example demonstrates how the `WebSocketResource` streamlines the
@@ -1000,9 +996,7 @@ sub-routes. These paths are *relative* to the router's mount point.
 chat_router = WebSocketRouter(name="chat")  # Give the router a name for reversal
 
 # Add a route to the router, giving it a name for url_for.
-chat_router.add_route(
-    "/{room_id}", ChatResource, name="room", init_args={"history_size": 100}
-)
+chat_router.add_route("/{room_id}", ChatResource, name="room", history_size=100)
 
 app.add_route("/ws/chat", chat_router)
 
@@ -1030,13 +1024,20 @@ sequenceDiagram
 
     Client->>FalconApp: Initiate WebSocket connection (URL)
     FalconApp->>WebSocketRouter: on_websocket(req, ws)
-    WebSocketRouter->>WebSocketRouter: Match URL to route
-    WebSocketRouter->>WebSocketResource: Instantiate resource
+    WebSocketRouter->>WebSocketRouter: Validate mount prefix
+    WebSocketRouter->>WebSocketRouter: Match path against a route's prefix
+    WebSocketRouter->>WebSocketResource: Instantiate resource from factory
+    WebSocketRouter->>WebSocketResource: Resolve subroutes (consume remaining path)
+    WebSocketRouter->>WebSocketRouter: Run before_connect hooks
     WebSocketRouter->>WebSocketResource: on_connect(req, ws, **params)
+    WebSocketRouter->>WebSocketRouter: Run after_connect hooks
     alt on_connect returns False
         WebSocketRouter->>Client: Close WebSocket
     else on_connect returns True
         WebSocketRouter->>Client: Accept WebSocket
+    end
+    alt Unhandled exception during dispatch
+        WebSocketRouter->>Client: Close WebSocket
     end
 ```
 
@@ -1063,11 +1064,12 @@ erDiagram
 ```mermaid
 classDiagram
     class WebSocketRouter {
-        - _routes: list[tuple[str, re.Pattern[str], Callable[..., WebSocketResource]]]
+        - _raw: list[_RawRoute]
+        - _routes: list[_CompiledRoute]
         - _names: dict[str, str]
         - name: str | None
         + __init__(name: str | None = None)
-        + add_route(path: str, resource: type[WebSocketResource] | Callable[..., WebSocketResource], name: str | None = None, args: tuple = (), kwargs: dict | None = None)
+        + add_route(path: str, resource: type[WebSocketResource] | Callable[..., WebSocketResource], *init_args: object, name: str | None = None, **init_kwargs: object)
         + url_for(name: str, **params: object) str
         + on_websocket(req: falcon.Request, ws: WebSocketLike)
     }
@@ -1450,7 +1452,7 @@ router = WebSocketRouter(resource_factory=container.create_resource)
 router.add_route(
     "/{room_id}",
     ChatResource,
-    kwargs={"history_size": 100},
+    history_size=100,
 )
 ```
 
@@ -1708,27 +1710,52 @@ enables white-box testing of router behaviour without needing an ASGI server.
 
 #### 6.5.3. Pytest Fixture
 
-To streamline usage, the documentation prescribes a pytest fixture that
-initializes the simulator alongside a configured router. A representative
-fixture looks like:
+`falcon_pachinko.testing` exports a `websocket_simulator` pytest fixture that
+takes no parameters and yields a `SimulatorRouterHarness`. The harness
+constructs its own `falcon.asgi.App` and `WebSocketRouter`, wired with a
+`simulator_factory`, and mounts the router at `/` by default. On teardown the
+fixture calls `harness.discard_pending_simulator()` to drop any simulator
+staged for a connection that was never established:
 
 ```python
-@pytest.fixture
-async def websocket_simulator(app, event_loop):
-    sim = WebSocketSimulator()
-    router = WebSocketRouter(simulator_factory=lambda *_: sim)
-    app.add_route("/ws", router)
-    async with sim.connected() as connection:
-        yield connection
+def _websocket_simulator() -> cabc.Iterator[SimulatorRouterHarness]:
+    harness = SimulatorRouterHarness()
+    try:
+        yield harness
+    finally:
+        harness.discard_pending_simulator()
 ```
 
-- **Lifecycle Management**: The fixture ensures `accept()` is invoked before
-  yielding and that `close()` is called after the test, preventing dangling
-  tasks or leaked queues.
+A test registers routes on `harness.router` and then uses the async context
+manager `harness.connect(path, *, initial_inbound=None)` to dispatch a
+simulated connection through the router. `connect()` yields a
+`SimulatorConnection` exposing `accepted`, `closed`, `close_code`,
+`subprotocol`, and `sent_messages`, plus helpers such as `pop_sent()`,
+`pop_sent_json()`, `push_json()`, `push_text()`, and `push_bytes()`. Both the
+simulator and the underlying websocket stub are closed automatically when the
+context exits:
 
-- **Behavioural Testing**: Higher-level fixtures can compose the simulator with
-  the connection manager to validate broadcast flows, or parameterize initial
-  inbound frames to exercise specific message handlers.
+```python
+async def test_echo(websocket_simulator: SimulatorRouterHarness) -> None:
+    websocket_simulator.router.add_route("/echo", EchoResource)
+
+    async with websocket_simulator.connect(
+        "/echo", initial_inbound=[({"type": "ping"}, "json")]
+    ) as connection:
+        assert connection.pop_sent_json() == {
+            "type": "ack",
+            "payload": {"type": "ping"},
+        }
+```
+
+- **Lifecycle Management**: `connect()` dispatches the request through
+  `router.on_websocket()` and guarantees the simulator and the underlying
+  websocket stub are closed on exit, even if the resource left them open.
+
+- **Behavioural Testing**: Because routes can be added to `harness.router` at
+  any point before `connect()` is awaited, higher-level fixtures can compose
+  the harness with the connection manager or seed `initial_inbound` frames to
+  exercise specific message handlers.
 
 - **Extensibility**: Because the simulator is injectable, teams can swap in
   variants that add latency simulation, failure injection, or statistics

@@ -21,6 +21,8 @@ from types import MethodType
 from .resource import WebSocketResource
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from .protocols import WebSocketLike
 
 
@@ -95,6 +97,17 @@ class RouteSpec:
     kwargs: dict[str, typ.Any] = dc.field(default_factory=_kwargs_factory)
 
 
+class _WebSocketApp(typ.Protocol):
+    """State :func:`install` attaches to the host application.
+
+    The deprecated route helpers are bound to arbitrary application objects,
+    so this protocol captures the only attributes they actually touch.
+    """
+
+    _websocket_routes: dict[str, RouteSpec]
+    _websocket_route_lock: ThreadLock
+
+
 class ConnectionBackend(abc.ABC):
     """Abstract interface for connection manager backends.
 
@@ -121,12 +134,12 @@ class ConnectionBackend(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def websockets(self) -> typ.Mapping[str, WebSocketLike]:
+    def websockets(self) -> cabc.Mapping[str, WebSocketLike]:
         """Mapping of connection IDs to local WebSocket objects."""
 
     @property
     @abc.abstractmethod
-    def rooms(self) -> typ.Mapping[str, typ.Collection[str]]:
+    def rooms(self) -> cabc.Mapping[str, cabc.Collection[str]]:
         """Read-only mapping of room names to connection ID collections."""
 
     @abc.abstractmethod
@@ -165,13 +178,13 @@ class InProcessBackend(ConnectionBackend):
         self._lock = asyncio.Lock()
 
     @property
-    def websockets(self) -> typ.Mapping[str, WebSocketLike]:
+    def websockets(self) -> cabc.Mapping[str, WebSocketLike]:
         """Read-only snapshot of connection IDs to WebSocket objects."""
         snapshot = self._websockets.copy()
         return types.MappingProxyType(snapshot)
 
     @property
-    def rooms(self) -> typ.Mapping[str, frozenset[str]]:
+    def rooms(self) -> cabc.Mapping[str, frozenset[str]]:
         """Read-only snapshot of room -> member IDs.
 
         This creates a fresh snapshot per access; for hot paths use
@@ -228,6 +241,11 @@ class InProcessBackend(ConnectionBackend):
         """Return snapshot of (conn_id, websocket) pairs for ``room`` or all.
 
         Stale room memberships are ignored to favour eventual consistency.
+
+        Returns
+        -------
+        list[tuple[str, WebSocketLike]]
+            Connection IDs paired with their WebSocket objects.
         """
         async with self._lock:
             if room is None:
@@ -259,12 +277,12 @@ class WebSocketConnectionManager:
         return self._backend
 
     @property
-    def websockets(self) -> typ.Mapping[str, WebSocketLike]:
+    def websockets(self) -> cabc.Mapping[str, WebSocketLike]:
         """Expose backend websocket mapping."""
         return self._backend.websockets
 
     @property
-    def rooms(self) -> typ.Mapping[str, typ.Collection[str]]:
+    def rooms(self) -> cabc.Mapping[str, cabc.Collection[str]]:
         """Expose backend room membership mapping."""
         return self._backend.rooms
 
@@ -296,8 +314,10 @@ class WebSocketConnectionManager:
         room: str,
         data: object,
         *,
-        exclude: typ.Collection[str] | None = None,
-        timeout: float | None = None,
+        exclude: cabc.Collection[str] | None = None,
+        # ASYNC109 suggests a caller-side deadline, but this bounds each send
+        # individually rather than the broadcast as a whole.
+        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout] - per-send deadline
     ) -> None:
         """Broadcast ``data`` to members of ``room``.
 
@@ -310,83 +330,55 @@ class WebSocketConnectionManager:
         websockets = [ws for cid, ws in snapshot if cid not in excluded]
 
         send_fn = self._create_send_function(data, timeout)
-        errors = await self._execute_broadcast(websockets, send_fn)
+        errors = await self._broadcast(websockets, send_fn)
         self._handle_broadcast_errors(errors)
 
+    @staticmethod
     def _create_send_function(
-        self, data: object, timeout: float | None
-    ) -> typ.Callable[[WebSocketLike], typ.Awaitable[None]]:
+        data: object, timeout: float | None
+    ) -> cabc.Callable[[WebSocketLike], cabc.Awaitable[None]]:
         """Return a coroutine factory for sending ``data`` with ``timeout``."""
 
-        def _send(ws: WebSocketLike) -> typ.Awaitable[None]:
+        def _send(ws: WebSocketLike) -> cabc.Awaitable[None]:
             send = ws.send_media(data)
             return asyncio.wait_for(send, timeout) if timeout is not None else send
 
         return _send
 
-    async def _execute_broadcast(
-        self,
+    @staticmethod
+    async def _broadcast(
         websockets: list[WebSocketLike],
-        send_fn: typ.Callable[[WebSocketLike], typ.Awaitable[None]],
+        send_fn: cabc.Callable[[WebSocketLike], cabc.Awaitable[None]],
     ) -> list[Exception]:
-        """Dispatch send tasks using the best available concurrency primitive."""
-        task_group_factory = getattr(asyncio, "TaskGroup", None)
-        if task_group_factory is None:
-            return await self._broadcast_with_gather(websockets, send_fn)
-        return await self._broadcast_with_task_group(
-            websockets, send_fn, task_group_factory
-        )
-
-    async def _broadcast_with_task_group(
-        self,
-        websockets: list[WebSocketLike],
-        send_fn: typ.Callable[[WebSocketLike], typ.Awaitable[None]],
-        task_group_factory: typ.Callable[[], typ.AsyncContextManager[typ.Any]],
-    ) -> list[Exception]:
-        """Execute a broadcast using ``asyncio.TaskGroup`` and collect failures."""
+        """Send to every socket concurrently and collect the failures."""
         errors: list[Exception] = []
 
         async def _send_with_capture(ws: WebSocketLike) -> None:
             try:
                 await send_fn(ws)
-            except Exception as exc:  # noqa: BLE001 - aggregate all failures
+            except Exception as exc:  # ruff: ignore[blind-except] - every recipient failure is aggregated and re-raised
                 errors.append(exc)
 
-        async with task_group_factory() as tg:  # pragma: no branch - coverage
+        async with asyncio.TaskGroup() as tg:  # pragma: no branch - coverage
             for ws in websockets:
                 tg.create_task(_send_with_capture(ws))
         return errors
 
-    async def _broadcast_with_gather(
-        self,
-        websockets: list[WebSocketLike],
-        send_fn: typ.Callable[[WebSocketLike], typ.Awaitable[None]],
-    ) -> list[Exception]:
-        """Execute a broadcast using ``asyncio.gather`` and collect failures."""
-        coroutines = [send_fn(ws) for ws in websockets]
-        results = await asyncio.gather(*coroutines, return_exceptions=True)
-        return [exc for exc in results if isinstance(exc, Exception)]
-
-    def _handle_broadcast_errors(self, errors: list[Exception]) -> None:
+    @staticmethod
+    def _handle_broadcast_errors(errors: list[Exception]) -> None:
         if not errors:
             return
         if len(errors) == 1:
             raise errors[0]
-        self._raise_exception_group(errors)
-
-    def _raise_exception_group(self, errors: list[Exception]) -> None:
-        try:
-            msg = "broadcast_to_room errors"
-            raise ExceptionGroup(msg, errors)  # type: ignore[name-defined]
-        except NameError:  # pragma: no cover - fallback for older Pythons
-            raise errors[0] from None
+        msg = "broadcast_to_room errors"
+        raise ExceptionGroup(msg, errors)
 
     async def connections(
         self,
         *,
         room: str | None = None,
-        exclude: typ.Collection[str] | None = None,
-    ) -> typ.AsyncIterator[WebSocketLike]:
+        exclude: cabc.Collection[str] | None = None,
+    ) -> cabc.AsyncIterator[WebSocketLike]:
         """Iterate over active connections matching ``room`` and ``exclude``."""
         snapshot = await self._backend.snapshot(room)
         excluded = set(exclude) if exclude else set()
@@ -395,7 +387,7 @@ class WebSocketConnectionManager:
                 yield ws
 
 
-def install(app: typ.Any) -> None:  # noqa: ANN401
+def install(app: typ.Any) -> None:  # ruff: ignore[any-type] - app duck-typing
     """Attach WebSocket connection management and routing utilities to the app.
 
     Initializes and binds WebSocket-related attributes and methods to the given app,
@@ -406,6 +398,12 @@ def install(app: typ.Any) -> None:  # noqa: ANN401
     ----------
     app : typ.Any
         The application object to install WebSocket support on
+
+    Raises
+    ------
+    PartialWebSocketInstallError
+        If only some of the WebSocket attributes are already present, which
+        would leave the app in an inconsistent state.
     """
     wanted = (
         "ws_connection_manager",
@@ -480,7 +478,7 @@ def _validate_route_path(path: object) -> None:
 
     Raises
     ------
-    ValueError
+    InvalidWebSocketRoutePathError
         If the path is not a non-empty string starting with '/', contains
         whitespace, or has leading/trailing whitespace
     """
@@ -488,13 +486,18 @@ def _validate_route_path(path: object) -> None:
         raise InvalidWebSocketRoutePathError(str(path))
 
 
-def _validate_resource_cls(resource_cls: object) -> None:
+def _validate_resource_cls(resource_cls: object) -> type[WebSocketResource]:
     """Validate that the provided class is a subclass of WebSocketResource.
 
     Parameters
     ----------
     resource_cls : object
         The class to validate
+
+    Returns
+    -------
+    type of WebSocketResource
+        The validated class, narrowed for the type checker.
 
     Raises
     ------
@@ -510,10 +513,11 @@ def _validate_resource_cls(resource_cls: object) -> None:
             f"{resource_cls!r}"
         )
         raise TypeError(msg)
+    return resource_cls
 
 
 def _add_websocket_route(
-    self: typ.Any,  # noqa: ANN401
+    self: _WebSocketApp,
     path: str,
     resource_cls: object,
     *init_args: object,
@@ -530,7 +534,7 @@ def _add_websocket_route(
 
     Parameters
     ----------
-    self : typ.Any
+    self : _WebSocketApp
         The application instance
     path : str
         The WebSocket route path
@@ -540,6 +544,11 @@ def _add_websocket_route(
         Positional arguments for resource initialization
     **init_kwargs : object
         Keyword arguments for resource initialization
+
+    Raises
+    ------
+    ValueError
+        If ``path`` already has a resource registered.
     """
     warnings.warn(
         "_add_websocket_route is deprecated; use WebSocketRouter.add_route instead",
@@ -547,20 +556,23 @@ def _add_websocket_route(
         stacklevel=2,
     )
     _validate_route_path(path)
-    _validate_resource_cls(resource_cls)
+    resource_type = _validate_resource_cls(resource_cls)
     with self._websocket_route_lock:
         if path in self._websocket_routes:
             msg = f"WebSocket route already registered for path: {path}"
             raise ValueError(msg)
 
         self._websocket_routes[path] = RouteSpec(
-            typ.cast("type[WebSocketResource]", resource_cls),
+            resource_type,
             init_args,
             dict(init_kwargs),
         )
 
 
-def _create_websocket_resource(self: typ.Any, path: str) -> WebSocketResource:  # noqa: ANN401
+def _create_websocket_resource(
+    self: _WebSocketApp,
+    path: str,
+) -> WebSocketResource:
     """Instantiate and return the WebSocket resource registered for ``path``.
 
     Initialization parameters provided to :func:`add_websocket_route` are
@@ -571,7 +583,7 @@ def _create_websocket_resource(self: typ.Any, path: str) -> WebSocketResource:  
 
     Parameters
     ----------
-    self : typ.Any
+    self : _WebSocketApp
         The application instance
     path : str
         The route path for which to create the resource
@@ -583,7 +595,7 @@ def _create_websocket_resource(self: typ.Any, path: str) -> WebSocketResource:  
 
     Raises
     ------
-    ValueError
+    WebSocketResourceNotFoundError
         If no resource class is registered for ``path``
     """
     warnings.warn(

@@ -6,6 +6,10 @@ import re
 
 import msgspec as ms
 
+# Cap the payload echoed back in validation errors so logs stay readable.
+_MAX_PAYLOAD_SNIPPET = 200
+_ELLIPSIS = "..."
+
 
 def duplicate_payload_type_msg(
     payload_type: type, handler_name: str | None = None
@@ -27,8 +31,9 @@ def raise_unknown_fields(
     details = f"Unknown fields in payload: {sorted(extra_fields)}"
     if include_payload and payload is not None:
         snippet = str(payload)
-        if len(snippet) > 200:
-            snippet = f"{snippet[:197]}..."
+        if len(snippet) > _MAX_PAYLOAD_SNIPPET:
+            keep = _MAX_PAYLOAD_SNIPPET - len(_ELLIPSIS)
+            snippet = f"{snippet[:keep]}{_ELLIPSIS}"
         details += f" -> {snippet}"
     raise ms.ValidationError(details)
 

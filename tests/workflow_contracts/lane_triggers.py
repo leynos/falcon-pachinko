@@ -27,6 +27,13 @@ def triggers(source: WorkflowSource, workflow_name: str) -> dict[str, object]:
     trigger's branches, so only the mapping form is accepted; a list or
     scalar trigger carries no filter to read and is refused.
 
+    Reading the document propagates the source's own refusals unchanged:
+    :class:`~.workflow_support.UnreadableWorkflowError`,
+    :class:`~.workflow_support.UndecodableWorkflowError`,
+    :class:`~.workflow_support.UnparsableWorkflowError`, and
+    :class:`~.workflow_support.NotAMappingError` for a document that is not a
+    mapping.
+
     Parameters
     ----------
     source : WorkflowSource
@@ -43,13 +50,6 @@ def triggers(source: WorkflowSource, workflow_name: str) -> dict[str, object]:
     ------
     NotAMappingError
         If the workflow declares no trigger mapping.
-
-    Reading the document propagates the source's own refusals unchanged:
-    :class:`~.workflow_support.UnreadableWorkflowError`,
-    :class:`~.workflow_support.UndecodableWorkflowError`,
-    :class:`~.workflow_support.UnparsableWorkflowError`, and
-    :class:`~.workflow_support.NotAMappingError` for a document that is not a
-    mapping.
     """
     declared = as_mapping(source.document(workflow_name).get(ON_KEY))
     if declared is None:

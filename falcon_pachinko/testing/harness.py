@@ -19,9 +19,9 @@ from falcon_pachinko.router import WebSocketRouter
 from ._common import _JSON_FRAME_REQUIRED_MSG, FrameKind
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from falcon_pachinko.testing.simulator import WebSocketSimulator
-else:  # pragma: no cover - optional types under runtime-only execution
-    WebSocketSimulator = typ.Any
 
 
 @dc.dataclass(slots=True)
@@ -44,12 +44,12 @@ class SimulatorConnection:
 
     @property
     def accepted(self) -> bool:
-        """Return ``True`` when the simulator accepted the handshake."""
+        """``True`` when the simulator accepted the handshake."""
         return self.simulator.accepted
 
     @property
     def closed(self) -> bool:
-        """Return ``True`` once the simulator recorded connection closure."""
+        """``True`` once the simulator recorded connection closure."""
         return self.simulator.closed
 
     @property
@@ -59,7 +59,7 @@ class SimulatorConnection:
 
     @property
     def sent_messages(self) -> list[object]:
-        """Return a snapshot of frames emitted by the resource."""
+        """Snapshot of the frames emitted by the resource."""
         return list(self.simulator.sent_messages)
 
     @property
@@ -67,27 +67,41 @@ class SimulatorConnection:
         """Expose the negotiated subprotocol from the simulator."""
         return self.simulator.subprotocol
 
+    # pylint: disable-next=trivial-attribute-wrapper  # deliberate public facade API: SimulatorConnection hides the simulator's private queues from test authors
     def pop_sent(self) -> object:
         """Pop the next outbound frame without decoding."""
         return self.simulator.pop_sent()
 
     def pop_sent_json(self, payload_type: type[object] | None = None) -> object:
-        """Pop the next outbound frame and decode it as JSON."""
+        """Pop the next outbound frame and decode it as JSON.
+
+        Returns
+        -------
+        object
+            The decoded JSON payload, using ``payload_type`` when supplied.
+
+        Raises
+        ------
+        TypeError
+            If the popped frame is neither a text nor a binary payload.
+        """
         raw = self.pop_sent()
-        if isinstance(raw, str):
-            data = raw.encode("utf-8")
-        elif isinstance(raw, bytes | bytearray | memoryview):
-            data = bytes(raw)
-        else:  # pragma: no cover - safeguarded by simulator helpers
-            raise TypeError(_JSON_FRAME_REQUIRED_MSG)
+        match raw:
+            case str():
+                data = raw.encode("utf-8")
+            case bytes() | bytearray() | memoryview():
+                data = bytes(raw)
+            case _:  # pragma: no cover - safeguarded by simulator helpers
+                raise TypeError(_JSON_FRAME_REQUIRED_MSG)
+        return self._decoder_for(payload_type).decode(data)
+
+    def _decoder_for(self, payload_type: type[object] | None) -> msjson.Decoder:
+        """Return a cached decoder for ``payload_type``."""
         if payload_type is None:
-            decoder = self._json_decoder
-        else:
-            decoder = self._decoders.get(payload_type)
-            if decoder is None:
-                decoder = msjson.Decoder(payload_type)
-                self._decoders[payload_type] = decoder
-        return decoder.decode(data)
+            return self._json_decoder
+        if (decoder := self._decoders.get(payload_type)) is None:
+            decoder = self._decoders[payload_type] = msjson.Decoder(payload_type)
+        return decoder
 
     async def push_json(self, payload: object) -> None:
         """Queue a JSON payload for the resource to consume."""
@@ -126,7 +140,12 @@ class SimulatorRouterHarness:
         self._mount_prefix = normalized
         self._mounted = True
 
-    def _normalize_mount(self, prefix: str) -> str:
+    def discard_pending_simulator(self) -> None:
+        """Drop any simulator staged for the next connection."""
+        self._pending_simulator = None
+
+    @staticmethod
+    def _normalize_mount(prefix: str) -> str:
         if not prefix:
             return "/"
         if not prefix.startswith("/"):
@@ -157,9 +176,21 @@ class SimulatorRouterHarness:
         self,
         path: str,
         *,
-        initial_inbound: typ.Iterable[tuple[object, FrameKind]] | None = None,
-    ) -> typ.AsyncIterator[SimulatorConnection]:
-        """Dispatch ``path`` through the router yielding a connection helper."""
+        initial_inbound: cabc.Iterable[tuple[object, FrameKind]] | None = None,
+    ) -> cabc.AsyncIterator[SimulatorConnection]:
+        """Dispatch ``path`` through the router yielding a connection helper.
+
+        Yields
+        ------
+        SimulatorConnection
+            A helper bound to the simulator serving ``path``. Both the
+            simulator and the underlying websocket stub are closed on exit.
+
+        Raises
+        ------
+        RuntimeError
+            If the router has not been mounted yet.
+        """
         if not self._mounted:
             msg = "router must be mounted before establishing connections"
             raise RuntimeError(msg)

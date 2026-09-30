@@ -66,9 +66,13 @@ def test_collapsing_is_idempotent_and_leaves_no_run(raw: str) -> None:
     """
     once = collapse_label_whitespace(raw)
 
-    assert collapse_label_whitespace(once) == once
-    assert "  " not in once
-    assert not any(character in once for character in "\t\n\r")
+    assert collapse_label_whitespace(once) == once, (
+        "collapsing must reach a fixed point"
+    )
+    assert "  " not in once, "no run of spaces may survive collapsing"
+    assert not any(character in once for character in "\t\n\r"), (
+        "no folding whitespace may survive collapsing"
+    )
 
 
 @hyp.given(
@@ -88,7 +92,9 @@ def test_collapsing_leaves_the_file_separators_alone(
     """
     collapsed = collapse_label_whitespace(f"{prefix}{separator}{suffix}")
 
-    assert collapsed == f"{prefix}{separator}{suffix}"
+    assert collapsed == f"{prefix}{separator}{suffix}", (
+        "collapsing must leave the file separators alone"
+    )
 
 
 @st.composite
@@ -132,10 +138,10 @@ def test_an_expression_survives_any_folding(drawn: tuple[str, str, str, str]) ->
 
     parsed = runner_expression(written)
 
-    assert parsed.guard == guard
-    assert parsed.when_true == when_true
-    assert parsed.when_false == when_false
-    assert parsed.raw == written
+    assert parsed.guard == guard, "the guard must survive any folding"
+    assert parsed.when_true == when_true, "the true arm must survive any folding"
+    assert parsed.when_false == when_false, "the false arm must survive any folding"
+    assert parsed.raw == written, "the parsed label must keep the text as written"
 
 
 @hyp.given(
@@ -162,7 +168,9 @@ def test_a_job_resolves_exactly_the_axis_its_declaration_names(
 
     resolved = job_labels("ci.yml", "build", job)
 
-    assert resolved == set(matrix[named])
+    assert resolved == set(matrix[named]), (
+        "a job must resolve exactly the axis its declaration names"
+    )
 
 
 @hyp.given(

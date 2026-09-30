@@ -31,7 +31,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib
 
-Documents = dict[str, dict[str, typ.Any]]
+type Documents = dict[str, dict[str, typ.Any]]
 
 
 def _mutated(
@@ -73,7 +73,8 @@ def _reports(source: WorkflowSource, message: str) -> bool:
 
 def test_the_repository_places_the_environment() -> None:
     """The publisher declares the environment, and nothing else does."""
-    assert environment_violations(REPOSITORY) == []
+    found = environment_violations(REPOSITORY)
+    assert found == [], f"the codescene environment is misplaced: {found}"
 
 
 def test_the_publisher_cannot_drop_the_environment(tmp_path: pathlib.Path) -> None:
@@ -82,7 +83,8 @@ def test_the_publisher_cannot_drop_the_environment(tmp_path: pathlib.Path) -> No
     def drop(documents: Documents) -> None:
         del _job(documents, PUBLISHER, PUBLISHER_JOB)["environment"]
 
-    assert _reports(_mutated(tmp_path, drop), MISSING)
+    reported = _reports(_mutated(tmp_path, drop), MISSING)
+    assert reported, "a dropped environment is missed"
 
 
 def test_the_publisher_cannot_name_another_environment(
@@ -93,7 +95,8 @@ def test_the_publisher_cannot_name_another_environment(
     def rename(documents: Documents) -> None:
         _job(documents, PUBLISHER, PUBLISHER_JOB)["environment"] = "production"
 
-    assert _reports(_mutated(tmp_path, rename), MISSING)
+    reported = _reports(_mutated(tmp_path, rename), MISSING)
+    assert reported, "a renamed environment is missed"
 
 
 def test_the_mapping_form_is_accepted(tmp_path: pathlib.Path) -> None:
@@ -102,7 +105,8 @@ def test_the_mapping_form_is_accepted(tmp_path: pathlib.Path) -> None:
     def remap(documents: Documents) -> None:
         _job(documents, PUBLISHER, PUBLISHER_JOB)["environment"] = {"name": "codescene"}
 
-    assert environment_violations(_mutated(tmp_path, remap)) == []
+    found = environment_violations(_mutated(tmp_path, remap))
+    assert found == [], f"the mapping form must be accepted: {found}"
 
 
 def test_no_other_job_may_declare_it(tmp_path: pathlib.Path) -> None:
@@ -115,7 +119,7 @@ def test_no_other_job_may_declare_it(tmp_path: pathlib.Path) -> None:
             "steps": [{"run": "true"}],
         }
 
-    assert _reports(_mutated(tmp_path, add), STRAY)
+    assert _reports(_mutated(tmp_path, add), STRAY), "a second holder is not reported"
 
 
 def test_no_pull_request_job_may_declare_it(tmp_path: pathlib.Path) -> None:
@@ -124,7 +128,8 @@ def test_no_pull_request_job_may_declare_it(tmp_path: pathlib.Path) -> None:
     def expose(documents: Documents) -> None:
         _job(documents, PR_WORKFLOW, PR_JOB)["environment"] = {"name": "codescene"}
 
-    assert _reports(_mutated(tmp_path, expose), REACHABLE)
+    reported = _reports(_mutated(tmp_path, expose), REACHABLE)
+    assert reported, "a PR-reachable holder is missed"
 
 
 def test_an_empty_reading_is_refused(tmp_path: pathlib.Path) -> None:
@@ -138,4 +143,5 @@ def test_an_empty_reading_is_refused(tmp_path: pathlib.Path) -> None:
             if "upload-codescene-coverage" not in str(step.get("uses", ""))
         ]
 
-    assert _reports(_mutated(tmp_path, strip), NO_UPLOADER)
+    reported = _reports(_mutated(tmp_path, strip), NO_UPLOADER)
+    assert reported, "a missing uploader is not reported"

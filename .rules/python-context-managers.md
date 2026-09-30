@@ -1,9 +1,4 @@
----
-description: 
-globs: 
-alwaysApply: false
----
-## Using Context Managers for Cleanup and Resource Management
+# Using Context Managers for Cleanup and Resource Management
 
 Use context managers to encapsulate setup and teardown logic cleanly and
 safely. This reduces the risk of forgetting to release resources (files, locks,
@@ -13,39 +8,43 @@ Context managers can be written either with `contextlib.contextmanager` (for
 simple procedural control flow) or by implementing `__enter__` and `__exit__`
 in a class (for more complex or stateful use cases).
 
-### Why Use Context Managers?
+## Why Use Context Managers?
 
-* **Safety:** Ensures cleanup occurs even if an exception is raised.
-* **Clarity:** Reduces boilerplate and visually scopes side effects.
-* **Reuse:** Common setup/teardown logic becomes reusable and composable.
+- **Safety:** Ensures cleanup occurs even if an exception is raised.
+- **Clarity:** Reduces boilerplate and visually scopes side effects.
+- **Reuse:** Common setup/teardown logic becomes reusable and composable.
 
 ______________________________________________________________________
 
-### Example: Using `contextlib.contextmanager`
+## Example: Using `contextlib.contextmanager`
 
 Use this for straightforward procedural setup/teardown:
 
 ```python
 from contextlib import contextmanager
 
+
 @contextmanager
 def managed_file(path: str, mode: str):
-    f = open(path, mode)
+    f = open(path, mode, encoding="utf-8")
     try:
         yield f
     finally:
         f.close()
+
 
 # Usage:
 with managed_file("/tmp/data.txt", "w") as f:
     f.write("hello")
 ```
 
-This avoids repeating `try/finally` in every file access.
+This avoids repeating `try/finally` in every file access. Note the explicit
+`encoding=`; the `unspecified-encoding` Pylint message requires it for
+portability.
 
 ______________________________________________________________________
 
-### Example: Using a Class-Based Context Manager
+## Example: Using a Class-Based Context Manager
 
 Use this when state or lifecycle logic spans methods:
 
@@ -58,6 +57,7 @@ class Resource:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.conn.close()
 
+
 # Usage:
 with Resource() as conn:
     conn.send("ping")
@@ -67,43 +67,45 @@ This keeps state encapsulated and makes testing easier.
 
 ______________________________________________________________________
 
-### When to Use Which
+## When to Use Which
 
-* Use `@contextmanager` when control flow is linear and no persistent state is
-  required.
-* Use a class when:
+- Use `@contextmanager` when control flow is linear and no persistent state
+  is required.
 
-  * There is internal state or methods tied to the resource lifecycle.
-  * You need to support re-entry or more advanced context features.
+- Use a class when:
 
-______________________________________________________________________
-
-### Common Use Cases
-
-* File or network resource handling
-* Lock acquisition and release
-* Temporary changes to environment (e.g., `os.chdir`, `patch`, `tempfile`)
-* Logging scope control or tracing
-* Transaction control in databases or services
+  - There is internal state or methods tied to the resource lifecycle.
+  - Re-entry or more advanced context features need to be supported.
 
 ______________________________________________________________________
 
-### Don't Do This:
+## Common Use Cases
+
+- File or network resource handling
+- Lock acquisition and release
+- Temporary changes to environment (e.g., `os.chdir`, `patch`, `tempfile`)
+- Logging scope control or tracing
+- Transaction control in databases or services
+
+______________________________________________________________________
+
+## Don't Do This
 
 ```python
-f = open("file.txt")
+f = open("file.txt", encoding="utf-8")
 try:
     process(f)
 finally:
     f.close()
 ```
 
-### Do This Instead:
+## Do This Instead
 
 ```python
-with open("file.txt") as f:
+with open("file.txt", encoding="utf-8") as f:
     process(f)
 ```
 
-Context managers make your intent and error handling explicit. Prefer them over
-manual `try/finally` for clearer, safer code.
+Context managers make intent and error handling explicit. Prefer them over
+manual `try/finally` for clearer, safer code. The `consider-using-with` Pylint
+message flags resource-owning calls that skip the `with` form.
