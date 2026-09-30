@@ -129,6 +129,30 @@ class DiagnosticSanitizer:
     described by length; unsupported objects and uncertain keys are omitted.
     Limits also have hard ceilings to keep traversal within Python's stack and
     avoid accidentally configuring effectively unbounded diagnostics.
+
+    Parameters
+    ----------
+    max_depth : int
+        Maximum container depth, from zero to 32. Defaults to 6.
+    max_items : int
+        Maximum entries inspected per collection, from zero to 256. Defaults
+        to 20; an omission count can add one synthetic entry.
+    max_string_length : int
+        Maximum sample string or key length, from zero to 4096. Defaults to
+        128. Values under oversized keys are omitted.
+    max_output_length : int
+        Total formatted output budget, from zero to 65536. Defaults to 2048.
+        Traversal stops when this budget is exhausted.
+    extra_sensitive_keys : frozenset[str]
+        Additional nonempty, bounded sensitive fragments, normalized once.
+        Defaults to an empty set; the default fragments always remain active.
+
+    Raises
+    ------
+    ValueError
+        If a bound is invalid or a fragment is empty, oversized, or uncertain.
+    TypeError
+        If ``extra_sensitive_keys`` is not an exact ``frozenset``.
     """
 
     max_depth: int = 6
@@ -171,11 +195,37 @@ class DiagnosticSanitizer:
         object.__setattr__(self, "_sensitive_fragments", fragments)
 
     def sanitize(self, value: object) -> object:
-        """Return a sanitized built-in tree within the configured bounds."""
+        """Return a sanitized built-in tree within the configured bounds.
+
+        Parameters
+        ----------
+        value : object
+            The trusted application's explicitly selected diagnostic sample.
+
+        Returns
+        -------
+        object
+            A bounded tree of exact built-ins and omission placeholders.
+            With a zero output budget, returns ``"<budget>"`` immediately.
+            This method does not mutate the input.
+        """
         return _SampleBuilder(self).walk(value, 0)
 
     def format_sample(self, value: object) -> str:
-        """Format a sanitized sample incrementally within the output budget."""
+        """Format a sanitized sample incrementally within the output budget.
+
+        Parameters
+        ----------
+        value : object
+            The trusted application's explicitly selected diagnostic sample.
+
+        Returns
+        -------
+        str
+            JSON-like sample text no longer than ``max_output_length``.
+            Budget truncation can leave incomplete JSON; a zero budget returns
+            an empty string. Binary values are never decoded.
+        """
         builder = _SampleBuilder(self)
         builder.walk(value, 0)
         return "".join(builder.chunks)
@@ -262,21 +312,26 @@ class _SampleBuilder:
         """Omit non-string keys, and redact normalized sensitive fragments."""
         self._emit("{")
         result: dict[str, object] = {}
+        emitted = 0
         for key, item in itertools.islice(value.items(), self.config.max_items):
             if not self.remaining:
                 break
             if type(key) is not str:
                 continue
+            name = key[: self.config.max_string_length]
+            if name in result:
+                continue
             if result:
                 self._emit(", ")
-            name = key[: self.config.max_string_length]
             self._emit(json.dumps(name) + ": ")
             result[name] = self._mapping_value(key, item, depth)
-        omitted = len(value) - len(result)
+            emitted += 1
+        omitted = len(value) - emitted
         if omitted:
             self._emit(", " if result else "")
-            self._emit(f'"<omitted entries>": {omitted}')
-            result["<omitted entries>"] = omitted
+            count_name = _omission_name(result)
+            self._emit(json.dumps(count_name) + f": {omitted}")
+            result[count_name] = omitted
         self._emit("}")
         return result
 
@@ -288,3 +343,13 @@ class _SampleBuilder:
         if any(fragment in normalized for fragment in self.config._sensitive_fragments):
             return self._leaf("<redacted>")
         return self.walk(value, depth + 1)
+
+
+def _omission_name(result: dict[str, object]) -> str:
+    """Choose a synthetic count key without overwriting sample fields."""
+    name = "<omitted entries>"
+    suffix = 2
+    while name in result:
+        name = f"<omitted entries {suffix}>"
+        suffix += 1
+    return name
