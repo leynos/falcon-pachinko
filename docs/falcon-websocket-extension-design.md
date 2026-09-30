@@ -509,52 +509,16 @@ and simplifies the application's mental model.
 
 #### 3.8.2. Public API: The `WorkerController`
 
-A new module, `pachinko.workers`, will provide the core components for this
-feature.
+The implementation tracks worker tasks directly. `start()` raises
+`RuntimeError("WorkerController is already started")` if tasks are already
+registered, then schedules each worker with the same keyword context. `stop()`
+cancels every task and gathers them with
+`asyncio.gather(..., return_exceptions=True)`. It selects the first
+non-cancellation exception in task registration order, clears the task list,
+and then re-raises that exception, leaving the controller ready to restart.
 
-```python
-# pachinko/workers.py (new module)
-import asyncio
-from contextlib import AsyncExitStack
-import collections.abc as cabc
-import typing as typ
-
-WorkerFn: typ.TypeAlias = cabc.Callable[[typ.Any], cabc.Awaitable[None]]
-
-
-class WorkerController:
-    """Manages a set of long-running asyncio tasks tied to an ASGI lifespan."""
-
-    __slots__: typ.Final = ("_tasks", "_stack")
-
-    def __init__(self) -> None:
-        self._tasks: list[asyncio.Task[None]] = []
-        self._stack: AsyncExitStack | None = None
-
-    async def start(self, *workers: WorkerFn, **context: typ.Any) -> None:
-        """Create and supervise tasks. *context is injected into each worker."""
-        self._stack = AsyncExitStack()
-        await self._stack.__aenter__()
-
-        for fn in workers:
-            task = asyncio.create_task(fn(**context))
-            self._tasks.append(task)
-
-    async def stop(self) -> None:
-        """Cancel tasks and propagate first exception, if any."""
-        for t in self._tasks:
-            t.cancel()
-        await asyncio.gather(*self._tasks, return_exceptions=True)
-        if self._stack:
-            await self._stack.__aexit__(None, None, None)
-
-
-# Optional syntactic sugar
-def worker(fn: WorkerFn) -> WorkerFn:
-    """Marks *fn* as a background worker. Informational; documents intent."""
-    fn.__pachinko_worker__ = True
-    return fn
-```
+Worker cleanup happens through task cancellation, and the application lifespan
+handler owns external resources.
 
 #### 3.8.3. Application Usage
 
