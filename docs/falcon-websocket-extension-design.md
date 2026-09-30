@@ -1307,7 +1307,13 @@ provides "zero-cost" validation via `msgspec`.
 
 #### 5.3.3. Error Handling
 
-The framework must gracefully handle dispatch errors.
+The framework must gracefully handle dispatch errors. Framework-generated
+validation errors and diagnostics omit payload values by default and report
+bounded structural metadata, such as invalid field names, expected types, and
+frame kind and length. This follows the payload-omission policy described in
+[PR #143](https://github.com/leynos/falcon-pachinko/pull/143), which proposes
+RFC 0001 and ADR 0007. Application hooks can still read raw frames and remain a
+trusted boundary.
 
 - A `msgspec.ValidationError` raised during decoding should be caught, and a
   customizable error hook should be invoked.
@@ -1670,11 +1676,14 @@ already provides a reliable asyncio client with excellent RFC coverage.
   runtime validation. Additional passthroughs expose `send_bytes`, `receive`,
   and `close` for full coverage.
 
-- **Trace Collection**: Optional hooks capture a chronological log of outbound
-  and inbound frames. Each `TraceEvent` is annotated with a monotonically
-  increasing index alongside the direction, payload kind, and decoded payload.
-  The log integrates with pytest's assertion introspection, making it easy to
-  debug sequencing issues.
+- **Trace Collection**: Optional hooks retain a chronological log of sent and
+  received values. For JSON receives, the recorded payload is the decoded
+  object, not necessarily the original frame. Each `TraceEvent` has a
+  monotonically increasing index, direction, payload kind and payload. Its
+  default representation and `summary()` expose bounded structural metadata
+  only; the retained payload remains available to trusted test and application
+  code. The log integrates with pytest's assertion introspection, making it
+  easy to debug sequencing issues without rendering payload values by default.
 
 By delegating network semantics to `websockets`, the client stays thin while
 still supporting TLS, custom headers, and subprotocol negotiation.

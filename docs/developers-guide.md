@@ -3,6 +3,29 @@
 This guide captures maintainer-facing conventions that are not part of the
 public user guide.
 
+## Safe diagnostics
+
+Framework diagnostics must not call `repr()` or `str()` on raw payloads,
+decoded caller values, or other caller-controlled objects. Use the shared
+bounded metadata helpers in `falcon_pachinko.diagnostics` for identifiers,
+types, frame kind and length, and safe scalar fields. Payload values stay
+available to runtime code; their default representations, errors, logs and
+trace summaries omit them.
+
+When translating a vendor decode failure, capture only its exception class in
+the `except` suite and raise the framework error after leaving that suite.
+`raise ... from None` suppresses traceback display of the preceding exception,
+but it does not remove the implicit `__context__` reference. Raising afterwards
+avoids retaining the vendor exception and its message in either chain
+attribute. Preserve application exceptions when they are propagated; diagnostic
+display suppression does not sanitize an exception object retained or logged by
+application code.
+
+Application hooks and handlers that read `HookContext.raw`, fallback raw
+arguments, or `TraceEvent.payload` cross a trusted boundary. Do not use payload
+`repr()` or `str()` for diagnostics there; UTF-8 decoding changes
+representation but does not remove secrets.
+
 ## Spelling policy
 
 Run the spelling gate with:
