@@ -48,18 +48,31 @@ class HandlerInvocationContext:
     def __repr__(self) -> str:
         """Describe the invocation without displaying raw or decoded values."""
         kind, length = _frame_metadata(self.raw)
-        schema = (
-            _class_name(self.handler_info.payload_type)
-            if type(self.handler_info) is HandlerInfo
-            and self.handler_info.payload_type is not None
-            else "<omitted>"
-        )
         return (
             f"HandlerInvocationContext(resource={_type_name(self.resource)}, "
             f"ws={_type_name(self.ws)}, raw_kind={kind}, raw_length={length}, "
-            f"handler_info={_type_name(self.handler_info)}, expected_type={schema}, "
+            f"handler_info={_type_name(self.handler_info)}, "
+            f"expected_type={_expected_type_label(self.handler_info)}, "
             f"payload_type={_type_name(self.payload)})"
         )
+
+
+def _expected_type_label(info: object) -> str:
+    """Select schema metadata from an exact framework handler record.
+
+    Parameters
+    ----------
+    info : object
+        A handler record whose caller-controlled display methods are ignored.
+
+    Returns
+    -------
+    str
+        The bounded schema name, or an omission marker for unsupported records.
+    """
+    if type(info) is HandlerInfo and info.payload_type is not None:
+        return _class_name(info.payload_type)
+    return "<omitted>"
 
 
 def find_conventional_handler(
