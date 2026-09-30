@@ -3,6 +3,12 @@
 Omission is the security boundary. Redaction is only a defence-in-depth aid for
 trusted local diagnostics: unknown field names and positional secrets remain
 an application's responsibility.
+
+Explicitly opt in when inspecting a trusted local sample::
+
+    sanitizer = DiagnosticSanitizer()
+    sample = sanitizer.format_sample({"status": "ready", "token": "local-secret"})
+    # sample contains a redacted token value.
 """
 
 from __future__ import annotations
@@ -101,17 +107,19 @@ def _safe_scalar(value: object) -> str:
     # Delayed import avoids a diagnostics/hooks import cycle.
     from .hooks import HookEvent
 
-    if value is None:
-        return "None"
-    if type(value) is bool:
-        return "True" if value else "False"
-    if type(value) is int:
-        return f"{value}" if -_MAX_INTEGER <= value <= _MAX_INTEGER else "<integer>"
-    if type(value) is HookEvent:
-        return value.value
-    if type(value) is str and value in _EVENT_NAMES:
-        return value
-    return "<omitted>"
+    match value:
+        case None:
+            return "None"
+        case _ if type(value) is bool:
+            return "True" if value else "False"
+        case _ if type(value) is int:
+            return f"{value}" if -_MAX_INTEGER <= value <= _MAX_INTEGER else "<integer>"
+        case _ if type(value) is HookEvent:
+            return value.value
+        case _ if type(value) is str and value in _EVENT_NAMES:
+            return value
+        case _:
+            return "<omitted>"
 
 
 def _normalize_key(key: str) -> str:
@@ -249,20 +257,24 @@ class _SampleBuilder:
 
     def _scalar(self, value: object) -> object:
         """Select supported scalars without calling custom conversion methods."""
-        if value is None or type(value) is bool:
-            return value
-        if type(value) is str:
-            return value[: self.config.max_string_length]
-        if type(value) is int:
-            return value if -_MAX_INTEGER <= value <= _MAX_INTEGER else "<integer>"
-        if type(value) is float:
-            return value if math.isfinite(value) else "<float>"
-        kind, length = _frame_metadata(value)
-        return (
-            f"<bytes len={length}>"
-            if kind == "bytes"
-            else f"<omitted {_type_name(value)}>"
-        )
+        match value:
+            case None:
+                return None
+            case _ if type(value) is bool:
+                return value
+            case _ if type(value) is str:
+                return value[: self.config.max_string_length]
+            case _ if type(value) is int:
+                return value if -_MAX_INTEGER <= value <= _MAX_INTEGER else "<integer>"
+            case _ if type(value) is float:
+                return value if math.isfinite(value) else "<float>"
+            case _:
+                kind, length = _frame_metadata(value)
+                return (
+                    f"<bytes len={length}>"
+                    if kind == "bytes"
+                    else f"<omitted {_type_name(value)}>"
+                )
 
     def _leaf(self, value: object) -> object:
         """Render safe primitives only, using JSON escaping for sample text."""
