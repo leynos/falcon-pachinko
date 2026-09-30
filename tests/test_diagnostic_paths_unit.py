@@ -23,8 +23,7 @@ from falcon_pachinko.schema import validate_strict_payload
 from falcon_pachinko.testing import TraceEvent, WebSocketSimulator
 from falcon_pachinko.testing.client import WebSocketSession
 from falcon_pachinko.utils import raise_unknown_fields
-from tests._stubs import RecordingWebSocket
-from tests.test_diagnostics_unit import Hostile
+from tests._stubs import Hostile, RecordingWebSocket
 
 if typ.TYPE_CHECKING:
     from websockets.client import WebSocketClientProtocol
@@ -303,4 +302,21 @@ async def test_harness_decode_error_omits_vendor_values() -> None:
     )
     assert caught.value.__context__ is None, (
         "outbound errors must detach vendor context"
+    )
+
+
+@pytest.mark.parametrize(
+    ("info", "expected"),
+    [
+        (HandlerInfo(FallbackResource.on_client_hello, Hello), "Hello"),
+        (HandlerInfo(FallbackResource.on_client_hello, None), "<omitted>"),
+        (Hostile(), "<omitted>"),
+    ],
+)
+def test_invocation_expected_type_label_is_non_reflective(
+    info: object, expected: str
+) -> None:
+    """Expected-type metadata inspects only exact framework handler records."""
+    assert dispatcher._expected_type_label(info) == expected, (
+        "unsupported records must be omitted and supported schemas identified"
     )

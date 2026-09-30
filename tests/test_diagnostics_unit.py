@@ -24,30 +24,12 @@ from falcon_pachinko.diagnostics import (
     _type_name,
 )
 from falcon_pachinko.hooks import HookEvent
+from tests._stubs import Hostile
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 CANARY = "CANARY-local-auth-74b1"
-
-
-class Hostile:
-    """Catch accidental reflection of caller-controlled objects."""
-
-    def __repr__(self) -> str:
-        """Reject representation calls."""
-        msg = "repr invoked"
-        raise AssertionError(msg)
-
-    def __str__(self) -> str:
-        """Reject string conversion calls."""
-        msg = "str invoked"
-        raise AssertionError(msg)
-
-    def __len__(self) -> int:
-        """Reject length calls."""
-        msg = "len invoked"
-        raise AssertionError(msg)
 
 
 class HostileDict(dict):  # ruff: ignore[subclass-builtin]  # deliberately test dict-subclass rejection
@@ -71,7 +53,7 @@ class HostileDict(dict):  # ruff: ignore[subclass-builtin]  # deliberately test 
 def test_frame_metadata(value: object, expected: tuple[str, int | None]) -> None:
     """Only exact built-in frames disclose length."""
     assert _frame_metadata(value) == expected, (
-        "the diagnostic safety contract must hold"
+        "frame metadata must match the exact built-in kind and length"
     )
 
 
@@ -123,8 +105,10 @@ def test_sensitive_fragments_are_redacted_recursively(key: str) -> None:
     """Variants remain redacted inside sequences and mappings."""
     sample = {"outer": [{key: CANARY}, ({key: CANARY},)]}
     rendered = DiagnosticSanitizer().format_sample(sample)
-    assert CANARY not in rendered, "the diagnostic safety contract must hold"
-    assert "<redacted>" in rendered, "the diagnostic safety contract must hold"
+    assert CANARY not in rendered, (
+        "nested sensitive fragments must never disclose the canary"
+    )
+    assert "<redacted>" in rendered, "sensitive values must use the redaction marker"
 
 
 def test_sanitizer_preserves_safe_sample_and_extends_keys() -> None:
@@ -133,9 +117,9 @@ def test_sanitizer_preserves_safe_sample_and_extends_keys() -> None:
     assert sanitizer.sanitize({"ok": "visible", "tenant_key": CANARY}) == {
         "ok": "visible",
         "tenant_key": "<redacted>",
-    }, "the diagnostic safety contract must hold"
+    }, "extended keys must redact while preserving ordinary sample fields"
     assert "visible" in sanitizer.format_sample({"ok": "visible"}), (
-        "the diagnostic safety contract must hold"
+        "explicit samples may display ordinary string values"
     )
     field = "max_depth"
     with pytest.raises(dc.FrozenInstanceError):
@@ -147,7 +131,9 @@ def test_sanitizer_omits_unsupported_keys_bytes_and_cycles() -> None:
     sample: list[object] = [Hostile(), HostileDict(token=CANARY), CANARY.encode()]
     sample.append(sample)
     rendered = DiagnosticSanitizer().format_sample({"items": sample, 1: CANARY})
-    assert CANARY not in rendered, "the diagnostic safety contract must hold"
+    assert CANARY not in rendered, (
+        "unsupported keys and byte contents must not disclose the canary"
+    )
     assert all(
         marker in rendered for marker in ("<cycle>", "<bytes len=", "Hostile")
     ), "samples must describe cycles, binary lengths, and unsupported types"
@@ -157,19 +143,19 @@ def test_sanitizer_bounds_each_dimension() -> None:
     """Every container, scalar, and output budget is independently bounded."""
     sanitizer = DiagnosticSanitizer(max_depth=1, max_items=2, max_string_length=4)
     assert sanitizer.sanitize([[[CANARY]]]) == ["<depth>"], (
-        "the diagnostic safety contract must hold"
+        "containers at the configured depth must use the depth marker"
     )
     assert sanitizer.sanitize("abcdef") == "abcd", (
-        "the diagnostic safety contract must hold"
+        "sample string values must respect the configured character bound"
     )
     assert sanitizer.sanitize(10**1000) == "<integer>", (
-        "the diagnostic safety contract must hold"
+        "oversized integers must use the integer marker"
     )
     sample = sanitizer.sanitize(list(range(100)))
-    assert isinstance(sample, list), "the diagnostic safety contract must hold"
-    assert len(sample) == 3, "the diagnostic safety contract must hold"
+    assert isinstance(sample, list), "sanitization must preserve list container shape"
+    assert len(sample) == 3, "collection overflow must append one omission count marker"
     assert len(sanitizer.format_sample({"x": "abc" * 10000})) < 100, (
-        "the diagnostic safety contract must hold"
+        "large strings must be bounded before formatting"
     )
 
 
@@ -198,7 +184,7 @@ def test_recursive_samples_obey_total_budget(value: object, budget: int) -> None
     assert (
         len(DiagnosticSanitizer(max_output_length=budget).format_sample(value))
         <= budget
-    ), "the diagnostic safety contract must hold"
+    ), "recursive formatted samples must never exceed the total budget"
 
 
 @given(value=_RECURSIVE)
@@ -206,7 +192,7 @@ def test_canary_under_sensitive_key_never_appears(value: object) -> None:
     """Unrelated nesting cannot weaken redaction of a known secret."""
     sample = [value, {"nested": [{"ACCESS-TOKEN": CANARY}]}]
     assert CANARY not in DiagnosticSanitizer().format_sample(sample), (
-        "the diagnostic safety contract must hold"
+        "sensitive fields in recursive samples must never disclose the canary"
     )
 
 
@@ -235,12 +221,14 @@ class MetaValue(metaclass=HostileMeta):
 def test_metadata_bypasses_metaclass_hooks() -> None:
     """Safe type names use built-in descriptors and identity checks."""
     value = MetaValue()
-    assert _type_name(value) == "MetaValue", "the diagnostic safety contract must hold"
+    assert _type_name(value) == "MetaValue", (
+        "type metadata must bypass hostile metaclass attribute hooks"
+    )
     assert _frame_metadata(value) == ("object", None), (
-        "the diagnostic safety contract must hold"
+        "unsupported frame objects must omit length without calling hooks"
     )
     assert "MetaValue" in DiagnosticSanitizer().format_sample(value), (
-        "the diagnostic safety contract must hold"
+        "unsupported samples must display only the safe type name"
     )
 
 
@@ -249,7 +237,7 @@ def test_released_memoryview_fails_closed() -> None:
     value = memoryview(CANARY.encode())
     value.release()
     assert CANARY not in DiagnosticSanitizer().format_sample(value), (
-        "the diagnostic safety contract must hold"
+        "released binary views must omit inaccessible contents"
     )
 
 
