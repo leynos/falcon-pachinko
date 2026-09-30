@@ -109,6 +109,8 @@ def test_metadata_omits_hostile_and_oversized_values() -> None:
         "x-access.Token",
         "Refresh_Token",
         "Api-Key",
+        "api:key",
+        "x/access+token",
         "pass word",
         "clientCredential",
         "session_cookie",
@@ -344,4 +346,13 @@ def test_omission_count_does_not_overwrite_a_real_field() -> None:
     sample = DiagnosticSanitizer().sanitize({"<omitted entries>": "visible", 1: CANARY})
     assert sample == {"<omitted entries>": "visible", "<omitted entries 2>": 1}, (
         "synthetic counts must not collide with application keys"
+    )
+
+
+@given(separator=st.text(alphabet="/:+!|.-_ ", min_size=1, max_size=3))
+def test_key_separators_cannot_bypass_redaction(separator: str) -> None:
+    """Common punctuation between key letters cannot expose API keys."""
+    key = separator.join("APIKEY")
+    assert CANARY not in DiagnosticSanitizer().format_sample({key: CANARY}), (
+        "separator variants must remain redacted"
     )

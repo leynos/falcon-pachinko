@@ -116,9 +116,7 @@ def _safe_scalar(value: object) -> str:
 
 def _normalize_key(key: str) -> str:
     """Normalize common separators and casing for fragment matching."""
-    return "".join(
-        char for char in key.casefold() if char not in "-_." and not char.isspace()
-    )
+    return "".join(char for char in key.casefold() if char.isalnum())
 
 
 @dc.dataclass(frozen=True, slots=True)
