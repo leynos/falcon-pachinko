@@ -12,10 +12,10 @@ from ._common import (
     _BINARY_PAYLOAD_REQUIRED_MSG,
     _EXPECTED_BYTES_MSG,
     _EXPECTED_TEXT_MSG,
-    _FAILED_JSON_DECODE_MSG,
     _TEXT_PAYLOAD_REQUIRED_MSG,
     _UNSUPPORTED_FRAME_KIND_MSG,
     FrameKind,
+    _decode_json,
     _LifecycleSocket,
 )
 
@@ -120,21 +120,10 @@ class WebSocketSimulator(_LifecycleSocket):
         object
             The decoded payload, using ``payload_type`` when supplied.
 
-        Raises
-        ------
-        TypeError
-            If the received frame is neither a text nor a binary payload.
+        Unsupported frames raise ``TypeError`` through the shared decoder.
         """
         message = await self.receive_media()
-        match message:
-            case str():
-                data = message.encode("utf-8")
-            case bytes() | bytearray() | memoryview():
-                data = bytes(message)
-            case _:
-                raise TypeError(_FAILED_JSON_DECODE_MSG.format(message=message))
-        decoder = self._decoder_for(payload_type)
-        return decoder.decode(data)
+        return _decode_json(self._decoder_for(payload_type), message, payload_type)
 
     async def push_message(self, payload: object, *, kind: FrameKind = "json") -> None:
         """Queue ``payload`` as if it were received from the peer."""
