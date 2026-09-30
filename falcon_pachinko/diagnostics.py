@@ -131,6 +131,31 @@ def _normalize_key(key: str) -> str:
     return "".join(char for char in key.casefold() if char.isalnum())
 
 
+def _validate_bound(value: object, ceiling: int) -> None:
+    """Reject non-integer and oversized bounds without converting caller values."""
+    if type(value) is not int:
+        msg = "Diagnostic sanitizer bound outside supported range"
+        raise ValueError(msg)
+    if not 0 <= value <= ceiling:
+        msg = "Diagnostic sanitizer bound outside supported range"
+        raise ValueError(msg)
+
+
+def _normalized_fragment(key: object) -> str:
+    """Validate one exact string before normalizing a sensitive fragment."""
+    if type(key) is not str:
+        msg = "extra_sensitive_keys must contain bounded nonempty strings"
+        raise ValueError(msg)
+    if not 0 < len(key) <= _MAX_KEY_LENGTH:
+        msg = "extra_sensitive_keys must contain bounded nonempty strings"
+        raise ValueError(msg)
+    fragment = _normalize_key(key)
+    if not fragment:
+        msg = "extra_sensitive_keys must contain nonempty normalized keys"
+        raise ValueError(msg)
+    return fragment
+
+
 @dc.dataclass(frozen=True, slots=True)
 class DiagnosticSanitizer:
     """Configure an explicitly opted-in, bounded diagnostic sample.
@@ -180,28 +205,14 @@ class DiagnosticSanitizer:
             (self.max_string_length, 4096),
             (self.max_output_length, 65536),
         )
-        if any(
-            type(value) is not int or not 0 <= value <= ceiling
-            for value, ceiling in bounds
-        ):
-            msg = "Diagnostic sanitizer bound outside supported range"
-            raise ValueError(msg)
+        for value, ceiling in bounds:
+            _validate_bound(value, ceiling)
         if type(self.extra_sensitive_keys) is not frozenset:
             msg = "extra_sensitive_keys must be an exact frozenset of strings"
             raise TypeError(msg)
-        if any(
-            type(key) is not str or not key or len(key) > _MAX_KEY_LENGTH
-            for key in self.extra_sensitive_keys
-        ):
-            msg = "extra_sensitive_keys must contain bounded nonempty strings"
-            raise ValueError(msg)
         fragments = frozenset(
-            _normalize_key(key)
-            for key in DEFAULT_SENSITIVE_KEYS | self.extra_sensitive_keys
-        )
-        if "" in fragments:
-            msg = "extra_sensitive_keys must contain nonempty normalized keys"
-            raise ValueError(msg)
+            _normalized_fragment(key) for key in self.extra_sensitive_keys
+        ) | frozenset(_normalize_key(key) for key in DEFAULT_SENSITIVE_KEYS)
         object.__setattr__(self, "_sensitive_fragments", fragments)
 
     def sanitize(self, value: object) -> object:
