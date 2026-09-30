@@ -11,7 +11,11 @@ type WorkerFn = cabc.Callable[..., cabc.Coroutine[object, object, None]]
 
 
 class WorkerController:
-    """Manage a set of long-running tasks bound to an ASGI lifespan."""
+    """Manage long-running tasks bound to an ASGI lifespan.
+
+    The application passes each worker explicitly to :meth:`start`. The
+    controller provides no worker discovery or registry.
+    """
 
     __slots__ = ("_stack", "_tasks")
 
@@ -21,6 +25,18 @@ class WorkerController:
 
     async def start(self, *workers: WorkerFn, **context: object) -> None:
         """Schedule *workers* as tasks, injecting shared *context*.
+
+        *workers* may be any async callable that accepts the supplied keyword
+        arguments, with or without the :func:`worker` decorator. Every keyword
+        argument in *context* is passed to every worker.
+
+        Parameters
+        ----------
+        *workers : WorkerFn
+            Async callables to schedule. Each must accept every keyword
+            argument in *context*.
+        **context : object
+            Keyword arguments passed to every worker.
 
         Raises
         ------
@@ -77,7 +93,23 @@ class WorkerController:
 
 
 def worker(fn: WorkerFn) -> WorkerFn:
-    """Mark *fn* as a background worker."""
+    """Mark *fn* as a background worker.
+
+    Set ``__pachinko_worker__ = True`` on *fn* for readers and introspection
+    tools. Return the same function object without wrapping or validating it.
+    Decoration is optional, and :meth:`WorkerController.start` never reads
+    this marker.
+
+    Parameters
+    ----------
+    fn : WorkerFn
+        Async callable to mark.
+
+    Returns
+    -------
+    WorkerFn
+        The same function object passed as *fn*.
+    """
     # cast: ``WorkerFn`` is a bare callable alias, so the checker cannot see
     # the dynamic marker attribute stamped onto the function object.
     typ.cast("typ.Any", fn).__pachinko_worker__ = True
