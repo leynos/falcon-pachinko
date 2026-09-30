@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import sys
 import textwrap
 
 import pytest
@@ -143,9 +144,39 @@ def _run_tool(env: dict[str, str], argv: list[str], *arguments: str) -> Complete
     return run_command([*argv, *arguments], env=env)
 
 
+def _project_venv(
+    prefix: pathlib.Path, base_prefix: pathlib.Path, root: pathlib.Path
+) -> pathlib.Path:
+    """Return the virtual environment this suite runs in, else ``root/.venv``.
+
+    The suite runs in ``.venv`` under ``make test`` but in ``.venv-coverage``
+    under the coverage action, where ``.venv`` does not exist. The invariant
+    is that linting leaves the environment the tests run in untouched, so it
+    is found from the running interpreter rather than assumed by name.
+
+    Returns
+    -------
+    pathlib.Path
+        ``prefix`` when it is a virtual environment, otherwise ``root/.venv``.
+
+    Examples
+    --------
+    >>> _project_venv(pathlib.Path("/w/.venv-coverage"), pathlib.Path("/usr"),
+    ...               pathlib.Path("/w"))
+    PosixPath('/w/.venv-coverage')
+    >>> _project_venv(pathlib.Path("/usr"), pathlib.Path("/usr"),
+    ...               pathlib.Path("/w"))
+    PosixPath('/w/.venv')
+
+    """
+    return prefix if prefix != base_prefix else root / ".venv"
+
+
 def _venv_identity() -> dict[str, str]:
-    """Describe the project virtual environment's interpreter."""
-    venv = REPO_ROOT / ".venv"
+    """Describe the virtual environment's interpreter the suite runs in."""
+    venv = _project_venv(
+        pathlib.Path(sys.prefix), pathlib.Path(sys.base_prefix), REPO_ROOT
+    )
     return {
         "pyvenv.cfg": (venv / "pyvenv.cfg").read_text(encoding="utf-8"),
         "python": str((venv / "bin" / "python").resolve()),
@@ -495,3 +526,23 @@ def test_project_venv_is_untouched(
     assert "pypy" not in after["pyvenv.cfg"].lower(), (
         "the project .venv must never become the PyPy lint interpreter"
     )
+
+
+@pytest.mark.parametrize(
+    ("prefix", "base_prefix", "expected"),
+    [
+        ("/w/.venv", "/usr", "/w/.venv"),
+        ("/w/.venv-coverage", "/usr", "/w/.venv-coverage"),
+        ("/usr", "/usr", "/w/.venv"),
+    ],
+    ids=["project-venv", "coverage-venv", "no-venv-falls-back"],
+)
+def test_the_project_venv_is_the_one_the_suite_runs_in(
+    prefix: str, base_prefix: str, expected: str
+) -> None:
+    """The coverage action's ``.venv-coverage`` counts; ``.venv`` is the fallback."""
+    found = _project_venv(
+        pathlib.Path(prefix), pathlib.Path(base_prefix), pathlib.Path("/w")
+    )
+
+    assert found == pathlib.Path(expected), f"{prefix} resolved to {found}"
