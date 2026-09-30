@@ -320,3 +320,32 @@ def test_invocation_expected_type_label_is_non_reflective(
     assert dispatcher._expected_type_label(info) == expected, (
         "unsupported records must be omitted and supported schemas identified"
     )
+
+
+def test_unknown_field_keyword_contract_survives_option_grouping() -> None:
+    """Schema metadata and an extended sanitizer remain independently optional."""
+    sanitizer = DiagnosticSanitizer(extra_sensitive_keys=frozenset({"tenant-key"}))
+    with pytest.raises(ms.ValidationError) as caught:
+        raise_unknown_fields(
+            {"extra"},
+            {"tenant-key": CANARY},
+            include_payload=True,
+            expected_type=Hello,
+            sanitizer=sanitizer,
+        )
+    assert "Hello" in str(caught.value), (
+        "the expected schema keyword must remain supported"
+    )
+    assert CANARY not in str(caught.value), (
+        "the sanitizer keyword must still extend redaction"
+    )
+
+
+def test_unknown_field_diagnostics_reject_unknown_keywords() -> None:
+    """Grouping options must preserve rejection of unrecognized keyword arguments."""
+    function = typ.cast("typ.Any", raise_unknown_fields)
+    with pytest.raises(TypeError) as caught:
+        function({"extra"}, unsupported=CANARY)
+    assert CANARY not in str(caught.value), (
+        "keyword errors must not disclose option values"
+    )

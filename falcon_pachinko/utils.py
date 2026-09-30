@@ -39,16 +39,27 @@ def duplicate_payload_type_msg(
     return msg
 
 
-# pylint: disable-next=too-many-arguments  # preserve compatibility while adding schema metadata and explicit sample configuration
-def raise_unknown_fields(  # ruff: ignore[too-many-arguments]  # preserve existing keywords and explicit sample configuration
+class _UnknownFieldOptions(typ.TypedDict, total=False):
+    """Optional schema and sample configuration for validation diagnostics."""
+
+    expected_type: type | None
+    sanitizer: DiagnosticSanitizer | None
+
+
+def raise_unknown_fields(
     extra_fields: set[str],
     payload: dict | None = None,
     *,
     include_payload: bool = False,
-    expected_type: type | None = None,
-    sanitizer: DiagnosticSanitizer | None = None,
+    **options: typ.Unpack[_UnknownFieldOptions],
 ) -> None:
     """Raise a structural validation error, optionally adding a sanitized sample."""
+    unknown_options = options.keys() - {"expected_type", "sanitizer"}
+    if unknown_options:
+        msg = f"Unknown diagnostic options: {_identifiers(unknown_options)}"
+        raise TypeError(msg)
+    expected_type = options.get("expected_type")
+    sanitizer = options.get("sanitizer")
     details = f"Unknown fields in payload: {_identifiers(extra_fields)}"
     if expected_type is not None:
         details += f" (expected: {_class_name(expected_type)})"

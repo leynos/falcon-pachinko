@@ -15,7 +15,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from falcon_pachinko import DEFAULT_SENSITIVE_KEYS, DiagnosticSanitizer
+from falcon_pachinko import DEFAULT_SENSITIVE_KEYS, DiagnosticSanitizer, diagnostics
 from falcon_pachinko.diagnostics import (
     _class_name,
     _frame_metadata,
@@ -372,4 +372,33 @@ def test_exhausted_budget_does_not_add_omission_metadata(
     sanitizer = DiagnosticSanitizer(max_output_length=1)
     assert sanitizer.sanitize(value) == expected, (
         "exhausted output budgets must stop synthetic omission metadata"
+    )
+
+
+@pytest.mark.parametrize("value", [True, 1.5, -1, 33, Hostile()])
+def test_bound_validator_rejects_unsupported_values(value: object) -> None:
+    """An extracted bound validator preserves exact-integer checks."""
+    with pytest.raises(ValueError, match="bound outside supported range"):
+        diagnostics._validate_bound(value, 32)
+
+
+@pytest.mark.parametrize("value", [0, 32])
+def test_bound_validator_accepts_endpoints(value: int) -> None:
+    """Both inclusive endpoints are valid configuration bounds."""
+    assert diagnostics._validate_bound(value, 32) is None, (
+        "the inclusive integer bound endpoints must remain valid"
+    )
+
+
+@pytest.mark.parametrize("value", ["", "___", "x" * 4097, Hostile()])
+def test_fragment_validator_rejects_uncertain_keys(value: object) -> None:
+    """New normalization helpers must reject uncertain key fragments."""
+    with pytest.raises(ValueError, match="extra_sensitive_keys"):
+        diagnostics._normalized_fragment(value)
+
+
+def test_fragment_validator_normalizes_valid_key() -> None:
+    """Normalization preserves case and separator matching behaviour."""
+    assert diagnostics._normalized_fragment("API-Key") == "apikey", (
+        "valid fragments must normalize before containment matching"
     )
