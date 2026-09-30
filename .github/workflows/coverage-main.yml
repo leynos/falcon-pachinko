@@ -94,7 +94,7 @@ jobs:
         # verifies the archive against that manifest's digest, so an
         # `archive-checksum` could only agree with it or go stale and fail.
         if: steps.codescene-token.outputs.available == 'true' && github.ref == 'refs/heads/main'
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@759da19f0379b6d2d7ddef93b7ad4c3b98154e41
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@abf0dcf2686de1eaf79b6dc9a16662b631bed149
         with:
           format: cobertura
           mode: upload
