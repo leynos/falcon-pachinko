@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import inspect
 import typing as typ
+from unittest import mock
 
 import pytest
 import pytest_asyncio
@@ -28,12 +29,14 @@ def _failing_factory() -> cabc.Coroutine[object, object, None]:
 
 
 def _capture_created_tasks(
-    monkeypatch: pytest.MonkeyPatch,
     *,
     fail_on_call: int | None = None,
     error: BaseException | None = None,
-) -> list[asyncio.Task[None]]:
-    """Capture tasks and optionally fail on one task-creation call."""
+) -> tuple[
+    list[asyncio.Task[None]],
+    cabc.Callable[[cabc.Coroutine[object, object, None]], asyncio.Task[None]],
+]:
+    """Return a task-creation spy and its captured tasks."""
     original_create_task = asyncio.create_task
     tasks: list[asyncio.Task[None]] = []
     call_count = 0
@@ -54,8 +57,7 @@ def _capture_created_tasks(
         tasks.append(task)
         return task
 
-    monkeypatch.setattr(asyncio, "create_task", create_task)
-    return tasks
+    return tasks, create_task
 
 
 @worker
@@ -136,12 +138,14 @@ async def test_exception_propagates_on_stop(
 @pytest.mark.asyncio
 async def test_start_factory_failure_rolls_back_and_allows_restart(
     controller: WorkerController,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Roll back scheduled tasks and allow a later start after factory failure."""
-    tasks = _capture_created_tasks(monkeypatch)
+    tasks, create_task = _capture_created_tasks()
 
-    with pytest.raises(ValueError, match="factory failed"):
+    with (
+        mock.patch.object(asyncio, "create_task", create_task),
+        pytest.raises(ValueError, match="factory failed"),
+    ):
         await controller.start(_blocking_worker, _failing_factory)
 
     assert len(tasks) == 1, (
@@ -160,7 +164,6 @@ async def test_start_factory_failure_rolls_back_and_allows_restart(
 @pytest.mark.asyncio
 async def test_start_task_creation_failure_closes_rejected_coroutine(
     controller: WorkerController,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Close a worker coroutine rejected by task creation and roll back."""
     coroutines: list[cabc.Coroutine[object, object, None]] = []
@@ -171,13 +174,15 @@ async def test_start_task_creation_failure_closes_rejected_coroutine(
         coroutines.append(coroutine)
         return coroutine
 
-    tasks = _capture_created_tasks(
-        monkeypatch,
+    tasks, create_task = _capture_created_tasks(
         fail_on_call=2,
         error=RuntimeError("scheduling failed"),
     )
 
-    with pytest.raises(RuntimeError, match="scheduling failed"):
+    with (
+        mock.patch.object(asyncio, "create_task", create_task),
+        pytest.raises(RuntimeError, match="scheduling failed"),
+    ):
         await controller.start(_blocking_worker, second_worker)
 
     assert len(coroutines) == 1, "the rejected worker coroutine should be retained"
