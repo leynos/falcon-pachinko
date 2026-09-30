@@ -113,7 +113,9 @@ def when_both_workers_start(context: dict[str, typ.Any]) -> None:
                 msg = "The failing worker factory should abort startup"
                 raise AssertionError(msg)
 
-        context["created_tasks_after_failure"] = created_tasks
+        context["worker_tasks_rolled_back"] = len(created_tasks) == 1 and all(
+            task.done() and task.cancelled() for task in created_tasks
+        )
 
     asyncio.run(_run())
 
@@ -121,13 +123,11 @@ def when_both_workers_start(context: dict[str, typ.Any]) -> None:
 @then("startup propagates the original error and leaves no worker running")
 def then_startup_rolled_back(context: dict[str, typ.Any]) -> None:
     """Verify the factory error is preserved and no worker task remains."""
-    worker_tasks = context["created_tasks_after_failure"]
     assert context["startup_error"] is context["failure"], (
         "startup should propagate the original factory error"
     )
-    assert len(worker_tasks) == 1, "startup should have scheduled one worker"
-    assert all(task.done() and task.cancelled() for task in worker_tasks), (
-        "failed startup should cancel and await each scheduled worker"
+    assert context["worker_tasks_rolled_back"] is True, (
+        "failed startup should cancel and await its scheduled worker"
     )
 
 
