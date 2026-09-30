@@ -20,6 +20,9 @@ from falcon_pachinko.diagnostics import (
 )
 from falcon_pachinko.hooks import HookEvent
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 CANARY = "CANARY-local-auth-74b1"
 
 
@@ -67,37 +70,31 @@ def test_frame_metadata(value: object, expected: tuple[str, int | None]) -> None
     )
 
 
-def test_metadata_omits_hostile_and_oversized_values() -> None:
+@pytest.mark.parametrize(
+    ("renderer", "value", "expected", "message"),
+    [
+        (_type_name, Hostile(), "Hostile", "report only the hostile object's type"),
+        (_identifier, Hostile(), "<invalid>", "reject non-string identifiers"),
+        (_identifier, "x" * 1000, "<long>", "omit oversized identifiers"),
+        (_identifier, "bad\nname", "<invalid>", "reject non-printable identifiers"),
+        (_safe_scalar, Hostile(), "<omitted>", "omit unsupported scalar objects"),
+        (_safe_scalar, 10**1000, "<integer>", "bound integer rendering"),
+        (_safe_scalar, HookEvent.AFTER_RECEIVE, "after_receive", "render known events"),
+        (_safe_scalar, CANARY, "<omitted>", "omit arbitrary string values"),
+        (_identifiers, {"z", "a"}, '["a", "z"]', "sort rendered field names"),
+    ],
+)
+def test_metadata_omits_hostile_and_oversized_values(
+    renderer: cabc.Callable[[typ.Any], str], value: object, expected: str, message: str
+) -> None:
     """Metadata never converts caller objects or long integers."""
-    assert _type_name(Hostile()) == "Hostile", (
-        "the diagnostic safety contract must hold"
-    )
-    assert _identifier(Hostile()) == "<invalid>", (
-        "the diagnostic safety contract must hold"
-    )
-    assert _identifier("x" * 1000) == "<long>", (
-        "the diagnostic safety contract must hold"
-    )
-    assert _identifier("bad\nname") == "<invalid>", (
-        "the diagnostic safety contract must hold"
-    )
-    assert _safe_scalar(Hostile()) == "<omitted>", (
-        "the diagnostic safety contract must hold"
-    )
-    assert _safe_scalar(10**1000) == "<integer>", (
-        "the diagnostic safety contract must hold"
-    )
-    assert _safe_scalar(HookEvent.AFTER_RECEIVE) == "after_receive", (
-        "the diagnostic safety contract must hold"
-    )
-    assert _safe_scalar(CANARY) == "<omitted>", (
-        "the diagnostic safety contract must hold"
-    )
-    assert _identifiers({"z", "a"}) == '["a", "z"]', (
-        "the diagnostic safety contract must hold"
-    )
+    assert renderer(value) == expected, message
+
+
+def test_field_metadata_bounds_collection_output() -> None:
+    """Large field collections disclose a bounded set of identifiers."""
     assert len(_identifiers({f"field{i}" for i in range(1000)})) < 1500, (
-        "the diagnostic safety contract must hold"
+        "field metadata must bound collection output"
     )
 
 
