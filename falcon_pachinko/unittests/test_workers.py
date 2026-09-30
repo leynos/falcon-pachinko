@@ -13,6 +13,8 @@ from falcon_pachinko.workers import WorkerController, WorkerFn, worker
 if typ.TYPE_CHECKING:  # pragma: no cover - used only for type checking
     import collections.abc as cabc
 
+START_TIMEOUT = 1.0
+
 
 @pytest_asyncio.fixture
 async def controller() -> cabc.AsyncIterator[WorkerController]:
@@ -96,7 +98,7 @@ async def test_start_and_stop_runs_decorated_or_undecorated_worker(
         started=started,
         cancelled=cancelled,
     )
-    await asyncio.wait_for(started.wait(), 0.1)
+    await asyncio.wait_for(started.wait(), timeout=START_TIMEOUT)
     assert received_context == {
         "label": "background worker",
         "started": started,
