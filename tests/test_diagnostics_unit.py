@@ -359,3 +359,17 @@ def test_expected_schema_metadata_handles_non_class_objects(
     assert _class_name(schema) == expected, (
         "schema metadata must fail closed without assuming a class object"
     )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [({"token": CANARY}, {}), ([CANARY], []), ((CANARY,), ())],
+)
+def test_exhausted_budget_does_not_add_omission_metadata(
+    value: object, expected: object
+) -> None:
+    """Container headers may exhaust the budget before any metadata is emitted."""
+    sanitizer = DiagnosticSanitizer(max_output_length=1)
+    assert sanitizer.sanitize(value) == expected, (
+        "exhausted output budgets must stop synthetic omission metadata"
+    )
