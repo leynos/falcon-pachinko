@@ -15,6 +15,13 @@ class WorkerController:
 
     The application passes each worker explicitly to :meth:`start`. The
     controller provides no worker discovery or registry.
+
+    Methods
+    -------
+    start
+        Schedule worker tasks and inject shared context.
+    stop
+        Cancel worker tasks and propagate the first exception, if any.
     """
 
     __slots__ = ("_stack", "_tasks")
