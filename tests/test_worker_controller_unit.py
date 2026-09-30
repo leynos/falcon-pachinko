@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import typing as typ
 
 import pytest
@@ -17,6 +18,48 @@ if typ.TYPE_CHECKING:  # pragma: no cover - used only for type checking
     import collections.abc as cabc
 
 START_TIMEOUT = 1.0
+
+
+async def _blocking_worker() -> None:
+    """Remain pending until the controller cancels this worker."""
+    await asyncio.Event().wait()
+
+
+def _failing_factory() -> cabc.Coroutine[object, object, None]:
+    """Raise while the controller is creating a worker coroutine."""
+    msg = "factory failed"
+    raise ValueError(msg)
+
+
+def _capture_created_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    fail_on_call: int | None = None,
+    error: BaseException | None = None,
+) -> list[asyncio.Task[None]]:
+    """Capture tasks and optionally fail on one task-creation call."""
+    original_create_task = asyncio.create_task
+    tasks: list[asyncio.Task[None]] = []
+    call_count = 0
+
+    def create_task(
+        coroutine: cabc.Coroutine[object, object, None],
+    ) -> asyncio.Task[None]:
+        """Record delegated tasks and raise at the configured call."""
+        nonlocal call_count
+        call_count += 1
+        if call_count == fail_on_call:
+            if error is None:
+                msg = "A task-creation error is required for the configured failure"
+                raise AssertionError(msg)
+            raise error
+
+        task = original_create_task(coroutine)
+        tasks.append(task)
+        return task
+
+    monkeypatch.setattr(asyncio, "create_task", create_task)
+    return tasks
 
 
 @worker
@@ -268,3 +311,59 @@ async def test_stop_raises_first_exception_in_registration_order(
     assert raised.value is first_failure, (
         "stop must raise the first registered worker's exception"
     )
+
+@pytest.mark.asyncio
+async def test_start_factory_failure_rolls_back_and_allows_restart(
+    controller: WorkerController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Roll back scheduled tasks and allow a later start after factory failure."""
+    tasks = _capture_created_tasks(monkeypatch)
+
+    with pytest.raises(ValueError, match="factory failed"):
+        await controller.start(_blocking_worker, _failing_factory)
+
+    assert len(tasks) == 1, (
+        "the first worker should be scheduled before factory failure"
+    )
+    assert all(task.done() and task.cancelled() for task in tasks), (
+        "every task from partial startup should be cancelled and complete"
+    )
+    assert controller._tasks == [], "failed startup should clear the task list"
+
+    await controller.start(_blocking_worker)
+    await controller.stop()
+
+
+@pytest.mark.asyncio
+async def test_start_task_creation_failure_closes_rejected_coroutine(
+    controller: WorkerController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Close a worker coroutine rejected by task creation and roll back."""
+    coroutines: list[cabc.Coroutine[object, object, None]] = []
+
+    def second_worker() -> cabc.Coroutine[object, object, None]:
+        """Return a coroutine so the test can inspect its cleanup state."""
+        coroutine = _blocking_worker()
+        coroutines.append(coroutine)
+        return coroutine
+
+    tasks = _capture_created_tasks(
+        monkeypatch,
+        fail_on_call=2,
+        error=RuntimeError("scheduling failed"),
+    )
+
+    with pytest.raises(RuntimeError, match="scheduling failed"):
+        await controller.start(_blocking_worker, second_worker)
+
+    assert len(coroutines) == 1, "the rejected worker coroutine should be retained"
+    assert inspect.getcoroutinestate(coroutines[0]) == inspect.CORO_CLOSED, (
+        "task-creation failure should close the rejected coroutine"
+    )
+    assert len(tasks) == 1, "only the first worker should become a task"
+    assert all(task.done() and task.cancelled() for task in tasks), (
+        "every task from partial startup should be cancelled and complete"
+    )
+    assert controller._tasks == [], "failed startup should clear the task list"
