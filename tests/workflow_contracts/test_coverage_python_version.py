@@ -184,6 +184,49 @@ def test_an_absent_step_uv_python_still_inherits_the_job_value() -> None:
     assert verdict(call) == "conflicting", f"expected a conflict, got {call.sources}"
 
 
+@pytest.mark.parametrize(
+    "guard",
+    [{"if": "always()"}, {"continue-on-error": True}],
+    ids=["guarded", "continue-on-error"],
+)
+def test_a_guarded_setup_after_a_reliable_one_declares_nothing(
+    guard: dict[str, object],
+) -> None:
+    """A later setup that may not run leaves nothing the call can rely on.
+
+    The earlier setup's Python may or may not still be first on ``PATH`` once a
+    later one can replace it, so with no other source the call is undeclared.
+    """
+    job = _steps(_setup(AGREE), _setup(CONFLICT, **guard), COVERAGE)
+    (call,) = coverage_calls(_workflow({"cov": job}))
+
+    assert call.sources["setup-python"] == "", f"setup read as {call.sources}"
+    assert verdict(call) == "undeclared", f"expected undeclared, got {call.sources}"
+
+
+def test_an_empty_job_uv_python_wins_over_the_workflow_value() -> None:
+    """An empty job ``UV_PYTHON`` replaces the workflow's, so there is no conflict."""
+    job = {**_steps(_setup(AGREE), COVERAGE), "env": {"UV_PYTHON": ""}}
+    (call,) = coverage_calls(_workflow({"cov": job}, {"UV_PYTHON": CONFLICT}), AGREE)
+
+    assert call.sources["UV_PYTHON"] == "", "the empty job value must win"
+    assert verdict(call) == "", f"no conflict expected, got {call.sources}"
+
+
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        "jobs:\n  cov:\n    steps: []\n    steps: []\n",
+        "jobs:\n  cov:\n    steps: []\njobs: {}\n",
+    ],
+    ids=["duplicate-steps", "duplicate-jobs"],
+)
+def test_a_workflow_repeating_a_key_is_refused(workflow: str) -> None:
+    """A repeated mapping key cannot hide a coverage step or a job."""
+    with pytest.raises(yaml.YAMLError):
+        coverage_calls(workflow)
+
+
 class SourceCombination(typ.NamedTuple):
     """One combination of the sources the resolver reads for a single call."""
 

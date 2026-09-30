@@ -16,6 +16,8 @@ import yaml
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
+from .strict_yaml import StrictLoader
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 #: The pull-request lane and the publisher whose baseline it ratchets against.
@@ -257,7 +259,7 @@ def coverage_calls(workflow: str, python_version: str = "") -> list[CoverageCall
         the resolver's priority order (empty where a source declares nothing).
 
     """
-    document = yaml.safe_load(workflow) or {}
+    document = yaml.load(workflow, Loader=StrictLoader) or {}  # noqa: S506 - strict SafeLoader subclass
     return [
         call
         for name, job in (document.get("jobs") or {}).items()
