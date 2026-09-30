@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import typing as typ
+from unittest import mock
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -90,20 +91,29 @@ def when_run_worker(context: dict[str, typ.Any]) -> None:
 def when_both_workers_start(context: dict[str, typ.Any]) -> None:
     """Capture the startup error and any worker tasks left running."""
     controller = context["controller"]
+    created_tasks: list[asyncio.Task[None]] = []
 
     async def _run() -> None:
-        try:
-            await controller.start(context["worker"], context["failing_factory"])
-        except ValueError as error:
-            context["startup_error"] = error
-        else:
-            msg = "The failing worker factory should abort startup"
-            raise AssertionError(msg)
+        original_create_task = asyncio.create_task
 
-        current_task = asyncio.current_task()
-        context["running_tasks_after_failure"] = {
-            task for task in asyncio.all_tasks() if task is not current_task
-        }
+        def capture_task(
+            coroutine: cabc.Coroutine[object, object, None],
+        ) -> asyncio.Task[None]:
+            """Capture a task created during the failed startup."""
+            task = original_create_task(coroutine)
+            created_tasks.append(task)
+            return task
+
+        with mock.patch.object(asyncio, "create_task", capture_task):
+            try:
+                await controller.start(context["worker"], context["failing_factory"])
+            except ValueError as error:
+                context["startup_error"] = error
+            else:
+                msg = "The failing worker factory should abort startup"
+                raise AssertionError(msg)
+
+        context["created_tasks_after_failure"] = created_tasks
 
     asyncio.run(_run())
 
@@ -111,11 +121,13 @@ def when_both_workers_start(context: dict[str, typ.Any]) -> None:
 @then("startup propagates the original error and leaves no worker running")
 def then_startup_rolled_back(context: dict[str, typ.Any]) -> None:
     """Verify the factory error is preserved and no worker task remains."""
+    worker_tasks = context["created_tasks_after_failure"]
     assert context["startup_error"] is context["failure"], (
         "startup should propagate the original factory error"
     )
-    assert context["running_tasks_after_failure"] == set(), (
-        "failed startup should leave no worker tasks running"
+    assert len(worker_tasks) == 1, "startup should have scheduled one worker"
+    assert all(task.done() and task.cancelled() for task in worker_tasks), (
+        "failed startup should cancel and await each scheduled worker"
     )
 
 
@@ -123,6 +135,7 @@ def then_startup_rolled_back(context: dict[str, typ.Any]) -> None:
 def when_restart_logging_worker(context: dict[str, typ.Any]) -> None:
     """Start the valid worker again and let it run before stopping it."""
     controller = context["controller"]
+    context["log"].clear()
 
     async def _run() -> None:
         await controller.start(context["worker"])
