@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import json
 import typing as typ
 
 import pytest
@@ -324,3 +325,23 @@ def test_uncertain_extension_keys_are_rejected(keys: frozenset[str]) -> None:
     """Custom normalization must not silently weaken the redaction set."""
     with pytest.raises(ValueError, match="extra_sensitive_keys"):
         DiagnosticSanitizer(extra_sensitive_keys=keys)
+
+
+def test_colliding_sample_keys_are_omitted_and_counted() -> None:
+    """A sample never emits ambiguous duplicate truncated field names."""
+    sanitizer = DiagnosticSanitizer(max_string_length=4)
+    pairs = json.loads(
+        sanitizer.format_sample({"aaaa1": CANARY, "aaaa2": CANARY}),
+        object_pairs_hook=list,
+    )
+    assert pairs == [("aaaa", "<omitted>"), ("<omitted entries>", 1)], (
+        "colliding keys must be counted without duplicate output"
+    )
+
+
+def test_omission_count_does_not_overwrite_a_real_field() -> None:
+    """Synthetic metadata must preserve a legitimate same-named field."""
+    sample = DiagnosticSanitizer().sanitize({"<omitted entries>": "visible", 1: CANARY})
+    assert sample == {"<omitted entries>": "visible", "<omitted entries 2>": 1}, (
+        "synthetic counts must not collide with application keys"
+    )
