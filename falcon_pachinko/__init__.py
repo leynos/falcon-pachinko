@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .di import ServiceContainer, ServiceNotFoundError
+from .diagnostics import DEFAULT_SENSITIVE_KEYS, DiagnosticSanitizer
 from .handlers import handles_message
 from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
@@ -25,7 +26,9 @@ from .websocket import (
 from .workers import WorkerController, worker
 
 __all__ = (
+    "DEFAULT_SENSITIVE_KEYS",
     "ConnectionBackend",
+    "DiagnosticSanitizer",
     "HookCollection",
     "HookContext",
     "HookManager",
