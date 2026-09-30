@@ -316,7 +316,7 @@ class _SampleBuilder:
             if result:
                 self._emit(", ")
             result.append(self.walk(item, depth + 1))
-        if len(sequence) > len(result):
+        if self.remaining and len(sequence) > len(result):
             self._emit(", " if result else "")
             result.append(self._leaf(f"<omitted {len(sequence) - len(result)} items>"))
         self._emit("]")
@@ -341,7 +341,7 @@ class _SampleBuilder:
             result[name] = self._mapping_value(key, item, depth)
             emitted += 1
         omitted = len(value) - emitted
-        if omitted:
+        if omitted and self.remaining:
             self._emit(", " if result else "")
             count_name = _omission_name(result)
             self._emit(json.dumps(count_name) + f": {omitted}")
