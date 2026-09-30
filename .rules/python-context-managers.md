@@ -1,8 +1,8 @@
 # Using Context Managers for Cleanup and Resource Management
 
 Use context managers to encapsulate setup and teardown logic cleanly and
-safely. This reduces the risk of forgetting to release resources (files,
-locks, connections, etc.) and simplifies error handling.
+safely. This reduces the risk of forgetting to release resources (files, locks,
+connections, etc.) and simplifies error handling.
 
 Context managers can be written either with `contextlib.contextmanager` (for
 simple procedural control flow) or by implementing `__enter__` and `__exit__`
@@ -106,6 +106,6 @@ with open("file.txt", encoding="utf-8") as f:
     process(f)
 ```
 
-Context managers make intent and error handling explicit. Prefer them
-over manual `try/finally` for clearer, safer code. The `consider-using-with`
-Pylint message flags resource-owning calls that skip the `with` form.
+Context managers make intent and error handling explicit. Prefer them over
+manual `try/finally` for clearer, safer code. The `consider-using-with` Pylint
+message flags resource-owning calls that skip the `with` form.

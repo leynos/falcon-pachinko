@@ -38,9 +38,9 @@
 - Use `pyproject.toml` to configure tools like Ruff, Pylint, Pyright, and
   pytest.
 - **Treat typecheck diagnostics as CI errors.** `make typecheck` runs `ty`
-  over the package and tests. Use `# ty: ignore[...]` sparingly and always
-  with an explanation; the `typecheck-suppression-without-explanation`
-  checker rejects bare pragmas.
+  over the package and tests. Use `# ty: ignore[...]` sparingly and always with
+  an explanation; the `typecheck-suppression-without-explanation` checker
+  rejects bare pragmas.
 - **Run Pylint with the df12 house checkers.** `make lint` loads the
   `df12_python_lints` plugin on CPython 3.14; fix findings at source rather
   than suppressing them.
@@ -150,6 +150,6 @@ def test_login_failure():
 
 ______________________________________________________________________
 
-This style guide aims to foster clean, consistent, and maintainable Python
-3.12 code with modern tooling. The priority is correctness, clarity, and
-developer empathy.
+This style guide aims to foster clean, consistent, and maintainable Python 3.12
+code with modern tooling. The priority is correctness, clarity, and developer
+empathy.

@@ -17,8 +17,8 @@ def func():
     return
 ```
 
-Use `return` alone instead of `return None` when the function's only result
-is `None`.
+Use `return` alone instead of `return None` when the function's only result is
+`None`.
 
 ______________________________________________________________________
 
@@ -96,10 +96,9 @@ ______________________________________________________________________
 
 ## RET505–RET508 — Eliminate Unnecessary `else` After Terminal Statements
 
-Avoid `else` after `return`, `raise`, `break`, or `continue`. These
-statements already exit control flow. The Pylint `no-else-return`,
-`no-else-raise`, `no-else-break`, and `no-else-continue` messages enforce
-the same shape.
+Avoid `else` after `return`, `raise`, `break`, or `continue`. These statements
+already exit control flow. The Pylint `no-else-return`, `no-else-raise`,
+`no-else-break`, and `no-else-continue` messages enforce the same shape.
 
 ```python
 # BAD:

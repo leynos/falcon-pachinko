@@ -1,15 +1,14 @@
 # Python exception design, raising, handling, and logging — Ruff TRY/BLE/LOG, N818, PERF203
 
 This guide distils the intent behind Ruff's Tryceratops (TRY), Blind Except
-(BLE), flake8-errmsg (EM), flake8-logging (LOG), pep8-naming N818, and
-Perflint PERF203, aligned with practical engineering practice.
+(BLE), flake8-errmsg (EM), flake8-logging (LOG), pep8-naming N818, and Perflint
+PERF203, aligned with practical engineering practice.
 
 ## 1) Design a coherent exception hierarchy (N818 + practice)
 
-**Principle:** model failure semantics with a small tree of domain
-exceptions; suffix concrete error classes with `Error` (N818). A single
-package-level base class enables callers to catch all domain failures
-without vendor leakage.
+**Principle:** model failure semantics with a small tree of domain exceptions;
+suffix concrete error classes with `Error` (N818). A single package-level base
+class enables callers to catch all domain failures without vendor leakage.
 
 ```python
 class PaymentsError(Exception):
@@ -41,9 +40,9 @@ raise ValueError("Percent must be between 0 and 100")
 raise CardDeclinedError("insufficient_funds")
 ```
 
-TRY002 discourages raising `Exception` directly. TRY004 encourages
-appropriate built-ins (`TypeError` for wrong types, `ValueError` for bad
-values, etc.) or domain-specific classes.
+TRY002 discourages raising `Exception` directly. TRY004 encourages appropriate
+built-ins (`TypeError` for wrong types, `ValueError` for bad values, etc.) or
+domain-specific classes.
 
 ### Preserve causal chains with `raise … from …`
 
@@ -110,9 +109,9 @@ msg = f"User {name!r} not found"
 raise RuntimeError(msg)
 ```
 
-The `msg = …; raise X(msg)` idiom is house style here. It satisfies TRY003,
-and mirrors the EM101/EM102 guidance even though the EM family is not
-currently selected in this repository's Ruff configuration.
+The `msg = …; raise X(msg)` idiom is house style here. It satisfies TRY003, and
+mirrors the EM101/EM102 guidance even though the EM family is not currently
+selected in this repository's Ruff configuration.
 
 ### Logging: parameterized messages, module loggers, correct APIs
 
@@ -169,9 +168,9 @@ except ParseError:
     handle_parse_failure()
 ```
 
-Exception handling carries overhead on the exceptional path; hoisting the
-block can improve throughput in hot loops (PERF203). Treat as a
-micro-optimization guided by profiling.
+Exception handling carries overhead on the exceptional path; hoisting the block
+can improve throughput in hot loops (PERF203). Treat as a micro-optimization
+guided by profiling.
 
 ## 6) Testing: assert specific failures (B017)
 
@@ -185,23 +184,22 @@ with pytest.raises(JSONDecodeError, match=r"Expecting value"):
     parse("not-json")
 ```
 
-B017 flags overly broad exception assertions. Tests should specify the
-expected type and, when useful, constrain the message via regex.
+B017 flags overly broad exception assertions. Tests should specify the expected
+type and, when useful, constrain the message via regex.
 
 ## 7) Practical patterns and anti-patterns
 
 **Handle vs bubble:** handle locally when the code can correct the condition
-(retry, substitute, degrade) or add essential context and re-raise with
-`from`. Otherwise, allow bubbling to a layer capable of policy decisions
-(transaction rollback, HTTP 5xx, CLI exit code).
+(retry, substitute, degrade) or add essential context and re-raise with `from`.
+Otherwise, allow bubbling to a layer capable of policy decisions (transaction
+rollback, HTTP 5xx, CLI exit code).
 
 **No "log and re-raise" chains:** log exactly once at a suitable boundary.
 Intermediate layers should either resolve the problem or propagate it.
 
-**Built-ins with intent:** `ValueError` for bad values, `TypeError` for
-wrong types, `NotImplementedError` for abstract methods; avoid
-`RuntimeError` as a catch-all where a domain error or specific built-in
-communicates intent better.
+**Built-ins with intent:** `ValueError` for bad values, `TypeError` for wrong
+types, `NotImplementedError` for abstract methods; avoid `RuntimeError` as a
+catch-all where a domain error or specific built-in communicates intent better.
 
 ## 8) Reference examples (good vs bad)
 
@@ -267,8 +265,8 @@ def test_amount_must_be_int() -> None:
 
 ## 9) Enforcement in this repository
 
-The `pyproject.toml` Ruff configuration already selects the `TRY`, `BLE`,
-`LOG`, `N` (including N818), `PERF`, and `B` (including B017) families under
+The `pyproject.toml` Ruff configuration already selects the `TRY`, `BLE`, `LOG`,
+`N` (including N818), `PERF`, and `B` (including B017) families under
 `target-version = "py312"`. The Pylint gate adds the `logging-*` message
 family. The EM family is not selected; follow the `msg` variable idiom shown
 above regardless, as review treats it as house style.

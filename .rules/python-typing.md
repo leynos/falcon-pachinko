@@ -9,8 +9,7 @@
 
 Use `Enum` for fixed sets of related constants. Use `enum.auto()` to avoid
 repeating values manually. Use `IntEnum` or `StrEnum` when interoperability
-with integers or strings is required (e.g. for database or JSON
-serialization).
+with integers or strings is required (e.g. for database or JSON serialization).
 
 ```python
 import enum
@@ -62,13 +61,12 @@ class Box[T]:
         self.value = value
 ```
 
-This is cleaner and avoids the indirection of separate `TypeVar`
-declarations.
+This is cleaner and avoids the indirection of separate `TypeVar` declarations.
 
 ## `Self` Type (PEP 673)
 
-Use `Self` in fluent interfaces and builder-style APIs to indicate the
-method returns the same instance.
+Use `Self` in fluent interfaces and builder-style APIs to indicate the method
+returns the same instance.
 
 ```python
 import typing as typ
@@ -84,9 +82,9 @@ This improves tool support and enforces correct chaining semantics.
 
 ## `@override` Decorator (PEP 698)
 
-Use `@override` to indicate that a method overrides one from a superclass.
-This enables static analysis tools to detect typos and signature mismatches,
-and Ruff exempts `@typ.override`-decorated methods from `no-self-use`.
+Use `@override` to indicate that a method overrides one from a superclass. This
+enables static analysis tools to detect typos and signature mismatches, and
+Ruff exempts `@typ.override`-decorated methods from `no-self-use`.
 
 ```python
 import typing as typ
@@ -133,15 +131,15 @@ from typing_extensions import TypeVar
 T = TypeVar("T", default=int)
 ```
 
-This makes APIs more ergonomic while retaining type safety; do not reach for
-it until an API genuinely benefits from a defaulted parameter.
+This makes APIs more ergonomic while retaining type safety; do not reach for it
+until an API genuinely benefits from a defaulted parameter.
 
 ## Standard Library Generics (PEP 585)
 
-Use built-in generics from the standard library (`list`, `dict`, `tuple`,
-etc.) instead of `typing.List`, `typing.Dict`, etc. The Ruff configuration
-bans the deprecated `typing` generics outright; use `collections.abc` for
-the abstract collection types.
+Use built-in generics from the standard library (`list`, `dict`, `tuple`, etc.)
+instead of `typing.List`, `typing.Dict`, etc. The Ruff configuration bans the
+deprecated `typing` generics outright; use `collections.abc` for the abstract
+collection types.
 
 ```python
 names: list[str] = ["Alice", "Bob"]
@@ -174,8 +172,8 @@ This replaces `StrDict: TypeAlias = ...` and is preferred in modern Python.
 ## `from __future__ import annotations`
 
 Use this import in modules with type annotations to defer evaluation of
-annotation expressions to runtime. This prevents issues with forward
-references and circular imports.
+annotation expressions to runtime. This prevents issues with forward references
+and circular imports.
 
 ```python
 from __future__ import annotations
@@ -186,8 +184,8 @@ remains below Python 3.14 (where deferred evaluation becomes the default).
 
 ## `if typ.TYPE_CHECKING`
 
-Use this conditional to guard imports required only for static typing. The
-TC rules enforce moving typing-only imports into this block.
+Use this conditional to guard imports required only for static typing. The TC
+rules enforce moving typing-only imports into this block.
 
 ```python
 import typing as typ
@@ -221,5 +219,4 @@ This simplifies common types such as `dt.datetime`, `cabc.Iterable`,
 
 ______________________________________________________________________
 
-These conventions promote clarity, tool compatibility, and future-ready
-Python.
+These conventions promote clarity, tool compatibility, and future-ready Python.

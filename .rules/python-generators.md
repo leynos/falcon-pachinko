@@ -1,9 +1,9 @@
 # Prefer Generators Over Complex Loop Logic
 
 Using generators improves readability, composability, and memory efficiency.
-Functions built as generators are often simpler to test, debug, and
-refactor. This guidance encourages breaking apart complex `for`-loops into
-generator expressions or functions using `yield`.
+Functions built as generators are often simpler to test, debug, and refactor.
+This guidance encourages breaking apart complex `for`-loops into generator
+expressions or functions using `yield`.
 
 ## Why Prefer Generators?
 
@@ -88,8 +88,8 @@ def iter_even_doubles():
 
 ______________________________________________________________________
 
-**Rule of thumb:** If a `for` loop has multiple branches, mutations, or is
-hard to explain in one sentence—rewrite it as a generator.
+**Rule of thumb:** If a `for` loop has multiple branches, mutations, or is hard
+to explain in one sentence—rewrite it as a generator.
 
 Prefer clear, linear data flows over deeply nested conditionals and loop
 bodies. The `use-yield-from` Pylint message and the Ruff comprehension rules
