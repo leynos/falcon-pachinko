@@ -370,6 +370,12 @@ async def _seed_project(context: HookContext) -> None:
 
 
 async def _record_receive(context: HookContext) -> None:
+    """Store received payload content in the trusted application audit trail.
+
+    This explicit raw-payload storage is application policy, not a safe
+    diagnostic. Valid UTF-8 bytes are decoded before storage, but decoding does
+    not sanitize their contents.
+    """
     resource = context.target
     if not isinstance(resource, TaskStreamResource) or context.raw is None:
         return

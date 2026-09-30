@@ -17,6 +17,7 @@ from hypothesis import strategies as st
 
 from falcon_pachinko import DEFAULT_SENSITIVE_KEYS, DiagnosticSanitizer
 from falcon_pachinko.diagnostics import (
+    _class_name,
     _frame_metadata,
     _identifier,
     _identifiers,
@@ -344,4 +345,17 @@ def test_key_separators_cannot_bypass_redaction(separator: str) -> None:
     key = separator.join("APIKEY")
     assert CANARY not in DiagnosticSanitizer().format_sample({key: CANARY}), (
         "separator variants must remain redacted"
+    )
+
+
+@pytest.mark.parametrize(
+    ("schema", "expected"),
+    [(int, "int"), (int | str, type(int | str).__qualname__), (Hostile(), "Hostile")],
+)
+def test_expected_schema_metadata_handles_non_class_objects(
+    schema: object, expected: str
+) -> None:
+    """Union schemas and unsupported objects disclose only safe type metadata."""
+    assert _class_name(schema) == expected, (
+        "schema metadata must fail closed without assuming a class object"
     )

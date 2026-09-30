@@ -76,6 +76,14 @@ composable patterns.
   - [x] Document `msgspec`'s default strictness (no extra fields) and expose a
     `strict=False` option on the decorator.
 
+- [x] **Prevent payload values from leaking into diagnostics**
+  ([issue #61](https://github.com/leynos/falcon-pachinko/issues/61)). Framework
+  errors, logs, trace summaries and object representations omit payload values
+  by default. The work follows the payload-omission policy proposed by
+  [PR #143](https://github.com/leynos/falcon-pachinko/pull/143), which treats
+  this protection as a blocker for the completed session runtime and first beta
+  release.
+
 - [ ] **Refine Resource API and State Management.**
 
   - [x] Rename the fallback handler method from `on_message` to `on_unhandled`
@@ -203,8 +211,9 @@ the library is ready for use.
     `websockets` asyncio client, including context-managed connections and JSON
     helpers.
 
-  - [x] Add trace/log capture to `WebSocketTestClient` sessions so tests can
-    assert on frame ordering and payloads.
+  - [x] Add trace capture to `WebSocketTestClient` sessions so tests can assert
+    on frame ordering and retained original payloads. Trace representations
+    and summaries expose safe metadata only.
 
   - [x] Implement an injectable `WebSocketSimulator` that mimics the
     `WebSocketLike` interface with spyable send/receive queues.

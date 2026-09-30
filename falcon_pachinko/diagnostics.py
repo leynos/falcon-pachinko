@@ -77,8 +77,12 @@ def _identifiers(values: cabc.Collection[object]) -> str:
     return rendered
 
 
-def _class_name(cls: type) -> str:
-    """Read the built-in type descriptor without a caller's metaclass hook."""
+def _class_name(cls: object) -> str:
+    """Read class metadata, omitting schema objects without reflecting them."""
+    # Inspect the actual metaclass: isinstance(cls, type) can invoke __class__
+    # hooks on caller objects. Union annotations are schema objects, not classes.
+    if not issubclass(type(cls), type):
+        return _type_name(cls)
     return _identifier(type.__getattribute__(cls, "__qualname__"))
 
 
