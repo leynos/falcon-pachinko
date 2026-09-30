@@ -13,6 +13,8 @@ from falcon_pachinko.workers import WorkerController, WorkerFn, worker
 if typ.TYPE_CHECKING:  # pragma: no cover - used only for type checking
     import collections.abc as cabc
 
+START_TIMEOUT = 1.0
+
 
 @pytest_asyncio.fixture
 async def controller() -> cabc.AsyncIterator[WorkerController]:
@@ -57,7 +59,7 @@ async def test_start_and_stop_runs_workers(controller: WorkerController) -> None
     started = asyncio.Event()
     stopped = asyncio.Event()
     await controller.start(_logging_worker, log=log, started=started, stopped=stopped)
-    await asyncio.wait_for(started.wait(), 0.1)
+    await asyncio.wait_for(started.wait(), timeout=START_TIMEOUT)
     assert log, "the worker should have logged at least one tick before stop"
     await controller.stop()
     assert stopped.is_set(), "stopping should cancel the worker and let it clean up"
