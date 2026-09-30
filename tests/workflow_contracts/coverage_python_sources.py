@@ -107,8 +107,8 @@ def read_required_text(path: Path) -> str:
     """Return the text of a file the contract cannot run without.
 
     With :func:`read_text_if_present`, this is the module's file boundary. A
-    missing or undecodable file raises, naming the path, so the contract fails
-    loudly instead of judging nothing.
+    missing or undecodable file raises (``OSError`` or ``UnicodeDecodeError``
+    from the read), so the contract fails loudly instead of judging nothing.
 
     Parameters
     ----------
@@ -120,13 +120,6 @@ def read_required_text(path: Path) -> str:
     str
         The file's UTF-8 text.
 
-    Raises
-    ------
-    OSError
-        If the file is missing or cannot be read.
-    UnicodeDecodeError
-        If the file is not valid UTF-8.
-
     """
     return path.read_text(encoding="utf-8")
 
@@ -135,8 +128,8 @@ def read_text_if_present(path: Path) -> str | None:
     """Return a file's text, or ``None`` when the file does not exist.
 
     Only a missing file reads as absent. A directory, a permission failure or
-    undecodable bytes raise, which fails the contract loudly rather than
-    reading as absent.
+    undecodable bytes raise (``OSError`` or ``UnicodeDecodeError``), which fails
+    the contract loudly rather than reading as absent.
 
     Parameters
     ----------
@@ -147,13 +140,6 @@ def read_text_if_present(path: Path) -> str | None:
     -------
     str or None
         The file's text, or ``None`` when it is absent.
-
-    Raises
-    ------
-    OSError
-        If the file exists but cannot be read, for example a directory.
-    UnicodeDecodeError
-        If the file is not valid UTF-8.
 
     """
     try:
@@ -201,6 +187,12 @@ def _uv_python(*scopes: dict[str, object]) -> str:
     The first scope that defines the key wins even when its value is empty: an
     empty step value replaces the outer one, and the action then falls through
     to ``.python-version`` or ``PATH`` rather than to the outer value.
+
+    Returns
+    -------
+    str
+        The innermost defined value, or ``""`` when no scope defines the key.
+
     """
     for scope in scopes:
         env = _mapping(scope.get("env"))
@@ -259,7 +251,7 @@ def coverage_calls(workflow: str, python_version: str = "") -> list[CoverageCall
         the resolver's priority order (empty where a source declares nothing).
 
     """
-    document = yaml.load(workflow, Loader=StrictLoader) or {}  # noqa: S506 - strict SafeLoader subclass
+    document = yaml.load(workflow, Loader=StrictLoader) or {}  # ruff: ignore[unsafe-yaml-load] - strict SafeLoader subclass
     return [
         call
         for name, job in (document.get("jobs") or {}).items()
