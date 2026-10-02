@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import collections.abc as cabc
 import typing as typ
-from contextlib import AsyncExitStack
 
 type WorkerFn = cabc.Callable[..., cabc.Coroutine[object, object, None]]
 
@@ -13,11 +12,10 @@ type WorkerFn = cabc.Callable[..., cabc.Coroutine[object, object, None]]
 class WorkerController:
     """Manage a set of long-running tasks bound to an ASGI lifespan."""
 
-    __slots__ = ("_stack", "_tasks")
+    __slots__ = ("_tasks",)
 
     def __init__(self) -> None:
         self._tasks: list[asyncio.Task[None]] = []
-        self._stack: AsyncExitStack | None = None
 
     async def start(self, *workers: WorkerFn, **context: object) -> None:
         """Schedule *workers* as tasks, injecting shared *context*.
@@ -31,10 +29,6 @@ class WorkerController:
             msg = "WorkerController is already started"
             raise RuntimeError(msg)
 
-        # A freshly constructed AsyncExitStack needs no explicit entry; entering
-        # it is a no-op that merely returns the stack itself.
-        self._stack = AsyncExitStack()
-
         for fn in workers:
             coroutine = fn(**context)
             task = asyncio.create_task(coroutine)
@@ -45,7 +39,6 @@ class WorkerController:
         self._cancel_all_tasks()
         await self._wait_for_tasks()
         error = self._collect_first_exception()
-        await self._cleanup_stack()
         self._tasks.clear()
         if error:
             raise error
@@ -69,11 +62,6 @@ class WorkerController:
             if isinstance(exc, Exception):
                 return exc
         return None
-
-    async def _cleanup_stack(self) -> None:
-        """Clean up the async context stack."""
-        if self._stack:
-            await self._stack.aclose()
 
 
 def worker(fn: WorkerFn) -> WorkerFn:
