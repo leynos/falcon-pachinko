@@ -11,6 +11,7 @@ import msgspec as ms
 import msgspec.inspect as msinspect
 import msgspec.json as msjson
 
+from .diagnostics import _class_name, _frame_metadata, _identifier, _type_name
 from .exceptions import (
     HandlerNotAsyncError,
     HandlerSignatureError,
@@ -34,7 +35,7 @@ class Envelope(ms.Struct, frozen=True):
     payload: typ.Any | None = None
 
 
-@dc.dataclass(slots=True)
+@dc.dataclass(slots=True, repr=False)
 class HandlerInvocationContext:
     """Context for invoking a message handler."""
 
@@ -43,6 +44,35 @@ class HandlerInvocationContext:
     raw: str | bytes
     handler_info: HandlerInfo
     payload: object
+
+    def __repr__(self) -> str:
+        """Describe the invocation without displaying raw or decoded values."""
+        kind, length = _frame_metadata(self.raw)
+        return (
+            f"HandlerInvocationContext(resource={_type_name(self.resource)}, "
+            f"ws={_type_name(self.ws)}, raw_kind={kind}, raw_length={length}, "
+            f"handler_info={_type_name(self.handler_info)}, "
+            f"expected_type={_expected_type_label(self.handler_info)}, "
+            f"payload_type={_type_name(self.payload)})"
+        )
+
+
+def _expected_type_label(info: object) -> str:
+    """Select schema metadata from an exact framework handler record.
+
+    Parameters
+    ----------
+    info : object
+        A handler record whose caller-controlled display methods are ignored.
+
+    Returns
+    -------
+    str
+        The bounded schema name, or an omission marker for unsupported records.
+    """
+    if type(info) is HandlerInfo and info.payload_type is not None:
+        return _class_name(info.payload_type)
+    return "<omitted>"
 
 
 def find_conventional_handler(
@@ -60,7 +90,7 @@ def find_conventional_handler(
         HandlerNotAsyncError,
         SignatureInspectionError,
     ) as exc:
-        logger.debug("Handler %s invalid: %s", name, exc)
+        logger.debug("Handler %s invalid: %s", _identifier(name), _type_name(exc))
         return None
     return HandlerInfo(func, payload_type, strict=True)
 
@@ -69,6 +99,7 @@ async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
     """Convert ``payload`` to the handler's type and invoke it."""
     payload_type = context.handler_info.payload_type
     payload = context.payload
+    failed = False
     if payload_type is not None and payload is not None:
         try:
             validate_strict_payload(
@@ -80,8 +111,10 @@ async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
                 strict=context.handler_info.strict,
             )
         except ms.ValidationError:
-            await context.resource.on_unhandled(context.ws, context.raw)
-            return
+            failed = True
+    if failed:
+        await context.resource.on_unhandled(context.ws, context.raw)
+        return
     await context.handler_info.handler(context.resource, context.ws, payload)
 
 
@@ -99,9 +132,12 @@ async def dispatch_with_schema(
     resource: WebSocketResource, ws: WebSocketLike, raw: str | bytes
 ) -> None:
     """Decode and dispatch ``raw`` using ``resource.schema``."""
+    failed = False
     try:
         message = msjson.decode(raw, type=resource.schema)
     except (ms.DecodeError, ms.ValidationError):
+        failed = True
+    if failed:
         await resource.on_unhandled(ws, raw)
         return
 
@@ -127,9 +163,12 @@ async def dispatch_with_envelope(
     resource: WebSocketResource, ws: WebSocketLike, raw: str | bytes
 ) -> None:
     """Decode and dispatch ``raw`` using the envelope format."""
+    failed = False
     try:
         envelope = msjson.decode(raw, type=Envelope)
     except (ms.DecodeError, ms.ValidationError):
+        failed = True
+    if failed:
         await resource.on_unhandled(ws, raw)
         return
 
