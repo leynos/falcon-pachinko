@@ -245,153 +245,80 @@ CodeScene.
 
 Both lanes must measure the same thing, or the baseline the trunk writes is not
 the baseline a pull request should be compared against.
-`tests/workflow_contracts/test_codescene_publisher.py` holds their
-`generate-coverage` inputs equal field by field, and holds the list of compared
-fields equal to the set both lanes declare, so an input added to both and not
-to the list cannot drift unnoticed. Agreement is not enough on its own: each
-lane must also set `with-ratchet: 'true'`, because turning the ratchet off in
-both lanes at once keeps them equal and leaves the pull request with no
-coverage gate. The pull-request lane declines the report artefact; the
-publisher keeps the action's default and uploads what it wrote.
 
-The contracts recognize a shared action by its whole path before `@`, at any
-ref. A substring search accepts `someone-else/upload-codescene-coverage` as the
-real upload, so a step repointed at a look-alike would satisfy every rule
-written about the one it replaced.
+The shared CV-005 contract library holds that shape. `make check-cv005` runs
+`cv005-contracts check`, from the `leynos/shared-actions` package
+`packages/cv005-contracts`, at the full commit named by `CV005_CONTRACTS_REF`
+in the Makefile, and CI runs it as its own step. A fix to the rules is a pin
+bump. The target needs `uv`, which fetches the Python 3.13 the library runs
+under, and `make test-workflow-contracts` runs it before this repository's own
+contracts. The library's suite proves each rule in both directions, so this
+repository keeps no copy of the readers or the refusal cases. What it holds:
 
-Both shared actions are pinned to one revision, and the upload passes no
-checksum input. From shared-actions `f68e8e2e` the action pins `cs-coverage`
-through its own manifest, which is what fixed the parse break, and rejects a
-non-empty `installer-checksum`. Its optional `archive-checksum` adds no
-assurance: the action verifies the downloaded archive against the
-`archive_sha256` in its own `cli-manifest.json`, so a caller-supplied digest
-can only agree with that manifest or go stale and fail. A contract refuses both
-inputs.
+- No workflow a pull request can reach names a CodeScene action or host, runs
+  `cs-coverage`, carries `CS_ACCESS_TOKEN` at any scope, or forwards every
+  secret with `secrets: inherit`. The reach is a closure through local calls,
+  not a trigger list, and a call the reader cannot place is refused.
+- The publisher uploads rather than checks, behind a ref guard read as a
+  conjunction (a `||` is refused) and a check step whose one command is
+  `echo "available=${{ secrets.CS_ACCESS_TOKEN != '' }}" >> "$GITHUB_OUTPUT"`.
+  The token reaches `access-token` directly and is bound in no `env`, because
+  the uploader is a composite action that hands a step's `env` to its nested
+  steps. A guard on `env.CS_ACCESS_TOKEN != ''` would not do: with the binding
+  deleted it is simply false, and the upload skips forever without failing
+  anything.
+- The publisher job declares `environment: codescene`, which admits deployments
+  from `main` alone, and no other job does (`environment.placement`).
+- The publisher's concurrency group is keyed on the ref and never cancels a
+  running generation. The shared action saves a fresh baseline cache per
+  successful push and later runs restore the newest match, so two overlapping
+  pushes would let the older commit's baseline become the one every pull
+  request is measured against. It is not a durable queue: GitHub keeps one
+  pending run per group, so a newer push replaces an older pending one.
+- Both lanes select the same `generate-coverage` inputs, both set
+  `with-ratchet: 'true'`, and both use one shared-actions revision. The
+  publisher's selection is pinned in `.github/cv005.toml` under `[selection]`,
+  so a change made to both lanes at once is still a reviewed change. The
+  pull-request lane declines the report artefact and the publisher keeps the
+  action's default.
+- The upload passes no checksum input. From shared-actions `f68e8e2e` the
+  action pins `cs-coverage` through its own manifest and rejects a non-empty
+  `installer-checksum`, and a workflow that reads or refreshes the retired
+  `CODESCENE_CLI_SHA256` variable is refused. `get-codescene-sha.yml` is
+  deleted for that reason, and the repository variable can be removed whenever
+  convenient, because nothing reads it.
 
-Neither lane fetches full Git history. The ratchet compares the measured
-percentage with a stored baseline and reads no commits. The full clone the
-pull-request lane once requested dates from the CodeScene check step, which has
-left it, and `test_the_pull_request_lane_fetches_no_history` keeps it from
-returning.
+`.github/cv005.toml` carries this repository's parameters: `repository`, the
+`[selection]` and `interpreter = "3.13"`. The interpreter makes the library
+require `UV_PYTHON: '3.13'` on every `generate-coverage` step, set on the job
+in both lanes, and hold that version inside `requires-python` (`>=3.12`),
+because generate-coverage otherwise takes the `python3` that the latest
+`setup-python` put on `PATH`, and `uv sync` refuses an interpreter outside the
+range. The ratchet baseline key carries the interpreter
+(`ratchet-baseline-<os>-py<major.minor>-`), so a lane on another Python would
+miss its baseline rather than compare against the wrong one.
 
-`tests/workflow_contracts/` needs two development dependencies the library
-itself does not. **PyYAML** (`pyyaml>=6.0.3`) parses the GitHub Actions
-documents and **Hypothesis** (`hypothesis>=6.168.0`) generates the documents
-the scanner is held to. Both are in the `dev` dependency group, so
-`make build`, which runs `uv sync --group dev`, installs them;
-`uv sync --group dev` on its own does as well. `make test` collects the
-contracts, which is what makes them a gate rather than a convenience, and
-`uv run pytest tests/workflow_contracts` runs them alone. Running them without
-those dependencies fails at import.
-
-What a pull request can reach is a closure, not a trigger list.
-`tests/workflow_contracts/pull_request_reach.py` starts from every workflow a
-`pull_request` or `pull_request_target` event starts, reading the trigger block
-in scalar, list or mapping form under either key, and follows each job-level
-call into this repository's workflow directory, recognized by where the
-reference resolves rather than by a list of prefixes, GitHub's recommended `$/`
-self-repository spelling included. A `workflow_call`-only workflow a
-pull-request job calls runs on that pull request, and with `secrets: inherit`
-it holds every secret the caller does; a call the reader cannot place is
-refused rather than skipped. `test_codescene_boundary.py` scans that closure.
-
-The contracts scan whole parsed workflow documents rather than a list of step
-keys, because a credential can be declared at workflow scope, at job scope, on
-a step, as an action input, or forwarded by name, and the service's host can be
-curled from any shell script. `secrets: inherit` names nothing, so it is
-recognized by its position. The action marker is the exception: it is scoped to
-`uses` values, because applied to every scalar it would report a step named
-"check CodeScene coverage" as an invocation, and scoped to one action reference
-it would miss a second CodeScene action entirely.
-
-The upload carries a ref guard as well as its trigger. `workflow_dispatch` can
-select any branch or tag, and the push trigger's `branches: [main]` says
-nothing about a dispatch, so without the guard a dispatch from a feature branch
-would publish that branch's coverage through the main-owned upload. The
-contract reads the guard as a conjunction through
-`tests/workflow_contracts/guard_conditions.py` and refuses `||`, because a
-substring check passes a guard with
-`|| github.event_name == 'workflow_dispatch'` appended. The same module's
-`admits` evaluates the guard for a push to main, dispatches on main, a branch
-and a tag, and a missing token, which is the behavioural question a workflow
-runner would answer.
-
-The token is bound in no `env`. The uploader is a composite action that binds
-the token itself from its `access-token` input and hands a step's `env` to its
-nested `upload-artifact` and cache steps. A check step with the id
-`codescene-token` runs one command,
-`echo "available=${{ secrets.CS_ACCESS_TOKEN != '' }}" >> "$GITHUB_OUTPUT"`,
-whose expression GitHub evaluates before the shell starts, so the secret
-reaches no process. The upload runs only when that output is `'true'` and the
-ref is main, and passes `${{ secrets.CS_ACCESS_TOKEN }}` straight to
-`access-token`. `tests/workflow_contracts/test_codescene_token.py` asserts the
-exact command with no `if:` or `env`, the output conjunct, the direct input,
-and no `env` anywhere in the publisher carrying the token under any name or
-reading the secrets context at all, which an indexed expression such as
-`secrets[format(...)]` would otherwise hide. A guard on
-`env.CS_ACCESS_TOKEN != ''` would not do: with the binding deleted it is simply
-false, and the upload skips forever without failing anything.
-
-The publisher job declares `environment: codescene`. That environment admits
-deployments from `main` alone and is where the CodeScene token lives, so only
-the trunk publisher can read it.
-`tests/workflow_contracts/codescene_environment.py` holds the placement: every
-uploading job declares the environment, as a string or as `{name: codescene}`;
-no other job declares it; and no workflow a pull request can start declares it
-in any job. `tests/workflow_contracts/test_codescene_environment.py` proves
-each clause over mutated copies of the workflows.
+Two facts remain this repository's own, in
+`tests/workflow_contracts/test_coverage_lane_facts.py`. The pull-request lane
+fetches no full Git history: the ratchet compares the measured percentage with
+a stored baseline and reads no commits, and the full clone the lane once
+requested dates from the CodeScene check step, which has left it. The library
+has no clause for it, so the contract is proved over temporary sources as well
+as this repository's workflow.
 
 One known exception: a Dependabot pull request merged by the automerge workflow
 uses `GITHUB_TOKEN`, whose merges fire no push event, so that commit publishes
 no coverage until the next push or a dispatch on main.
 
-The workflow also serializes per ref and never cancels a running generation.
-The shared action saves a fresh baseline cache per successful push and later
-runs restore the newest match, so two overlapping pushes would let the older
-commit's baseline become the one every pull request is measured against. It is
-not a durable queue: GitHub keeps one pending run per group, so a newer push
-replaces an older pending one, which skips an intermediate commit no pull
-request should be measured against.
-
-The contracts read through `workflow_support.WorkflowSource`, the same source,
-strict loader and error hierarchy the placement contracts use, so a repeated
-key cannot hide a credential and `except UnreadableWorkflowError` catches every
-reader's failure. The reusable queries live in
-`tests/workflow_contracts/codescene_scan.py` and take their source explicitly.
-
-Each marker is proved against a document carrying only its own interaction: the
-scan clears a workflow by finding nothing, so a marker that had stopped
-matching would clear the very thing it exists to catch while the others kept
-the suite green. The reader is proved the same way, over temporary directories,
-because a reader that returned an empty list for a missing directory would
-clear the whole estate by finding no workflows in it.
-
-The publisher is now the only workflow here that names CodeScene at all.
-`get-codescene-sha.yml` refreshed the `CODESCENE_CLI_SHA256` repository
-variable, and `installer-checksum` was its only consumer; since the shared
-action rejects that input and pins the CLI through its own manifest, the
-workflow maintained a value nothing read. It is deleted, and a contract refuses
-any workflow that reads or refreshes the variable. The repository variable
-itself can be removed whenever convenient, because nothing reads it.
-
-Both coverage lanes set up Python 3.13 with `actions/setup-python`, and the
-pull-request lane names it again with a job-level `UV_PYTHON`, inside the
-project's `requires-python` (`>=3.12`). generate-coverage chooses its
-interpreter from its `python-version` input, then `UV_PYTHON`, then
-`.python-version`, then the `python3` on `PATH`, which is the most recent
-`setup-python` step before the call in its job; `uv sync` refuses an
-interpreter outside `requires-python`.
-`tests/workflow_contracts/test_coverage_python_version.py`, with its reader in
-`tests/workflow_contracts/coverage_python_sources.py`, requires every
-generate-coverage call in the pull-request lane and the publisher to declare at
-least one of those sources, every declared source to name the same version,
-that version to be inside `requires-python`, and both lanes to measure on that
-one version. A `setup-python` step guarded by `if:` or allowed to fail with
-`continue-on-error` declares nothing. The ratchet baseline key already carries
-the interpreter (`ratchet-baseline-<os>-py<major.minor>-`), so a lane on
-another Python would miss its baseline rather than compare against the wrong
-one; the contract turns that silent restart into a failure. It uses
-`packaging`, a development dependency.
+`tests/workflow_contracts/` needs two development dependencies the library
+itself does not. **PyYAML** (`pyyaml>=6.0.3`) parses the GitHub Actions
+documents and **Hypothesis** (`hypothesis>=6.168.0`) generates the documents
+the label readers are held to. Both are in the `dev` dependency group, so
+`make build`, which runs `uv sync --group dev`, installs them;
+`uv sync --group dev` on its own does as well. `make test` collects the
+contracts, which is what makes them a gate rather than a convenience, and
+`uv run pytest tests/workflow_contracts` runs them alone. Running them without
+those dependencies fails at import.
 
 ## Markdown formatting and linting
 
