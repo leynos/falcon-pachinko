@@ -1,0 +1,8 @@
+repository = "leynos/falcon-pachinko"
+interpreter = "3.13"
+
+[selection]
+output-path = "coverage.xml"
+format = "cobertura"
+pytest-workers = ""
+with-ratchet = "true"
