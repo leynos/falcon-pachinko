@@ -177,8 +177,13 @@ def _venv_identity() -> dict[str, str]:
     venv = _project_venv(
         pathlib.Path(sys.prefix), pathlib.Path(sys.base_prefix), REPO_ROOT
     )
+    config = venv / "pyvenv.cfg"
+    # A re-created environment can keep its path and its configuration text, so
+    # the file's inode and modification time are recorded as well.
+    stat = config.stat()
     return {
-        "pyvenv.cfg": (venv / "pyvenv.cfg").read_text(encoding="utf-8"),
+        "pyvenv.cfg": config.read_text(encoding="utf-8"),
+        "pyvenv.cfg identity": f"{stat.st_ino}:{stat.st_mtime_ns}",
         "python": str((venv / "bin" / "python").resolve()),
     }
 
@@ -546,3 +551,22 @@ def test_the_project_venv_is_the_one_the_suite_runs_in(
     )
 
     assert found == pathlib.Path(expected), f"{prefix} resolved to {found}"
+
+
+def test_the_venv_identity_notices_a_same_content_recreation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """Re-creating the config with identical text changes the recorded identity."""
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "python").touch()
+    config = tmp_path / "pyvenv.cfg"
+    config.write_text("home = /usr/bin\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "prefix", str(tmp_path))
+    before = _venv_identity()
+
+    config.unlink()
+    config.write_text("home = /usr/bin\n", encoding="utf-8")
+    after = _venv_identity()
+
+    assert after["pyvenv.cfg"] == before["pyvenv.cfg"], "the text is unchanged"
+    assert after != before, "a re-created pyvenv.cfg must change the identity"
