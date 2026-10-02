@@ -491,6 +491,11 @@ and simplifies the application's mental model.
 2. **Explicit Wiring**: The application explicitly defines which workers to run
    and injects any dependencies directly, removing "magic" or hidden state.
 
+   `WorkerController` does not consult `__pachinko_worker__`. Validation is
+   rejected because it would break undecorated workers and contradict optional
+   decoration. Auto-registration is rejected because it contradicts explicit
+   wiring and the decision to avoid a bespoke worker registry.
+
 3. **Fault Transparency**: An unhandled exception in a worker will crash the
    server process immediately, ensuring failures are not silent. Developers can
    opt-in to supervision for tasks that should be restarted.
@@ -546,7 +551,7 @@ class WorkerController:
 
 # Optional syntactic sugar
 def worker(fn: WorkerFn) -> WorkerFn:
-    """Marks *fn* as a valid worker. Purely cosmetic but documents intent."""
+    """Marks *fn* as a background worker. Informational; documents intent."""
     fn.__pachinko_worker__ = True
     return fn
 ```

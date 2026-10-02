@@ -260,6 +260,10 @@ async def lifespan(app):
     await controller.stop()
 ```
 
+The `@worker` decorator is optional and marks intent only.
+`WorkerController.start()` runs only the workers that the application passes to
+it. An undecorated async function works in the same way.
+
 ## 10. Testing Toolkit
 
 - **WebSocketTestClient** – Real websocket client powered by `websockets`,
