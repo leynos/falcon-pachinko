@@ -14,6 +14,7 @@ once. The tests never skip: a missing interpreter is a failure, not a pass.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import sys
@@ -179,11 +180,12 @@ def _venv_identity() -> dict[str, str]:
     )
     config = venv / "pyvenv.cfg"
     # A re-created environment can keep its path and its configuration text, so
-    # the file's inode and modification time are recorded as well.
+    # the file's inode, modification time and status-change time are recorded
+    # as well. The status-change time cannot be set from user space.
     stat = config.stat()
     return {
         "pyvenv.cfg": config.read_text(encoding="utf-8"),
-        "pyvenv.cfg identity": f"{stat.st_ino}:{stat.st_mtime_ns}",
+        "pyvenv.cfg identity": f"{stat.st_ino}:{stat.st_mtime_ns}:{stat.st_ctime_ns}",
         "python": str((venv / "bin" / "python").resolve()),
     }
 
@@ -564,8 +566,13 @@ def test_the_venv_identity_notices_a_same_content_recreation(
     monkeypatch.setattr(sys, "prefix", str(tmp_path))
     before = _venv_identity()
 
+    original_mtime = config.stat().st_mtime_ns
     config.unlink()
     config.write_text("home = /usr/bin\n", encoding="utf-8")
+    # Filesystems may reuse the inode and keep a coarse timestamp, so the
+    # change is made deterministic rather than left to allocation behaviour.
+    changed = original_mtime + 1_000_000_000
+    os.utime(config, ns=(changed, changed))
     after = _venv_identity()
 
     assert after["pyvenv.cfg"] == before["pyvenv.cfg"], "the text is unchanged"
