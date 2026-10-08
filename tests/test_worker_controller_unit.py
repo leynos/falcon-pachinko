@@ -14,11 +14,17 @@ from falcon_pachinko.workers import WorkerController, worker
 if typ.TYPE_CHECKING:  # pragma: no cover - used only for type checking
     import collections.abc as cabc
 
+START_TIMEOUT = 1.0
+
 
 @worker
-async def _sample_worker(*, flag: dict[str, bool]) -> None:
+async def _sample_worker(
+    *, flag: dict[str, bool], ready: asyncio.Event | None = None
+) -> None:
     """Set ``flag['ran']`` then block until cancelled."""
     flag["ran"] = True
+    if ready is not None:
+        ready.set()
     never_set = asyncio.Event()
     with contextlib.suppress(asyncio.CancelledError):
         await never_set.wait()
@@ -51,8 +57,10 @@ async def test_worker_controller_runs_and_stops(
 ) -> None:
     """Start and stop a worker, verifying context injection."""
     flag: dict[str, bool] = {}
-    await controller.start(_sample_worker, flag=flag)
-    await asyncio.sleep(0)
+    ready = asyncio.Event()
+    await controller.start(_sample_worker, flag=flag, ready=ready)
+    # start() schedules tasks but does not run them.
+    await asyncio.wait_for(ready.wait(), timeout=START_TIMEOUT)
     assert flag["ran"] is True, "worker must run and set the flag before being stopped"
     await controller.stop()
 
