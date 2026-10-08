@@ -496,9 +496,9 @@ and simplifies the application's mental model.
    decoration. Auto-registration is rejected because it contradicts explicit
    wiring and the decision to avoid a bespoke worker registry.
 
-3. **Fault Transparency**: An unhandled exception in a worker will crash the
-   server process immediately, ensuring failures are not silent. Developers can
-   opt-in to supervision for tasks that should be restarted.
+3. **Fault Transparency**: Worker exceptions are surfaced when `stop()` runs,
+   after it has gathered the worker tasks, so failures are not silent.
+   Developers can opt-in to supervision for tasks that should be restarted.
 
 4. **Framework Agnosticism**: The pattern works with any ASGI-compliant server
    (e.g., Uvicorn, Hypercorn) and in both synchronous and asynchronous Falcon

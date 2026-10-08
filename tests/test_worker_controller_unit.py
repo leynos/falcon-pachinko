@@ -11,6 +11,8 @@ import pytest_asyncio
 
 from falcon_pachinko.workers import WorkerController, worker
 
+EVENT_WAIT_TIMEOUT = 2.0
+
 if typ.TYPE_CHECKING:  # pragma: no cover - used only for type checking
     import collections.abc as cabc
 
@@ -56,12 +58,13 @@ def cleanup_gate() -> _CleanupGate:
     cleaned_up = asyncio.Event()
 
     async def blocking_worker() -> None:
+        """Block until cancelled, then perform test-controlled cleanup."""
         started.set()
         try:
-            await asyncio.Event().wait()
+            await asyncio.wait_for(asyncio.Event().wait(), timeout=EVENT_WAIT_TIMEOUT)
         finally:
             cleanup_started.set()
-            await finish_cleanup.wait()
+            await asyncio.wait_for(finish_cleanup.wait(), timeout=EVENT_WAIT_TIMEOUT)
             cleaned_up.set()
 
     return _CleanupGate(
@@ -80,11 +83,12 @@ async def assert_controller_restarts(controller: WorkerController) -> None:
     restarted = asyncio.Event()
 
     async def healthy_worker() -> None:
+        """Signal startup and wait until the controller stops the worker."""
         restarted.set()
-        await asyncio.Event().wait()
+        await asyncio.wait_for(asyncio.Event().wait(), timeout=EVENT_WAIT_TIMEOUT)
 
     await controller.start(healthy_worker)
-    await restarted.wait()
+    await asyncio.wait_for(restarted.wait(), timeout=EVENT_WAIT_TIMEOUT)
     await controller.stop()
 
 
@@ -162,10 +166,12 @@ async def test_stop_waits_for_cleanup_and_controller_can_restart(
         A worker and events that let the test hold cleanup until released.
     """
     await controller.start(cleanup_gate.worker)
-    await cleanup_gate.started.wait()
+    await asyncio.wait_for(cleanup_gate.started.wait(), timeout=EVENT_WAIT_TIMEOUT)
 
     stopping = asyncio.create_task(controller.stop())
-    await cleanup_gate.cleanup_started.wait()
+    await asyncio.wait_for(
+        cleanup_gate.cleanup_started.wait(), timeout=EVENT_WAIT_TIMEOUT
+    )
     cleanup_gate.finish_cleanup.set()
     await stopping
 
@@ -196,19 +202,22 @@ async def test_failure_propagates_after_peer_cleanup_and_allows_restart(
     failed = asyncio.Event()
 
     async def failing_worker() -> None:
+        """Wait for permission to fail, then signal and raise the worker error."""
         failure_ready.set()
-        await fail_now.wait()
+        await asyncio.wait_for(fail_now.wait(), timeout=EVENT_WAIT_TIMEOUT)
         failed.set()
         raise failure
 
     await controller.start(failing_worker, cleanup_gate.worker)
-    await failure_ready.wait()
+    await asyncio.wait_for(failure_ready.wait(), timeout=EVENT_WAIT_TIMEOUT)
     fail_now.set()
-    await failed.wait()
-    await cleanup_gate.started.wait()
+    await asyncio.wait_for(failed.wait(), timeout=EVENT_WAIT_TIMEOUT)
+    await asyncio.wait_for(cleanup_gate.started.wait(), timeout=EVENT_WAIT_TIMEOUT)
 
     stopping = asyncio.create_task(controller.stop())
-    await cleanup_gate.cleanup_started.wait()
+    await asyncio.wait_for(
+        cleanup_gate.cleanup_started.wait(), timeout=EVENT_WAIT_TIMEOUT
+    )
     cleanup_gate.finish_cleanup.set()
 
     with pytest.raises(RuntimeError) as raised:
@@ -237,19 +246,21 @@ async def test_stop_raises_first_exception_in_registration_order(
     first_failed = asyncio.Event()
 
     async def first_worker() -> None:
-        await second_failed.wait()
+        """Wait for the later worker to fail, then raise the first error."""
+        await asyncio.wait_for(second_failed.wait(), timeout=EVENT_WAIT_TIMEOUT)
         first_failed.set()
         raise first_failure
 
     async def second_worker() -> None:
-        await allow_second_failure.wait()
+        """Wait for permission to fail before the first-registered worker."""
+        await asyncio.wait_for(allow_second_failure.wait(), timeout=EVENT_WAIT_TIMEOUT)
         second_failed.set()
         raise second_failure
 
     await controller.start(first_worker, second_worker)
     allow_second_failure.set()
-    await first_failed.wait()
-    await second_failed.wait()
+    await asyncio.wait_for(first_failed.wait(), timeout=EVENT_WAIT_TIMEOUT)
+    await asyncio.wait_for(second_failed.wait(), timeout=EVENT_WAIT_TIMEOUT)
 
     with pytest.raises(ValueError, match="first registered worker") as raised:
         await controller.stop()
