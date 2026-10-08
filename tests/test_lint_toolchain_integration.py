@@ -20,6 +20,7 @@ import re
 import sys
 import textwrap
 import time
+import typing as typ
 
 import pytest
 
@@ -33,6 +34,9 @@ from tests._makefile import (
     split_command,
     tool_environment,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 pytestmark = [pytest.mark.lint_toolchain]
 
@@ -586,11 +590,24 @@ def test_the_venv_identity_notices_a_same_content_recreation(
     assert after != before, "a re-created pyvenv.cfg must change the identity"
 
 
+@pytest.mark.parametrize(
+    "make_config",
+    [lambda config: None, lambda config: config.mkdir()],
+    ids=["stat-fails", "read-fails"],
+)
 def test_the_venv_identity_reports_an_unreadable_config_by_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    make_config: cabc.Callable[[pathlib.Path], None],
 ) -> None:
-    """A missing ``pyvenv.cfg`` fails the test naming the file, not a bare OSError."""
+    """A missing or unreadable ``pyvenv.cfg`` fails naming its full path.
+
+    A missing file fails at ``stat``; a directory in its place passes ``stat``
+    and fails at ``read_text``, so both reads of the helper are covered.
+    """
+    config = tmp_path / "pyvenv.cfg"
+    make_config(config)
     monkeypatch.setattr(sys, "prefix", str(tmp_path))
 
-    with pytest.raises(pytest.fail.Exception, match=r"pyvenv\.cfg"):
+    with pytest.raises(pytest.fail.Exception, match=re.escape(str(config))):
         _venv_identity()
