@@ -50,7 +50,7 @@ jobs:
         # `--git`. The action
         # installs a prebuilt release through a hardened cargo-binstall rather
         # than building from source.
-        uses: leynos/shared-actions/.github/actions/install-mdtablefix@7d751eded578e48dacf43ab173d5820e6437c474
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@b9a3bff63b1e19b3a48d433668184e24e1abd3ba
         with:
           version: "0.6.0"
 
