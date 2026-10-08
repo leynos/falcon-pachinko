@@ -195,12 +195,13 @@ detects cycles and describes bytes without decoding them. Unsupported objects
 are described by safe type name without their value; non-string or unusable
 mapping keys are omitted. If a value cannot be inspected safely, it is omitted.
 `format_sample()` also enforces a total output-length limit, while `sanitize()`
-returns a bounded tree. Sensitive-key matching normalizes case and common
-separators, then matches configured fragments within the key.
-`DEFAULT_SENSITIVE_KEYS` provides common credential names, and
-`extra_sensitive_keys` extends that set. Redaction is a defence-in-depth aid:
-applications may use unfamiliar names or positional values, so omission remains
-the default security boundary.
+returns a bounded tree. If its complete JSON-serialized result would exceed
+`max_output_length`, `sanitize()` returns the `<budget>` omission marker.
+Sensitive-key matching normalizes case and common separators, then matches
+configured fragments within the key. `DEFAULT_SENSITIVE_KEYS` provides common
+credential names, and `extra_sensitive_keys` extends that set. Redaction is a
+defence-in-depth aid: applications may use unfamiliar names or positional
+values, so omission remains the default security boundary.
 
 ## 5. Hooks
 
