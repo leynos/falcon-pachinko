@@ -23,12 +23,11 @@ package uses Falcon's ASGI application and WebSocket APIs in
 `falcon_pachinko/testing/harness.py`; the exclusive upper bound keeps a future
 major release out until compatibility is verified.
 
-The lower bound was checked on 2026-10-08 UTC (2026-10-09 in
-Europe/Berlin) by installing Falcon 4.0.0 with
-`uv pip install falcon==4.0.0` and running `uv run --no-sync pytest -v`: 770
-tests passed and 2 were skipped. Run `make build` afterwards to restore the
-normal environment. The latest CI build checked for this change resolved Falcon
-4.4.0.
+The lower bound was checked on 2026-10-08 UTC (2026-10-09 in Europe/Berlin) by
+installing Falcon 4.0.0 with `uv pip install falcon==4.0.0` and running
+`uv run --no-sync pytest -v`: 770 tests passed and 2 were skipped. Run
+`make build` afterwards to restore the normal environment. The latest CI build
+checked for this change resolved Falcon 4.4.0.
 
 The repository has no committed lock file, and `.gitignore` excludes `uv.lock`.
 CI therefore resolves the newest release allowed by the dependency bounds on
