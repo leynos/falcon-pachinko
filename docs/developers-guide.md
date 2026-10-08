@@ -15,7 +15,7 @@ The tracked `typos.toml` is regenerated on every run from the live shared
 dictionary and the repository-specific `typos.local.toml` overlay. Never edit
 generated entries by hand; add only narrow repository terminology to the
 overlay. Because the dictionary is live, `typos.toml` must never be drift
-checked in continuous integration.
+checked in continuous integration (CI).
 
 The shared `typos-config-builder` CLI refreshes the estate dictionary into an
 untracked local cache only when the authoritative copy is newer. A valid cache
@@ -297,6 +297,13 @@ because generate-coverage otherwise takes the `python3` that the latest
 range. The ratchet baseline key carries the interpreter
 (`ratchet-baseline-<os>-py<major.minor>-`), so a lane on another Python would
 miss its baseline rather than compare against the wrong one.
+
+`tests/workflow_contracts/test_check_cv005_target.py` holds the target's wiring
+(the pinned full commit, Python 3.13, the arguments, the parameters file and
+failure propagation) without the network, and CI runs the real command as the
+end-to-end check. The runner-label and lane-trigger contracts
+(`test_runner_placement.py`, `test_lane_triggers.py` and their readers) stay
+local too.
 
 Two facts remain this repository's own, in
 `tests/workflow_contracts/test_coverage_lane_facts.py`. The pull-request lane
