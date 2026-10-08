@@ -39,7 +39,10 @@ no vendor cause or context. Simulator and harness JSON decoding continue to
 raise `msgspec.ValidationError` for validation failures and
 `msgspec.DecodeError` for other decode failures, using fresh errors without
 vendor text or chains. Unsupported frame types raise `TypeError` with only the
-safe type name.
+safe type name. A text frame that cannot be encoded as UTF-8 raises a fresh
+`UnicodeError` without frame contents or original exception text; binary-frame
+failures and `msgspec` JSON decode failures retain the behaviour described
+above.
 
 Close failures still propagate the original close exception. Their trace entry
 now records the exception class name instead of its message; caller-supplied

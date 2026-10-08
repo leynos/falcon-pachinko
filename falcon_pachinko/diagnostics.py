@@ -177,7 +177,8 @@ class DiagnosticSanitizer:
         128. Values under oversized keys are omitted.
     max_output_length : int
         Total formatted output budget, from zero to 65536. Defaults to 2048.
-        Traversal stops when this budget is exhausted.
+        Traversal stops when this budget is exhausted. ``sanitize()`` returns
+        ``"<budget>"`` if the complete JSON-serialized tree exceeds it.
     extra_sensitive_keys : frozenset[str]
         Additional nonempty, bounded sensitive fragments, normalized once.
         Defaults to an empty set; the default fragments always remain active.
@@ -227,10 +228,15 @@ class DiagnosticSanitizer:
         -------
         object
             A bounded tree of exact built-ins and omission placeholders.
-            With a zero output budget, returns ``"<budget>"`` immediately.
-            This method does not mutate the input.
+            Returns ``"<budget>"`` if the complete JSON-serialized tree
+            exceeds the configured output budget. This method does not mutate
+            the input.
         """
-        return _SampleBuilder(self).walk(value, 0)
+        builder = _SampleBuilder(self)
+        sample = builder.walk(value, 0)
+        if len(json.dumps(sample, ensure_ascii=True)) > self.max_output_length:
+            return "<budget>"
+        return sample
 
     def format_sample(self, value: object) -> str:
         """Format a sanitized sample incrementally within the output budget.

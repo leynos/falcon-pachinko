@@ -54,9 +54,14 @@ def _decode_json(
     payload_type: type | None,
 ) -> object:
     """Decode a test frame, raising a fresh vendor-class error without its text."""
+    encoding_exception: str | None = None
     match raw:
         case str():
-            data = raw.encode("utf-8")
+            try:
+                data = raw.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                encoding_exception = _type_name(exc)
+                data = b""
         case bytes() | bytearray() | memoryview():
             data = bytes(raw)
         case _:
@@ -65,6 +70,8 @@ def _decode_json(
                 f"unsupported frame type={_type_name(raw)}"
             )
             raise TypeError(details)
+    if encoding_exception is not None:
+        raise UnicodeError(_json_decode_message(raw, payload_type, encoding_exception))
     try:
         return decoder.decode(data)
     except ms.DecodeError as exc:

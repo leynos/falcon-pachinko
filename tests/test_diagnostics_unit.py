@@ -188,6 +188,32 @@ def test_recursive_samples_obey_total_budget(value: object, budget: int) -> None
     ), "recursive formatted samples must never exceed the total budget"
 
 
+@given(value=_RECURSIVE, budget=st.integers(min_value=1, max_value=200))
+def test_sanitized_tree_obeys_total_budget_or_uses_omission_marker(
+    value: object, budget: int
+) -> None:
+    """The returned tree must not retain values beyond its output allowance."""
+    sanitized = DiagnosticSanitizer(max_output_length=budget).sanitize(value)
+    if sanitized == "<budget>":
+        return
+    assert len(json.dumps(sanitized, ensure_ascii=True)) <= budget, (
+        "sanitized trees must fit the output budget or collapse to an omission marker"
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "budget"),
+    [(CANARY, 1), ({"x": CANARY}, 8)],
+)
+def test_sanitize_omits_values_that_do_not_fit_total_budget(
+    value: object, budget: int
+) -> None:
+    """A short total allowance must not return an oversized diagnostic tree."""
+    assert (
+        DiagnosticSanitizer(max_output_length=budget).sanitize(value) == "<budget>"
+    ), "values that exceed the complete tree budget must become an omission marker"
+
+
 @given(value=_RECURSIVE)
 def test_canary_under_sensitive_key_never_appears(value: object) -> None:
     """Unrelated nesting cannot weaken redaction of a known secret."""
@@ -362,16 +388,14 @@ def test_expected_schema_metadata_handles_non_class_objects(
 
 
 @pytest.mark.parametrize(
-    ("value", "expected"),
-    [({"token": CANARY}, {}), ([CANARY], []), ((CANARY,), ())],
+    "value",
+    [{"token": CANARY}, [CANARY], (CANARY,)],
 )
-def test_exhausted_budget_does_not_add_omission_metadata(
-    value: object, expected: object
-) -> None:
-    """Container headers may exhaust the budget before any metadata is emitted."""
+def test_exhausted_budget_omits_over_budget_containers(value: object) -> None:
+    """Even an empty sanitized container must fit the configured tree budget."""
     sanitizer = DiagnosticSanitizer(max_output_length=1)
-    assert sanitizer.sanitize(value) == expected, (
-        "exhausted output budgets must stop synthetic omission metadata"
+    assert sanitizer.sanitize(value) == "<budget>", (
+        "over-budget container trees must collapse to the omission marker"
     )
 
 

@@ -305,6 +305,54 @@ async def test_harness_decode_error_omits_vendor_values() -> None:
     )
 
 
+@pytest.mark.parametrize("path", ["receive_json", "pop_sent_json"])
+@pytest.mark.asyncio
+async def test_text_frame_encoding_error_omits_raw_frame(path: str) -> None:
+    """UTF-8 encoding failures must not retain the source frame in diagnostics."""
+    from falcon_pachinko import WebSocketRouter
+    from falcon_pachinko._testing_harness import _OriginalWebSocket
+    from falcon_pachinko.testing.harness import SimulatorConnection
+
+    raw = f'{{"token":"{CANARY}","tail":"\ud800"}}'
+    simulator = WebSocketSimulator()
+    connection = None
+    if path == "receive_json":
+        await simulator.push_text(raw)
+    else:
+        await simulator.send_text(raw)
+        connection = SimulatorConnection(
+            "/",
+            WebSocketRouter(),
+            simulator,
+            object(),
+            _OriginalWebSocket(),
+        )
+
+    async def decode() -> None:
+        if path == "receive_json":
+            await simulator.receive_json()
+        else:
+            assert connection is not None, "sent-frame path must create its connection"
+            connection.pop_sent_json()
+
+    with pytest.raises(UnicodeError) as caught:
+        await decode()
+
+    error = caught.value
+    diagnostic = "\n".join([
+        str(error),
+        repr(error),
+        "".join(traceback.format_exception(error)),
+    ])
+    assert type(error) is UnicodeError, "encoding errors must use the safe base type"
+    assert CANARY not in diagnostic, "encoded source frames must not enter diagnostics"
+    assert not hasattr(error, "object"), "fresh errors must not retain the source frame"
+    assert error.__cause__ is None, "fresh errors must not retain an explicit cause"
+    assert error.__context__ is None, (
+        "fresh errors must not retain the source exception"
+    )
+
+
 @pytest.mark.parametrize(
     ("info", "expected"),
     [
