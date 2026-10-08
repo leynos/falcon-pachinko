@@ -13,6 +13,27 @@ and re-raises that exception, if present, leaving the controller ready to
 restart. Worker cleanup runs through task cancellation; the application
 lifespan handler owns external resources.
 
+## Dependency bounds
+
+The package supports Falcon 4.x through `falcon>=4,<5`. Falcon follows
+[semantic versioning](https://falcon.readthedocs.io/en/stable/community/releases.html#semantic-versioning),
+so an incompatible API change can arrive with a new major release. This
+package uses Falcon's ASGI application and WebSocket APIs in
+`falcon_pachinko/router.py`, `falcon_pachinko/websocket.py`, and
+`falcon_pachinko/testing/harness.py`; the exclusive upper bound keeps a future
+major release out until compatibility is verified.
+
+The lower bound was checked on 2026-10-09 by installing Falcon 4.0.0 with
+`uv pip install falcon==4.0.0` and running `uv run --no-sync pytest -v`: 770
+tests passed and 2 were skipped. Run `make build` afterwards to restore the
+normal environment. The latest CI build checked for this change resolved Falcon
+4.4.0.
+
+The repository has no committed lock file, and `.gitignore` excludes `uv.lock`.
+CI therefore resolves the newest release allowed by the dependency bounds on
+each build. Lower-bound coverage in CI and the decision to commit a lock file
+are tracked separately from this support policy.
+
 ## Spelling policy
 
 Run the spelling gate with:
