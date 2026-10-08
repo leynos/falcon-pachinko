@@ -3,6 +3,16 @@
 This guide captures maintainer-facing conventions that are not part of the
 public user guide.
 
+## WorkerController lifecycle
+
+`WorkerController.start()` rejects a second start while tasks remain
+registered. It schedules each worker with the same keyword context. During
+`stop()`, the controller cancels all tasks, gathers them, and selects the first
+non-cancellation exception in registration order. It then clears the task list
+and re-raises that exception, if present, leaving the controller ready to
+restart. Worker cleanup runs through task cancellation; the application
+lifespan handler owns external resources.
+
 ## Spelling policy
 
 Run the spelling gate with:
