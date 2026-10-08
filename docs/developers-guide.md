@@ -6,12 +6,21 @@ public user guide.
 ## WorkerController lifecycle
 
 `WorkerController.start()` rejects a second start while tasks remain
-registered. It schedules each worker with the same keyword context. During
-`stop()`, the controller cancels all tasks, gathers them, and selects the first
-non-cancellation exception in registration order. It then clears the task list
-and re-raises that exception, if present, leaving the controller ready to
-restart. Worker cleanup runs through task cancellation; the application
-lifespan handler owns external resources.
+registered and schedules each worker with the same keyword context. If a worker
+factory or task creation fails, it closes any coroutine rejected by
+`asyncio.create_task()`, cancels and awaits tasks already scheduled, and resets
+the controller so the caller can retry. The original startup exception remains
+primary; rollback failures or cancellation are attached to it as exception
+notes. Rollback continues cleanup if the caller is cancelled. The controller
+does not keep an async exit stack; the application lifespan handler owns
+external resources.
+
+During `stop()`, the controller cancels all tasks, gathers them, and selects the
+first non-cancellation exception in registration order. It then clears the task
+list and re-raises that exception, if present, leaving the controller ready to
+restart. The controller does not log startup rollback: it propagates the
+original exception to the application startup caller, where the lifespan owner
+can log it.
 
 ## Dependency bounds
 
