@@ -37,6 +37,7 @@ PYPY_MANIFEST = REPO_ROOT / "tools" / "pypy-downloads.json"
 CLASSIC_RCFILE = REPO_ROOT / "pyproject.toml"
 DF12_RCFILE = REPO_ROOT / "pylintrc-df12.toml"
 MARKDOWNLINT_CONFIG = REPO_ROOT / ".markdownlint-cli2.jsonc"
+NOSE_RELEASE_DIGESTS = REPO_ROOT / "tools" / "nose-release-digests.json"
 
 # Diagnostics that report an unparsable or unanalysable module. Disabling any
 # of them lets such a module pass with exit status 0.
@@ -63,6 +64,103 @@ def _messages_control(rcfile: pathlib.Path) -> dict[str, list[str]]:
     """Return an rcfile's Pylint ``messages control`` table."""
     config = tomllib.loads(rcfile.read_text(encoding="utf-8"))
     return config["tool"]["pylint"]["messages control"]
+
+
+def test_nose_gate_pins_the_complete_bounded_scan() -> None:
+    """The selected production root and ranking policy stay explicit."""
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    nose = project["tool"]["nose"]
+
+    expected = {
+        "version": "0.20.0",
+        "roots": ["falcon_pachinko"],
+        "mode": "syntax,semantic,near",
+        "min-size": 24,
+        "surface": "all",
+        "top": 30,
+        "exclude": ["testing/**", "unittests/**", "behaviour/**"],
+    }
+    assert set(nose) == set(expected), "the configured scan keys must stay explicit"
+    for key, value in expected.items():
+        assert nose[key] == value, f"the configured nose {key!r} must remain reviewed"
+    assert (REPO_ROOT / "falcon_pachinko").is_dir(), (
+        "the configured production root must exist"
+    )
+    assert any((REPO_ROOT / "falcon_pachinko").glob("*.py")), (
+        "the configured production root must select Python modules"
+    )
+
+
+def test_nose_release_pin_has_one_authoritative_version() -> None:
+    """The installer and digest manifest derive from the nose config pin."""
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    manifest = json.loads(NOSE_RELEASE_DIGESTS.read_text(encoding="utf-8"))
+    makefile = MAKEFILE.read_text(encoding="utf-8")
+    assert manifest["version"] == project["tool"]["nose"]["version"], (
+        "the release digest manifest must use the configured nose version"
+    )
+    assert "NOSE_VERSION" not in makefile, (
+        "the Makefile must not duplicate the nose pin"
+    )
+    assert "cargo-binstall" not in makefile, "provisioning must not compile a fallback"
+    assert "nose-cli@" not in makefile, (
+        "provisioning must use the verified release asset"
+    )
+    installer = (REPO_ROOT / "scripts" / "install_nose.py").read_text()
+    assert "def load_pins(" in installer, "installer pins must come from configuration"
+    assert "version, digests = load_pins(" in installer, (
+        "the installer must consume the shared version and digest pins"
+    )
+
+
+def test_nose_gate_uses_an_isolated_python_314_tool_environment() -> None:
+    """Gate and helper-test commands select Python 3.14 without project sync."""
+    makefile = MAKEFILE.read_text(encoding="utf-8")
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    assert "NOSE_PYTHON_VERSION ?= 3.14" in makefile, (
+        "the gate tooling interpreter must remain explicitly pinned"
+    )
+    assert makefile.count("--no-project --python $(NOSE_PYTHON_VERSION)") >= 2, (
+        "gate execution and helper tests must use the isolated interpreter"
+    )
+    assert project["project"]["requires-python"] == ">=3.12", (
+        "gate tooling must not raise the application Python floor"
+    )
+    runtime_dependencies = project["project"]["dependencies"]
+    assert not any(
+        dependency.lower().startswith(("cyclopts", "tomlkit"))
+        for dependency in runtime_dependencies
+    ), "Gate-only packages must stay out of application dependencies."
+    assert (REPO_ROOT / "scripts" / "tests" / "pytest.ini").is_file(), (
+        "gate tests must keep their isolated pytest configuration"
+    )
+    assert project["tool"]["pytest"]["ini_options"]["testpaths"] == [
+        "falcon_pachinko",
+        "tests",
+    ], "Normal application tests must not collect Python-3.14 gate helpers."
+
+
+def test_ci_caches_the_platform_specific_verified_nose_binary() -> None:
+    """CI caches the install path and keys it on platform and release pins."""
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    start = workflow.index("      - name: Cache pinned nose release binary")
+    end = workflow.index("      - name:", start + 8)
+    cache_step = workflow[start:end]
+    required_cache_tokens = (
+        "path: .tools/nose",
+        "${{ runner.os }}",
+        "${{ runner.arch }}",
+        "pyproject.toml",
+        "scripts/install_nose.py",
+        "tools/nose-release-digests.json",
+    )
+    missing_tokens = tuple(
+        token for token in required_cache_tokens if token not in cache_step
+    )
+    assert not missing_tokens, f"the nose cache is missing inputs: {missing_tokens}"
+    assert "run: make duplication-test" in workflow, (
+        "CI must run the focused nose gate tests"
+    )
 
 
 @pytest.mark.parametrize(

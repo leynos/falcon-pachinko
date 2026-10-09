@@ -11,10 +11,33 @@ import falcon.asgi
 import pytest
 
 from falcon_pachinko import HookContext, WebSocketResource, WebSocketRouter
+from falcon_pachinko.router import _compile_prefix_template, compile_uri_template
 from falcon_pachinko.unittests.helpers import DummyWS, RecordingWS, make_req
 from falcon_pachinko.unittests.resource_factories import resource_factory
 
 pytest_plugins = ["falcon_pachinko.unittests.test_app_install"]
+
+
+def test_template_compilers_keep_complete_and_prefix_match_semantics() -> None:
+    """The wrappers share compilation while keeping their suffixes distinct."""
+    complete = compile_uri_template("/rooms/{room}")
+    prefix = _compile_prefix_template("/rooms/{room}")
+
+    assert complete.fullmatch("/rooms/7") is not None, (
+        "complete templates must match the route itself"
+    )
+    assert complete.fullmatch("/rooms/7/") is not None, (
+        "complete templates must preserve an optional trailing slash"
+    )
+    assert complete.fullmatch("/rooms/7/child") is None, (
+        "complete templates must reject a child path"
+    )
+    match = prefix.match("/rooms/7/child")
+    assert match is not None, "prefix templates must accept a child path"
+    assert match.groupdict() == {"room": "7"}, (
+        "prefix matching must capture the route parameters"
+    )
+
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc

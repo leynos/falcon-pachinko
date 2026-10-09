@@ -16,6 +16,19 @@ TOOLS = $(MDLINT) $(MDTABLEFIX) $(NIXIE) uv
 VENV_TOOLS = pytest
 UV ?= uv
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
+NOSE_PYTHON_VERSION ?= 3.14
+NOSE_TOOLS_DIR ?= .tools/nose
+NOSE_BIN ?= $(NOSE_TOOLS_DIR)/nose
+NOSE_INSTALL = $(UV_ENV) UV_PYTHON_INSTALL_DIR=.uv-python $(UV) run \
+	--no-project --python $(NOSE_PYTHON_VERSION) scripts/install_nose.py
+DUPLICATION_GATE ?= $(UV_ENV) UV_PYTHON_INSTALL_DIR=.uv-python \
+	NOSE_BIN="$(NOSE_BIN)" $(UV) run --no-project \
+	--python $(NOSE_PYTHON_VERSION) scripts/duplication_gate.py
+DUPLICATION_TEST = $(UV_ENV) UV_PYTHON_INSTALL_DIR=.uv-python $(UV) run \
+	--no-project --python $(NOSE_PYTHON_VERSION) \
+	--with pytest==9.0.2 --with cyclopts==4.25.2 --with tomlkit==0.15.1 \
+	--with hypothesis==6.165.6 python -m pytest \
+	-c scripts/tests/pytest.ini scripts/tests
 # Retain the typos-config-builder gate: the bespoke spelling machinery, and
 # the PATHSPEC_VERSION and TYPOS_VERSION pins that served only it, were
 # retired in favour of this single gate subcommand. The RUFF_VERSION below is
@@ -111,7 +124,8 @@ AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(DF12_PYTHON) \
 
 .PHONY: help all clean build build-release lint lint-pylint lint-df12 \
 	pylint-pypy-python fmt check-fmt markdownlint nixie spelling test \
-	test-workflow-contracts check-cv005 typecheck $(TOOLS) $(VENV_TOOLS)
+	test-workflow-contracts check-cv005 typecheck install-nose duplication \
+	duplication-test duplication-allow $(TOOLS) $(VENV_TOOLS)
 
 .DEFAULT_GOAL := all
 
@@ -162,10 +176,35 @@ check-fmt: uv $(MDTABLEFIX) ## Verify formatting
 	$(RUFF) format --check
 	$(MDTABLEFIX) --check $(MDTABLEFIX_SELECT) $(MDTABLEFIX_RULES)
 
-lint: uv ## Run linters
+lint: uv install-nose ## Run linters
 	$(RUFF) check
 	$(MAKE) --no-print-directory lint-pylint
 	$(MAKE) --no-print-directory lint-df12
+	$(DUPLICATION_GATE) check
+
+install-nose: ## Install the pinned, checksum-verified nose detector
+	NOSE_BIN="$(NOSE_BIN)" $(NOSE_INSTALL)
+
+duplication: install-nose ## Run the blocking code-duplication gate
+	$(DUPLICATION_GATE) check
+
+duplication-test: ## Run isolated nose-gate tests on CPython 3.14
+	$(DUPLICATION_TEST)
+
+# Only values explicitly supplied on the Make command line are accepted.
+# They travel through the environment so shell metacharacters in REASON stay
+# data when the quoted CLI argument is expanded.
+cli_value = $(if $(filter command line,$(origin $(1))),$(value $(1)))
+
+duplication-allow: export DUPLICATION_FIRST = $(call cli_value,FIRST)
+duplication-allow: export DUPLICATION_SECOND = $(call cli_value,SECOND)
+duplication-allow: export DUPLICATION_REASON = $(call cli_value,REASON)
+duplication-allow: ## Record one reasoned duplication exception
+	@test -n "$${DUPLICATION_FIRST}" || { printf "Error: FIRST is required (path[::name])\\n" >&2; exit 2; }
+	@test -n "$${DUPLICATION_REASON}" || { printf "Error: REASON is required for a duplication exception\\n" >&2; exit 2; }
+	$(DUPLICATION_GATE) allow --first "$${DUPLICATION_FIRST}" \
+		$(if $(call cli_value,SECOND),--second "$${DUPLICATION_SECOND}",) \
+		--reason "$${DUPLICATION_REASON}"
 
 pylint-pypy-python: uv ## Print the pinned PyPy interpreter, installing it if needed
 	@$(PYPY_PROVISION)

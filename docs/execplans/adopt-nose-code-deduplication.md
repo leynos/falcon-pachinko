@@ -11,21 +11,21 @@ member outside that exception.
 
 ## Conformance basis
 
-The detector decision and support-code baseline are
-`leynos/episodic` PR #276 at immutable commit
-`d9e5ac0d254f375e2986f52d91a3b88c117c833b`, especially ADR-021 and the merged
-nose gate at that revision. Upstream command and JSON behaviour is taken from
-`corca-ai/nose` v0.20.0. This repository has no existing ADR series; its
-maintainer-facing source of truth is `docs/developers-guide.md`.
+The detector decision and support-code baseline are `leynos/episodic` PR #276
+at immutable commit `d9e5ac0d254f375e2986f52d91a3b88c117c833b`, especially
+ADR-021 and the merged nose gate at that revision. Upstream command and JSON
+behaviour is taken from `corca-ai/nose` v0.20.0. This repository has no
+existing ADR series; its maintainer-facing source of truth is
+`docs/developers-guide.md`.
 
 The delivery maps the requirements to these observable results:
 
 - `GATE-SCOPE`: `[tool.nose]` names existing shipped Python roots, all three
   channels, the 24-token floor, `surface = "all"` and the explicit top-30
   ranking limit; a root that selects no production Python fails closed.
-- `GATE-REPORT`: one repository-rooted JSON query validates and deterministically
-  reports every selected family, with exit status 0, 1 or 2 for pass, blocking
-  duplication or configuration/execution failure.
+- `GATE-REPORT`: one repository-rooted JSON query validates and
+  deterministically reports every selected family, with exit status 0, 1 or 2
+  for pass, blocking duplication or configuration/execution failure.
 - `GATE-ALLOW`: one reasoned TOML entry must cover every family location;
   persistence preserves comments, permissions and concurrent updates.
 - `GATE-TOOLS`: only the pinned official nose v0.20.0 release archive for the
@@ -51,9 +51,9 @@ surface. The nested `falcon_pachinko/testing`, `falcon_pachinko/unittests` and
 `falcon_pachinko/behaviour` trees are not in that package list and are excluded
 from the detector. Top-level `tests/`, `examples/` and `tools/` are also
 excluded: they contain application tests, demonstration applications and
-maintenance tooling, respectively. No separate `src/` root or shipped
-top-level module was found. There is no existing atomic-write helper suitable
-for cross-process allowlist updates.
+maintenance tooling, respectively. No separate `src/` root or shipped top-level
+module was found. There is no existing atomic-write helper suitable for
+cross-process allowlist updates.
 
 The canonical lint entrypoint is `make lint`; formatting, type checking,
 documentation checks and application tests are separate Make targets. CI runs
@@ -73,20 +73,20 @@ before exceptions are applied; allowed families consume places, and lower
 ranked families are not enforced by this gate. The semantic channel supplies
 limited witness-backed evidence, not a general Type-4 clone guarantee.
 
-The installer will download only the official, versioned GitHub release
-archive and verify its platform-specific published SHA-256 before extraction.
-This deliberately replaces the reference's cargo-binstall Git-source
-installer: the release provides checksummed binaries for the supported Linux
-and macOS architectures, so a second bootstrap binary is unnecessary. There
-is no compilation fallback. Missing platform assets or digests fail with an
+The installer will download only the official, versioned GitHub release archive
+and verify its platform-specific published SHA-256 before extraction. This
+deliberately replaces the reference's cargo-binstall Git-source installer: the
+release provides checksummed binaries for the supported Linux and macOS
+architectures, so a second bootstrap binary is unnecessary. There is no
+compilation fallback. Missing platform assets or digests fail with an
 actionable error.
 
 The application package list, Python floor, runtime dependencies, supported
 platforms and public behaviour are outside the change. No PyChase, pyscn,
 benchmark artefacts, episodic allow entries or estate-wide framework are
 introduced. The focused helper suite stays under `scripts/tests`, is excluded
-from normal application collection, and runs with an explicit CPython 3.14
-tool environment.
+from normal application collection, and runs with an explicit CPython 3.14 tool
+environment.
 
 ## Invariants and verification
 
@@ -124,12 +124,13 @@ and safe allow commands. Wire lint and standalone scan through provisioning;
 cache the binary by OS/architecture and its pins, and cache the actual Python
 tool environments using their relevant source/configuration keys.
 4. **Adjudicate the selected surface.** Run the initial scan, inspect each
-family and its callers with Leta/codegraph, then refactor genuine duplication
-or write a specific exception for intentional independent contracts. Repeat
-until the bounded selected surface is clean. Record each decision and its
-focused tests in this plan and the developer documentation.
+   family and its callers with Leta and codegraph where available, then
+   refactor genuine duplication or write a specific exception for intentional
+   independent contracts. Repeat until the bounded selected surface is clean.
+   Record each decision and its focused tests in this plan and the developer
+   documentation.
 5. **Prove and deliver.** In a disposable unsaturated workspace, run the four
-canary states and compare normalised output across repeated scans. Run the
+canary states and compare normalized output across repeated scans. Run the
 standalone gate, focused tests, canonical lint, formatter, type checker,
 documentation and application-test gates sequentially. Review the complete
 diff, commit, push over SSH, establish tracking for
@@ -143,7 +144,7 @@ duplication fix would require a public API or runtime-dependency change.
 
 ## Progress and decision log
 
-Status: implementation in progress.
+Status: implementation complete; final gates passed and delivery is in progress.
 
 - Confirmed the reference commit exists locally in an episodic worktree and
   consulted the specified ADR, merged gate modules and v0.20.0 nose usage,
@@ -157,3 +158,30 @@ Status: implementation in progress.
   SHA-256 values rather than bootstrapping cargo-binstall. The reference
   revision and this deviation will also be recorded in the final maintainer
   documentation and PR description.
+- The first scan exposed that nose exclusions are relative to each configured
+  root. The configuration and root-selection contract now use `testing/**`,
+  `unittests/**` and `behaviour/**`; a direct JSON query confirmed that only
+  direct production modules remain selected.
+- The bounded production report selected three families. Independent
+  exception constructors retain separate base-class and message contracts;
+  router imports and package re-exports retain their distinct dependency roles;
+  and the complete-URI and prefix matchers retain distinct suffix semantics
+  around their already-shared compiler. Focused tests preserve each contract,
+  and all three families have exact-path/name reasoned entries.
+- The post-adjudication standalone scan passes with all three families
+  explicitly allowed. The final isolated `make duplication-test` passed 153
+  tests. Its disposable real-binary fixture covers a clean scan, a blocking
+  planted clone, a narrow allow rule, a blocking added member, and
+  deterministic normalized output.
+- The first full gate run exposed repository spellings, strict Ruff rules in
+  the adapted scripts, and one incorrect pin-contract assertion. The prose and
+  tests now match repository conventions; lint findings were corrected with
+  small validation helpers and reasoned subprocess/download directives. The
+  installer rejects non-HTTPS or non-GitHub release URLs, and refuses Linux
+  hosts without a known glibc release target. The final sequential run passed
+  Make validation, formatting, spelling, duplication tests and scan, lint,
+  typechecking, Markdown and Mermaid checks, and application tests (805 passed,
+  2 skipped, 19 warnings). `typos.toml` remained unchanged.
+- Leta verified router compiler callers. The codegraph workspace was created,
+  but its repository re-index timed out; no codegraph result is treated as
+  evidence.
