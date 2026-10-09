@@ -52,7 +52,7 @@ jobs:
         # than building from source.
         uses: leynos/shared-actions/.github/actions/install-mdtablefix@b9a3bff63b1e19b3a48d433668184e24e1abd3ba
         with:
-          version: "0.6.0"
+          version: "0.6.1"
 
       # `make lint` runs the classic Pylint checks on PyPy 8.0.0's Python 3.12
       # build, which it provisions into .uv-python from
