@@ -27,7 +27,8 @@ DUPLICATION_GATE ?= $(UV_ENV) UV_PYTHON_INSTALL_DIR=.uv-python \
 DUPLICATION_TEST = $(UV_ENV) UV_PYTHON_INSTALL_DIR=.uv-python $(UV) run \
 	--no-project --python $(NOSE_PYTHON_VERSION) \
 	--with pytest==9.0.2 --with cyclopts==4.25.2 --with tomlkit==0.15.1 \
-	--with hypothesis==6.165.6 --with syrupy==6.1.1 python -m pytest \
+	--with hypothesis==6.165.6 --with syrupy==6.1.1 --with pathspec==1.1.1 \
+	python -m pytest \
 	-c scripts/tests/pytest.ini scripts/tests
 # Retain the typos-config-builder gate: the bespoke spelling machinery, and
 # the PATHSPEC_VERSION and TYPOS_VERSION pins that served only it, were
@@ -189,8 +190,8 @@ install-nose: ## Install the pinned, checksum-verified nose detector
 duplication: install-nose ## Run the blocking code-duplication gate
 	$(DUPLICATION_GATE) check
 
-duplication-test: ## Run isolated nose-gate tests on CPython 3.14
-	$(DUPLICATION_TEST)
+duplication-test: install-nose ## Run isolated nose-gate tests on CPython 3.14
+	NOSE_BIN="$(NOSE_BIN)" $(DUPLICATION_TEST)
 
 # Only values explicitly supplied on the Make command line are accepted.
 # They travel through the environment so shell metacharacters in REASON stay

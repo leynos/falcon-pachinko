@@ -32,6 +32,7 @@ from nose_schema import (
     require_table,
     require_value,
 )
+from pathspec import GitIgnoreSpec
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
@@ -233,16 +234,17 @@ def _validate_root_sources(
 ) -> None:
     """Require one in-scope Python file beneath a configured root."""
     source_files, is_file_root = _root_sources(candidate, resolved)
-    if any(
-        _is_selected_source(
+    ignore_cache: dict[Path, GitIgnoreSpec | None] = {}
+    for source in source_files:
+        if not _is_selected_source(
             source,
             resolved_root=resolved,
             is_file_root=is_file_root,
             exclude=exclude,
-        )
-        for source in source_files
-    ):
-        return
+        ):
+            continue
+        if is_file_root or not _is_gitignored(source, candidate, ignore_cache):
+            return
     msg = f"tool.nose.roots entry {root!r} selects no Python source files"
     raise GateConfigError(msg)
 
@@ -285,6 +287,89 @@ def _is_selected_source(
         else resolved_source.relative_to(resolved_root).as_posix()
     )
     return not _is_excluded(relative_path, exclude)
+
+
+def _is_gitignored(
+    source: Path,
+    scan_root: Path,
+    ignore_cache: dict[Path, GitIgnoreSpec | None],
+) -> bool:
+    """Report whether nose's root-relative ignore files exclude ``source``.
+
+    Only ignore files at or below the configured root apply. A directory
+    excluded by its parent cannot be reopened by a nested ``.gitignore``,
+    matching Git's traversal rules and nose's effective source selection.
+
+    Returns
+    -------
+    bool
+        Whether the source is ignored by the applicable in-root rules.
+    """
+    relative_parts = source.relative_to(scan_root).parts
+    current_directory = scan_root
+    scoped_specs: list[tuple[Path, GitIgnoreSpec]] = []
+    root_spec = _load_gitignore_spec(scan_root, ignore_cache)
+    if root_spec is not None:
+        scoped_specs.append((scan_root, root_spec))
+
+    for index, part in enumerate(relative_parts):
+        path = current_directory / part
+        is_directory = index < len(relative_parts) - 1
+        if _matches_ignore_rules(
+            path, is_directory=is_directory, scoped_specs=scoped_specs
+        ):
+            return True
+        if is_directory:
+            current_directory = path
+            nested_spec = _load_gitignore_spec(current_directory, ignore_cache)
+            if nested_spec is not None:
+                scoped_specs.append((current_directory, nested_spec))
+    return False
+
+
+def _matches_ignore_rules(
+    path: Path,
+    *,
+    is_directory: bool,
+    scoped_specs: list[tuple[Path, GitIgnoreSpec]],
+) -> bool:
+    """Return the latest matching decision from the in-scope ignore files.
+
+    Returns
+    -------
+    bool
+        Whether the path is ignored after applying rules from root to leaf.
+    """
+    ignored = False
+    for base, spec in scoped_specs:
+        scoped_path = path.relative_to(base).as_posix()
+        if is_directory:
+            scoped_path += "/"
+        match = spec.check_file(scoped_path).include
+        if match is not None:
+            ignored = match
+    return ignored
+
+
+def _load_gitignore_spec(
+    directory: Path,
+    cache: dict[Path, GitIgnoreSpec | None],
+) -> GitIgnoreSpec | None:
+    """Read and cache one in-root Git ignore file for source validation."""
+    if directory in cache:
+        return cache[directory]
+    ignore_file = directory / ".gitignore"
+    if not ignore_file.exists():
+        cache[directory] = None
+        return None
+    try:
+        patterns = ignore_file.read_text(encoding="utf-8").splitlines()
+        spec = GitIgnoreSpec.from_lines(patterns)
+    except (OSError, UnicodeError, ValueError) as error:
+        msg = f"cannot read {ignore_file} while validating nose scan roots: {error}"
+        raise GateConfigError(msg) from error
+    cache[directory] = spec
+    return spec
 
 
 def _is_excluded(path: str, patterns: tuple[str, ...]) -> bool:

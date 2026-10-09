@@ -263,7 +263,8 @@ def append_allow_entry(
     Raises
     ------
     GateConfigError
-        If ``pyproject_path`` is unreadable or is not valid TOML.
+        If ``pyproject_path`` is unreadable, is not valid TOML, or contains
+        malformed allowlist tables.
     """
     target = tuple(keys)
     with _locked_file(pyproject_path):
@@ -276,13 +277,13 @@ def append_allow_entry(
             # configuration error.
             msg = f"cannot parse {pyproject_path}: {error}"
             raise GateConfigError(msg) from error
+        existing_allowlist = load_allowlist(pyproject_path)
         tool = document.setdefault("tool", tomlkit.table(is_super_table=True))
         gate = tool.setdefault("duplication_gate", tomlkit.table())
         entries = gate.setdefault("allow", tomlkit.aot())
-        for index, raw_entry in enumerate(entries):
-            existing = _allow_entry(raw_entry, index=index)
+        for index, existing in enumerate(existing_allowlist):
             if _same_allow_target(existing.keys, target):
-                raw_entry["reason"] = reason
+                entries[index]["reason"] = reason
                 _write_document(pyproject_path, document)
                 return
         entries.append(_new_entry(target, reason))
