@@ -130,6 +130,63 @@ class TestMakeDuplicationAllow:
         assert not marker.exists(), "Quoted values must not execute shell fragments."
 
 
+class TestMakeDuplicationTest:
+    """The standalone acceptance target provisions its required detector."""
+
+    def test_provisions_and_forwards_the_selected_nose_binary(
+        self, tmp_path: Path
+    ) -> None:
+        """Install runs first and tests receive the same quoted override."""
+        make = shutil.which("make")
+        assert make is not None, "Expected make to be available for contract tests."
+        nose = tmp_path / "custom nose"
+        result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - dry-run of fixed repository target
+            [
+                make,
+                "--no-print-directory",
+                "--dry-run",
+                "duplication-test",
+                f"NOSE_BIN={nose}",
+            ],
+            cwd=REPOSITORY_ROOT,
+            env=gate_environment(),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stderr
+        commands = result.stdout.splitlines()
+        install_index = next(
+            (
+                index
+                for index, command in enumerate(commands)
+                if "scripts/install_nose.py" in command
+            ),
+            None,
+        )
+        test_index = next(
+            (
+                index
+                for index, command in enumerate(commands)
+                if "python -m pytest" in command
+            ),
+            None,
+        )
+        assert install_index is not None, "The acceptance target must provision nose."
+        assert test_index is not None, (
+            "The acceptance target must execute helper tests."
+        )
+        assert install_index < test_index, "Provisioning must precede acceptance tests."
+        quoted_override = f'NOSE_BIN="{nose}"'
+        assert quoted_override in commands[install_index], (
+            "The install command must receive the selected NOSE_BIN."
+        )
+        assert quoted_override in commands[test_index], (
+            "The test command must receive the same selected NOSE_BIN."
+        )
+
+
 def _make_dry_run(target: str) -> subprocess.CompletedProcess[str]:
     """Expand a Make target's recipe without running it."""
     make = shutil.which("make")

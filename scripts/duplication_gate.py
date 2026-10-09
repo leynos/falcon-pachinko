@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run python
 # /// script
 # requires-python = ">=3.14"
-# dependencies = ["cyclopts==4.25.2", "tomlkit==0.15.1"]
+# dependencies = ["cyclopts==4.25.2", "pathspec==1.1.1", "tomlkit==0.15.1"]
 # ///
 """Blocking code-duplication gate over the pinned nose detector.
 

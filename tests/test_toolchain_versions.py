@@ -140,6 +140,22 @@ def test_nose_gate_uses_an_isolated_python_314_tool_environment() -> None:
     ], "Normal application tests must not collect Python-3.14 gate helpers."
 
 
+def test_nose_gitignore_matcher_pin_agrees_between_gate_and_tests() -> None:
+    """The gate and acceptance environment use the same Git-ignore parser."""
+    script = (REPO_ROOT / "scripts" / "duplication_gate.py").read_text(encoding="utf-8")
+    match = re.search(r"# dependencies = (\[[^\n]+\])", script)
+    assert match is not None, "The gate's inline tool dependencies must be explicit."
+    dependencies = tomllib.loads(f"dependencies = {match.group(1)}")["dependencies"]
+    test_target = makefile_variable_block("DUPLICATION_TEST", makefile=MAKEFILE)
+
+    assert "pathspec==1.1.1" in dependencies, (
+        "The source-selection matcher must remain pinned in the isolated gate."
+    )
+    assert "--with pathspec==1.1.1" in test_target, (
+        "The focused tests must use the same pathspec release as the gate."
+    )
+
+
 def test_ci_caches_the_platform_specific_verified_nose_binary() -> None:
     """CI caches the install path and keys it on platform and release pins."""
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")

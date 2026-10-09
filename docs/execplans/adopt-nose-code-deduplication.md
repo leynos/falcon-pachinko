@@ -22,7 +22,8 @@ The delivery maps the requirements to these observable results:
 
 - `GATE-SCOPE`: `[tool.nose]` names existing shipped Python roots, all three
   channels, the 24-token floor, `surface = "all"` and the explicit top-30
-  ranking limit; a root that selects no production Python fails closed.
+  ranking limit; a root that selects no production Python after configured
+  exclusions and in-root `.gitignore` rules fails closed.
 - `GATE-REPORT`: one repository-rooted JSON query validates and
   deterministically reports every selected family, with exit status 0, 1 or 2
   for pass, blocking duplication or configuration/execution failure.
@@ -33,8 +34,9 @@ The delivery maps the requirements to these observable results:
   checked; gate and helper tests use CPython 3.14 without installing the
   application.
 - `GATE-INTEGRATION`: `make lint` and Linux CI run the gate, while a separate
-  isolated target runs focused helper tests. Application tests do not collect
-  Python-3.14-only helper tests.
+  isolated target provisions nose and runs focused helper and real-detector
+  acceptance tests. Application tests do not collect Python-3.14-only helper
+  tests.
 - `GATE-ADJUDICATION`: each selected family is inspected in context; genuine
   repeated logic is refactored with regression coverage, while intentional
   parallels receive a narrow, reasoned exception. A disposable unsaturated
@@ -79,7 +81,9 @@ deliberately replaces the reference's cargo-binstall Git-source installer: the
 release provides checksummed binaries for the supported Linux and macOS
 architectures, so a second bootstrap binary is unnecessary. There is no
 compilation fallback. Missing platform assets or digests fail with an
-actionable error.
+actionable error. A pinned `pathspec==1.1.1` tool dependency models nose's
+in-root `.gitignore` selection during preflight; the helper-test environment
+uses the same pin, enforced by a toolchain contract test.
 
 The application package list, Python floor, runtime dependencies, supported
 platforms and public behaviour are outside the change. No PyChase, pyscn,
@@ -172,19 +176,27 @@ unmerged.
   around their already-shared compiler. Focused tests preserve each contract,
   and all three families have exact-path/name reasoned entries.
 - The post-adjudication standalone scan passes with all three families
-  explicitly allowed. The final isolated `make duplication-test` passed 153
-  tests. Its disposable real-binary fixture covers a clean scan, a blocking
-  planted clone, a narrow allow rule, a blocking added member, and
-  deterministic normalized output.
+  explicitly allowed. The final isolated `make duplication-test` passed 162
+  tests with no skips and three snapshots. Its disposable real-binary fixture
+  covers a clean scan, a blocking planted clone, a narrow allow rule, a
+  blocking added member, deterministic normalized output, and an ignored-only
+  root that must fail closed.
 - The first full gate run exposed repository spellings, strict Ruff rules in
   the adapted scripts, and one incorrect pin-contract assertion. The prose and
   tests now match repository conventions; lint findings were corrected with
   small validation helpers and reasoned subprocess/download directives. The
   installer rejects non-HTTPS or non-GitHub release URLs, and refuses Linux
   hosts without a known glibc release target. The final sequential run passed
-  Make validation, formatting, spelling, duplication tests and scan, lint,
-  typechecking, Markdown and Mermaid checks, and application tests (805 passed,
-  2 skipped, 19 warnings). `typos.toml` remained unchanged.
+  Make validation, formatting, spelling, duplication tests and scan, Ruff, both
+  Pylint passes, typechecking, Markdown and Mermaid checks, and application
+  tests (439 passed, 2 skipped, 19 warnings). The separate `make check-cv005`
+  workflow-contract gate also passed. `typos.toml` remained unchanged.
+- The earlier `805 passed` figure came from a historical `uv run pytest -v`
+  log that did not record its source revision; it is not evidence for this PR
+  head. Before this follow-up, local `make test` on
+  `369993cf1934b0f53cfea8b9b499eedde3ace82f` reported 438 passed, 2 skipped and
+  19 warnings; hosted coverage at that same head reported 438 passed, 2 skipped
+  and 20 warnings. The final count above is from the post-fix `make test` run.
 - Leta verified router compiler callers. The codegraph workspace was created,
   but its repository re-index timed out; no codegraph result is treated as
   evidence.

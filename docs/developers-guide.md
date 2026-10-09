@@ -294,9 +294,13 @@ the unrelated Python package of the same name. Adapted material retains its
 upstream attribution and is used under this repository's ISC licence. This
 repository downloads only official release archives and verifies their
 platform-specific SHA-256 digests; it does not use cargo-binstall. The wrapper
-also validates that configured roots exist and select source files. Stale
-allow-rule diagnostics say “unmatched in this capped scan” because absence from
-a ranked report does not prove that duplication has disappeared.
+also validates that configured roots exist and select source files after both
+the configured exclusions and the `.gitignore` rules nose applies inside each
+root. Parent ignore files above a configured root do not affect that root. The
+preflight uses the isolated, pinned `pathspec` matcher so an ignored-only root
+cannot produce a successful empty report. Stale allow-rule diagnostics say
+“unmatched in this capped scan” because absence from a ranked report does not
+prove that duplication has disappeared.
 
 The scan covers shipped direct modules under `falcon_pachinko/`. Its explicit
 setuptools package list omits `testing/`, `unittests/`, and `behaviour/`, so
@@ -327,8 +331,12 @@ relative paths resolve from the repository root, and the expected version is
 checked before every scan and after installation.
 
 The isolated helper-test environment pins Syrupy 6.1.1 for exact snapshots of
-the CLI report and detector argument vectors. Review snapshot changes with the
-test contract that produced them.
+the CLI report and detector argument vectors. It also installs nose before
+running the acceptance suite; real-detector canaries fail if the binary is
+missing or has drifted. Review snapshot changes with the test contract that
+produced them. The gate and test target both pin `pathspec` 1.1.1, and a
+toolchain contract test checks that they stay in sync. This matcher is a
+tool-only dependency and does not enter the application environment.
 
 Use these Make targets:
 
