@@ -7,9 +7,7 @@ import re
 import msgspec as ms
 
 # Public identity alias for callers that should not depend on msgspec directly.
-# pylint: disable=reexport-by-assignment  # The public identity alias is intentional.
-ValidationError = ms.ValidationError
-# pylint: enable=reexport-by-assignment
+ValidationError = ms.ValidationError  # pylint: disable=C9105  # Required API identity.
 
 # Cap the payload echoed back in validation errors so logs stay readable.
 _MAX_PAYLOAD_SNIPPET = 200
