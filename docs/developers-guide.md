@@ -160,7 +160,8 @@ Ruff rejects member imports such as `from msgspec.inspect import type_info` with
 `ICN003`; it rejects a missing or different `msgspec.inspect` alias with
 `ICN001`. The `[tool.ruff.lint.flake8-import-conventions]` table in
 `pyproject.toml` is the authoritative source for aliases and `banned-from`.
-When a convention changes, update that table rather than this guide.
+Change that table, not this guide, to alter enforcement. When the configured
+convention changes, update this guide to match.
 
 ### Pylint passes
 
