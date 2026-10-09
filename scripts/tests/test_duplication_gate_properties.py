@@ -52,11 +52,16 @@ def test_entries_allow_only_fully_covered_families(
     finding: detector.Finding,
     entry: allowlist.AllowEntry,
 ) -> None:
-    """An entry silences a family exactly when it covers every location."""
-    covered = all(
+    """An entry needs full location coverage and no unused member keys."""
+    covers_locations = all(
         any(allowlist.key_matches(key, location) for key in entry.keys)
         for location in finding.locations
     )
+    uses_every_key = all(
+        any(allowlist.key_matches(key, location) for location in finding.locations)
+        for key in entry.keys
+    )
+    covered = bool(finding.locations) and covers_locations and uses_every_key
     assert entry.matches(finding) is covered, (
         "Matching must require coverage of every reported location."
     )

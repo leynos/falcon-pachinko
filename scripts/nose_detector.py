@@ -18,7 +18,7 @@ import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - gate runs the pinned repository-owned binary
 import tomllib
 from collections import abc as cabc
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from nose_schema import (
     Finding,
@@ -27,6 +27,7 @@ from nose_schema import (
     Location,
     is_non_empty_string,
     is_positive_integer,
+    is_safe_relative_posix_path,
     normalize_findings,
     require_string_tuple,
     require_table,
@@ -36,15 +37,30 @@ from pathspec import GitIgnoreSpec
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
-DEFAULT_NOSE_BIN = REPO_ROOT / ".tools" / "nose" / "nose"
 INSTALL_HINT = "run `make install-nose` to install the pinned detector"
 COMMAND_TIMEOUT_SECONDS = 120
 _SUPPORTED_CHANNELS = {"syntax", "semantic", "near"}
 
-type CommandRunner = cabc.Callable[[cabc.Sequence[str]], str]
+type CommandRunner = cabc.Callable[
+    [cabc.Sequence[str], Path, cabc.Mapping[str, str]], str
+]
+type BinaryDiscoverer = cabc.Callable[[Path, cabc.Mapping[str, str]], str | None]
+
+
+@dc.dataclass(frozen=True, slots=True)
+class DetectorContext:
+    """Explicit runtime dependencies for binary discovery and query execution."""
+
+    repository_root: Path
+    environment: cabc.Mapping[str, str]
+    binary_discoverer: BinaryDiscoverer
+    command_runner: CommandRunner
+
 
 __all__ = [
+    "BinaryDiscoverer",
     "CommandRunner",
+    "DetectorContext",
     "Finding",
     "GateConfigError",
     "GateExecutionError",
@@ -201,20 +217,20 @@ def _validate_roots(
 ) -> None:
     """Reject mistyped roots and roots that select no Python source files."""
     root_directory = repository_root.resolve()
-    _validate_excludes(exclude)
+    exclude_spec = _validate_excludes(exclude)
 
     for root in roots:
         candidate, resolved = _resolve_root(
             root, repository_root=repository_root, root_directory=root_directory
         )
-        _validate_root_sources(root, candidate, resolved, exclude)
+        _validate_root_sources(root, candidate, resolved, exclude_spec)
 
 
 def _resolve_root(
     root: str, *, repository_root: Path, root_directory: Path
 ) -> tuple[Path, Path]:
     """Resolve one safe configured root and reject missing or escaping paths."""
-    if not _is_safe_relative_posix_path(root):
+    if not is_safe_relative_posix_path(root):
         msg = f"tool.nose.roots entry {root!r} must be a repository-relative POSIX path"
         raise GateConfigError(msg)
     candidate = repository_root / root
@@ -230,7 +246,10 @@ def _resolve_root(
 
 
 def _validate_root_sources(
-    root: str, candidate: Path, resolved: Path, exclude: tuple[str, ...]
+    root: str,
+    candidate: Path,
+    resolved: Path,
+    exclude_spec: GitIgnoreSpec | None,
 ) -> None:
     """Require one in-scope Python file beneath a configured root."""
     source_files, is_file_root = _root_sources(candidate, resolved)
@@ -240,7 +259,7 @@ def _validate_root_sources(
             source,
             resolved_root=resolved,
             is_file_root=is_file_root,
-            exclude=exclude,
+            exclude_spec=exclude_spec,
         ):
             continue
         if is_file_root or not _is_gitignored(source, candidate, ignore_cache):
@@ -249,12 +268,19 @@ def _validate_root_sources(
     raise GateConfigError(msg)
 
 
-def _validate_excludes(exclude: tuple[str, ...]) -> None:
-    """Reject exclusion patterns that are not repository-relative POSIX globs."""
+def _validate_excludes(exclude: tuple[str, ...]) -> GitIgnoreSpec | None:
+    """Validate POSIX exclusion paths and compile their Git-ignore matcher."""
     for pattern in exclude:
-        if not _is_safe_relative_posix_path(pattern):
-            msg = "tool.nose.exclude entries must be repository-relative POSIX globs"
+        if not is_safe_relative_posix_path(pattern):
+            msg = "tool.nose.exclude entries must be non-escaping POSIX globs"
             raise GateConfigError(msg)
+    if not exclude:
+        return None
+    try:
+        return GitIgnoreSpec.from_lines(exclude)
+    except ValueError as error:
+        msg = f"tool.nose.exclude entries must be valid Git-ignore globs: {error}"
+        raise GateConfigError(msg) from error
 
 
 def _root_sources(candidate: Path, resolved: Path) -> tuple[list[Path], bool]:
@@ -271,7 +297,7 @@ def _is_selected_source(
     *,
     resolved_root: Path,
     is_file_root: bool,
-    exclude: tuple[str, ...],
+    exclude_spec: GitIgnoreSpec | None,
 ) -> bool:
     """Report whether one source is in scope after safety and glob checks."""
     if not source.is_file() or source.suffix != ".py":
@@ -286,7 +312,7 @@ def _is_selected_source(
         if is_file_root
         else resolved_source.relative_to(resolved_root).as_posix()
     )
-    return not _is_excluded(relative_path, exclude)
+    return not _is_excluded(relative_path, exclude_spec)
 
 
 def _is_gitignored(
@@ -379,9 +405,9 @@ def _load_gitignore_spec(
     return spec
 
 
-def _is_excluded(path: str, patterns: tuple[str, ...]) -> bool:
-    """Report whether a repository-relative source path matches an exclusion."""
-    return any(PurePosixPath(path).full_match(pattern) for pattern in patterns)
+def _is_excluded(path: str, spec: GitIgnoreSpec | None) -> bool:
+    """Report whether a scan-root-relative source path matches an exclusion."""
+    return spec is not None and spec.match_file(path)
 
 
 def _validate_channels(mode: str) -> None:
@@ -402,18 +428,8 @@ def _has_supported_channels(mode: str) -> bool:
     )
 
 
-def _is_safe_relative_posix_path(path_value: str) -> bool:
-    """Report whether a configured path is canonical and stays repository-local."""
-    path = PurePosixPath(path_value)
-    if path.is_absolute() or "\\" in path_value:
-        return False
-    if ".." in path.parts:
-        return False
-    return path.as_posix() == path_value
-
-
 def resolve_binary(
-    settings: NoseSettings, *, runner: CommandRunner | None = None
+    settings: NoseSettings, *, context: DetectorContext | None = None
 ) -> str:
     """Locate the pinned nose binary and verify its version.
 
@@ -421,8 +437,9 @@ def resolve_binary(
     ----------
     settings : NoseSettings
         Detector settings supplying the pinned version.
-    runner : CommandRunner | None
-        Injected command runner; defaults to a real subprocess call.
+    context : DetectorContext | None
+        Explicit repository root, environment, binary discovery and command
+        runner. The default context is assembled at the CLI boundary.
 
     Returns
     -------
@@ -434,20 +451,29 @@ def resolve_binary(
     GateExecutionError
         If no binary is found or the reported version does not match.
     """
-    run = _run_command if runner is None else runner
+    runtime = _default_context() if context is None else context
     # Resolve against the repository root so a relative NOSE_BIN keeps
     # working for callers that run the detector from another directory.
-    override = os.environ.get("NOSE_BIN")
-    candidate = (
-        str(Path(REPO_ROOT / override).resolve()) if override else _discover_binary()
-    )
+    override = runtime.environment.get("NOSE_BIN")
+    if override:
+        override_path = Path(override)
+        if not override_path.is_absolute():
+            override_path = runtime.repository_root / override_path
+        candidate = str(override_path.resolve())
+    else:
+        candidate = runtime.binary_discoverer(
+            runtime.repository_root, runtime.environment
+        )
     if candidate is None:
+        default_binary = runtime.repository_root / ".tools" / "nose" / "nose"
         msg = (
-            f"nose {settings.version} was not found at {DEFAULT_NOSE_BIN} "
+            f"nose {settings.version} was not found at {default_binary} "
             f"or on PATH: {INSTALL_HINT}"
         )
         raise GateExecutionError(msg)
-    reported = run([candidate, "--version"]).strip()
+    reported = runtime.command_runner(
+        [candidate, "--version"], runtime.repository_root, runtime.environment
+    ).strip()
     expected = f"nose {settings.version}"
     if reported != expected:
         msg = (
@@ -458,11 +484,24 @@ def resolve_binary(
     return candidate
 
 
-def _discover_binary() -> str | None:
-    """Return the repository-local nose binary, else one found on PATH."""
-    if DEFAULT_NOSE_BIN.is_file():
-        return str(DEFAULT_NOSE_BIN)
-    return shutil.which("nose")
+def _default_context() -> DetectorContext:
+    """Assemble process-wide dependencies at the detector's CLI boundary."""
+    return DetectorContext(
+        repository_root=REPO_ROOT,
+        environment=dict(os.environ),
+        binary_discoverer=_discover_binary,
+        command_runner=_run_command,
+    )
+
+
+def _discover_binary(
+    repository_root: Path, environment: cabc.Mapping[str, str]
+) -> str | None:
+    """Return the repository-local nose binary, else one found on supplied PATH."""
+    local_binary = repository_root / ".tools" / "nose" / "nose"
+    if local_binary.is_file():
+        return str(local_binary)
+    return shutil.which("nose", path=environment.get("PATH", os.defpath))
 
 
 def build_command(binary: str, settings: NoseSettings) -> list[str]:
@@ -499,7 +538,7 @@ def build_command(binary: str, settings: NoseSettings) -> list[str]:
 def run_detector(
     settings: NoseSettings,
     *,
-    runner: CommandRunner | None = None,
+    context: DetectorContext | None = None,
 ) -> list[Finding]:
     """Run the pinned detector and normalize its report.
 
@@ -507,8 +546,9 @@ def run_detector(
     ----------
     settings : NoseSettings
         Detector settings for this repository.
-    runner : CommandRunner | None
-        Injected command runner; defaults to a real subprocess call.
+    context : DetectorContext | None
+        Explicit repository root, environment, binary discovery and command
+        runner. The default context is assembled at the CLI boundary.
 
     Returns
     -------
@@ -522,9 +562,11 @@ def run_detector(
         schema violations propagate as ``GateConfigError`` from
         :func:`normalize_findings`.
     """
-    run = _run_command if runner is None else runner
-    binary = resolve_binary(settings, runner=run)
-    output = run(build_command(binary, settings))
+    runtime = _default_context() if context is None else context
+    binary = resolve_binary(settings, context=runtime)
+    output = runtime.command_runner(
+        build_command(binary, settings), runtime.repository_root, runtime.environment
+    )
     try:
         report = json.loads(output)
     except json.JSONDecodeError as error:
@@ -533,12 +575,17 @@ def run_detector(
     return normalize_findings(report)
 
 
-def _run_command(command: cabc.Sequence[str]) -> str:
-    """Run one detector command from the repository root and return stdout."""
+def _run_command(
+    command: cabc.Sequence[str],
+    repository_root: Path,
+    environment: cabc.Mapping[str, str],
+) -> str:
+    """Run one detector command in its supplied repository and environment."""
     try:
         result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - executes the fixed repository-owned binary
             list(command),
-            cwd=REPO_ROOT,
+            cwd=repository_root,
+            env=dict(environment),
             check=False,
             capture_output=True,
             text=True,

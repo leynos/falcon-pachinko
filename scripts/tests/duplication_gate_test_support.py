@@ -147,12 +147,36 @@ def stub_runner(
     """Build a command runner double answering version and query commands."""
     payload = STUB_REPORT if report is None else report
 
-    def run(command: cabc.Sequence[str]) -> str:
+    def run(
+        command: cabc.Sequence[str],
+        _repository_root: Path,
+        _environment: cabc.Mapping[str, str],
+    ) -> str:
         if "--version" in command:
             return f"{version}\n"
         return json.dumps(payload)
 
     return run
+
+
+def stub_detector_context(
+    repository_root: Path,
+    *,
+    environment: cabc.Mapping[str, str] | None = None,
+    command_runner: detector.CommandRunner | None = None,
+    binary_discoverer: detector.BinaryDiscoverer | None = None,
+) -> detector.DetectorContext:
+    """Build an explicit detector context with no ambient process lookup."""
+    return detector.DetectorContext(
+        repository_root=repository_root,
+        environment={"NOSE_BIN": "/stub/nose"} if environment is None else environment,
+        binary_discoverer=(
+            (lambda _root, _environment: None)
+            if binary_discoverer is None
+            else binary_discoverer
+        ),
+        command_runner=stub_runner() if command_runner is None else command_runner,
+    )
 
 
 __all__ = [
@@ -166,6 +190,7 @@ __all__ = [
     "gate_environment",
     "run_gate_command",
     "schema",
+    "stub_detector_context",
     "stub_runner",
     "stub_settings",
     "write_stub_nose",

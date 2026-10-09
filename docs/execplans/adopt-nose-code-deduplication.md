@@ -148,8 +148,9 @@ duplication fix would require a public API or runtime-dependency change.
 
 ## Progress and decision log
 
-Status: implementation and delivery complete; draft PR #225 is open and
-unmerged.
+Status: implementation is complete; PR #225 is open, ready for review, and
+unmerged. CodeRabbit follow-up gates pass; commit, publication and hosted
+review reconciliation remain pending.
 
 - Confirmed the reference commit exists locally in an episodic worktree and
   consulted the specified ADR, merged gate modules and v0.20.0 nose usage,
@@ -200,3 +201,22 @@ unmerged.
 - Leta verified router compiler callers. The codegraph workspace was created,
   but its repository re-index timed out; no codegraph result is treated as
   evidence.
+- At head `e6147b30533f1cc64a9f47baaac7501ec73139c6`, CodeRabbit's walkthrough
+  was ready and requested changes. Read-only verification confirmed four inline
+  findings and the Unit Architecture pre-merge row. The follow-up tightens
+  multi-key matching, shares schema validation, aligns exclusion preflight with
+  Nose's tagged Git-ignore contract, injects detector and installer process
+  context, and makes toolchain reads explicitly UTF-8. Focused regressions
+  cover each boundary, and the maintainer guide now matches lint and cache
+  behaviour.
+- The final sequential validation passed on the review fixes before this
+  documentation-only status update: formatting, 166 helper tests with 3
+  snapshots, the three-exception duplication scan, Ruff, classic Pylint
+  (10/10), df12 Pylint (10/10), ambrleaks, typechecking, spelling and Markdown,
+  Mermaid, 439 application tests (2 skipped, 19 warnings), and CV005. The
+  candidate is ready to commit and publish; hosted checks and review
+  reconciliation remain pending for the new head.
+- CodeRabbit's walkthrough says automatic reviews are paused because the branch
+  is under active development. It does not report a rate-limit rejection. The
+  managed review queue already contains a pending request for PR #225, so no
+  duplicate request was added.
