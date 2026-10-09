@@ -19,6 +19,7 @@ from duplication_gate_test_support import (
     run_gate_command,
     write_stub_nose,
 )
+from syrupy import SnapshotAssertion
 
 
 def _finding() -> detector.Finding:
@@ -43,6 +44,7 @@ class TestGateCommands:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
+        snapshot: SnapshotAssertion,
     ) -> None:
         """The check command emits the blocking report and status one."""
         monkeypatch.chdir(tmp_path)
@@ -51,19 +53,10 @@ class TestGateCommands:
         with pytest.raises(SystemExit) as error:
             gate.check()
         assert error.value.code == 1, "Blocking findings must return status one."
-        assert capsys.readouterr().out == (
-            "duplicate code: 1 unsuppressed family/families\n"
-            "  falcon_pachinko/a.py:1-20 ~ falcon_pachinko/b.py:30-49 beta "
-            "(copy-paste, value 22.1)\n"
-            "Extract the shared logic at its owning layer, or record a reviewed "
-            "exception:\n"
-            "  make duplication-allow FIRST='<path[::name]>' "
-            "[SECOND='<path[::name]>'] REASON='<why this stays>'\n"
-            "For families with more members, repeat --second with the gate CLI: "
-            "uv run --no-project --python 3.14 scripts/duplication_gate.py allow "
-            "--first '<path[::name]>' --second '<path[::name]>' "
-            "--second '<path[::name]>' --reason '<why this stays>'\n"
-        ), "Blocking report must remain actionable and deterministic."
+        output = capsys.readouterr().out
+        assert (output.splitlines(), output.endswith("\n")) == snapshot, (
+            "Blocking report must remain actionable and deterministic."
+        )
 
     def test_check_reports_stale_entries(
         self,
@@ -668,13 +661,17 @@ class TestEndToEndBlocking:
         assert result.returncode == 1, (
             f"An unlisted third member must block.\n{result.stdout}{result.stderr}"
         )
-        assert "planted/total_2.py" in result.stdout
+        assert "planted/total_2.py" in result.stdout, (
+            "The blocking family must identify the new unlisted member."
+        )
 
     def test_clean_workspace_passes(self, tmp_path: Path) -> None:
         """A clean, unsaturated workspace passes the same real gate."""
         result = self._run_check(self._clean_workspace(tmp_path))
         assert result.returncode == 0, f"{result.stdout}{result.stderr}"
-        assert "duplication gate passed" in result.stdout
+        assert "duplication gate passed" in result.stdout, (
+            "A clean workspace must report the successful gate result."
+        )
 
     def test_repeated_scans_have_identical_normalized_output(
         self, tmp_path: Path

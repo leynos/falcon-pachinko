@@ -2,6 +2,7 @@
 
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - tests exercise copied gate commands
 import tomllib
+from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
@@ -47,7 +48,7 @@ class TestLoadAllowEntry:
             before.st_mtime_ns,
             before.st_size,
         ), "Loading must leave the file untouched."
-        assert list(tmp_path.glob(".pyproject.toml.*")) == [], (
+        assert not list(tmp_path.glob(".pyproject.toml.*")), (
             "Loading must not leave a lock or temporary sibling behind."
         )
 
@@ -58,7 +59,7 @@ class TestLoadAllowEntry:
         pyproject = tmp_path / "pyproject.toml"
         pyproject.write_text('[project]\nname = "x"\n', encoding="utf-8")
 
-        assert allowlist.load_allowlist(pyproject) == (), (
+        assert not allowlist.load_allowlist(pyproject), (
             "A document without an allow table must load no entries."
         )
         assert list(tmp_path.iterdir()) == [pyproject], (
@@ -175,51 +176,60 @@ class TestAppendAllowEntry:
     ) -> None:
         """Two blocked writers retain both exceptions after the lock releases."""
         _, script = copied_gate_workspace(tmp_path)
-        with allowlist._locked_file(script.parent.parent / "pyproject.toml"):
-            first = subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed copied gate command
-                gate_command(
-                    script,
-                    "allow",
-                    "--first",
-                    "falcon_pachinko/a.py",
-                    "--reason",
-                    "first writer",
-                ),
-                cwd=script.parent.parent,
-                env=gate_environment(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            second = subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed copied gate command
-                gate_command(
-                    script,
-                    "allow",
-                    "--first",
-                    "falcon_pachinko/b.py",
-                    "--reason",
-                    "second writer",
-                ),
-                cwd=script.parent.parent,
-                env=gate_environment(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            assert first.poll() is None, "First writer must wait for the lock."
-            assert second.poll() is None, "Second writer must wait for the lock."
+        with ExitStack() as child_processes:
+            with allowlist._locked_file(script.parent.parent / "pyproject.toml"):
+                first = child_processes.enter_context(
+                    subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed copied gate command
+                        gate_command(
+                            script,
+                            "allow",
+                            "--first",
+                            "falcon_pachinko/a.py",
+                            "--reason",
+                            "first writer",
+                        ),
+                        cwd=script.parent.parent,
+                        env=gate_environment(),
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                )
+                second = child_processes.enter_context(
+                    subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed copied gate command
+                        gate_command(
+                            script,
+                            "allow",
+                            "--first",
+                            "falcon_pachinko/b.py",
+                            "--reason",
+                            "second writer",
+                        ),
+                        cwd=script.parent.parent,
+                        env=gate_environment(),
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                )
+                assert first.poll() is None, "First writer must wait for the lock."
+                assert second.poll() is None, "Second writer must wait for the lock."
 
-        try:
-            assert first.wait(timeout=10) == 0, "First writer must exit successfully."
-            assert second.wait(timeout=10) == 0, "Second writer must exit successfully."
-        finally:
-            # A timed-out writer blocks on the lock holding its stdout and
-            # stderr pipes open. Reap both on the way out so a failure here
-            # cannot leak processes or descriptors into the rest of the run.
-            for writer in (first, second):
-                if writer.poll() is None:
-                    writer.kill()
-                writer.wait(timeout=10)
+            try:
+                assert first.wait(timeout=10) == 0, (
+                    "First writer must exit successfully."
+                )
+                assert second.wait(timeout=10) == 0, (
+                    "Second writer must exit successfully."
+                )
+            finally:
+                # A timed-out writer blocks on the lock holding its stdout and
+                # stderr pipes open. Reap both on the way out so a failure here
+                # cannot leak processes or descriptors into the rest of the run.
+                for writer in (first, second):
+                    if writer.poll() is None:
+                        writer.kill()
+                    writer.wait(timeout=10)
 
         entries = tomllib.loads(
             (script.parent.parent / "pyproject.toml").read_text(encoding="utf-8")

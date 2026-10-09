@@ -83,8 +83,10 @@ class TestReleaseSelection:
             machine=machine,
             libc_name="glibc" if system == "Linux" else None,
         )
-        assert target == expected
-        assert installer.asset_filename(target) == f"nose-cli-{target}.tar.xz"
+        assert target == expected, "Supported platform must map to its target."
+        assert installer.asset_filename(target) == f"nose-cli-{target}.tar.xz", (
+            "The release archive name must match the selected platform."
+        )
 
     def test_rejects_platforms_without_an_approved_binary(self) -> None:
         """Unsupported operating systems fail without compiling or guessing."""
@@ -111,7 +113,9 @@ class TestVerifiedArchive:
         payload = installer.verified_binary(
             archive, expected_sha256=hashlib.sha256(archive).hexdigest()
         )
-        assert payload.startswith(f"#!{sys.executable}".encode())
+        assert payload.startswith(f"#!{sys.executable}".encode()), (
+            "Verified archive extraction must return the Python stub executable."
+        )
 
     def test_rejects_checksum_mismatch(self) -> None:
         """An unapproved binary payload is never installed."""
@@ -158,8 +162,10 @@ class TestEnsureInstalled:
                 output=messages.append,
             )
         )
-        assert result == binary.resolve()
-        assert "already installed" in messages[0]
+        assert result == binary.resolve(), "A matching override must be reused."
+        assert "already installed" in messages[0], (
+            "Reusing the override must report the no-op installation."
+        )
 
     def test_installs_only_the_platform_archive_and_verifies_it(
         self, tmp_path: Path
@@ -191,16 +197,22 @@ class TestEnsureInstalled:
                 output=messages.append,
             )
         )
-        assert result == target.resolve()
+        assert result == target.resolve(), "The installer must return its target."
         assert downloads == [
             (
                 f"https://github.com/corca-ai/nose/releases/download/v{NOSE_VERSION}/"
                 f"nose-cli-{LINUX_X86_64}.tar.xz"
             )
-        ]
-        assert installer._run_version(result) == f"nose {NOSE_VERSION}"
-        assert result.stat().st_mode & 0o777 == 0o755
-        assert any(message.startswith("Verified ") for message in messages)
+        ], "Only the checksum-approved platform archive may be downloaded."
+        assert installer._run_version(result) == f"nose {NOSE_VERSION}", (
+            "The installed executable must report the configured version."
+        )
+        assert result.stat().st_mode & 0o777 == 0o755, (
+            "The installed executable must retain executable permissions."
+        )
+        assert any(message.startswith("Verified ") for message in messages), (
+            "The installer must report successful archive verification."
+        )
 
     @pytest.mark.parametrize(
         "url",
@@ -305,4 +317,6 @@ def test_make_install_nose_reuses_a_valid_cached_override(tmp_path: Path) -> Non
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert "already installed" in result.stdout
+    assert "already installed" in result.stdout, (
+        "The Make target must reuse a matching cached nose executable."
+    )

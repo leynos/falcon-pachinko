@@ -27,7 +27,7 @@ DUPLICATION_GATE ?= $(UV_ENV) UV_PYTHON_INSTALL_DIR=.uv-python \
 DUPLICATION_TEST = $(UV_ENV) UV_PYTHON_INSTALL_DIR=.uv-python $(UV) run \
 	--no-project --python $(NOSE_PYTHON_VERSION) \
 	--with pytest==9.0.2 --with cyclopts==4.25.2 --with tomlkit==0.15.1 \
-	--with hypothesis==6.165.6 python -m pytest \
+	--with hypothesis==6.165.6 --with syrupy==6.1.1 python -m pytest \
 	-c scripts/tests/pytest.ini scripts/tests
 # Retain the typos-config-builder gate: the bespoke spelling machinery, and
 # the PATHSPEC_VERSION and TYPOS_VERSION pins that served only it, were
@@ -66,11 +66,12 @@ TY ?= $(UV) tool run --from ty==$(TY_VERSION) ty
 # 4.3.1 once a Pylint release accepts it.
 PYLINT_VERSION ?= 4.0.8
 ASTROID_VERSION ?= 4.0.4
-# List falcon_pachinko/unittests and falcon_pachinko/behaviour explicitly:
-# they carry no __init__.py, so package discovery from falcon_pachinko does
-# not descend into them.
+# List non-package test directories explicitly: package discovery does not
+# descend into them. Script globs also include gate tests without relying on
+# Pylint's recursive directory discovery.
 PYLINT_TARGETS ?= falcon_pachinko falcon_pachinko/unittests \
-	falcon_pachinko/behaviour tests examples tools
+	falcon_pachinko/behaviour tests examples tools scripts/*.py \
+	scripts/tests/*.py
 # Persisted Pylint state lives in one directory per runtime, so the two passes
 # never read each other's statistics.
 PYLINT_CACHE ?= .cache/pylint
@@ -177,7 +178,7 @@ check-fmt: uv $(MDTABLEFIX) ## Verify formatting
 	$(MDTABLEFIX) --check $(MDTABLEFIX_SELECT) $(MDTABLEFIX_RULES)
 
 lint: uv install-nose ## Run linters
-	$(RUFF) check
+	$(RUFF) check .
 	$(MAKE) --no-print-directory lint-pylint
 	$(MAKE) --no-print-directory lint-df12
 	$(DUPLICATION_GATE) check

@@ -16,6 +16,7 @@ from duplication_gate_test_support import (
     stub_settings,
     write_stub_nose,
 )
+from syrupy import SnapshotAssertion
 
 
 def _settings_body(
@@ -170,7 +171,7 @@ class TestResolveBinary:
         monkeypatch.setenv("NOSE_BIN", "tools/nose")
         assert detector.resolve_binary(stub_settings(), runner=stub_runner()) == str(
             stub.resolve()
-        )
+        ), "A relative override must resolve against the repository root."
 
     def test_rejects_a_version_mismatch(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -197,7 +198,7 @@ class TestResolveBinary:
 class TestBuildCommand:
     """Translation of gate settings into a nose query command."""
 
-    def test_pins_every_configured_setting(self) -> None:
+    def test_pins_every_configured_setting(self, snapshot: SnapshotAssertion) -> None:
         """The whole argument vector is pinned, in order, from the settings."""
         settings = dc.replace(
             stub_settings(),
@@ -211,28 +212,13 @@ class TestBuildCommand:
 
         command = detector.build_command("nose", settings)
 
-        assert command == [
-            "nose",
-            "query",
-            "--root",
-            "falcon_pachinko",
-            "--root",
-            "openai_test_types.py",
-            "all",
-            "top=30",
-            "--mode",
-            "semantic",
-            "--min-size",
-            "40",
-            "--exclude",
-            "**/generated/**",
-            "--exclude",
-            "**/_vendor/**",
-            "--format",
-            "json",
-        ], "Every configured setting must reach nose, in the documented order."
+        assert command == snapshot, (
+            "Every configured nose option must reach the detector in order."
+        )
 
-    def test_default_surface_omits_the_all_term(self) -> None:
+    def test_default_surface_omits_the_all_term(
+        self, snapshot: SnapshotAssertion
+    ) -> None:
         """The default surface leaves nose on its ranked dashboard."""
         settings = dc.replace(
             stub_settings(),
@@ -246,18 +232,9 @@ class TestBuildCommand:
 
         command = detector.build_command("nose", settings)
 
-        assert command == [
-            "nose",
-            "query",
-            "--root",
-            "falcon_pachinko",
-            "--mode",
-            "syntax",
-            "--min-size",
-            "24",
-            "--format",
-            "json",
-        ], "The default surface must not widen the view or pass a ranking bound."
+        assert command == snapshot, (
+            "The default surface must omit an all-wide view and ranking bound."
+        )
 
 
 class TestRunDetector:

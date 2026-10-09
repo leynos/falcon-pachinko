@@ -131,8 +131,9 @@ locally and in CI, and need no wrapper and no second manual step.
 
 Ruff is pinned at 0.16.4 via `RUFF_VERSION` in the Makefile, and the same
 version is installed in `.github/workflows/ci.yml` with
-`uv tool install ruff==0.16.4`. Ruff runs in preview mode, targets py312, and
-also formats Python code blocks embedded in Markdown.
+`uv tool install ruff==0.16.4`. `make lint` runs `ruff check .`, covering the
+repository's Python sources, scripts and tests. Ruff runs in preview mode,
+targets py312, and also formats Python code blocks embedded in Markdown.
 
 `ty` is pinned at 0.0.74 via `TY_VERSION` in the Makefile, with a matching
 `uv tool install ty==0.0.74` step in CI. `ty` is pre-1.0 and its diagnostics
@@ -259,10 +260,13 @@ change never restores a stale toolchain.
 
 `PYLINT_TARGETS` covers `falcon_pachinko` (listing its `unittests` and
 `behaviour` directories explicitly, because they carry no `__init__.py`),
-`tests`, `examples`, and `tools`, which is every tracked Python file. None
-needs syntax newer than Python 3.12, so no separate CPython classic pass
-exists. The three inline script blocks under `examples` declare dependencies
-but no Python version.
+`tests`, `examples`, `tools`, every top-level `scripts/*.py` module, and every
+`scripts/tests/*.py` helper-test module. Both Pylint passes use this same
+target list, so the scripts and tests receive classic and df12 checks.
+Recursive directory discovery covers nested test and tool packages. None of
+these Python files needs syntax newer than Python 3.12, so no separate CPython
+classic pass exists. The three inline script blocks under `examples` declare
+dependencies but no Python version.
 
 `tests/test_lint_toolchain_integration.py` (marker `lint_toolchain`) runs the
 Makefile's own commands against the real interpreters. The tests provision PyPy
@@ -321,6 +325,10 @@ unsupported; use POSIX or WSL. Missing trusted binaries are provisioning
 errors, with no source-build fallback. `NOSE_BIN` may select another binary;
 relative paths resolve from the repository root, and the expected version is
 checked before every scan and after installation.
+
+The isolated helper-test environment pins Syrupy 6.1.1 for exact snapshots of
+the CLI report and detector argument vectors. Review snapshot changes with the
+test contract that produced them.
 
 Use these Make targets:
 
