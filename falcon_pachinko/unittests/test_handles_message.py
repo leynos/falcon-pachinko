@@ -137,7 +137,7 @@ class ParentResource(WebSocketResource):
         ----------
         ws : WebSocketLike
             The WebSocket connection
-        payload : typing.Any
+        payload : object
             The message payload
         """
 
@@ -163,7 +163,7 @@ class ChildResource(ParentResource):
         ----------
         ws : WebSocketLike
             The WebSocket connection
-        payload : typing.Any
+        payload : object
             The message payload
         """
         self.invoked.append("child")
@@ -177,7 +177,7 @@ class ChildResource(ParentResource):
         ----------
         ws : WebSocketLike
             The WebSocket connection
-        payload : typing.Any
+        payload : object
             The message payload
         """
         # override to record
@@ -199,7 +199,7 @@ class DecoratedOverride(ParentResource):
         ----------
         ws : WebSocketLike
             The WebSocket connection
-        payload : typing.Any
+        payload : object
             The message payload
         """
         self.invoked = "decorated"
