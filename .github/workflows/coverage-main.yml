@@ -40,14 +40,20 @@ jobs:
     # The longest observed run of this job is 34 s.
     timeout-minutes: 15
     # The CodeScene token lives in this environment, whose deployment policy
-    # admits `main` alone; tests/workflow_contracts/codescene_environment.py
-    # holds it to this job.
+    # admits `main` alone; the shared CV-005 library's environment.placement
+    # clause holds it to this job.
     environment: codescene
     permissions:
       contents: read
+    env:
+      UV_PYTHON: '3.13'
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        # Nothing after checkout needs Git credentials, and the coverage run
+        # executes repository and dependency code.
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v7

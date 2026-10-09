@@ -110,6 +110,11 @@ jobs:
       - name: Run typechecker
         run: make typecheck
 
+      # The shared CV-005 contract library holds the coverage and CodeScene shape
+      # of these workflows; `make test` runs only the repository's own contracts.
+      - name: Check the CV-005 contracts
+        run: make check-cv005
+
       # Markdown is linted through the upstream action rather than a `run:`
       # step, because the action's release carries the linter's whole
       # dependency graph: nothing is resolved from the npm registry while the
