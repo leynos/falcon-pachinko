@@ -278,6 +278,84 @@ Every `noqa`, `pylint: disable`, or `type: ignore` pragma must carry a reason
 in the same comment. The df12-python-lints C9106 and C9107 checkers reject bare
 pragmas.
 
+### Nose code duplication gate
+
+`make lint` provisions and runs a blocking duplication gate. Its implementation
+and focused tests adapt the approach merged in
+[Episodic PR #276](https://github.com/leynos/episodic/pull/276), at immutable
+revision
+[`d9e5ac0d254f375e2986f52d91a3b88c117c833b`](https://github.com/leynos/episodic/commit/d9e5ac0d254f375e2986f52d91a3b88c117c833b).
+The detector is `corca-ai/nose` v0.20.0: the Rust-built `nose` executable, not
+the unrelated Python package of the same name. Adapted material retains its
+upstream attribution and is used under this repository's ISC licence. This
+repository downloads only official release archives and verifies their
+platform-specific SHA-256 digests; it does not use cargo-binstall. The wrapper
+also validates that configured roots exist and select source files. Stale
+allow-rule diagnostics say “unmatched in this capped scan” because absence from
+a ranked report does not prove that duplication has disappeared.
+
+The scan covers shipped direct modules under `falcon_pachinko/`. Its explicit
+setuptools package list omits `testing/`, `unittests/`, and `behaviour/`, so
+those directories are excluded with root-relative globs. The gate also omits
+`examples/`, top-level `tests/`, `tools/`, and maintenance `scripts/`: these
+are examples, tests, tooling, and the gate itself, rather than shipped
+production modules. The configured roots are passed together in one detector
+invocation so cross-root families remain visible. The initial report selected
+only `__init__.py`, `exceptions.py`, `router.py`, and `websocket.py`, with no
+excluded paths.
+
+The detector runs `syntax,semantic,near`, with a minimum of 24 intermediate-
+language tokens, `surface = "all"`, and a top-30 ranked-family limit. `all`
+widens the report surface but does not make the ranking exhaustive: allowed
+families still use positions in the top 30, and lower-ranked families are not
+enforced by that scan. The initial selected surface contained three families
+and did not reach the cap. The semantic channel supplies a limited,
+witness-backed check; it is not a guarantee of finding every Type-4 clone.
+
+The gate and its tests use an isolated, explicitly selected CPython 3.14
+tooling environment with `--no-project`; the package's Python `>=3.12` floor,
+platform support, and runtime dependencies remain unchanged. The pinned
+official binaries cover Linux glibc and macOS on x86-64 and AArch64. The gate
+uses POSIX file locking and directory operations, so native Windows gate use is
+unsupported; use POSIX or WSL. Missing trusted binaries are provisioning
+errors, with no source-build fallback. `NOSE_BIN` may select another binary;
+relative paths resolve from the repository root, and the expected version is
+checked before every scan and after installation.
+
+Use these Make targets:
+
+```text
+make install-nose
+make duplication
+make duplication-test
+make duplication-allow FIRST='path[::name]' [SECOND='path[::name]'] REASON='...'
+```
+
+The allow target reads `FIRST`, `SECOND`, and `REASON` only when supplied on
+the Make command line. Each TOML entry must have a non-blank reason and cover
+every location in one family; partial entries cannot be combined to allow a
+family. A named key matches only the exact reported unit name, never an unnamed
+fragment. The CLI accepts repeated `--second` values for families with more
+than two members. Updates preserve TOML comments, are idempotent, and use an
+atomic writer protected by a stable sidecar advisory lock. That lock
+coordinates participating allow commands, not unrelated editors.
+
+Review an unmatched stale entry against source or a sufficiently widened
+relevant scan before removing it; do not delete it automatically. In this
+ranked report, “unmatched” can mean that a family fell below the cutoff.
+
+The repository's initial families were adjudicated as follows:
+
+| Family                                                                      | Decision and reason                                                                                                                                                                                                                                                                                                                                                                                                      | Regression evidence                                                                                          |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `exceptions.py::__init__` and `websocket.py::__init__`                      | Intentional. The constructors belong to independent exception base classes and preserve different parameter and message contracts. A shared base or formatter would couple separate error domains without shared validation logic.                                                                                                                                                                                       | `falcon_pachinko/unittests/test_exceptions.py`                                                               |
+| Import fragments in `router.py` and `__init__.py`                           | Intentional. The router imports implementation dependencies; the package initializer re-exports the public package surface. A separate helper would add an import-only module, while routing router imports through the initializer would create a cycle. Nose gives this fragment no unit name, so exact path-only keys are necessary; they can also match future unnamed families wholly contained in these two files. | `tests/test_package_exports.py`                                                                              |
+| `router.py::compile_uri_template` and `router.py::_compile_prefix_template` | Retained as separate thin variants of the existing `_compile_template_with_suffix`: complete URI matching permits an optional trailing slash, while prefix matching enforces segment boundaries.                                                                                                                                                                                                                         | `falcon_pachinko/unittests/test_router.py::test_template_compilers_keep_complete_and_prefix_match_semantics` |
+
+No application code was changed to clear the initial report. The gate modules
+and tests are focused adoption evidence, not a detector benchmark; no benchmark
+result or performance claim from Episodic applies to this repository.
+
 ## Build Environment
 
 The `build` target owns the local virtual environment. It depends on the
