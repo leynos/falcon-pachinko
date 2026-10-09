@@ -316,6 +316,7 @@ async def test_stop_raises_first_exception_in_registration_order(
         "stop must raise the first registered worker's exception"
     )
 
+
 @pytest.mark.asyncio
 async def test_start_factory_failure_rolls_back_and_allows_restart(
     controller: WorkerController,
@@ -380,6 +381,7 @@ async def test_start_task_creation_failure_closes_rejected_coroutine(
         "every task from partial startup should be cancelled and complete"
     )
     assert controller._tasks == [], "failed startup should clear the task list"
+
 
 @pytest.mark.asyncio
 async def test_start_preserves_error_when_rollback_fails(
@@ -457,9 +459,8 @@ async def test_start_finishes_task_cleanup_when_cancelled_during_rollback(
         "the startup exception should record cancellation during rollback"
     )
     assert len(tasks) == 1, "startup should have scheduled one worker before failure"
-    assert tasks[0].done() and tasks[0].cancelled(), (
-        "rollback should finish awaiting task cancellation"
-    )
+    assert tasks[0].done(), "rollback should finish awaiting task cancellation"
+    assert tasks[0].cancelled(), "rollback should cancel the scheduled worker"
     assert controller._tasks == [], "cancelled startup should clear the task list"
 
 
