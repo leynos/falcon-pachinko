@@ -27,8 +27,8 @@ def test_validation_error_remains_a_decode_error() -> None:
     with pytest.raises(ms.DecodeError) as error:
         utils.raise_unknown_fields({"a"})
 
-    assert isinstance(error.value, ms.ValidationError), (
-        "The DecodeError must also be a msgspec ValidationError."
+    assert isinstance(error.value, utils.ValidationError), (
+        "The DecodeError must also be the re-exported ValidationError."
     )
 
 
