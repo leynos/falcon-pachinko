@@ -7,7 +7,7 @@ import re
 import msgspec as ms
 
 # Public identity alias for callers that should not depend on msgspec directly.
-ValidationError = ms.ValidationError  # pylint: disable=C9105  # Required API identity.
+ValidationError: type[ms.ValidationError] = ms.ValidationError
 
 # Cap the payload echoed back in validation errors so logs stay readable.
 _MAX_PAYLOAD_SNIPPET = 200
