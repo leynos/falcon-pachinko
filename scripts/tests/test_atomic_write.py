@@ -82,7 +82,7 @@ def test_default_options_are_shared_rather_than_rebuilt() -> None:
     )
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class _OsSpy:
     """Record what ``atomic_write`` fsyncs, delegating the rest to ``os``.
 
@@ -111,7 +111,7 @@ class _OsSpy:
         os.close(descriptor)
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class _FailingDirectorySync:
     """Fail the directory sync, recording which descriptors get closed.
 
@@ -170,7 +170,7 @@ def test_closes_the_directory_descriptor_when_the_sync_fails(
     assert spy.closed == spy.opened, (
         "The directory descriptor must be closed even when os.fsync raises."
     )
-    assert list(tmp_path.glob(f".{destination.name}.*")) == [], (
+    assert not list(tmp_path.glob(f".{destination.name}.*")), (
         "A failed sync must not leave the temporary sibling behind."
     )
 

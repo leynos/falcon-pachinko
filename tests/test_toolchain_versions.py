@@ -197,8 +197,18 @@ def test_pylint_tools_pin_pylint_and_astroid(variable: str) -> None:
 def test_lint_runs_both_pylint_passes() -> None:
     """``make lint`` runs Ruff and both Pylint passes, not a manual second step."""
     recipe = makefile_recipe("lint")
-    for step in ("$(RUFF) check", "lint-pylint", "lint-df12"):
+    for step in ("$(RUFF) check .", "lint-pylint", "lint-df12"):
         assert step in recipe, f"make lint must run {step}:\n{recipe}"
+
+
+def test_pylint_targets_include_gate_scripts_and_helper_tests() -> None:
+    """Both Pylint passes receive every scripts and tests Python module."""
+    targets = makefile_variable_block("PYLINT_TARGETS")
+    required_targets = ("tests", "scripts/*.py", "scripts/tests/*.py")
+    missing_targets = [target for target in required_targets if target not in targets]
+    assert not missing_targets, (
+        f"Pylint must cover every test and script tree; missing {missing_targets}."
+    )
 
 
 @pytest.mark.parametrize(
