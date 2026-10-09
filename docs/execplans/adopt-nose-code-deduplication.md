@@ -144,20 +144,23 @@ duplication fix would require a public API or runtime-dependency change.
 
 ## Progress and decision log
 
-Status: implementation complete; final gates passed and delivery is in progress.
+Status: implementation and delivery complete; draft PR #225 is open and
+unmerged.
 
 - Confirmed the reference commit exists locally in an episodic worktree and
   consulted the specified ADR, merged gate modules and v0.20.0 nose usage,
   configuration, query-JSON and release metadata through Firecrawl.
-- Created the requested Leta workspace and renamed the local branch. The
-  remote branch does not yet exist; upstream tracking will be set after push.
+- Created the requested Leta workspace, renamed the branch, and pushed it with
+  tracking set to `origin/adopt-nose-code-deduplication`. Opened
+  [draft PR #225](https://github.com/leynos/falcon-pachinko/pull/225) without
+  merging it.
 - Confirmed the package root, excluded first-party areas, Python floor, CI
   operating system and canonical lint target. No reusable atomic persistence
   helper exists.
 - Deliberate deviation: use pinned official release archives plus per-platform
-  SHA-256 values rather than bootstrapping cargo-binstall. The reference
-  revision and this deviation will also be recorded in the final maintainer
-  documentation and PR description.
+  SHA-256 values rather than bootstrapping cargo-binstall. The immutable
+  reference revision and this deviation are recorded in the maintainer
+  documentation and draft PR description.
 - The first scan exposed that nose exclusions are relative to each configured
   root. The configuration and root-selection contract now use `testing/**`,
   `unittests/**` and `behaviour/**`; a direct JSON query confirmed that only
