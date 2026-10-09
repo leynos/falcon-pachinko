@@ -79,10 +79,11 @@ def get_payload_type(func: Handler) -> type | None:
 
     param = select_payload_param(sig, func_name=func_name)
     try:
-        hints: dict[str, type] = typ.get_type_hints(func)
+        hints: dict[str, typ.Any] = typ.get_type_hints(func)
     except (NameError, AttributeError):
         hints = {}
-    return hints.get(param.name)
+    # get_type_hints may yield non-class hints; cast preserves HandlerInfo.payload_type.
+    return typ.cast("type | None", hints.get(param.name))
 
 
 class _HandlesMessageDescriptor:
@@ -107,8 +108,7 @@ class _HandlesMessageDescriptor:
         typed_owner = typ.cast("type[WebSocketResource]", owner)
         current = typed_owner.__dict__.get("handlers")
         if current is None:
-            current = {}
-            typed_owner.handlers = current
+            typed_owner.handlers = current = {}
         if self.message_type in current:
             msg = (
                 f"Duplicate handler for message type {self.message_type!r} "
