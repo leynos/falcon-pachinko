@@ -11,9 +11,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 PROJECT = PYPROJECT["project"]
 RUNTIME_REQUIREMENTS = [Requirement(item) for item in PROJECT["dependencies"]]
-FALCON_REQUIREMENT = next(
-    requirement for requirement in RUNTIME_REQUIREMENTS if requirement.name == "falcon"
-)
 DEVELOPMENT_CLASSIFIERS = {
     "a": "Development Status :: 3 - Alpha",
     "b": "Development Status :: 4 - Beta",
@@ -29,35 +26,6 @@ def test_runtime_dependencies_have_bounded_versions(
 
     assert operators & {">", ">="}, f"{requirement.name} needs a lower bound"
     assert "<" in operators, f"{requirement.name} needs an exclusive upper bound"
-
-
-@pytest.mark.parametrize(
-    "version",
-    [
-        pytest.param("4.0.0", id="minimum-supported-release"),
-        pytest.param("4.4.0", id="latest-ci-release"),
-        pytest.param("4.99.0", id="latest-four-series-boundary"),
-    ],
-)
-def test_falcon_requirement_accepts_supported_major(version: str) -> None:
-    """Falcon's dependency range accepts supported 4.x versions."""
-    assert Version(version) in FALCON_REQUIREMENT.specifier, (
-        f"Falcon {version} must satisfy {FALCON_REQUIREMENT.specifier}"
-    )
-
-
-@pytest.mark.parametrize(
-    "version",
-    [
-        pytest.param("3.99.0", id="previous-major"),
-        pytest.param("5.0.0", id="next-major"),
-    ],
-)
-def test_falcon_requirement_rejects_unsupported_majors(version: str) -> None:
-    """Falcon's dependency range excludes the previous and next major."""
-    assert Version(version) not in FALCON_REQUIREMENT.specifier, (
-        f"Falcon {version} must not satisfy {FALCON_REQUIREMENT.specifier}"
-    )
 
 
 @pytest.mark.parametrize(

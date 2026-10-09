@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tomllib
 
+import pytest
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
@@ -13,37 +14,50 @@ from tests._makefile import REPO_ROOT
 PROJECT = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
     "project"
 ]
+FALCON_REQUIREMENT = next(
+    Requirement(dependency)
+    for dependency in PROJECT["dependencies"]
+    if Requirement(dependency).name == "falcon"
+)
 
 
-def test_falcon_dependency_has_bounds_that_exclude_version_five() -> None:
-    """The package uses Falcon 4 APIs and must not admit a later major release."""
-    requirement = next(
-        Requirement(dependency)
-        for dependency in PROJECT["dependencies"]
-        if Requirement(dependency).name == "falcon"
-    )
-    specifier = requirement.specifier
+def test_falcon_dependency_has_lower_and_upper_bounds() -> None:
+    """The Falcon 4 API dependency stays within a bounded version range."""
+    specifier = FALCON_REQUIREMENT.specifier
+    operators = {bound.operator for bound in specifier}
 
-    assert any(bound.operator in {">", ">="} for bound in specifier), (
-        "Falcon must have a lower version bound"
+    assert operators & {">", ">="}, "Falcon must have a lower version bound"
+    assert operators & {"<", "<="}, "Falcon must have an upper version bound"
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        pytest.param("4.0.0", id="minimum-supported-release"),
+        pytest.param("4.4.0", id="latest-ci-release"),
+        pytest.param("4.99.0", id="latest-four-series-boundary"),
+    ],
+)
+def test_falcon_dependency_accepts_four_series(version: str) -> None:
+    """Representative Falcon 4 releases satisfy the declared dependency range."""
+    assert FALCON_REQUIREMENT.specifier.contains(Version(version)), (
+        f"Falcon {version} must satisfy {FALCON_REQUIREMENT.specifier}"
     )
-    assert any(bound.operator in {"<", "<="} for bound in specifier), (
-        "Falcon must have an upper version bound"
-    )
-    assert specifier.contains(Version("4.0.0")), (
-        "The Falcon dependency must accept version 4.0.0"
-    )
-    assert not specifier.contains(Version("3.99.0")), (
-        "The Falcon dependency must reject version 3.99.0"
-    )
-    assert not specifier.contains(Version("5.0.0")), (
-        "The Falcon dependency must exclude version 5.0.0"
-    )
-    assert not specifier.contains(Version("5.99.0")), (
-        "The Falcon dependency must exclude the 5.x series"
-    )
-    assert not specifier.contains(Version("5.1.0")), (
-        "The Falcon dependency must reject version 5.1.0"
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        pytest.param("3.99.0", id="previous-major"),
+        pytest.param("5.0.0", id="next-major"),
+        pytest.param("5.1.0", id="representative-next-major-release"),
+        pytest.param("5.99.0", id="latest-next-major-boundary"),
+    ],
+)
+def test_falcon_dependency_rejects_other_major_series(version: str) -> None:
+    """Falcon releases outside 4.x do not satisfy the dependency range."""
+    assert not FALCON_REQUIREMENT.specifier.contains(Version(version)), (
+        f"Falcon {version} must not satisfy {FALCON_REQUIREMENT.specifier}"
     )
 
 
