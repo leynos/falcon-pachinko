@@ -42,6 +42,15 @@ type AllowlistReader = cabc.Callable[[Path], tuple[AllowEntry, ...]]
 type FindingDetector = cabc.Callable[[], list[Finding]]
 
 
+def _matching_allow_positions(
+    finding: Finding, allowlist: cabc.Sequence[AllowEntry]
+) -> tuple[int, ...]:
+    """Return every complete-family exception that covers one finding."""
+    return tuple(
+        position for position, entry in enumerate(allowlist) if entry.matches(finding)
+    )
+
+
 def partition_findings(
     findings: cabc.Sequence[Finding],
     allowlist: cabc.Sequence[AllowEntry],
@@ -65,12 +74,9 @@ def partition_findings(
     allowed: list[Finding] = []
     used: set[int] = set()
     for finding in findings:
-        matched = False
-        for position, entry in enumerate(allowlist):
-            if entry.matches(finding):
-                used.add(position)
-                matched = True
-        (allowed if matched else blocking).append(finding)
+        matching_positions = _matching_allow_positions(finding, allowlist)
+        used.update(matching_positions)
+        (allowed if matching_positions else blocking).append(finding)
     stale = [entry for position, entry in enumerate(allowlist) if position not in used]
     return blocking, allowed, stale
 

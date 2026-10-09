@@ -111,30 +111,40 @@ def require_table(value: object, *, context: str) -> cabc.Mapping[str, object]:
     return typ.cast("cabc.Mapping[str, object]", value)
 
 
-def require_string(value: object, *, context: str) -> str:
-    """Validate one required non-empty configuration string.
+def require_value[T](
+    value: object,
+    *,
+    validator: cabc.Callable[[object], typ.TypeIs[T]],
+    expected: str,
+    context: str,
+) -> T:
+    """Validate a value with one predicate and a contextual diagnostic.
 
     Parameters
     ----------
     value : object
-        Candidate configuration value.
+        Candidate value from configuration or a detector report.
+    validator : collections.abc.Callable[[object], typing.TypeIs[T]]
+        Type guard defining the accepted value.
+    expected : str
+        Human-readable value description used in the diagnostic.
     context : str
-        Configuration path used in an invalid-value diagnostic.
+        Configuration or report path used in an invalid-value diagnostic.
 
     Returns
     -------
-    str
-        The validated string.
+    T
+        The validated value.
 
     Raises
     ------
     GateConfigError
-        If ``value`` is not a non-empty string.
+        If ``value`` does not satisfy ``validator``.
     """
-    if not _is_non_empty_string(value):
-        msg = f"{context} must be a non-empty string"
+    if not validator(value):
+        msg = f"{context} must be {expected}"
         raise GateConfigError(msg)
-    return value
+    return typ.cast("T", value)
 
 
 def require_string_tuple(value: object, *, context: str) -> tuple[str, ...]:
@@ -160,10 +170,18 @@ def require_string_tuple(value: object, *, context: str) -> tuple[str, ...]:
     if not isinstance(value, cabc.Sequence) or isinstance(value, (str, bytes)):
         msg = f"{context} must be an array of strings"
         raise GateConfigError(msg)
-    return tuple(require_string(item, context=f"{context}[]") for item in value)
+    return tuple(
+        require_value(
+            item,
+            validator=is_non_empty_string,
+            expected="a non-empty string",
+            context=f"{context}[]",
+        )
+        for item in value
+    )
 
 
-def _is_non_empty_string(value: object) -> typ.TypeIs[str]:
+def is_non_empty_string(value: object) -> typ.TypeIs[str]:
     """Report whether ``value`` is a non-empty string."""
     return isinstance(value, str) and bool(value)
 
@@ -173,30 +191,9 @@ def _is_integer(value: object) -> typ.TypeIs[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def require_positive_int(value: object, *, context: str) -> int:
-    """Validate one required positive configuration integer.
-
-    Parameters
-    ----------
-    value : object
-        Candidate configuration value.
-    context : str
-        Configuration path used in an invalid-value diagnostic.
-
-    Returns
-    -------
-    int
-        The validated positive integer.
-
-    Raises
-    ------
-    GateConfigError
-        If ``value`` is not a positive integer.
-    """
-    if not _is_integer(value) or value < 1:
-        msg = f"{context} must be a positive integer"
-        raise GateConfigError(msg)
-    return value
+def is_positive_integer(value: object) -> typ.TypeIs[int]:
+    """Report whether ``value`` is a positive integer rather than a boolean."""
+    return _is_integer(value) and value > 0
 
 
 def normalize_findings(report: object) -> list[Finding]:
@@ -264,7 +261,12 @@ def _finding(raw: object, *, context: str) -> Finding:
     """Validate one nose family payload."""
     family = require_table(raw, context=context)
     return Finding(
-        witness=require_string(family.get("witness"), context=f"{context}.witness"),
+        witness=require_value(
+            family.get("witness"),
+            validator=is_non_empty_string,
+            expected="a non-empty string",
+            context=f"{context}.witness",
+        ),
         value=_finding_value(family.get("value"), context=context),
         locations=_finding_locations(family.get("locations"), context=context),
     )
@@ -273,29 +275,49 @@ def _finding(raw: object, *, context: str) -> Finding:
 def _location(raw: object, *, context: str) -> Location:
     """Validate one nose location payload."""
     location = require_table(raw, context=context)
-    start = require_positive_int(location.get("start"), context=f"{context}.start")
-    end = location.get("end")
-    if not _is_integer(end) or end < start:
+    start = require_value(
+        location.get("start"),
+        validator=is_positive_integer,
+        expected="a positive integer",
+        context=f"{context}.start",
+    )
+    end = _location_end(location.get("end"), start, context=context)
+    name = _location_name(location.get("name"), context=context)
+    file = _location_file(location.get("file"), context=context)
+    return Location(file=file, start=start, end=end, name=name)
+
+
+def _location_end(value: object, start: int, *, context: str) -> int:
+    """Validate the inclusive end line against a location's start line."""
+    if not _is_integer(value) or value < start:
         msg = f"{context}.end must not precede start"
         raise GateConfigError(msg)
-    raw_name = location.get("name")
-    name: str | None = None
-    if raw_name is not None:
-        if not _is_non_empty_string(raw_name):
-            msg = f"{context}.name must be a non-empty string or null"
-            raise GateConfigError(msg)
-        name = raw_name
-    raw_file = require_string(location.get("file"), context=f"{context}.file")
+    return value
+
+
+def _location_name(value: object, *, context: str) -> str | None:
+    """Validate nose's optional unit name, preserving unnamed fragments."""
+    if value is None:
+        return None
+    if not is_non_empty_string(value):
+        msg = f"{context}.name must be a non-empty string or null"
+        raise GateConfigError(msg)
+    return value
+
+
+def _location_file(value: object, *, context: str) -> str:
+    """Validate a location's repository-relative Python source path."""
+    raw_file = require_value(
+        value,
+        validator=is_non_empty_string,
+        expected="a non-empty string",
+        context=f"{context}.file",
+    )
     path = PurePosixPath(raw_file)
     if not _is_repository_relative_python_path(path, raw_file):
         msg = f"{context}.file must be a repository-relative POSIX path"
         raise GateConfigError(msg)
-    return Location(
-        file=path.as_posix(),
-        start=start,
-        end=end,
-        name=name,
-    )
+    return path.as_posix()
 
 
 def _is_repository_relative_python_path(path: PurePosixPath, raw: str) -> bool:

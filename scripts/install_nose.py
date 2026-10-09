@@ -23,6 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from io import BytesIO
+from itertools import starmap
 from pathlib import Path, PurePosixPath
 
 if typ.TYPE_CHECKING:
@@ -75,6 +76,15 @@ def load_pins(
     *, pyproject_path: Path = PYPROJECT, manifest_path: Path = MANIFEST
 ) -> tuple[str, dict[str, str]]:
     """Read the single nose version pin and its platform-specific checksums."""
+    project, manifest = _read_pin_documents(pyproject_path, manifest_path)
+    version = _configured_nose_version(project)
+    return version, _release_digests(manifest, version)
+
+
+def _read_pin_documents(
+    pyproject_path: Path, manifest_path: Path
+) -> tuple[dict[str, object], object]:
+    """Load the project table and checksum manifest with one diagnostic."""
     try:
         with pyproject_path.open("rb") as stream:
             project = tomllib.load(stream)
@@ -83,13 +93,28 @@ def load_pins(
     except (OSError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
         msg = f"cannot read nose release pins: {error}"
         raise NoseInstallError(msg) from error
+    return project, manifest
 
+
+def _configured_nose_version(project: dict[str, object]) -> str:
+    """Validate the repository's one authoritative nose version."""
     tool = project.get("tool")
     nose = tool.get("nose") if isinstance(tool, dict) else None
     version = nose.get("version") if isinstance(nose, dict) else None
     if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+", version):
         msg = "pyproject.toml [tool.nose].version must be a pinned X.Y.Z release"
         raise NoseInstallError(msg)
+    return version
+
+
+def _release_digests(manifest: object, version: str) -> dict[str, str]:
+    """Validate the checksum manifest against the configured release."""
+    raw_digests = _checksum_table(manifest, version)
+    return dict(starmap(_validated_digest_entry, raw_digests.items()))
+
+
+def _checksum_table(manifest: object, version: str) -> dict[object, object]:
+    """Check the manifest release and return its non-empty digest table."""
     if not isinstance(manifest, dict) or manifest.get("version") != version:
         msg = "nose release digest manifest version does not match [tool.nose].version"
         raise NoseInstallError(msg)
@@ -97,16 +122,18 @@ def load_pins(
     if not isinstance(raw_digests, dict) or not raw_digests:
         msg = "nose release digest manifest must contain platform SHA-256 values"
         raise NoseInstallError(msg)
-    digests: dict[str, str] = {}
-    for target, digest in raw_digests.items():
-        if not isinstance(target, str) or not isinstance(digest, str):
-            msg = "nose release digest manifest contains an invalid platform checksum"
-            raise NoseInstallError(msg)
-        if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
-            msg = "nose release digest manifest contains an invalid platform checksum"
-            raise NoseInstallError(msg)
-        digests[target] = digest
-    return version, digests
+    return raw_digests
+
+
+def _validated_digest_entry(target: object, digest: object) -> tuple[str, str]:
+    """Validate one platform name and its lowercase SHA-256 digest."""
+    if not isinstance(target, str) or not isinstance(digest, str):
+        msg = "nose release digest manifest contains an invalid platform checksum"
+        raise NoseInstallError(msg)
+    if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        msg = "nose release digest manifest contains an invalid platform checksum"
+        raise NoseInstallError(msg)
+    return target, digest
 
 
 def binary_path(
@@ -183,26 +210,8 @@ def verified_binary(archive: bytes, *, expected_sha256: str) -> bytes:
         raise NoseInstallError(msg)
     try:
         with tarfile.open(fileobj=BytesIO(archive), mode="r:xz") as release:
-            candidates = [
-                member
-                for member in release.getmembers()
-                if member.isfile()
-                and PurePosixPath(member.name).name in {"nose", "nose-cli"}
-                and ".." not in PurePosixPath(member.name).parts
-                and not PurePosixPath(member.name).is_absolute()
-            ]
-            if len(candidates) != 1:
-                msg = "nose release archive must contain exactly one nose executable"
-                raise NoseInstallError(msg)
-            member = candidates[0]
-            if member.size > MAX_ARCHIVE_BYTES:
-                msg = "nose release executable exceeds the 100 MiB limit"
-                raise NoseInstallError(msg)
-            stream = release.extractfile(member)
-            if stream is None:
-                msg = "cannot read the nose executable from its release archive"
-                raise NoseInstallError(msg)
-            payload = stream.read(MAX_ARCHIVE_BYTES + 1)
+            member = _executable_member(release)
+            payload = _read_executable_payload(release, member)
     except (OSError, tarfile.TarError) as error:
         msg = f"cannot read the verified nose release archive: {error}"
         raise NoseInstallError(msg) from error
@@ -210,6 +219,43 @@ def verified_binary(archive: bytes, *, expected_sha256: str) -> bytes:
         msg = "nose release executable is empty or truncated"
         raise NoseInstallError(msg)
     return payload
+
+
+def _executable_member(release: tarfile.TarFile) -> tarfile.TarInfo:
+    """Select the one regular, path-safe nose binary in a release archive."""
+    candidates = [
+        member for member in release.getmembers() if _is_nose_executable(member)
+    ]
+    if len(candidates) != 1:
+        msg = "nose release archive must contain exactly one nose executable"
+        raise NoseInstallError(msg)
+    member = candidates[0]
+    if member.size > MAX_ARCHIVE_BYTES:
+        msg = "nose release executable exceeds the 100 MiB limit"
+        raise NoseInstallError(msg)
+    return member
+
+
+def _is_nose_executable(member: tarfile.TarInfo) -> bool:
+    """Reject links, unrelated members, and archive paths that can escape."""
+    path = PurePosixPath(member.name)
+    return (
+        member.isfile()
+        and path.name in {"nose", "nose-cli"}
+        and ".." not in path.parts
+        and not path.is_absolute()
+    )
+
+
+def _read_executable_payload(
+    release: tarfile.TarFile, member: tarfile.TarInfo
+) -> bytes:
+    """Read a bounded regular-file payload from the verified archive."""
+    stream = release.extractfile(member)
+    if stream is None:
+        msg = "cannot read the nose executable from its release archive"
+        raise NoseInstallError(msg)
+    return stream.read(MAX_ARCHIVE_BYTES + 1)
 
 
 @dc.dataclass(frozen=True, slots=True)
