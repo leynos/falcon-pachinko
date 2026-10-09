@@ -308,9 +308,7 @@ def _is_gitignored(
     relative_parts = source.relative_to(scan_root).parts
     current_directory = scan_root
     scoped_specs: list[tuple[Path, GitIgnoreSpec]] = []
-    root_spec = _load_gitignore_spec(scan_root, ignore_cache)
-    if root_spec is not None:
-        scoped_specs.append((scan_root, root_spec))
+    _append_gitignore_spec(scan_root, scoped_specs, ignore_cache)
 
     for index, part in enumerate(relative_parts):
         path = current_directory / part
@@ -321,10 +319,19 @@ def _is_gitignored(
             return True
         if is_directory:
             current_directory = path
-            nested_spec = _load_gitignore_spec(current_directory, ignore_cache)
-            if nested_spec is not None:
-                scoped_specs.append((current_directory, nested_spec))
+            _append_gitignore_spec(current_directory, scoped_specs, ignore_cache)
     return False
+
+
+def _append_gitignore_spec(
+    directory: Path,
+    scoped_specs: list[tuple[Path, GitIgnoreSpec]],
+    ignore_cache: dict[Path, GitIgnoreSpec | None],
+) -> None:
+    """Add one directory's ignore rules to the root-to-leaf rule stack."""
+    spec = _load_gitignore_spec(directory, ignore_cache)
+    if spec is not None:
+        scoped_specs.append((directory, spec))
 
 
 def _matches_ignore_rules(
