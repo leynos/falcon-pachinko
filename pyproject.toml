@@ -7,17 +7,25 @@ requires-python = ">=3.12"
 license = { text = "ISC" }
 dependencies = ["msgspec>=0.18,<1", "falcon>=4,<5"]
 authors = [{ name = "Payton McIntosh", email = "pmcintosh@df12.net" }]
-keywords = ["falcon", "websocket", "msgspec", "asyncio"]
+keywords = ["falcon", "websocket", "msgspec", "asyncio", "async", "asgi"]
 classifiers = [
   "Development Status :: 3 - Alpha",
+  "Framework :: AsyncIO",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: ISC License (ISCL)",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Libraries :: Python Modules",
   "Topic :: Internet :: WWW/HTTP",
 ]
-urls = { "Homepage" = "https://github.com/leynos/falcon-pachinko" }
+
+[project.urls]
+Homepage = "https://github.com/leynos/falcon-pachinko"
+Repository = "https://github.com/leynos/falcon-pachinko"
+Issues = "https://github.com/leynos/falcon-pachinko/issues"
 
 [dependency-groups]
 dev = [

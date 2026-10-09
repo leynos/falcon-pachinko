@@ -20,7 +20,7 @@ UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 # the PATHSPEC_VERSION and TYPOS_VERSION pins that served only it, were
 # retired in favour of this single gate subcommand. The RUFF_VERSION below is
 # a separate pin driving the repository-wide format and lint gates.
-TYPOS_CONFIG_BUILDER_VERSION ?= v0.1.1
+TYPOS_CONFIG_BUILDER_VERSION ?= v0.1.3
 TYPOS_CONFIG_BUILDER = $(UV_ENV) $(UV) tool run --python 3.14 --from \
 	"git+https://github.com/leynos/typos-config-builder.git@$(TYPOS_CONFIG_BUILDER_VERSION)" \
 	typos-config-builder
@@ -111,7 +111,7 @@ AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(DF12_PYTHON) \
 
 .PHONY: help all clean build build-release lint lint-pylint lint-df12 \
 	pylint-pypy-python fmt check-fmt markdownlint nixie spelling test \
-	test-workflow-contracts typecheck $(TOOLS) $(VENV_TOOLS)
+	test-workflow-contracts check-cv005 typecheck $(TOOLS) $(VENV_TOOLS)
 
 .DEFAULT_GOAL := all
 
@@ -207,10 +207,23 @@ nixie: $(NIXIE) ## Validate Mermaid diagrams
 test: build uv pytest ## Run tests
 	uv run pytest -v
 
+# The CV-005 CodeScene contracts live in shared-actions and run from a full
+# commit, so a fix to the rules is a pin bump. `.github/cv005.toml` holds this
+# repository's parameters.
+CV005_CONTRACTS_REF ?= 88977798a5c3bae1549afb99642529488c665276
+CV005_CONTRACTS = $(UV_ENV) $(UV) tool run --python 3.13 \
+	--from 'git+https://github.com/leynos/shared-actions@$(CV005_CONTRACTS_REF)\#subdirectory=packages/cv005-contracts' \
+	cv005-contracts
+
+# Hold the CodeScene and coverage shape every repository shares. It needs only
+# `uv`, which fetches the Python 3.13 the library runs under.
+check-cv005: ## Check the shared CV-005 CodeScene workflow contracts
+	$(CV005_CONTRACTS) check --repository .
+
 # The workflow contracts read the workflow documents rather than any Python
 # source, so they are fast and worth running on their own while editing a
 # workflow. `test` collects them too, which is what makes them a gate.
-test-workflow-contracts: build uv pytest ## Check the CI workflows' shape
+test-workflow-contracts: check-cv005 build uv pytest ## Check the CI workflows' shape
 	uv run pytest tests/workflow_contracts -v
 
 help: ## Show available targets

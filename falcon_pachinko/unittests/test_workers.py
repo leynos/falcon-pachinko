@@ -13,6 +13,8 @@ from falcon_pachinko.workers import WorkerController, WorkerFn, worker
 if typ.TYPE_CHECKING:  # pragma: no cover - used only for type checking
     import collections.abc as cabc
 
+START_TIMEOUT: float = 1.0
+
 
 @pytest_asyncio.fixture
 async def controller() -> cabc.AsyncIterator[WorkerController]:
@@ -35,32 +37,78 @@ def noop_worker() -> WorkerFn:
     return noop
 
 
-@worker
-async def _logging_worker(
-    *, log: list[str], started: asyncio.Event, stopped: asyncio.Event
-) -> None:
-    """Append ticks to *log* until cancelled."""
-    started.set()
-    try:
-        while True:
-            log.append("tick")
-            await asyncio.sleep(0)
-    except asyncio.CancelledError:
-        stopped.set()
-        raise
+def test_worker_returns_same_function_and_sets_marker() -> None:
+    """Verify decoration marks and returns the original function."""
+
+    async def fn() -> None:
+        """Provide a worker function for the decorator assertion."""
+
+    decorated_fn = worker(fn)
+
+    assert decorated_fn is fn, "the decorator should return the original function"
+    assert getattr(fn, "__pachinko_worker__", False) is True, (
+        "the decorator should set the worker marker"
+    )
 
 
+def test_undecorated_async_function_has_no_marker() -> None:
+    """Verify an undecorated async function has no worker marker."""
+
+    async def fn() -> None:
+        """Provide an undecorated worker function."""
+
+    assert getattr(fn, "__pachinko_worker__", False) is False, (
+        "an undecorated function should not have the worker marker"
+    )
+
+
+@pytest.mark.parametrize(
+    "worker_style",
+    ["decorated", "undecorated"],
+)
 @pytest.mark.asyncio
-async def test_start_and_stop_runs_workers(controller: WorkerController) -> None:
-    """Verify workers start, receive context, and are cancelled on stop."""
-    log: list[str] = []
+async def test_start_and_stop_runs_decorated_or_undecorated_worker(
+    controller: WorkerController, worker_style: str
+) -> None:
+    """Verify either worker form receives context and is cancelled on stop."""
+    received_context: dict[str, object] = {}
     started = asyncio.Event()
-    stopped = asyncio.Event()
-    await controller.start(_logging_worker, log=log, started=started, stopped=stopped)
-    await asyncio.wait_for(started.wait(), 0.1)
-    assert log, "the worker should have logged at least one tick before stop"
+    cancelled = asyncio.Event()
+
+    async def run_worker(
+        *, label: str, started: asyncio.Event, cancelled: asyncio.Event
+    ) -> None:
+        """Capture supplied context, then wait until the controller stops it."""
+        received_context.update(
+            label=label,
+            started=started,
+            cancelled=cancelled,
+        )
+        started.set()
+        try:
+            await asyncio.Future[None]()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    selected_worker = worker(run_worker) if worker_style == "decorated" else run_worker
+    await controller.start(
+        selected_worker,
+        label="background worker",
+        started=started,
+        cancelled=cancelled,
+    )
+    await asyncio.wait_for(started.wait(), timeout=START_TIMEOUT)
+    assert received_context == {
+        "label": "background worker",
+        "started": started,
+        "cancelled": cancelled,
+    }, "the worker should receive every context keyword argument"
+    assert started.is_set(), "the worker should run after start schedules it"
+
     await controller.stop()
-    assert stopped.is_set(), "stopping should cancel the worker and let it clean up"
+
+    assert cancelled.is_set(), "stop should cancel the worker and let it clean up"
 
 
 @pytest.mark.asyncio

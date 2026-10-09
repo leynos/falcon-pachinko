@@ -50,9 +50,9 @@ jobs:
         # `--git`. The action
         # installs a prebuilt release through a hardened cargo-binstall rather
         # than building from source.
-        uses: leynos/shared-actions/.github/actions/install-mdtablefix@ff1dd759dfffc0db3459e30e833f52437ee62b57
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@0606ca899ce2995a0c4bc78e660e80832e6e8855
         with:
-          version: "0.6.0"
+          version: "0.6.1"
 
       # `make lint` runs the classic Pylint checks on PyPy 8.0.0's Python 3.12
       # build, which it provisions into .uv-python from
@@ -110,6 +110,11 @@ jobs:
       - name: Run typechecker
         run: make typecheck
 
+      # The shared CV-005 contract library holds the coverage and CodeScene shape
+      # of these workflows; `make test` runs only the repository's own contracts.
+      - name: Check the CV-005 contracts
+        run: make check-cv005
+
       # Markdown is linted through the upstream action rather than a `run:`
       # step, because the action's release carries the linter's whole
       # dependency graph: nothing is resolved from the npm registry while the
@@ -128,7 +133,7 @@ jobs:
       # the work and the CodeScene upload for the same commit.
       - name: Generate coverage
         if: github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/generate-coverage@759da19f0379b6d2d7ddef93b7ad4c3b98154e41
+        uses: leynos/shared-actions/.github/actions/generate-coverage@0606ca899ce2995a0c4bc78e660e80832e6e8855
         with:
           output-path: coverage.xml
           format: cobertura

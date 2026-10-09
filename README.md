@@ -17,6 +17,7 @@ for the full design rationale. For practical guidance, start with the
 ## Requirements
 
 - Python 3.12 or newer
+- Falcon 4.x with ASGI support
 
 ## Key features
 

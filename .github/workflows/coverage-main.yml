@@ -40,14 +40,20 @@ jobs:
     # The longest observed run of this job is 34 s.
     timeout-minutes: 15
     # The CodeScene token lives in this environment, whose deployment policy
-    # admits `main` alone; tests/workflow_contracts/codescene_environment.py
-    # holds it to this job.
+    # admits `main` alone; the shared CV-005 library's environment.placement
+    # clause holds it to this job.
     environment: codescene
     permissions:
       contents: read
+    env:
+      UV_PYTHON: '3.13'
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        # Nothing after checkout needs Git credentials, and the coverage run
+        # executes repository and dependency code.
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -58,7 +64,7 @@ jobs:
         uses: astral-sh/setup-uv@v10.2.0
 
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@759da19f0379b6d2d7ddef93b7ad4c3b98154e41
+        uses: leynos/shared-actions/.github/actions/generate-coverage@0606ca899ce2995a0c4bc78e660e80832e6e8855
         with:
           output-path: coverage.xml
           format: cobertura
@@ -94,7 +100,7 @@ jobs:
         # verifies the archive against that manifest's digest, so an
         # `archive-checksum` could only agree with it or go stale and fail.
         if: steps.codescene-token.outputs.available == 'true' && github.ref == 'refs/heads/main'
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@759da19f0379b6d2d7ddef93b7ad4c3b98154e41
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@0606ca899ce2995a0c4bc78e660e80832e6e8855
         with:
           format: cobertura
           mode: upload
