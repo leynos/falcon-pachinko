@@ -19,7 +19,6 @@ import pathlib
 import re
 import sys
 import textwrap
-import time
 import typing as typ
 
 import pytest
@@ -576,13 +575,14 @@ def test_the_venv_identity_notices_a_same_content_recreation(
     before = _venv_identity()
 
     original_mtime = config.stat().st_mtime_ns
-    # Let the status-change clock tick so the recreation cannot share a stamp.
-    time.sleep(0.05)
-    config.unlink()
-    config.write_text("home = /usr/bin\n", encoding="utf-8")
+    # The replacement is created while the original still exists, so it is
+    # given a different inode without any dependence on elapsed time.
+    replacement = tmp_path / "pyvenv.cfg.new"
+    replacement.write_text("home = /usr/bin\n", encoding="utf-8")
     # Restore the modification time, so only the inode and the status-change
     # time (which user space cannot set) can reveal the recreation.
-    os.utime(config, ns=(original_mtime, original_mtime))
+    os.utime(replacement, ns=(original_mtime, original_mtime))
+    replacement.replace(config)
     after = _venv_identity()
 
     assert config.stat().st_mtime_ns == original_mtime, "mtime is preserved"
