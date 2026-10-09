@@ -24,9 +24,10 @@ attaches rollback failures or cancellation as notes.
 During `stop()`, the controller cancels all tasks, gathers them, and selects
 the first non-cancellation exception in registration order. It then clears the
 task list and re-raises that exception, if present, leaving the controller
-ready to restart. The controller does not log startup rollback: it propagates
-the original exception to the application startup caller, where the lifespan
-owner can log it.
+ready to restart. The controller emits neither startup logs nor metrics and
+remains telemetry-agnostic. It propagates the original startup exception to the
+application startup caller, leaving application-specific logging and metrics to
+the lifespan owner.
 
 ## Dependency bounds
 
