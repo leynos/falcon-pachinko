@@ -1,13 +1,13 @@
 [project]
 name = "falcon-pachinko"
 version = "0.1.0-alpha2"
-description = "falcon-pachinko package"
+description = "Adds WebSocket routing and message handling for Falcon ASGI applications."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "ISC" }
 dependencies = ["msgspec>=0.18,<1", "falcon>=4,<5"]
 authors = [{ name = "Payton McIntosh", email = "pmcintosh@df12.net" }]
-keywords = ["falcon", "websocket", "msgspec", "asyncio", "async", "asgi"]
+keywords = ["falcon", "websocket", "msgspec", "asyncio", "asgi", "websockets"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Framework :: AsyncIO",
@@ -15,9 +15,9 @@ classifiers = [
   "License :: OSI Approved :: ISC License (ISCL)",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
-  "Programming Language :: Python :: 3.14",
   "Topic :: Software Development :: Libraries :: Python Modules",
   "Topic :: Internet :: WWW/HTTP",
 ]
@@ -26,6 +26,7 @@ classifiers = [
 Homepage = "https://github.com/leynos/falcon-pachinko"
 Repository = "https://github.com/leynos/falcon-pachinko"
 Issues = "https://github.com/leynos/falcon-pachinko/issues"
+Documentation = "https://github.com/leynos/falcon-pachinko/tree/main/docs"
 
 [dependency-groups]
 dev = [

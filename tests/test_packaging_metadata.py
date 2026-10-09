@@ -99,12 +99,23 @@ def test_project_version_matches_development_classifier() -> None:
 
 def test_project_has_async_keywords_and_discovery_classifiers() -> None:
     """PyPI metadata describes the project's asynchronous ASGI focus."""
-    assert {"async", "asgi"} <= set(PROJECT["keywords"]), (
-        "pyproject.toml keywords must include async and asgi"
+    assert {
+        "falcon",
+        "websocket",
+        "msgspec",
+        "asyncio",
+        "asgi",
+        "websockets",
+    } <= set(PROJECT["keywords"]), (
+        "pyproject.toml keywords must include the supported project topics"
+    )
+    assert len(PROJECT["keywords"]) == len(set(PROJECT["keywords"])), (
+        "pyproject.toml keywords must not contain duplicates"
     )
     assert {
         "Framework :: AsyncIO",
         "Operating System :: OS Independent",
+        "Programming Language :: Python :: 3 :: Only",
         "Topic :: Software Development :: Libraries :: Python Modules",
     } <= set(PROJECT["classifiers"]), (
         "pyproject.toml classifiers must describe async and OS-independent use"
@@ -119,6 +130,9 @@ def test_project_urls_identify_repository_and_issue_tracker() -> None:
     assert PROJECT["urls"]["Issues"] == (
         "https://github.com/leynos/falcon-pachinko/issues"
     ), "The Issues URL must point to the GitHub issue tracker"
+    assert PROJECT["urls"]["Documentation"] == (
+        "https://github.com/leynos/falcon-pachinko/tree/main/docs"
+    ), "The Documentation URL must point to the project documentation"
 
 
 def test_packaging_is_a_development_dependency() -> None:
