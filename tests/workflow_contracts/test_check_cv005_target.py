@@ -19,10 +19,19 @@ import re
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - the tests drive make itself
 import tomllib
+import typing as typ
 
 import pytest
 
+from .workflow_support import REPOSITORY
+
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[2]
+PUBLISHER_SELECTION: typ.Final[dict[str, str]] = {
+    "output-path": "coverage.xml",
+    "format": "cobertura",
+    "pytest-workers": "",
+    "with-ratchet": "true",
+}
 MAKE = shutil.which("make")
 FULL_COMMIT = re.compile(r"[0-9a-f]{40}")
 
@@ -84,8 +93,8 @@ def test_the_parameters_file_names_this_repository_and_python_313() -> None:
 
     assert config["repository"] == "leynos/falcon-pachinko", "wrong repository"
     assert config["interpreter"] == "3.13", "wrong interpreter"
-    assert {"output-path", "format", "with-ratchet"} <= set(config["selection"]), (
-        "the publisher selection is incomplete"
+    assert config["selection"] == PUBLISHER_SELECTION, (
+        "the publisher selection must match the lanes' generate-coverage inputs"
     )
 
 
@@ -113,3 +122,35 @@ def test_a_failing_check_fails_the_target() -> None:
     result = _make("check-cv005", "CV005_CONTRACTS=false")
 
     assert result.returncode != 0, "the failure must propagate"
+
+
+def test_the_workflow_contract_target_runs_the_shared_check_first() -> None:
+    """Scenario: ``test-workflow-contracts`` is expanded with a marker tool.
+
+    Invariant: the shared check runs, with its arguments, before the
+    repository's own contracts, so dropping the prerequisite is caught.
+    """
+    result = _make("-n", "test-workflow-contracts", "CV005_CONTRACTS=SHARED_CHECK")
+
+    lines = result.stdout.splitlines()
+    shared = [i for i, line in enumerate(lines) if line.startswith("SHARED_CHECK")]
+    local = [
+        i for i, line in enumerate(lines) if "pytest tests/workflow_contracts" in line
+    ]
+    assert shared, f"the shared check must run: {result.stdout}"
+    assert lines[shared[0]] == "SHARED_CHECK check --repository .", lines[shared[0]]
+    assert local, f"the local contracts must run: {result.stdout}"
+    assert shared[0] < local[0], "the shared check must run before the local contracts"
+
+
+def test_the_lane_runs_the_check_as_its_own_step() -> None:
+    """Scenario: ``ci.yml`` is read for the dedicated CV-005 step.
+
+    Invariant: the pull-request lane has a step running ``make check-cv005``,
+    because ``make test`` does not.
+    """
+    steps = REPOSITORY.jobs("ci.yml")["lint-test"].get("steps")
+
+    assert isinstance(steps, list), "ci.yml:lint-test must declare its steps"
+    runs = [step.get("run") for step in steps if isinstance(step, dict)]
+    assert "make check-cv005" in runs, "the lane must run make check-cv005"

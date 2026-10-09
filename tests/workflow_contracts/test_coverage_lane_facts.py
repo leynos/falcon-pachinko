@@ -31,9 +31,10 @@ CHECKOUT_ACTION: typ.Final[str] = "actions/checkout"
 
 
 def _is_shallow(depth: object) -> bool:
-    """Report whether a ``fetch-depth`` value is a positive literal number.
+    """Report whether a ``fetch-depth`` value is a literal number of at least one.
 
-    A value that is zero in any spelling (``0``, ``"00"``, ``0.0``) fetches full
+    ``actions/checkout`` floors the number, so a value below one in any
+    spelling (``0``, ``"00"``, ``0.0``, ``0.5``, a negative) fetches full
     history. So does one the reader cannot resolve, such as an expression or a
     boolean, because the contract cannot prove it shallow.
 
@@ -45,12 +46,12 @@ def _is_shallow(depth: object) -> bool:
     Returns
     -------
     bool
-        ``True`` only for a positive literal number.
+        ``True`` only for a literal number of at least one.
     """
     if isinstance(depth, bool):
         return False
     try:
-        return float(str(depth)) > 0
+        return float(str(depth)) >= 1
     except ValueError:
         return False
 
@@ -100,8 +101,8 @@ def test_the_pull_request_lane_fetches_no_history() -> None:
 
 @pytest.mark.parametrize(
     "depth",
-    [0, "0", "00", 0.0, "${{ inputs.depth }}"],
-    ids=["integer", "string", "padded", "float", "expression"],
+    [0, "0", "00", 0.0, 0.5, -1, "${{ inputs.depth }}"],
+    ids=["integer", "string", "padded", "float", "fraction", "negative", "expression"],
 )
 def test_a_full_history_checkout_is_found(
     tmp_path: pathlib.Path, depth: object

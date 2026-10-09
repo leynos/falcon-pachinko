@@ -305,7 +305,7 @@ end-to-end check. The runner-label and lane-trigger contracts
 (`test_runner_placement.py`, `test_lane_triggers.py` and their readers) stay
 local too.
 
-Two facts remain this repository's own, in
+One fact remains this repository's own, in
 `tests/workflow_contracts/test_coverage_lane_facts.py`. The pull-request lane
 fetches no full Git history: the ratchet compares the measured percentage with
 a stored baseline and reads no commits, and the full clone the lane once
