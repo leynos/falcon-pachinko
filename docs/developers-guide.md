@@ -125,9 +125,10 @@ threaded positionally through each helper.
 
 ## Lint and Typecheck Toolchain
 
-`make lint` runs Ruff, then two Pylint passes, then ambrleaks. `make typecheck`
-runs `ty check falcon_pachinko tests tools`. Both perform their complete checks
-locally and in CI, and need no wrapper and no second manual step.
+`make lint` provisions nose, then runs Ruff, both Pylint passes, ambrleaks and
+the blocking nose duplication gate. `make typecheck` runs
+`ty check falcon_pachinko tests tools`. These are the complete local and CI
+checks; they need no wrapper or second manual step.
 
 Ruff is pinned at 0.16.4 via `RUFF_VERSION` in the Makefile, and the same
 version is installed in `.github/workflows/ci.yml` with
@@ -251,10 +252,14 @@ enables W0012, so every pragma name is still checked for typos exactly once.
 
 Each pass keeps its persisted Pylint state in its own directory under
 `.cache/pylint`, named for its runtime, so neither reads the other's
-statistics. CI caches `.uv-python` under a key derived from
-`tools/pypy-downloads.json`, and the lint tool environments in `.uv-cache`
-under a key that also covers the Makefile and `pylintrc-df12.toml`, so a pin
-change never restores a stale toolchain.
+statistics. CI keys `.uv-python` by runner OS and architecture plus the
+Makefile and `tools/pypy-downloads.json`. It keys `.uv-cache` by runner OS and
+architecture plus the Makefile, `pylintrc-df12.toml`,
+`tools/pypy-downloads.json`, `pyproject.toml` and `scripts/**`. The
+`.tools/nose` cache key also includes runner OS and architecture,
+`pyproject.toml`, `scripts/install_nose.py` and
+`tools/nose-release-digests.json`; `make install-nose` verifies the cached
+binary's pinned version before use.
 
 #### Coverage and tests
 
