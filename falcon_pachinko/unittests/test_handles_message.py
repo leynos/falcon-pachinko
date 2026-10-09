@@ -26,6 +26,7 @@ from falcon_pachinko.exceptions import (
     DuplicateHandlerRegistrationError,
     HandlerSignatureError,
 )
+from falcon_pachinko.handlers import get_payload_type
 from falcon_pachinko.unittests.helpers import DummyWS
 
 
@@ -33,6 +34,18 @@ class PingPayload(ms.Struct):
     """A simple message payload structure for testing ping messages."""
 
     text: str
+
+
+async def _class_payload_handler(
+    self: object, ws: WebSocketLike, payload: PingPayload
+) -> None:
+    """Provide a module-level handler with a class payload annotation."""
+
+
+async def _generic_payload_handler(
+    self: object, ws: WebSocketLike, payload: list[int]
+) -> None:
+    """Provide a module-level handler with a generic payload annotation."""
 
 
 class DecoratedResource(WebSocketResource):
@@ -191,6 +204,14 @@ class ChildResource(ParentResource):
         self.invoked.append("parent")
 
 
+class RedecoratedChild(ParentResource):
+    """Re-register the parent's message type on a child resource."""
+
+    @handles_message("parent")
+    async def parent(self, ws: WebSocketLike, payload: object) -> None:
+        """Handle the parent's message type on the child resource."""
+
+
 def test_child_handler_registry_is_isolated() -> None:
     """Adding a child handler does not mutate the parent registry."""
     assert ChildResource.handlers is not ParentResource.handlers, (
@@ -279,6 +300,35 @@ async def test_decorated_override() -> None:
     r.bind_default_hook_manager()
     await r.dispatch(DummyWS(), msjson.encode({"type": "parent"}))
     assert r.invoked == "decorated", "re-decorated handler should override the parent"
+
+
+def test_get_payload_type_returns_class_annotation() -> None:
+    """Return a handler's resolved class annotation unchanged."""
+    assert get_payload_type(_class_payload_handler) is PingPayload, (
+        "the resolver should return a class payload annotation as-is"
+    )
+
+
+def test_get_payload_type_preserves_non_class_annotation() -> None:
+    """Return a non-class typing object without runtime validation."""
+    assert get_payload_type(_generic_payload_handler) == list[int], (
+        "the resolver should preserve a parameterized generic annotation"
+    )
+
+
+def test_child_handler_registry_contains_inherited_and_child_types() -> None:
+    """The child registry includes both inherited and child message types."""
+    assert {"parent", "child"} <= ChildResource.handlers.keys(), (
+        "the child mapping should include inherited and child handlers"
+    )
+
+
+def test_child_can_redecorate_parent_handler() -> None:
+    """A child can register its own handler for the parent's message type."""
+    assert (
+        RedecoratedChild.handlers["parent"].handler
+        is not ParentResource.handlers["parent"].handler
+    ), "re-decorating the parent's message type should register the child handler"
 
 
 def test_unresolved_annotation_is_ignored() -> None:
