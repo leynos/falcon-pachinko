@@ -13,7 +13,7 @@ from falcon_pachinko.workers import WorkerController, WorkerFn, worker
 if typ.TYPE_CHECKING:  # pragma: no cover - used only for type checking
     import collections.abc as cabc
 
-START_TIMEOUT = 1.0
+START_TIMEOUT: float = 1.0
 
 
 @pytest_asyncio.fixture
