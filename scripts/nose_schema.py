@@ -111,6 +111,16 @@ def require_table(value: object, *, context: str) -> cabc.Mapping[str, object]:
     return typ.cast("cabc.Mapping[str, object]", value)
 
 
+def is_safe_relative_posix_path(path_value: str) -> bool:
+    """Report whether a path uses canonical, non-escaping POSIX syntax."""
+    path = PurePosixPath(path_value)
+    if path.is_absolute() or "\\" in path_value:
+        return False
+    if ".." in path.parts:
+        return False
+    return path.as_posix() == path_value
+
+
 def require_value[T](
     value: object,
     *,

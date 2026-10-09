@@ -6,9 +6,10 @@ against the repository-relative path) optionally suffixed with ``::name`` to
 require nose's unit name as well; ``::name`` keys never match the
 fragment-level findings that nose reports without a name. An entry names
 either one key (``unit = "..."``) or several (``members = ["...", ...]``),
-and silences a family only when *every* location in that family matches one
-of its keys, so a new copy in an unlisted file still blocks the gate. Every
-entry records a reason so exceptions stay reviewable in version control.
+and silences a family only when every location matches a key and every listed
+key matches a location. A new copy in an unlisted file still blocks the gate,
+and an unused broad key cannot expand an exception's scope. Every entry records
+a reason so exceptions stay reviewable in version control.
 
 Adapted from ``leynos/episodic`` PR #276 at commit
 ``d9e5ac0d254f375e2986f52d91a3b88c117c833b``.
@@ -26,7 +27,13 @@ import tomlkit
 import tomlkit.exceptions
 import tomlkit.items
 from atomic_write import AtomicWriteOptions, atomic_write
-from nose_schema import Finding, GateConfigError, Location
+from nose_schema import (
+    Finding,
+    GateConfigError,
+    Location,
+    is_safe_relative_posix_path,
+    require_table,
+)
 
 _MINIMUM_MEMBER_COUNT = 2
 
@@ -48,10 +55,17 @@ class AllowEntry:
     reason: str
 
     def matches(self, finding: Finding) -> bool:
-        """Report whether this entry covers every location in ``finding``."""
-        return all(
-            any(key_matches(key, location) for key in self.keys)
-            for location in finding.locations
+        """Require complete location coverage and use of every listed key."""
+        return (
+            bool(finding.locations)
+            and all(
+                any(key_matches(key, location) for key in self.keys)
+                for location in finding.locations
+            )
+            and all(
+                any(key_matches(key, location) for location in finding.locations)
+                for key in self.keys
+            )
         )
 
 
@@ -100,19 +114,9 @@ def _validate_key_shape(
 
 def _validate_repository_relative_path(path_glob: str, *, context: str) -> None:
     """Reject a path glob that is absolute or escapes the repository root."""
-    if not _is_repository_relative_path(path_glob):
+    if not is_safe_relative_posix_path(path_glob):
         msg = f"{context} must be a repository-relative path key"
         raise GateConfigError(msg)
-
-
-def _is_repository_relative_path(path_glob: str) -> bool:
-    """Report whether a glob is a canonical POSIX path inside the repository."""
-    path = PurePosixPath(path_glob)
-    if path.is_absolute() or "\\" in path_glob:
-        return False
-    if ".." in path.parts:
-        return False
-    return path.as_posix() == path_glob
 
 
 def validate_key(key: str, *, context: str) -> str:
@@ -161,9 +165,9 @@ def load_allowlist(pyproject_path: Path) -> tuple[AllowEntry, ...]:
     """
     with pyproject_path.open("rb") as handle:
         data = tomllib.load(handle)
-    root = _config_mapping(data, context="pyproject")
-    tool = _config_mapping(root.get("tool", {}), context="pyproject.tool")
-    table = _config_mapping(
+    root = require_table(data, context="pyproject")
+    tool = require_table(root.get("tool", {}), context="pyproject.tool")
+    table = require_table(
         tool.get("duplication_gate", {}),
         context="pyproject.tool.duplication_gate",
     )
@@ -178,19 +182,9 @@ def load_allowlist(pyproject_path: Path) -> tuple[AllowEntry, ...]:
     )
 
 
-def _config_mapping(value: object, *, context: str) -> cabc.Mapping[str, object]:
-    """Validate one TOML table before configuration logic consumes it."""
-    if not isinstance(value, cabc.Mapping) or not all(
-        isinstance(key, str) for key in value
-    ):
-        msg = f"{context} must be a table with string keys"
-        raise GateConfigError(msg)
-    return typ.cast("cabc.Mapping[str, object]", value)
-
-
 def _allow_entry(raw: object, *, index: int) -> AllowEntry:
     """Validate and normalize one reasoned TOML allow entry."""
-    table = _config_mapping(raw, context=f"duplication_gate.allow[{index}]")
+    table = require_table(raw, context=f"duplication_gate.allow[{index}]")
     unexpected = set(table) - {"unit", "members", "reason"}
     if unexpected:
         names = ", ".join(sorted(unexpected))

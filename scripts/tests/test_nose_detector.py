@@ -12,6 +12,7 @@ import pytest
 from duplication_gate_test_support import (
     STUB_REPORT,
     detector,
+    stub_detector_context,
     stub_runner,
     stub_settings,
     write_stub_nose,
@@ -116,6 +117,34 @@ class TestLoadSettings:
         ):
             detector.load_settings(pyproject)
 
+    def test_gitignore_exclusion_matches_python_files_at_nested_depth(
+        self, tmp_path: Path
+    ) -> None:
+        """An unanchored exclude cannot leave nose with an empty effective root."""
+        root = tmp_path / "source"
+        nested = root / "pkg"
+        nested.mkdir(parents=True)
+        (nested / "sample.py").write_text("VALUE = 1\n", encoding="utf-8")
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text(
+            textwrap.dedent(
+                """\
+                [tool.nose]
+                version = "0.20.0"
+                roots = ["source"]
+                mode = "syntax"
+                min-size = 24
+                exclude = ["*.py"]
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(
+            detector.GateConfigError, match="selects no Python source files"
+        ):
+            detector.load_settings(pyproject)
+
     def test_rejects_a_root_with_only_gitignored_python_files(
         self, tmp_path: Path
     ) -> None:
@@ -205,49 +234,71 @@ class TestLoadSettings:
 class TestResolveBinary:
     """Discovery and version verification of the pinned binary."""
 
-    def test_accepts_the_pinned_version(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_accepts_the_pinned_version(self, tmp_path: Path) -> None:
         """A binary reporting the pinned version is accepted."""
         stub = write_stub_nose(tmp_path)
-        monkeypatch.setenv("NOSE_BIN", str(stub))
-        assert detector.resolve_binary(stub_settings(), runner=stub_runner()) == str(
-            stub
-        ), "The pinned binary must be returned unchanged."
+        context = stub_detector_context(tmp_path, environment={"NOSE_BIN": str(stub)})
+        assert detector.resolve_binary(stub_settings(), context=context) == str(stub), (
+            "The pinned binary must be returned unchanged."
+        )
 
     def test_resolves_a_relative_override_from_the_repository_root(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path
     ) -> None:
         """A relative NOSE_BIN is stable when callers run from another directory."""
         tools = tmp_path / "tools"
         tools.mkdir()
         stub = write_stub_nose(tools)
-        monkeypatch.setattr(detector, "REPO_ROOT", tmp_path)
-        monkeypatch.setenv("NOSE_BIN", "tools/nose")
-        assert detector.resolve_binary(stub_settings(), runner=stub_runner()) == str(
+        context = stub_detector_context(
+            tmp_path, environment={"NOSE_BIN": "tools/nose"}
+        )
+        assert detector.resolve_binary(stub_settings(), context=context) == str(
             stub.resolve()
-        ), "A relative override must resolve against the repository root."
+        ), "A relative override must resolve against the supplied repository root."
 
-    def test_rejects_a_version_mismatch(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_rejects_a_version_mismatch(self, tmp_path: Path) -> None:
         """A different installed version fails with a remediation hint."""
         stub = write_stub_nose(tmp_path, version="nose 0.19.0")
-        monkeypatch.setenv("NOSE_BIN", str(stub))
+        context = stub_detector_context(
+            tmp_path,
+            environment={"NOSE_BIN": str(stub)},
+            command_runner=stub_runner(version="nose 0.19.0"),
+        )
         with pytest.raises(
             detector.GateExecutionError,
             match=r"reports 'nose 0\.19\.0'.*make install-nose",
         ):
-            detector.resolve_binary(
-                stub_settings(), runner=stub_runner(version="nose 0.19.0")
-            )
+            detector.resolve_binary(stub_settings(), context=context)
 
-    def test_reports_a_missing_binary(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_reports_a_missing_binary(self, tmp_path: Path) -> None:
         """A missing detector fails with the install remediation."""
-        monkeypatch.delenv("NOSE_BIN", raising=False)
-        monkeypatch.setattr(detector, "_discover_binary", lambda: None)
+        context = stub_detector_context(tmp_path, environment={})
         with pytest.raises(detector.GateExecutionError, match="make install-nose"):
-            detector.resolve_binary(stub_settings(), runner=stub_runner())
+            detector.resolve_binary(stub_settings(), context=context)
+
+    def test_discovery_receives_only_the_supplied_root_and_environment(
+        self, tmp_path: Path
+    ) -> None:
+        """Binary discovery uses the context instead of ambient PATH or globals."""
+        discovered = tmp_path / "tools" / "nose"
+        calls: list[tuple[Path, cabc.Mapping[str, str]]] = []
+
+        def discover(root: Path, environment: cabc.Mapping[str, str]) -> str:
+            calls.append((root, environment))
+            return str(discovered)
+
+        context = stub_detector_context(
+            tmp_path,
+            environment={"PATH": "/controlled/path"},
+            binary_discoverer=discover,
+        )
+
+        assert detector.resolve_binary(stub_settings(), context=context) == str(
+            discovered
+        ), "An injected discoverer supplies the selected binary."
+        assert calls == [(tmp_path, {"PATH": "/controlled/path"})], (
+            "Discovery must receive only the explicit root and environment."
+        )
 
 
 class TestBuildCommand:
@@ -295,15 +346,48 @@ class TestBuildCommand:
 class TestRunDetector:
     """Report parsing and finding normalization."""
 
-    def test_normalizes_a_stub_report(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_normalizes_a_stub_report(self, tmp_path: Path) -> None:
         """A stub report becomes one ordered finding with both locations."""
-        monkeypatch.setenv("NOSE_BIN", "/stub/nose")
-        findings = detector.run_detector(stub_settings(), runner=stub_runner())
+        context = stub_detector_context(tmp_path)
+        findings = detector.run_detector(stub_settings(), context=context)
         assert len(findings) == 1, "The stub report contains one family."
         assert (
             findings[0].label
             == "falcon_pachinko/a.py:1-20 ~ falcon_pachinko/b.py:30-49"
         ), "Findings must report both spans."
+
+    def test_runner_receives_the_context_for_version_and_query(
+        self, tmp_path: Path
+    ) -> None:
+        """The injected root and environment reach both subprocess commands."""
+        calls: list[tuple[list[str], Path, cabc.Mapping[str, str]]] = []
+        canned_runner = stub_runner()
+
+        def runner(
+            command: cabc.Sequence[str],
+            repository_root: Path,
+            environment: cabc.Mapping[str, str],
+        ) -> str:
+            calls.append((list(command), repository_root, dict(environment)))
+            return canned_runner(command, repository_root, environment)
+
+        context = stub_detector_context(
+            tmp_path,
+            environment={"NOSE_BIN": "/fixture/nose", "PATH": "/fixture/bin"},
+            command_runner=runner,
+        )
+
+        detector.run_detector(stub_settings(), context=context)
+
+        assert [call[0][-1] for call in calls] == ["--version", "json"], (
+            "The context must run version verification before one JSON query."
+        )
+        assert all(call[1] == tmp_path for call in calls), (
+            "Both commands must use the injected repository root."
+        )
+        assert all(call[2] == context.environment for call in calls), (
+            "Both commands must use the injected environment."
+        )
 
     @pytest.mark.parametrize(
         ("families", "expected_values", "expected_labels"),
@@ -549,17 +633,23 @@ class TestRunDetector:
         with pytest.raises(detector.GateConfigError, match=re.escape(diagnostic)):
             detector.normalize_findings(report)
 
-    def test_rejects_unreadable_output(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_rejects_unreadable_output(self, tmp_path: Path) -> None:
         """Non-JSON detector output fails with an execution error."""
-        monkeypatch.setenv("NOSE_BIN", "/stub/nose")
 
-        def runner(command: cabc.Sequence[str]) -> str:
+        def runner(
+            command: cabc.Sequence[str],
+            _repository_root: Path,
+            _environment: cabc.Mapping[str, str],
+        ) -> str:
             return "nose 0.20.0\n" if "--version" in command else "not json"
 
+        context = stub_detector_context(tmp_path, command_runner=runner)
         with pytest.raises(detector.GateExecutionError, match="not valid JSON"):
-            detector.run_detector(stub_settings(), runner=runner)
+            detector.run_detector(stub_settings(), context=context)
 
-    def test_run_command_reports_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_run_command_reports_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A slow detector becomes an actionable execution error."""
 
         def timeout(*_args: object, **_kwargs: object) -> typ.NoReturn:
@@ -570,10 +660,10 @@ class TestRunDetector:
         with pytest.raises(
             detector.GateExecutionError, match="timed out after 120 seconds"
         ):
-            detector._run_command(("nose", "query"))
+            detector._run_command(("nose", "query"), tmp_path, {})
 
     def test_run_command_reports_a_non_zero_exit(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A detector that fails carries its status and diagnostic out."""
 
@@ -590,10 +680,10 @@ class TestRunDetector:
             detector.GateExecutionError,
             match=r"nose exited with status 2: bad query",
         ):
-            detector._run_command(("nose", "query"))
+            detector._run_command(("nose", "query"), tmp_path, {})
 
     def test_run_command_reports_an_execution_failure(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An unrunnable detector points at the install remediation."""
 
@@ -606,4 +696,4 @@ class TestRunDetector:
             detector.GateExecutionError,
             match=r"cannot run nose: .*Permission denied.*make install-nose",
         ):
-            detector._run_command(("nose", "query"))
+            detector._run_command(("nose", "query"), tmp_path, {})

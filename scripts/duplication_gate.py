@@ -200,8 +200,8 @@ def allow(
     first : str
         Location key (``path`` or ``path::name``) of the first or only member.
     second : list[str] | None
-        Further location keys; when supplied, the entry silences only families
-        whose every location matches one of the listed keys.
+        Further location keys; a family is silenced only when every location
+        matches a key and every supplied key matches at least one location.
     reason : str
         Reviewable justification for keeping the duplication.
 

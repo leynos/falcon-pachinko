@@ -9,6 +9,7 @@ import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - test exercises the repository Make target
 import sys
 import tarfile
+from collections import abc as cabc
 from pathlib import Path
 
 import install_nose as installer
@@ -152,6 +153,16 @@ class TestEnsureInstalled:
         def unexpected_download(_url: str) -> bytes:
             pytest.fail("A matching cached binary must not trigger a download")
 
+        process_calls: list[tuple[list[str], Path, dict[str, str]]] = []
+
+        def process_runner(
+            command: cabc.Sequence[str],
+            repository_root: Path,
+            environment: cabc.Mapping[str, str],
+        ) -> subprocess.CompletedProcess[str]:
+            process_calls.append((list(command), repository_root, dict(environment)))
+            return installer._run_process(command, repository_root, environment)
+
         result = installer.ensure_installed(
             installer.InstallerContext(
                 repository_root=tmp_path,
@@ -160,12 +171,20 @@ class TestEnsureInstalled:
                 environment={"NOSE_BIN": "custom/nose"},
                 downloader=unexpected_download,
                 output=messages.append,
+                process_runner=process_runner,
             )
         )
         assert result == binary.resolve(), "A matching override must be reused."
         assert "already installed" in messages[0], (
             "Reusing the override must report the no-op installation."
         )
+        assert process_calls == [
+            (
+                [str(binary.resolve()), "--version"],
+                tmp_path,
+                {"NOSE_BIN": "custom/nose"},
+            )
+        ], "Cached-binary verification must use the injected root and environment."
 
     def test_installs_only_the_platform_archive_and_verifies_it(
         self, tmp_path: Path
@@ -184,19 +203,29 @@ class TestEnsureInstalled:
             downloads.append(url)
             return archive
 
-        result = installer.ensure_installed(
-            installer.InstallerContext(
-                repository_root=tmp_path,
-                pyproject_path=pyproject,
-                manifest_path=manifest,
-                environment={"NOSE_BIN": "tools/nose"},
-                system="Linux",
-                machine="x86_64",
-                libc_name="glibc",
-                downloader=download,
-                output=messages.append,
-            )
+        process_calls: list[tuple[list[str], Path, dict[str, str]]] = []
+
+        def process_runner(
+            command: cabc.Sequence[str],
+            repository_root: Path,
+            environment: cabc.Mapping[str, str],
+        ) -> subprocess.CompletedProcess[str]:
+            process_calls.append((list(command), repository_root, dict(environment)))
+            return installer._run_process(command, repository_root, environment)
+
+        context = installer.InstallerContext(
+            repository_root=tmp_path,
+            pyproject_path=pyproject,
+            manifest_path=manifest,
+            environment={"NOSE_BIN": "tools/nose"},
+            system="Linux",
+            machine="x86_64",
+            libc_name="glibc",
+            downloader=download,
+            output=messages.append,
+            process_runner=process_runner,
         )
+        result = installer.ensure_installed(context)
         assert result == target.resolve(), "The installer must return its target."
         assert downloads == [
             (
@@ -204,9 +233,14 @@ class TestEnsureInstalled:
                 f"nose-cli-{LINUX_X86_64}.tar.xz"
             )
         ], "Only the checksum-approved platform archive may be downloaded."
-        assert installer._run_version(result) == f"nose {NOSE_VERSION}", (
+        assert installer._run_version(result, context) == f"nose {NOSE_VERSION}", (
             "The installed executable must report the configured version."
         )
+        assert len(process_calls) == 3, "Each verification must run once."
+        assert all(
+            call[1] == tmp_path and call[2] == {"NOSE_BIN": "tools/nose"}
+            for call in process_calls
+        ), "Cached and installed verification must use the injected context."
         assert result.stat().st_mode & 0o777 == 0o755, (
             "The installed executable must retain executable permissions."
         )

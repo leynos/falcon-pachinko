@@ -68,7 +68,7 @@ def _messages_control(rcfile: pathlib.Path) -> dict[str, list[str]]:
 
 def test_nose_gate_pins_the_complete_bounded_scan() -> None:
     """The selected production root and ranking policy stay explicit."""
-    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     nose = project["tool"]["nose"]
 
     expected = {
@@ -93,7 +93,7 @@ def test_nose_gate_pins_the_complete_bounded_scan() -> None:
 
 def test_nose_release_pin_has_one_authoritative_version() -> None:
     """The installer and digest manifest derive from the nose config pin."""
-    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     manifest = json.loads(NOSE_RELEASE_DIGESTS.read_text(encoding="utf-8"))
     makefile = MAKEFILE.read_text(encoding="utf-8")
     assert manifest["version"] == project["tool"]["nose"]["version"], (
@@ -106,7 +106,7 @@ def test_nose_release_pin_has_one_authoritative_version() -> None:
     assert "nose-cli@" not in makefile, (
         "provisioning must use the verified release asset"
     )
-    installer = (REPO_ROOT / "scripts" / "install_nose.py").read_text()
+    installer = (REPO_ROOT / "scripts" / "install_nose.py").read_text(encoding="utf-8")
     assert "def load_pins(" in installer, "installer pins must come from configuration"
     assert "version, digests = load_pins(" in installer, (
         "the installer must consume the shared version and digest pins"
@@ -116,7 +116,7 @@ def test_nose_release_pin_has_one_authoritative_version() -> None:
 def test_nose_gate_uses_an_isolated_python_314_tool_environment() -> None:
     """Gate and helper-test commands select Python 3.14 without project sync."""
     makefile = MAKEFILE.read_text(encoding="utf-8")
-    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert "NOSE_PYTHON_VERSION ?= 3.14" in makefile, (
         "the gate tooling interpreter must remain explicitly pinned"
     )

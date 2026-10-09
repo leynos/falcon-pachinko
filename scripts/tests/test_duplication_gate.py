@@ -100,6 +100,23 @@ class TestAllowEntry:
             _finding(_location(), _location(file="falcon_pachinko/c.py"))
         ), "An unlisted third member must keep the family blocking."
 
+    def test_members_entry_does_not_match_when_a_key_is_unused(self) -> None:
+        """Every exact member key must describe part of the reported family."""
+        entry = allowlist.AllowEntry(
+            keys=("falcon_pachinko/router.py", "falcon_pachinko/__init__.py"),
+            reason="import fragment spans these modules",
+        )
+        router_only = _finding(
+            _location(file="falcon_pachinko/router.py", name="compile_uri_template"),
+            _location(
+                file="falcon_pachinko/router.py", name="_compile_prefix_template"
+            ),
+        )
+
+        assert not entry.matches(router_only), (
+            "A router-only family must not consume an import-fragment exception."
+        )
+
     def test_separate_partial_entries_cannot_combine_to_allow_a_family(self) -> None:
         """One family needs one exception that covers all of its locations."""
         finding = _finding()

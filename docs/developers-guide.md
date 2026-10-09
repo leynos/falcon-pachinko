@@ -349,12 +349,14 @@ make duplication-allow FIRST='path[::name]' [SECOND='path[::name]'] REASON='...'
 
 The allow target reads `FIRST`, `SECOND`, and `REASON` only when supplied on
 the Make command line. Each TOML entry must have a non-blank reason and cover
-every location in one family; partial entries cannot be combined to allow a
-family. A named key matches only the exact reported unit name, never an unnamed
-fragment. The CLI accepts repeated `--second` values for families with more
-than two members. Updates preserve TOML comments, are idempotent, and use an
-atomic writer protected by a stable sidecar advisory lock. That lock
-coordinates participating allow commands, not unrelated editors.
+every location in one family. Every key in a `members` entry must match at
+least one location, so unused keys cannot widen an exception. Partial entries
+cannot be combined to allow a family. A named key matches only the exact
+reported unit name, never an unnamed fragment. The CLI accepts repeated
+`--second` values for families with more than two members. Updates preserve
+TOML comments, are idempotent, and use an atomic writer protected by a stable
+sidecar advisory lock. That lock coordinates participating allow commands, not
+unrelated editors.
 
 Review an unmatched stale entry against source or a sufficiently widened
 relevant scan before removing it; do not delete it automatically. In this

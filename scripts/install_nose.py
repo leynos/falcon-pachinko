@@ -18,16 +18,13 @@ import subprocess  # ruff: ignore[suspicious-subprocess-import] - runs the verif
 import sys
 import tarfile
 import tomllib
-import typing as typ
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import abc as cabc
 from io import BytesIO
 from itertools import starmap
 from pathlib import Path, PurePosixPath
-
-if typ.TYPE_CHECKING:
-    from collections import abc as cabc
 
 from atomic_write import AtomicWriteOptions, atomic_write
 
@@ -39,6 +36,10 @@ RELEASE_BASE = "https://github.com/corca-ai/nose/releases/download"
 RELEASE_PATH_PREFIX = "/corca-ai/nose/releases/download/v"
 MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
 INSTALL_TIMEOUT_SECONDS = 15
+type ProcessRunner = cabc.Callable[
+    [cabc.Sequence[str], Path, cabc.Mapping[str, str]],
+    subprocess.CompletedProcess[str],
+]
 
 
 class NoseInstallError(RuntimeError):
@@ -258,9 +259,26 @@ def _read_executable_payload(
     return stream.read(MAX_ARCHIVE_BYTES + 1)
 
 
+def _run_process(
+    command: cabc.Sequence[str],
+    repository_root: Path,
+    environment: cabc.Mapping[str, str],
+) -> subprocess.CompletedProcess[str]:
+    """Run an installer subprocess in the supplied root and environment."""
+    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - executes only the configured local binary
+        list(command),
+        cwd=repository_root,
+        env=dict(environment),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=INSTALL_TIMEOUT_SECONDS,
+    )
+
+
 @dc.dataclass(frozen=True, slots=True)
 class InstallerContext:
-    """Inject filesystem, platform, download, and output boundaries for install."""
+    """Inject filesystem, process, platform, download, and output boundaries."""
 
     repository_root: Path = REPOSITORY_ROOT
     pyproject_path: Path = PYPROJECT
@@ -271,18 +289,18 @@ class InstallerContext:
     libc_name: str | None = None
     downloader: cabc.Callable[[str], bytes] = download_archive
     output: cabc.Callable[[str], None] = print
+    process_runner: ProcessRunner = _run_process
 
 
-def _run_version(binary: Path) -> str:
-    """Run ``--version`` on a local detector and return its standard output."""
+def _run_version(
+    binary: Path,
+    context: InstallerContext,
+) -> str:
+    """Run ``--version`` through the supplied process boundary."""
     try:
-        result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - executes only the configured local binary
-            [str(binary), "--version"],
-            cwd=REPOSITORY_ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=INSTALL_TIMEOUT_SECONDS,
+        environment = os.environ if context.environment is None else context.environment
+        result = context.process_runner(
+            [str(binary), "--version"], context.repository_root, environment
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         msg = f"cannot verify {binary} --version: {error}"
@@ -294,10 +312,20 @@ def _run_version(binary: Path) -> str:
     return result.stdout.strip()
 
 
-def _check_version(binary: Path, version: str) -> bool:
+def _check_version(
+    binary: Path,
+    version: str,
+    context: InstallerContext,
+) -> bool:
     """Report whether a local binary is the exact expected nose release."""
     try:
-        return _run_version(binary) == f"nose {version}"
+        return (
+            _run_version(
+                binary,
+                context,
+            )
+            == f"nose {version}"
+        )
     except NoseInstallError:
         return False
 
@@ -316,13 +344,14 @@ def _sync_file_and_directory(binary: Path) -> None:
 def ensure_installed(context: InstallerContext | None = None) -> Path:
     """Reuse or install the pinned platform release, then verify its version."""
     settings = InstallerContext() if context is None else context
-    env = os.environ if settings.environment is None else settings.environment
+    env = dict(os.environ if settings.environment is None else settings.environment)
+    settings = dc.replace(settings, environment=env)
     version, digests = load_pins(
         pyproject_path=settings.pyproject_path,
         manifest_path=settings.manifest_path,
     )
     binary = binary_path(repository_root=settings.repository_root, environment=env)
-    if binary.is_file() and _check_version(binary, version):
+    if binary.is_file() and _check_version(binary, version, settings):
         settings.output(f"nose {version} already installed at {binary}")
         return binary
     executable = _download_release(settings, version, digests, binary)
@@ -341,7 +370,7 @@ def ensure_installed(context: InstallerContext | None = None) -> Path:
     except OSError as error:
         msg = f"cannot install nose binary at {binary}: {error}"
         raise NoseInstallError(msg) from error
-    reported = _run_version(binary)
+    reported = _run_version(binary, settings)
     if reported != f"nose {version}":
         msg = f"installed detector reports {reported!r}; expected 'nose {version}'"
         raise NoseInstallError(msg)
