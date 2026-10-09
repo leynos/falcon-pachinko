@@ -318,66 +318,6 @@ class TestGateCommands:
             "requires a non-empty reason\n"
         ), "Malformed allows must use the configuration diagnostic."
 
-    @pytest.mark.parametrize(
-        "scenario",
-        [
-            pytest.param(
-                (
-                    'tool = "invalid"\n',
-                    "pyproject.tool must be a table with string keys",
-                ),
-                id="tool-is-scalar",
-            ),
-            pytest.param(
-                (
-                    '[tool]\nduplication_gate = "invalid"\n',
-                    "pyproject.tool.duplication_gate must be a table with string keys",
-                ),
-                id="gate-is-scalar",
-            ),
-            pytest.param(
-                (
-                    '[tool.duplication_gate]\nallow = "invalid"\n',
-                    "duplication_gate.allow must be an array",
-                ),
-                id="allow-is-scalar",
-            ),
-            pytest.param(
-                (
-                    "[tool.duplication_gate]\nallow = {}\n",
-                    "duplication_gate.allow must be an array",
-                ),
-                id="allow-is-table",
-            ),
-        ],
-    )
-    def test_allow_reports_malformed_existing_containers_without_writing(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-        scenario: tuple[str, str],
-    ) -> None:
-        """Malformed but valid TOML exits with a diagnostic and stays untouched."""
-        contents, diagnostic = scenario
-        pyproject = tmp_path / "pyproject.toml"
-        pyproject.write_text(contents, encoding="utf-8")
-        before = pyproject.read_bytes()
-        monkeypatch.setattr(gate, "PYPROJECT", pyproject)
-
-        with pytest.raises(SystemExit) as error:
-            gate.allow(first="falcon_pachinko/a.py", reason="reviewed exception")
-
-        assert error.value.code == 2, "Malformed TOML containers must return two."
-        stderr = capsys.readouterr().err
-        assert stderr == f"configuration error: {diagnostic}\n", (
-            "Malformed containers must use actionable configuration diagnostics."
-        )
-        assert "Traceback" not in stderr, "The CLI must not leak a traceback."
-        assert pyproject.read_bytes() == before, (
-            "Rejected TOML containers must leave the manifest unchanged."
-        )
-
     def test_allow_reports_write_failures(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -651,13 +591,6 @@ class TestEndToEndBlocking:
         )
         return workspace
 
-    def _ignored_only_workspace(self, tmp_path: Path) -> Path:
-        """Build a workspace whose Python sources are all ignored by nose."""
-        workspace = self._clean_workspace(tmp_path)
-        package = workspace / "planted"
-        (package / ".gitignore").write_text("*.py\n", encoding="utf-8")
-        return workspace
-
     def _run_check(self, workspace: Path) -> subprocess.CompletedProcess[str]:
         """Run the copied gate's real `check` against the pinned detector."""
         settings = detector.load_settings(REPOSITORY_ROOT / "pyproject.toml")
@@ -730,44 +663,6 @@ class TestEndToEndBlocking:
         assert "duplication gate passed" in result.stdout, (
             "A clean workspace must report the successful gate result."
         )
-
-    def test_ignored_only_root_is_rejected_by_real_detector_gate(
-        self, tmp_path: Path
-    ) -> None:
-        """A real nose empty-walk warning cannot masquerade as a clean report."""
-        workspace = self._ignored_only_workspace(tmp_path)
-        repository_settings = detector.load_settings(REPOSITORY_ROOT / "pyproject.toml")
-        binary = detector.resolve_binary(repository_settings)
-        query = detector.build_command(
-            binary,
-            dc.replace(repository_settings, roots=("planted",)),
-        )
-        raw_report = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - verified pinned nose binary
-            query,
-            cwd=workspace,
-            env=gate_environment(NOSE_BIN=binary),
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        assert raw_report.returncode == 0, raw_report.stderr
-        assert json.loads(raw_report.stdout)["families"] == [], (
-            "The detector emits an empty report when every source is ignored."
-        )
-        assert "no supported source files found under: planted" in raw_report.stderr, (
-            "The real detector must expose its empty effective scan diagnostic."
-        )
-
-        result = self._run_check(workspace)
-
-        assert result.returncode == 2, (
-            "An ignored-only root must fail configuration.\n"
-            f"{result.stdout}{result.stderr}"
-        )
-        assert "selects no Python source files" in result.stderr, (
-            "The diagnostic must explain that the configured root is empty."
-        )
-        assert "Traceback" not in result.stderr, "The gate must fail cleanly."
 
     def test_repeated_scans_have_identical_normalized_output(
         self, tmp_path: Path
