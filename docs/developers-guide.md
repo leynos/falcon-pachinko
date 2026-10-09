@@ -53,10 +53,17 @@ are tracked separately from this support policy.
 ## Validation error import boundary
 
 Use `from falcon_pachinko.utils import ValidationError` as the stable import
-path for validation exceptions. It is currently the same class as
-`msgspec.ValidationError`, preserving existing exception handlers. The
-dispatcher routes validation failures to `on_unhandled`; a `ValidationError`
-raised inside a handler still propagates.
+path for validation exceptions. New package code must raise through
+`falcon_pachinko.utils.ValidationError`, keeping raise sites behind the
+package's stable path. It is the same class as `msgspec.ValidationError`,
+preserving existing exception handlers. The dispatcher routes validation
+failures to `on_unhandled`; a `ValidationError` raised inside a handler still
+propagates.
+
+The typed alias is a direct assignment to preserve the original class object.
+Ruff bans `from msgspec import ...`, and PEP 695 syntax would not preserve class
+identity, so the line-local Pylint and Ruff suppressions document this
+constraint.
 
 ## Spelling policy
 
