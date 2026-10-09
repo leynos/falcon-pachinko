@@ -144,6 +144,25 @@ Makefile pins and the CI pins name the same version, without hard-coding a
 version itself. Bump both sites together when upgrading either tool. The same
 file pins the structure of the Pylint passes described below.
 
+### Import conventions
+
+Import `msgspec.inspect` as `msinspect`:
+
+```python
+import msgspec as ms
+import msgspec.inspect as msinspect
+import msgspec.json as msjson
+
+msinspect.type_info(int)
+```
+
+Ruff rejects member imports such as `from msgspec.inspect import type_info` with
+`ICN003`; it rejects a missing or different `msgspec.inspect` alias with
+`ICN001`. The `[tool.ruff.lint.flake8-import-conventions]` table in
+`pyproject.toml` is the authoritative source for aliases and `banned-from`.
+Change that table, not this guide, to alter enforcement. When the configured
+convention changes, update this guide to match.
+
 ### Pylint passes
 
 Pylint runs twice, in two isolated `uv tool run` environments. Neither pass
