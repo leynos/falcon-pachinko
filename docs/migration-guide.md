@@ -104,6 +104,10 @@ app.ws_connection_manager = WebSocketConnectionManager(backend=MyBackend(...))
   `snapshot` or documenting alternative semantics.
 - When migrating message handlers, ensure schema tags match incoming payloads;
   extra fields are rejected unless `strict=False` is used on `@handles_message`.
+- Import `ValidationError` from `falcon_pachinko.utils` when handling payload
+  validation failures. It is the same class as `msgspec.ValidationError`, so
+  existing handlers remain compatible. Decode failures still reach
+  `on_unhandled`, while errors raised inside a handler propagate.
 
 ## Done?
 

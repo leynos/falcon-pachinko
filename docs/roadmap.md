@@ -76,6 +76,9 @@ composable patterns.
   - [x] Document `msgspec`'s default strictness (no extra fields) and expose a
     `strict=False` option on the decorator.
 
+  - [x] Expose `ValidationError` from `falcon_pachinko.utils` as a stable
+    identity alias for `msgspec.ValidationError`.
+
 - [ ] **Refine Resource API and State Management.**
 
   - [x] Rename the fallback handler method from `on_message` to `on_unhandled`

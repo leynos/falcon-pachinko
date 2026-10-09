@@ -50,6 +50,14 @@ CI therefore resolves the newest release allowed by the dependency bounds on
 each build. Lower-bound coverage in CI and the decision to commit a lock file
 are tracked separately from this support policy.
 
+## Validation error import boundary
+
+Use `from falcon_pachinko.utils import ValidationError` as the stable import
+path for validation exceptions. It is currently the same class as
+`msgspec.ValidationError`, preserving existing exception handlers. The
+dispatcher routes validation failures to `on_unhandled`; a `ValidationError`
+raised inside a handler still propagates.
+
 ## Spelling policy
 
 Run the spelling gate with:

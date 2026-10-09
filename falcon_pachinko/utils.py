@@ -1,10 +1,24 @@
-"""Helper utilities for message validation and naming."""
+"""Helper utilities and a stable ``ValidationError`` import path.
+
+Catch validation errors through the public alias::
+
+    from falcon_pachinko.utils import ValidationError
+
+    try:
+        decode_message()
+    except ValidationError:
+        handle_invalid_input()
+"""
 
 from __future__ import annotations
 
 import re
+import typing as typ
 
 import msgspec as ms
+
+# Public identity alias for callers that should not depend on msgspec directly.
+ValidationError: typ.TypeAlias = ms.ValidationError  # pylint: disable=prefer-type-statement  # ruff: ignore[non-pep695-type-alias]  # PEP 695 breaks class identity.
 
 # Cap the payload echoed back in validation errors so logs stay readable.
 _MAX_PAYLOAD_SNIPPET = 200
@@ -35,7 +49,7 @@ def raise_unknown_fields(
             keep = _MAX_PAYLOAD_SNIPPET - len(_ELLIPSIS)
             snippet = f"{snippet[:keep]}{_ELLIPSIS}"
         details += f" -> {snippet}"
-    raise ms.ValidationError(details)
+    raise ValidationError(details)
 
 
 def to_snake_case(name: str) -> str:
