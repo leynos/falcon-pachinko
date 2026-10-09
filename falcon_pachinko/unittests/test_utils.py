@@ -84,9 +84,7 @@ def test_raise_unknown_fields_truncates_included_payload() -> None:
     assert separator == " -> ", (
         "Included payload text must follow the documented separator."
     )
-    assert len(snippet) == 200, (
-        "The included payload snippet must be 200 characters."
-    )
+    assert len(snippet) == 200, "The included payload snippet must be 200 characters."
     assert snippet.endswith("..."), (
         "A truncated payload snippet must end in an ellipsis."
     )
