@@ -61,9 +61,9 @@ failures to `on_unhandled`; a `ValidationError` raised inside a handler still
 propagates.
 
 The typed alias is a direct assignment to preserve the original class object.
-Ruff bans `from msgspec import ...`, and PEP 695 syntax would not preserve class
-identity, so the line-local Pylint and Ruff suppressions document this
-constraint.
+Ruff bans `from msgspec import ...`; PEP 695 syntax would not preserve class
+identity. The line-local Pylint `prefer-type-statement` and Ruff
+`non-pep695-type-alias` suppressions document those constraints.
 
 ## Spelling policy
 
