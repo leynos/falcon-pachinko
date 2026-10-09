@@ -74,4 +74,4 @@ def validate_strict_payload(
     if isinstance(info, msinspect.StructType) and (
         extra := set(payload) - {f.name for f in info.fields}
     ):
-        raise_unknown_fields(extra)
+        raise_unknown_fields(extra, expected_type=payload_type)

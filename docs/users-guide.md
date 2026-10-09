@@ -148,6 +148,50 @@ class ChatResource(WebSocketResource):
   `on_unhandled(self, ws, raw)` when defined.
 - The decorator supports `strict=False` to allow extra fields when required.
 
+### Diagnostic output and raw payloads
+
+Framework-generated validation errors, logs, trace summaries and object
+representations omit payload values by default. They may include bounded
+structural metadata such as field or handler names, expected types, frame kind
+and length, exception class, and lifecycle phase. This keeps a malformed
+authentication frame from placing a token or other payload value in ordinary
+diagnostic output.
+
+The raw values remain available to explicitly registered application hooks and
+handlers. For example, `HookContext.raw` and the `on_unhandled` fallback
+argument retain the original frame. `TraceEvent.payload` retains the value
+recorded by the trace; a JSON receive records the decoded object, not
+necessarily the original frame. Treat raw access as a trusted boundary: the
+framework cannot prevent application hook or handler code from explicitly
+logging raw payloads, which can disclose secrets. Decoding bytes as UTF-8 does
+not sanitize the resulting text.
+
+For trusted local debugging, opt in to a bounded sample formatter:
+
+```python
+from falcon_pachinko import DiagnosticSanitizer
+
+sanitizer = DiagnosticSanitizer(
+    extra_sensitive_keys=frozenset({"session_id", "client_secret"})
+)
+sample = sanitizer.format_sample({"status": "rejected", "access_token": "local-token"})
+```
+
+The sanitizer traverses only exact built-in dictionaries, lists, tuples and
+scalar types. Configure `max_depth`, `max_items`, `max_string_length`, and
+`max_output_length` to bound samples. Integer magnitudes are also bounded. It
+detects cycles and describes bytes without decoding them. Unsupported objects
+are described by safe type name without their value; non-string or unusable
+mapping keys are omitted. If a value cannot be inspected safely, it is omitted.
+`format_sample()` also enforces a total output-length limit, while `sanitize()`
+returns a bounded tree. If its complete JSON-serialized result would exceed
+`max_output_length`, `sanitize()` returns the `<budget>` omission marker.
+Sensitive-key matching normalizes case and common separators, then matches
+configured fragments within the key. `DEFAULT_SENSITIVE_KEYS` provides common
+credential names, and `extra_sensitive_keys` extends that set. Redaction is a
+defence-in-depth aid: applications may use unfamiliar names or positional
+values, so omission remains the default security boundary.
+
 ## 5. Hooks
 
 - Register global hooks on the router or per-resource hooks (`before_connect`,
@@ -267,7 +311,8 @@ it. An undecorated async function works in the same way.
 ## 10. Testing Toolkit
 
 - **WebSocketTestClient** – Real websocket client powered by `websockets`,
-  designed for integration tests; captures traces for assertions.
+  designed for integration tests; captures original payloads for assertions,
+  while trace representations and `TraceEvent.summary()` show safe metadata.
 - **WebSocketSimulator** – In-memory fake implementing the WebSocket protocol
   for fast unit tests.
 - **Pytest fixtures** – See `tests/behaviour/*.feature` and
