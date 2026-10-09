@@ -31,6 +31,17 @@ class AtomicWriteOptions:
 _DEFAULT_OPTIONS = AtomicWriteOptions()
 
 
+def _existing_mode(path: pathlib.Path, *, preserve_mode: bool) -> int | None:
+    """Return the destination mode only when preservation was requested."""
+    return path.stat().st_mode if preserve_mode and path.exists() else None
+
+
+def _cleanup_temporary(path: pathlib.Path | None) -> None:
+    """Remove an unfinished sibling after success or any write failure."""
+    if path is not None:
+        path.unlink(missing_ok=True)
+
+
 @contextlib.contextmanager
 def _open_directory(directory: pathlib.Path) -> cabc.Iterator[int]:
     """Open a directory descriptor for a scoped operation.
@@ -78,7 +89,7 @@ def atomic_write(
     """
     if options.create_parents:
         path.parent.mkdir(parents=True, exist_ok=True)
-    mode = path.stat().st_mode if options.preserve_mode and path.exists() else None
+    mode = _existing_mode(path, preserve_mode=options.preserve_mode)
     temporary: pathlib.Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -99,5 +110,4 @@ def atomic_write(
             with _open_directory(path.parent) as descriptor:
                 os.fsync(descriptor)
     finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+        _cleanup_temporary(temporary)

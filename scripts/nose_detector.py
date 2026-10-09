@@ -25,11 +25,12 @@ from nose_schema import (
     GateConfigError,
     GateExecutionError,
     Location,
+    is_non_empty_string,
+    is_positive_integer,
     normalize_findings,
-    require_positive_int,
-    require_string,
     require_string_tuple,
     require_table,
+    require_value,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -103,17 +104,48 @@ def load_settings(pyproject_path: Path) -> NoseSettings:
     NoseSettings
         Validated detector settings.
 
-    Raises
-    ------
-    GateConfigError
-        If a required key is missing or has the wrong type.
+    """
+    return _settings_from_table(
+        _load_nose_table(pyproject_path), repository_root=pyproject_path.parent
+    )
+
+
+def _load_nose_table(pyproject_path: Path) -> cabc.Mapping[str, object]:
+    """Read TOML and validate the nested table shape before field checks.
+
+    Returns
+    -------
+    collections.abc.Mapping[str, object]
+        The validated ``[tool.nose]`` table.
     """
     with pyproject_path.open("rb") as handle:
         data = tomllib.load(handle)
     root = require_table(data, context="pyproject")
     table = require_table(root.get("tool", {}), context="tool")
-    nose = require_table(table.get("nose", {}), context="tool.nose")
-    surface = require_string(nose.get("surface", "all"), context="tool.nose.surface")
+    return require_table(table.get("nose", {}), context="tool.nose")
+
+
+def _settings_from_table(
+    nose: cabc.Mapping[str, object], *, repository_root: Path
+) -> NoseSettings:
+    """Validate detector fields and source roots in their reported order.
+
+    Returns
+    -------
+    NoseSettings
+        Validated detector settings.
+
+    Raises
+    ------
+    GateConfigError
+        If a setting is invalid or a configured root selects no source files.
+    """
+    surface = require_value(
+        nose.get("surface", "all"),
+        validator=is_non_empty_string,
+        expected="a non-empty string",
+        context="tool.nose.surface",
+    )
     if surface not in {"default", "all"}:
         msg = "tool.nose.surface must be 'default' or 'all'"
         raise GateConfigError(msg)
@@ -121,22 +153,40 @@ def load_settings(pyproject_path: Path) -> NoseSettings:
     if not roots:
         msg = "tool.nose.roots must not be empty"
         raise GateConfigError(msg)
-    mode = require_string(nose.get("mode"), context="tool.nose.mode")
+    mode = require_value(
+        nose.get("mode"),
+        validator=is_non_empty_string,
+        expected="a non-empty string",
+        context="tool.nose.mode",
+    )
     _validate_channels(mode)
     exclude = require_string_tuple(nose.get("exclude", []), context="tool.nose.exclude")
-    _validate_roots(roots, exclude, repository_root=pyproject_path.parent)
+    _validate_roots(roots, exclude, repository_root=repository_root)
     return NoseSettings(
-        version=require_string(nose.get("version"), context="tool.nose.version"),
+        version=require_value(
+            nose.get("version"),
+            validator=is_non_empty_string,
+            expected="a non-empty string",
+            context="tool.nose.version",
+        ),
         roots=roots,
         mode=mode,
-        min_size=require_positive_int(
-            nose.get("min-size"), context="tool.nose.min-size"
+        min_size=require_value(
+            nose.get("min-size"),
+            validator=is_positive_integer,
+            expected="a positive integer",
+            context="tool.nose.min-size",
         ),
         surface=surface,
         top=(
             None
             if nose.get("top") is None
-            else require_positive_int(nose.get("top"), context="tool.nose.top")
+            else require_value(
+                nose.get("top"),
+                validator=is_positive_integer,
+                expected="a positive integer",
+                context="tool.nose.top",
+            )
         ),
         exclude=exclude,
     )
@@ -153,34 +203,48 @@ def _validate_roots(
     _validate_excludes(exclude)
 
     for root in roots:
-        if not _is_safe_relative_posix_path(root):
-            msg = (
-                f"tool.nose.roots entry {root!r} must be a "
-                "repository-relative POSIX path"
-            )
-            raise GateConfigError(msg)
-        candidate = repository_root / root
-        try:
-            resolved = candidate.resolve(strict=True)
-        except OSError as error:
-            msg = f"tool.nose.roots entry {root!r} does not exist: {error}"
-            raise GateConfigError(msg) from error
-        if not resolved.is_relative_to(root_directory):
-            msg = f"tool.nose.roots entry {root!r} escapes the repository"
-            raise GateConfigError(msg)
+        candidate, resolved = _resolve_root(
+            root, repository_root=repository_root, root_directory=root_directory
+        )
+        _validate_root_sources(root, candidate, resolved, exclude)
 
-        source_files, is_file_root = _root_sources(candidate, resolved)
-        if not any(
-            _is_selected_source(
-                source,
-                resolved_root=resolved,
-                is_file_root=is_file_root,
-                exclude=exclude,
-            )
-            for source in source_files
-        ):
-            msg = f"tool.nose.roots entry {root!r} selects no Python source files"
-            raise GateConfigError(msg)
+
+def _resolve_root(
+    root: str, *, repository_root: Path, root_directory: Path
+) -> tuple[Path, Path]:
+    """Resolve one safe configured root and reject missing or escaping paths."""
+    if not _is_safe_relative_posix_path(root):
+        msg = f"tool.nose.roots entry {root!r} must be a repository-relative POSIX path"
+        raise GateConfigError(msg)
+    candidate = repository_root / root
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        msg = f"tool.nose.roots entry {root!r} does not exist: {error}"
+        raise GateConfigError(msg) from error
+    if not resolved.is_relative_to(root_directory):
+        msg = f"tool.nose.roots entry {root!r} escapes the repository"
+        raise GateConfigError(msg)
+    return candidate, resolved
+
+
+def _validate_root_sources(
+    root: str, candidate: Path, resolved: Path, exclude: tuple[str, ...]
+) -> None:
+    """Require one in-scope Python file beneath a configured root."""
+    source_files, is_file_root = _root_sources(candidate, resolved)
+    if any(
+        _is_selected_source(
+            source,
+            resolved_root=resolved,
+            is_file_root=is_file_root,
+            exclude=exclude,
+        )
+        for source in source_files
+    ):
+        return
+    msg = f"tool.nose.roots entry {root!r} selects no Python source files"
+    raise GateConfigError(msg)
 
 
 def _validate_excludes(exclude: tuple[str, ...]) -> None:
@@ -230,16 +294,20 @@ def _is_excluded(path: str, patterns: tuple[str, ...]) -> bool:
 
 def _validate_channels(mode: str) -> None:
     """Reject empty, repeated, or unsupported detector channels."""
+    if not _has_supported_channels(mode):
+        msg = "tool.nose.mode must list unique syntax, semantic, or near channels"
+        raise GateConfigError(msg)
+
+
+def _has_supported_channels(mode: str) -> bool:
+    """Check channel content and uniqueness independently of diagnostics."""
     channels = tuple(channel.strip() for channel in mode.split(","))
-    if not channels or any(not channel for channel in channels):
-        msg = "tool.nose.mode must list unique syntax, semantic, or near channels"
-        raise GateConfigError(msg)
-    if len(set(channels)) != len(channels):
-        msg = "tool.nose.mode must list unique syntax, semantic, or near channels"
-        raise GateConfigError(msg)
-    if not set(channels) <= _SUPPORTED_CHANNELS:
-        msg = "tool.nose.mode must list unique syntax, semantic, or near channels"
-        raise GateConfigError(msg)
+    return (
+        bool(channels)
+        and all(channels)
+        and len(set(channels)) == len(channels)
+        and set(channels) <= _SUPPORTED_CHANNELS
+    )
 
 
 def _is_safe_relative_posix_path(path_value: str) -> bool:
