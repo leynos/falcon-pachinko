@@ -20,7 +20,7 @@ EVENT_WAIT_TIMEOUT = 2.0
 if typ.TYPE_CHECKING:  # pragma: no cover - used only for type checking
     import collections.abc as cabc
 
-START_TIMEOUT = 1.0
+START_TIMEOUT: float = 1.0
 
 
 async def _blocking_worker() -> None:
@@ -67,13 +67,10 @@ def _capture_created_tasks(
 
 
 @worker
-async def _sample_worker(
-    *, flag: dict[str, bool], ready: asyncio.Event | None = None
-) -> None:
+async def _sample_worker(*, flag: dict[str, bool], ready: asyncio.Event) -> None:
     """Set ``flag['ran']`` then block until cancelled."""
     flag["ran"] = True
-    if ready is not None:
-        ready.set()
+    ready.set()
     never_set = asyncio.Event()
     with contextlib.suppress(asyncio.CancelledError):
         await never_set.wait()
@@ -169,9 +166,10 @@ async def test_worker_controller_runs_and_stops(
 async def test_start_twice_raises_error(controller: WorkerController) -> None:
     """Starting twice without stopping should raise an error."""
     flag: dict[str, bool] = {}
-    await controller.start(_sample_worker, flag=flag)
+    ready = asyncio.Event()
+    await controller.start(_sample_worker, flag=flag, ready=ready)
     with pytest.raises(RuntimeError):
-        await controller.start(_sample_worker, flag=flag)
+        await controller.start(_sample_worker, flag=flag, ready=ready)
     await controller.stop()
 
 
@@ -179,8 +177,9 @@ async def test_start_twice_raises_error(controller: WorkerController) -> None:
 async def test_stop_is_idempotent(controller: WorkerController) -> None:
     """Stopping multiple times should not raise."""
     flag: dict[str, bool] = {}
-    await controller.start(_sample_worker, flag=flag)
-    await asyncio.sleep(0)
+    ready = asyncio.Event()
+    await controller.start(_sample_worker, flag=flag, ready=ready)
+    await asyncio.wait_for(ready.wait(), timeout=START_TIMEOUT)
     await controller.stop()
     await controller.stop()
 
