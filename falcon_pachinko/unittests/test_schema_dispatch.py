@@ -69,7 +69,7 @@ class IntegerTagResource(WebSocketResource):
 
     def __init__(self) -> None:
         """Initialize with an empty events list."""
-        self.events: list[tuple[str, typ.Any]] = []
+        self.events: list[tuple[str, str | bytes]] = []
 
     async def on_1(self, ws: WebSocketLike, payload: IntegerMessage) -> None:
         """Record the conventional integer-tag handler event."""
@@ -87,7 +87,7 @@ class RegisteredIntegerTagResource(WebSocketResource):
 
     def __init__(self) -> None:
         """Initialize with an empty events list."""
-        self.events: list[tuple[str, typ.Any]] = []
+        self.events: list[tuple[str, str | bytes]] = []
 
     @handles_message("integer")
     async def handle_integer(self, ws: WebSocketLike, payload: IntegerMessage) -> None:
@@ -108,7 +108,7 @@ class UntaggedFallbackResource(WebSocketResource):
 
     def __init__(self) -> None:
         """Initialize with an empty events list."""
-        self.events: list[tuple[str, typ.Any]] = []
+        self.events: list[tuple[str, str | bytes]] = []
 
     async def on_none(self, ws: WebSocketLike, payload: Untagged) -> None:
         """Record the handler that would match a stringified ``None`` tag."""
