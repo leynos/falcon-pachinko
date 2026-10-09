@@ -5,13 +5,29 @@ public user guide.
 
 ## WorkerController lifecycle
 
-`WorkerController.start()` rejects a second start while tasks remain
-registered. It schedules each worker with the same keyword context. During
-`stop()`, the controller cancels all tasks, gathers them, and selects the first
-non-cancellation exception in registration order. It then clears the task list
-and re-raises that exception, if present, leaving the controller ready to
-restart. Worker cleanup runs through task cancellation; the application
-lifespan handler owns external resources.
+`WorkerController.start()` rejects a second start while tasks remain registered
+and schedules each worker with the same keyword context. If a worker factory or
+task creation fails, it closes any coroutine rejected by
+`asyncio.create_task()`, cancels and awaits tasks already scheduled, and resets
+the controller so the caller can retry. The original startup exception remains
+primary; rollback failures or cancellation are attached to it as exception
+notes. Rollback continues cleanup if the caller is cancelled. The controller
+does not keep an async exit stack; the application lifespan handler owns
+external resources.
+
+`_schedule_worker()` creates the worker task and closes a rejected coroutine.
+`_rollback_start()` waits for `_finish_startup_rollback()` despite caller
+cancellation; that helper cancels and awaits scheduled tasks, then clears state.
+`_rollback_start_preserving_error()` keeps the startup exception primary and
+attaches rollback failures or cancellation as notes.
+
+During `stop()`, the controller cancels all tasks, gathers them, and selects
+the first non-cancellation exception in registration order. It then clears the
+task list and re-raises that exception, if present, leaving the controller
+ready to restart. The controller emits neither startup logs nor metrics and
+remains telemetry-agnostic. It propagates the original startup exception to the
+application startup caller, leaving application-specific logging and metrics to
+the lifespan owner.
 
 ## Dependency bounds
 

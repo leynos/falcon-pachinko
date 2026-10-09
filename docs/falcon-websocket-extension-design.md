@@ -518,7 +518,10 @@ non-cancellation exception in task registration order, clears the task list,
 and then re-raises that exception, leaving the controller ready to restart.
 
 Worker cleanup happens through task cancellation, and the application lifespan
-handler owns external resources.
+handler owns external resources. If a worker factory or task creation fails,
+`start()` closes any rejected coroutine, cancels and awaits tasks already
+scheduled, and resets the controller so the caller can retry. The original
+startup exception is re-raised; rollback failures are attached to it as notes.
 
 #### 3.8.3. Application Usage
 
