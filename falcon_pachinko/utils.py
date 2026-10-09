@@ -1,4 +1,14 @@
-"""Helper utilities and a stable ``ValidationError`` import path."""
+"""Helper utilities and a stable ``ValidationError`` import path.
+
+Catch validation errors through the public alias::
+
+    from falcon_pachinko.utils import ValidationError
+
+    try:
+        decode_message()
+    except ValidationError:
+        handle_invalid_input()
+"""
 
 from __future__ import annotations
 

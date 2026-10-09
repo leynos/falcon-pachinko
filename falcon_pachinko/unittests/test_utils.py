@@ -33,10 +33,5 @@ def test_raise_unknown_fields_uses_sorted_names() -> None:
 
 def test_msgspec_validation_error_catches_unknown_fields() -> None:
     """Existing msgspec exception handlers continue to catch the error."""
-    caught_by_msgspec = False
-    try:
+    with pytest.raises(ms.ValidationError):
         utils.raise_unknown_fields({"b", "a"})
-    except ms.ValidationError:
-        caught_by_msgspec = True
-
-    assert caught_by_msgspec, "msgspec.ValidationError must catch the raised error"

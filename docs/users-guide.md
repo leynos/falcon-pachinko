@@ -148,6 +148,12 @@ class ChatResource(WebSocketResource):
   `on_unhandled(self, ws, raw)` when defined.
 - The decorator supports `strict=False` to allow extra fields when required.
 
+The stable import path is `from falcon_pachinko.utils import ValidationError`.
+It is the same class as `msgspec.ValidationError`, so existing
+`except msgspec.ValidationError` handlers continue to work. The dispatcher
+routes validation failures to `on_unhandled`; a `ValidationError` raised inside
+a handler propagates.
+
 ## 5. Hooks
 
 - Register global hooks on the router or per-resource hooks (`before_connect`,
