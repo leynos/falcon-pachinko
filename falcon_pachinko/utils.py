@@ -13,11 +13,15 @@ Catch validation errors through the public alias::
 from __future__ import annotations
 
 import re
+import typing as typ
 
 import msgspec as ms
 
 # Public identity alias for callers that should not depend on msgspec directly.
-ValidationError: type[ms.ValidationError] = ms.ValidationError
+# pylint: disable-next=prefer-type-statement  # PEP 695 breaks class identity.
+ValidationError: typ.TypeAlias = (  # ruff: ignore[non-pep695-type-alias]
+    ms.ValidationError
+)
 
 # Cap the payload echoed back in validation errors so logs stay readable.
 _MAX_PAYLOAD_SNIPPET = 200

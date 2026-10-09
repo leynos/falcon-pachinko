@@ -22,6 +22,17 @@ def test_validation_error_is_decode_error() -> None:
     )
 
 
+def test_validation_error_is_usable_in_type_annotations() -> None:
+    """Callers can use the public exception name as an annotation."""
+
+    def handle(error: utils.ValidationError) -> str:
+        return str(error)
+
+    assert handle(ms.ValidationError("invalid payload")) == "invalid payload", (
+        "the public alias must be usable in exception annotations"
+    )
+
+
 def test_raise_unknown_fields_uses_sorted_names() -> None:
     """Unknown field names are sorted in the raised error message."""
     with pytest.raises(
