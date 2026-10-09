@@ -23,6 +23,18 @@ class Leave(ms.Struct, tag="leave"):
     room: str
 
 
+class IntegerMessage(ms.Struct, tag=1):
+    """Message structure with an integer dispatch tag."""
+
+    value: str
+
+
+class Untagged(ms.Struct):
+    """Message structure without a dispatch tag."""
+
+    value: str
+
+
 MessageUnion = Join | Leave
 
 
@@ -50,6 +62,63 @@ class SchemaResource(WebSocketResource):
         self.events.append(("raw", message))
 
 
+class IntegerTagResource(WebSocketResource):
+    """Resource with a conventional handler for an integer tag."""
+
+    schema = IntegerMessage
+
+    def __init__(self) -> None:
+        """Initialize with an empty events list."""
+        self.events: list[tuple[str, typ.Any]] = []
+
+    async def on_1(self, ws: WebSocketLike, payload: IntegerMessage) -> None:
+        """Record the conventional integer-tag handler event."""
+        self.events.append(("on_1", payload.value))
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record fallback messages."""
+        self.events.append(("raw", message))
+
+
+class RegisteredIntegerTagResource(WebSocketResource):
+    """Resource with a registered handler and a conventional handler."""
+
+    schema = IntegerMessage
+
+    def __init__(self) -> None:
+        """Initialize with an empty events list."""
+        self.events: list[tuple[str, typ.Any]] = []
+
+    @handles_message("integer")
+    async def handle_integer(self, ws: WebSocketLike, payload: IntegerMessage) -> None:
+        """Record the registered handler event."""
+        self.events.append(("registered", payload.value))
+
+    async def on_1(self, ws: WebSocketLike, payload: IntegerMessage) -> None:
+        """Record the conventional handler event."""
+        self.events.append(("on_1", payload.value))
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record fallback messages."""
+        self.events.append(("raw", message))
+
+
+class UntaggedFallbackResource(WebSocketResource):
+    """Resource with handlers that must not match an untagged schema."""
+
+    def __init__(self) -> None:
+        """Initialize with an empty events list."""
+        self.events: list[tuple[str, typ.Any]] = []
+
+    async def on_none(self, ws: WebSocketLike, payload: Untagged) -> None:
+        """Record the handler that would match a stringified ``None`` tag."""
+        self.events.append(("on_none", payload.value))
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record fallback messages."""
+        self.events.append(("raw", message))
+
+
 @pytest.mark.asyncio
 async def test_schema_dispatch_to_handlers() -> None:
     """Messages matching the schema are routed to decorated handlers."""
@@ -61,6 +130,41 @@ async def test_schema_dispatch_to_handlers() -> None:
         ("join", "a"),
         ("leave", "b"),
     ], "both schema-tagged messages should dispatch to their handlers in order"
+
+
+@pytest.mark.asyncio
+async def test_integer_tag_dispatches_to_conventional_handler() -> None:
+    """Integer tags should be stringified for conventional handler lookup."""
+    r = IntegerTagResource()
+    r.bind_default_hook_manager()
+    await r.dispatch(DummyWS(), msjson.encode(IntegerMessage(value="one")))
+    assert r.events == [("on_1", "one")], (
+        "integer tags should dispatch only to the on_1 conventional handler"
+    )
+
+
+@pytest.mark.asyncio
+async def test_registered_handler_precedes_integer_tag_fallback() -> None:
+    """Registered payload handlers should precede conventional tag lookup."""
+    r = RegisteredIntegerTagResource()
+    r.bind_default_hook_manager()
+    await r.dispatch(DummyWS(), msjson.encode(IntegerMessage(value="one")))
+    assert r.events == [("registered", "one")], (
+        "the registered handler should run without the conventional fallback"
+    )
+
+
+@pytest.mark.asyncio
+async def test_none_tag_calls_fallback_without_conventional_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """None tags should call on_unhandled rather than on_none."""
+    r = UntaggedFallbackResource()
+    r.bind_default_hook_manager()
+    monkeypatch.setattr(r, "schema", Untagged)
+    raw = msjson.encode(Untagged(value="untagged"))
+    await r.dispatch(DummyWS(), raw)
+    assert r.events == [("raw", raw)], "on_none must not run for a None tag"
 
 
 @pytest.mark.asyncio
