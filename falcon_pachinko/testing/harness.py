@@ -224,11 +224,15 @@ class SimulatorRouterHarness:
     async def _finish_connection(self, session: _ConnectionSession) -> None:
         """Close test sockets and await the router's session task."""
         self._pending_simulator = None
-        if not session.simulator.closed:
-            await session.simulator.close()
-        if not session.websocket.closed:
-            await session.websocket.close()
-        await self._await_router_task(session.router_task)
+        try:
+            if not session.simulator.closed:
+                await session.simulator.close()
+            if not session.websocket.closed:
+                await session.websocket.close()
+            await self._await_router_task(session.router_task)
+        finally:
+            if not session.websocket.closed:
+                await session.websocket.close()
 
     @asynccontextmanager
     async def connect(
@@ -279,7 +283,27 @@ class SimulatorRouterHarness:
         router_task: asyncio.Task[None],
     ) -> None:
         """Wait until routing accepts, closes, or fails before yielding."""
-        await asyncio.wait_for(simulator.ready_event.wait(), timeout=5)
+        readiness_task = asyncio.create_task(simulator.ready_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                (router_task, readiness_task),
+                timeout=5,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                msg = "router did not accept or reject the simulated connection"
+                raise TimeoutError(msg)
+            if router_task in done:
+                router_task.result()
+            elif simulator.closed:
+                # A close is a readiness event too; surface any failure that
+                # followed the resource's rejection or setup rollback.
+                if router_task.done():
+                    router_task.result()
+        finally:
+            readiness_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await readiness_task
         if simulator.closed or router_task.done():
             await router_task
 
