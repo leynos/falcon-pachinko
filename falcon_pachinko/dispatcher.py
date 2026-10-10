@@ -141,13 +141,6 @@ async def dispatch_with_schema(
         message = msjson.decode(raw, type=resource.schema)
     except (ms.DecodeError, ms.ValidationError):
         failed = True
-    except TypeError:
-        # ``TypeError`` is how msgspec reports a schema it cannot derive, such
-        # as a union mixing integer and string tags. Class creation rejects
-        # those, but ``schema`` can be assigned at runtime, so treat the
-        # schema as a decode failure rather than letting the error escape and
-        # break the receive loop.
-        failed = True
     if failed:
         await resource.on_unhandled(ws, raw)
         return

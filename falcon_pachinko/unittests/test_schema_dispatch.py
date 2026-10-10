@@ -150,7 +150,7 @@ class UntaggedFallbackResource(WebSocketResource):
         self.events.append(("raw", message))
 
 
-class MixedTagFallbackResource(WebSocketResource):
+class MixedTagResource(WebSocketResource):
     """Resource whose schema mixes tag kinds, applied at runtime.
 
     No ``schema`` attribute is declared here, so class creation performs no
@@ -163,7 +163,7 @@ class MixedTagFallbackResource(WebSocketResource):
         self.events: list[tuple[str, str | bytes]] = []
 
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Record fallback messages."""
+        """Record fallback messages that must never be reached."""
         self.events.append(("raw", message))
 
 
@@ -382,23 +382,23 @@ def test_homogeneous_integer_tags_are_accepted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_assigned_mixed_tag_union_falls_back() -> None:
-    """A mixed union assigned after class creation must reach ``on_unhandled``.
+async def test_runtime_assigned_mixed_tag_union_surfaces_the_error() -> None:
+    """A mixed union assigned after class creation must fail visibly.
 
-    Class-creation validation cannot see this schema, so the dispatcher itself
-    has to treat msgspec's ``TypeError`` as a decode failure rather than
-    letting it escape and break the receive loop.
+    Class-creation validation cannot see this schema. Swallowing msgspec's
+    ``TypeError`` here would send every frame to ``on_unhandled`` while leaving
+    the broken schema installed, so the configuration error must propagate
+    instead of being disguised as a malformed message.
     """
-    r = MixedTagFallbackResource()
+    r = MixedTagResource()
     r.bind_default_hook_manager()
     # Assigning the invalid schema after class creation bypasses the eager
     # check, which is the point of the regression.
     r.schema = MixedTagUnion  # ty: ignore[invalid-assignment]  # deliberately bypasses validation
     raw = msjson.encode(IntegerTaggedMessage(value="eleven"))
-    await r.dispatch(DummyWS(), raw)
-    assert r.events == [("raw", raw)], (
-        "a mixed tag union must fall back instead of raising TypeError"
-    )
+    with pytest.raises(TypeError, match="both .int. and .str. tags"):
+        await r.dispatch(DummyWS(), raw)
+    assert r.events == [], "an invalid schema must not be reported as a bad frame"
 
 
 @pytest.mark.asyncio
