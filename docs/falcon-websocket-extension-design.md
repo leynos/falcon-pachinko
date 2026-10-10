@@ -356,6 +356,16 @@ avoids a monolithic receive loop with extensive conditional logic.
      set at class creation keeps the decision with the class author, who is the
      only party that can judge which `on_*` methods are message handlers.
 
+     The allowlist admits only a plain coroutine function. Class creation
+     inspects each `on_*` attribute with `inspect.getattr_static` rather than
+     `getattr`, so a descriptor named `on_*` cannot run, or raise, while the
+     class is being created. That also means `@staticmethod` and `@classmethod`
+     coroutines are not admitted: the dispatcher passes the resource instance
+     in the `self` position, which a static method does not accept and a class
+     method would receive as the class. Only the conventional path narrows this
+     way; explicit registration with `@handles_message` or `add_handler` is
+     unaffected.
+
      The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are
      reserved and are never admitted to the allowlist, along with any alias or
      inherited copy of them. They are lifecycle-driven, so a peer-chosen tag

@@ -254,15 +254,18 @@ class WebSocketResource:
 
         The set is fixed when the class is created so that dispatch never
         consults an attribute the class did not intend to expose. Resolution
-        walks the MRO, so inheritance is honoured; only reserved lifecycle
-        names, synchronous shadows and descriptors are dropped.
+        walks the MRO, so inheritance is honoured.
 
         ``getattr_static`` is used rather than ``getattr`` so that a
         descriptor an application happens to name ``on_*`` cannot run, or
         raise, while a resource class is being created. It returns the raw
-        function object for a plain method, so ``iscoroutinefunction`` still
-        sees through nothing: a wrapped coroutine stays wrapped unless the
-        wrapper sets ``__wrapped__``, which ``getattr_static`` follows.
+        attribute, so only a plain coroutine function is admitted:
+        ``@staticmethod`` and ``@classmethod`` return the descriptor object
+        rather than the function, and both fail the coroutine test. That is
+        deliberate: a ``staticmethod`` has no ``self``, so the dispatcher
+        cannot pass the resource the registered handler signature promises,
+        and a ``classmethod`` receives the class in that position. Both
+        shapes are rejected here rather than failing at call time.
         """
         names = {
             name
