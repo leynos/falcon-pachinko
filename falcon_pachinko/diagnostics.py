@@ -63,6 +63,12 @@ def _identifier(value: object) -> str:
     return value
 
 
+def _quote_identifier(value: str) -> str:
+    """Quote an already-bounded identifier without reflecting caller values."""
+    escaped = value.replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{escaped}'"
+
+
 def _identifiers(values: cabc.Collection[object]) -> str:
     """Bound names before sorting and rendering framework field metadata."""
     if not any(type(values) is kind for kind in (dict, list, tuple, set, frozenset)):
@@ -70,7 +76,7 @@ def _identifiers(values: cabc.Collection[object]) -> str:
     names = sorted(
         _identifier(value) for value in itertools.islice(values, _MAX_IDENTIFIERS)
     )
-    rendered = "[" + ", ".join(json.dumps(name) for name in names) + "]"
+    rendered = "[" + ", ".join(_quote_identifier(name) for name in names) + "]"
     overflow = len(values) - len(names)
     if overflow:
         rendered += f" (+{overflow} fields)"

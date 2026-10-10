@@ -69,7 +69,7 @@ def test_frame_metadata(value: object, expected: tuple[str, int | None]) -> None
         (_safe_scalar, 10**1000, "<integer>", "bound integer rendering"),
         (_safe_scalar, HookEvent.AFTER_RECEIVE, "after_receive", "render known events"),
         (_safe_scalar, CANARY, "<omitted>", "omit arbitrary string values"),
-        (_identifiers, {"z", "a"}, '["a", "z"]', "sort rendered field names"),
+        (_identifiers, {"z", "a"}, "['a', 'z']", "sort rendered field names"),
     ],
 )
 def test_metadata_omits_hostile_and_oversized_values(

@@ -107,6 +107,16 @@ def test_raise_unknown_fields_truncates_included_payload() -> None:
     )
 
 
+def test_raise_unknown_fields_escapes_identifier_quotes_and_backslashes() -> None:
+    """Bounded names preserve the established single-quoted representation."""
+    with pytest.raises(utils.ValidationError) as raised:
+        utils.raise_unknown_fields({"quote'\\name"})
+
+    assert str(raised.value) == "Unknown fields in payload: ['quote\\'\\\\name']", (
+        "field identifiers must remain escaped within the compatible format"
+    )
+
+
 def test_msgspec_validation_error_catches_unknown_fields() -> None:
     """Existing msgspec exception handlers continue to catch the error."""
     with pytest.raises(ms.ValidationError):
