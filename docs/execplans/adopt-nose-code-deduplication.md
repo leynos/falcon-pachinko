@@ -216,16 +216,17 @@ head and checks after this documentation follow-up.
   cover each boundary, and the maintainer guide now matches lint and cache
   behaviour.
 - At that pre-publication point, the final sequential validation passed on the
-  review fixes: formatting, 166 helper tests with 3
-  snapshots, the three-exception duplication scan, Ruff, classic Pylint
-  (10/10), df12 Pylint (10/10), ambrleaks, typechecking, spelling and Markdown,
-  Mermaid, 439 application tests (2 skipped, 19 warnings), and CV005. The
-  candidate was then ready to commit and publish; hosted checks and review
-  reconciliation were pending for its next head.
+  review fixes: formatting, 166 helper tests with 3 snapshots, the
+  three-exception duplication scan, Ruff, classic Pylint (10/10), df12 Pylint
+  (10/10), ambrleaks, typechecking, spelling and Markdown, Mermaid, 439
+  application tests (2 skipped, 19 warnings), and CV005. The candidate was then
+  ready to commit and publish; hosted checks and review reconciliation were
+  pending for its next head.
 - CodeRabbit's walkthrough says automatic reviews are paused because the branch
-  is under active development. It does not report a rate-limit rejection. The
-  current `comenq list` has no request for `falcon-pachinko#225`; request one
-  review after the next validated head is pushed.
+  is under active development. It does not report a rate-limit rejection. At
+  that point, `comenq list` had no request for `falcon-pachinko#225`; the
+  recorded next action was to request a review after the next validated head
+  was pushed.
 - At `dc858da5ec08e65f8acbb5a37038c3163631e48f`, the CodeScene delta reproduced
   a mean complexity of 4.14 in the new detector module. Splitting root-relative
   source-path validation from exclusion policy preserves selection behaviour;
@@ -280,21 +281,32 @@ head and checks after this documentation follow-up.
 - Current-head publication and validation: on
   `a0f02fe4c9398e4f1530b14c3bcc2137275b268c` against base
   `554105de7c9a3f7c413d31a36125271ad759f164`, PR #225 is open, ready for
-  review, and unmerged. Hosted CI run `38014329831`, CodeScene result `7890877`,
-  and Gecko Security Review pass. The final local sequential gates passed:
-  `make duplication-test` reported 172 passed and 3 snapshots with no skips;
-  `make test` reported 439 passed, 2 skipped, and 19 warnings; the standalone
-  duplication scan, formatting, lint (Ruff and both Pylint passes), typecheck,
-  spelling, Markdown, Mermaid, and CV005 checks also passed. The CodeRabbit
-  review baseline at this head has two unresolved documentation threads and a
-  Developer Documentation pre-merge warning. This is not clearance of the
-  separate completeness assessment; readiness is already true, and no proof or
-  completeness assessment clearance is claimed.
+  review, and unmerged. Hosted CI run `38014329831`, CodeScene result
+  `7890877`, and Gecko Security Review pass. The final local sequential gates
+  passed: `make duplication-test` reported 172 passed and 3 snapshots with no
+  skips; `make test` reported 439 passed, 2 skipped, and 19 warnings; the
+  standalone duplication scan, formatting, lint (Ruff and both Pylint passes),
+  typecheck, spelling, Markdown, Mermaid, and CV005 checks also passed. The
+  CodeRabbit review baseline at this head has two unresolved documentation
+  threads and a Developer Documentation pre-merge warning. This is not
+  clearance of the separate completeness assessment; readiness is already true,
+  and no proof or completeness assessment clearance is claimed.
 - Documentation follow-up status: at this entry, the published PR head remains
-  `a0f02fe4c9398e4f1530b14c3bcc2137275b268c`. Uncommitted local changes
-  correct the Developer Guide's both-file exception scope and document the
-  `DetectorContext` and `InstallerContext`; `make markdownlint` and `make nixie`
-  passed locally. Commit/publication, new-head hosted checks, a current-head
-  completeness assessment, and CodeRabbit inline-thread/pre-merge-warning
-  reconciliation remain pending. These documentation changes are not yet
-  published, and the findings are not claimed as resolved.
+  `a0f02fe4c9398e4f1530b14c3bcc2137275b268c`. Uncommitted local changes correct
+  the Developer Guide's both-file exception scope and document the
+  `DetectorContext` and `InstallerContext`; `make markdownlint` and
+  `make nixie` passed locally. Commit/publication, new-head hosted checks, a
+  current-head completeness assessment, and CodeRabbit
+  inline-thread/pre-merge-warning reconciliation remain pending. These
+  documentation changes are not yet published, and the findings are not claimed
+  as resolved.
+- Formatter follow-up, recorded while the published PR head was
+  `6245c5e5c10d046ec6c79b9e513188b17918a106` (base unchanged): CodeScene result
+  `7894021` passed. Hosted CI run `38049158534` failed only at
+  `Check formatting`, where mdtablefix requested this ExecPlan's reflow;
+  dependent checks were skipped. `make fmt` applied the reflow, and
+  `make check-fmt`, `make markdownlint`, and `make nixie` now pass locally. At
+  this entry, the format repair remains uncommitted and unpublished. Its hosted
+  checks, a current-head completeness assessment, and CodeRabbit disposition of
+  both inline threads and the Developer Documentation pre-merge warning remain
+  pending; no final CI pass or review resolution is claimed.
