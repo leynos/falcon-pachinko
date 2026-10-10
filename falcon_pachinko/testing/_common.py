@@ -29,6 +29,7 @@ _FAILED_JSON_DECODE_MSG = (
     "expected_type={expected}, exception={exception}"
 )
 _JSON_FRAME_REQUIRED_MSG = "JSON frames must be text or binary payloads"
+_CLOSED_SENTINEL = object()
 _ORIGINAL_WS_RECEIVE_MSG = "Original websocket stub does not support receiving frames"
 _INSECURE_WEBSOCKET_MSG = (
     "Insecure websocket URLs require allow_insecure=True. "

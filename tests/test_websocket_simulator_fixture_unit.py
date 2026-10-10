@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import typing as typ
 
 import pytest
@@ -12,8 +13,19 @@ from falcon_pachinko import (
     WebSocketResource,
     WebSocketSimulator,
 )
+from falcon_pachinko._testing_harness import _HarnessSimulator
+
+
+def _failed_future(error: Exception) -> asyncio.Future[None]:
+    """Return an awaitable that raises ``error`` when awaited."""
+    future = asyncio.get_running_loop().create_future()
+    future.set_exception(error)
+    return future
+
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     import falcon
 
     from falcon_pachinko.protocols import WebSocketLike
@@ -172,4 +184,121 @@ class TestWebSocketSimulatorFixture:
         )
         assert connection.websocket.accepted is True, (
             "the underlying websocket must remain accepted"
+        )
+
+    async def test_readiness_is_signalled_when_accept_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed accept wakes harness readiness waiters with its error."""
+        accept_error = RuntimeError()
+
+        def fail_accept(self: WebSocketSimulator, *_: object) -> asyncio.Future[None]:
+            del self
+            return _failed_future(accept_error)
+
+        monkeypatch.setattr(WebSocketSimulator, "accept", fail_accept)
+        simulator = _HarnessSimulator()
+
+        with pytest.raises(RuntimeError) as caught:
+            await simulator.accept()
+
+        assert caught.value is accept_error, "the accept failure must be preserved"
+        assert simulator.ready_event.is_set(), (
+            "accept failures must still wake readiness waiters"
+        )
+
+    async def test_readiness_is_signalled_when_close_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed close wakes harness readiness waiters with its error."""
+        close_error = RuntimeError()
+
+        def fail_close(self: WebSocketSimulator, *_: object) -> asyncio.Future[None]:
+            del self
+            return _failed_future(close_error)
+
+        monkeypatch.setattr(WebSocketSimulator, "close", fail_close)
+        simulator = _HarnessSimulator()
+
+        with pytest.raises(RuntimeError) as caught:
+            await simulator.close()
+
+        assert caught.value is close_error, "the close failure must be preserved"
+        assert simulator.ready_event.is_set(), (
+            "close failures must still wake readiness waiters"
+        )
+
+    async def test_readiness_failure_survives_router_cleanup_timeout(
+        self,
+        websocket_simulator: SimulatorRouterHarness,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Cleanup errors must not replace the original readiness failure."""
+        readiness_error = LookupError()
+        cleanup_error = TimeoutError()
+
+        def fail_readiness(
+            simulator: WebSocketSimulator,
+            router_task: asyncio.Task[None],
+        ) -> asyncio.Future[None]:
+            del simulator, router_task
+            return _failed_future(readiness_error)
+
+        def fail_cleanup(router_task: asyncio.Task[None]) -> asyncio.Future[None]:
+            future = asyncio.get_running_loop().create_future()
+
+            def finish_cleanup(task: asyncio.Task[None]) -> None:
+                if not task.cancelled():
+                    task.exception()
+                future.set_exception(cleanup_error)
+
+            router_task.add_done_callback(finish_cleanup)
+            return future
+
+        monkeypatch.setattr(websocket_simulator, "_wait_until_ready", fail_readiness)
+        monkeypatch.setattr(websocket_simulator, "_await_router_task", fail_cleanup)
+
+        with pytest.raises(LookupError) as caught:
+            async with websocket_simulator.connect("/missing"):
+                pytest.fail("connect must not yield after readiness failed")
+        assert caught.value is readiness_error, (
+            "cleanup timeout must not replace the readiness failure"
+        )
+
+    async def test_router_task_cancel_timeout_uses_session_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cancellation timeout is reported as the harness shutdown error."""
+
+        async def wait_forever() -> None:
+            await asyncio.Event().wait()
+
+        router_task = asyncio.create_task(wait_forever())
+        first_timeout = TimeoutError()
+        cancellation_timeout = TimeoutError()
+        wait_calls = 0
+
+        def fail_wait(
+            awaitable: cabc.Awaitable[object], *, timeout: float
+        ) -> asyncio.Future[None]:
+            del awaitable, timeout
+            nonlocal wait_calls
+            wait_calls += 1
+            if wait_calls == 1:
+                return _failed_future(first_timeout)
+            router_task.cancel()
+            return _failed_future(cancellation_timeout)
+
+        monkeypatch.setattr(
+            "falcon_pachinko.testing.harness.asyncio.wait_for", fail_wait
+        )
+
+        with pytest.raises(
+            TimeoutError, match="router session did not stop after the simulator closed"
+        ) as caught:
+            await SimulatorRouterHarness._await_router_task(router_task)
+
+        await asyncio.gather(router_task, return_exceptions=True)
+        assert caught.value.__cause__ is first_timeout, (
+            "the session timeout must retain the first shutdown timeout"
         )

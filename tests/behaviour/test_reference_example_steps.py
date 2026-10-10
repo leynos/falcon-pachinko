@@ -6,32 +6,41 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
-import msgspec.json as msjson
 import pytest
 from pytest_bdd import given, scenario, then, when
 
-from examples.reference_app import build_container, build_router
-from examples.reference_app.resources import AddTask, TaskStreamResource
-from examples.reference_app.services import AnnouncementFeed
-from falcon_pachinko.testing import WebSocketSimulator
+from examples.reference_app import build_container
+from examples.reference_app.resources import (
+    AddTask,
+    TaskStreamResource,
+    WorkspaceResource,
+    register_reference_hooks,
+)
+from examples.reference_app.server import _require_token_hook
+from examples.reference_app.services import (
+    AnnouncementFeed,
+    AuditTrail,
+    TokenAuthenticator,
+)
+from falcon_pachinko.hooks import HookEvent
+from falcon_pachinko.testing import SimulatorConnection, SimulatorRouterHarness
 from falcon_pachinko.websocket import WebSocketConnectionManager
-from tests._stubs import RequestStub
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers, string-only annotations
     import collections.abc as cabc
 
-    from falcon_pachinko import ServiceContainer, WebSocketResource, WebSocketRouter
+    from falcon_pachinko import ServiceContainer, WebSocketResource
 
 
 @dc.dataclass(slots=True)
 class ReferenceScenario:
     """Container for shared reference example state."""
 
-    router: WebSocketRouter
+    harness: SimulatorRouterHarness
     container: ServiceContainer
     feed: AnnouncementFeed
-    simulator: WebSocketSimulator
     instances: list[WebSocketResource]
+    connection: SimulatorConnection | None = None
     resource: TaskStreamResource | None = None
     last_event: tuple[str, dict[str, object]] | None = None
 
@@ -75,17 +84,23 @@ def given_reference_router(event_loop: asyncio.AbstractEventLoop) -> ReferenceSc
         instances.append(instance)
         return instance
 
-    simulator = WebSocketSimulator()
-    router = build_router(
-        container,
-        simulator_factory=lambda *_: simulator,
+    register_reference_hooks()
+    harness = SimulatorRouterHarness(
+        mount="/ws",
         resource_factory=recording_factory,
     )
+    harness.router.add_route("/workspaces/{workspace_id}", WorkspaceResource)
+    harness.router.global_hooks.add(
+        HookEvent.BEFORE_CONNECT,
+        _require_token_hook(
+            typ.cast("TokenAuthenticator", container.resolve("token_authenticator")),
+            typ.cast("AuditTrail", container.resolve("audit_trail")),
+        ),
+    )
     return ReferenceScenario(
-        router=router,
+        harness=harness,
         container=container,
         feed=feed,
-        simulator=simulator,
         instances=instances,
     )
 
@@ -99,46 +114,44 @@ def _select_task_resource(instances: list[WebSocketResource]) -> TaskStreamResou
 
 @when(
     'a client connects to "/ws/workspaces/atlas/projects/triage/tasks" '
-    'using token "seekrit" as user "casey"',
+    'using token "seekrit" as user "casey" and sends a "task.add" message '
+    'for task "T-42"',
     target_fixture="context",
 )
 def when_client_connects(
     context: ReferenceScenario, event_loop: asyncio.AbstractEventLoop
 ) -> ReferenceScenario:
-    """Dispatch a connection through the router with valid headers."""
-    req = RequestStub(
-        "/ws/workspaces/atlas/projects/triage/tasks",
-        headers={"x-workspace-token": "seekrit", "x-user": "casey"},
-    )
-    event_loop.run_until_complete(context.router.on_websocket(req, context.simulator))
-    context.resource = _select_task_resource(context.instances)
-    return context
-
-
-@when('they send a "task.add" message for task "T-42"', target_fixture="context")
-def when_send_task_add(
-    context: ReferenceScenario, event_loop: asyncio.AbstractEventLoop
-) -> ReferenceScenario:
-    """Dispatch a schema-defined message through the active resource."""
-    resource = context.resource
-    assert resource is not None, "the connection step must have selected the resource"
+    """Connect through the harness and send a task-add frame."""
     payload = AddTask(task_id="T-42", title="Investigate event loop")
-    raw = msjson.encode(payload)
-    event_loop.run_until_complete(resource.dispatch(context.simulator, raw))
-    context.last_event = event_loop.run_until_complete(context.feed.next_event())
+
+    async def exchange() -> None:
+        async with context.harness.connect(
+            "/workspaces/atlas/projects/triage/tasks",
+            headers={"x-workspace-token": "seekrit", "x-user": "casey"},
+            initial_inbound=[(payload, "json")],
+        ) as connection:
+            context.connection = connection
+            context.resource = _select_task_resource(context.instances)
+            context.last_event = await context.feed.next_event()
+
+    event_loop.run_until_complete(exchange())
     return context
 
 
 @then("the connection is accepted")
 def then_connection(context: ReferenceScenario) -> None:
     """Ensure the simulator recorded the handshake acceptance."""
-    assert context.simulator.accepted is True, "the simulator must record acceptance"
+    connection = context.connection
+    assert connection is not None, "the harness must yield a connection"
+    assert connection.accepted is True, "the simulator must record acceptance"
 
 
 @then("the task stream resource replies with a task acknowledgement")
 def then_acknowledgement(context: ReferenceScenario) -> None:
     """Check that the last frame is the expected acknowledgement."""
-    message = context.simulator.sent_messages[-1]
+    connection = context.connection
+    assert connection is not None, "the harness must yield a connection"
+    message = connection.sent_messages[-1]
     assert isinstance(message, dict), "the last frame must be a mapping"
     assert message["type"] == "task.added", (
         "the last frame must be a task.added acknowledgement"

@@ -46,6 +46,11 @@ RECEIVE_EVENTS = [
     "parent.after_receive",
     "global.after_receive",
 ]
+DISCONNECT_EVENTS = [
+    "global.before_disconnect",
+    "parent.before_disconnect",
+    "child.before_disconnect",
+]
 
 
 class HookChild(WebSocketResource):
@@ -217,33 +222,29 @@ class HookTestEnvironment:
         self.router.global_hooks.add("after_connect", global_hook)
         self.router.global_hooks.add("before_receive", global_hook)
         self.router.global_hooks.add("after_receive", global_hook)
+        self.router.global_hooks.add("before_disconnect", global_hook)
 
         HookParent.hooks.add("before_connect", parent_hook)
         HookParent.hooks.add("after_connect", parent_hook)
         HookParent.hooks.add("before_receive", parent_hook)
         HookParent.hooks.add("after_receive", parent_hook)
+        HookParent.hooks.add("before_disconnect", parent_hook)
 
         HookChild.hooks.add("before_connect", child_hook)
         HookChild.hooks.add("after_connect", child_hook)
         HookChild.hooks.add("before_receive", child_hook)
         HookChild.hooks.add("after_receive", child_hook)
+        HookChild.hooks.add("before_disconnect", child_hook)
 
         self.router.add_route("/hooks", HookParent)
         self.router.mount("/")
 
-    async def open_connection(self) -> HookChild:
+    async def open_connection(self, frames: cabc.Iterable[object] = ()) -> HookChild:
         """Create a connection and return the instantiated child resource."""
-        self._ws = DummyWS()
+        self._ws = DummyWS(frames)
         req = make_req("/hooks/child")
         await self.router.on_websocket(req, self._ws)
         return HookChild.instances[-1]
-
-    async def dispatch_noop(self, child: HookChild) -> None:
-        """Send a no-op payload through the active connection."""
-        assert self._ws is not None, (
-            "call open_connection() before dispatching messages"
-        )
-        await child.dispatch(self._ws, b'{"type":"noop"}')
 
 
 @pytest.fixture(autouse=True)
@@ -277,12 +278,11 @@ async def test_hooks_execute_in_layered_order(
     hook_test_environment: HookTestEnvironment,
 ) -> None:
     """Hooks fire in onion order across global, parent, and child scopes."""
-    child = await hook_test_environment.open_connection()
-    await hook_test_environment.dispatch_noop(child)
+    await hook_test_environment.open_connection([b'{"type":"noop"}'])
 
-    assert hook_test_environment.events == CONNECT_EVENTS + RECEIVE_EVENTS, (
-        "hooks should fire in onion order across all three scopes"
-    )
+    assert hook_test_environment.events == (
+        CONNECT_EVENTS + RECEIVE_EVENTS + DISCONNECT_EVENTS
+    ), "hooks should fire in onion order across all three scopes"
 
 
 @pytest.mark.asyncio
@@ -305,12 +305,11 @@ async def test_message_processing_hooks_capture_handler_events(
     hook_test_environment: HookTestEnvironment,
 ) -> None:
     """Receive hooks surround dispatch and observe handler execution."""
-    child = await hook_test_environment.open_connection()
-    await hook_test_environment.dispatch_noop(child)
+    await hook_test_environment.open_connection([b'{"type":"noop"}'])
 
-    assert hook_test_environment.events[len(CONNECT_EVENTS) :] == RECEIVE_EVENTS, (
-        "receive hooks should surround handler dispatch in onion order"
-    )
+    assert hook_test_environment.events[len(CONNECT_EVENTS) :] == (
+        RECEIVE_EVENTS + DISCONNECT_EVENTS
+    ), "receive hooks should surround handler dispatch in onion order"
 
 
 def test_hookcollection_add_unsupported_event() -> None:
@@ -406,13 +405,10 @@ async def test_after_receive_reports_errors() -> None:
     router.add_route("/boom", BoomResource)
     router.mount("/")
 
-    ws = DummyWS()
+    ws = DummyWS([b'{"type":"boom"}'])
     req = make_req("/boom")
-    await router.on_websocket(req, ws)
-
-    resource = BoomResource.instances[-1]
     with pytest.raises(RuntimeError):
-        await resource.dispatch(ws, b'{"type":"boom"}')
+        await router.on_websocket(req, ws)
 
     expected_events = [
         ("global", "before_receive"),

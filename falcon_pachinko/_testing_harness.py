@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
 from types import SimpleNamespace
 
@@ -30,6 +31,24 @@ class _OriginalWebSocket(_LifecycleSocket):
 class _HarnessSimulator(WebSocketSimulator):
     """Simulator variant that mirrors lifecycle events to the original stub."""
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.ready_event = asyncio.Event()
+
+    async def accept(self, subprotocol: str | None = None) -> None:
+        """Signal readiness after the simulator mirrors handshake acceptance."""
+        try:
+            await super().accept(subprotocol)
+        finally:
+            self.ready_event.set()
+
+    async def close(self, code: int = 1000) -> None:
+        """Signal readiness after the simulator mirrors connection closure."""
+        try:
+            await super().close(code)
+        finally:
+            self.ready_event.set()
+
     # pylint: disable-next=trivial-attribute-wrapper  # deliberate seam: testing.harness binds the ASGI stub through this name to keep the intent explicit
     def bind_original(self, original: _OriginalWebSocket) -> None:
         """Associate ``original`` so lifecycle events stay in sync."""
@@ -42,4 +61,9 @@ class _TestRequest:
 
     path: str
     path_template: str
+    headers: dict[str, str] = dc.field(default_factory=dict)
     context: SimpleNamespace = dc.field(default_factory=SimpleNamespace)
+
+    def get_header(self, name: str, default: str | None = None) -> str | None:
+        """Return a case-insensitive header value for reference hooks."""
+        return self.headers.get(name.lower(), default)

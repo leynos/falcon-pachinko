@@ -28,6 +28,7 @@ from .protocols import WebSocketLike
 # that raises NameError when introspected would be a trap for runtime
 # consumers, so the name it references has to resolve at runtime too.
 from .resource import WebSocketResource
+from .session import drive_session
 
 if typ.TYPE_CHECKING:
     import re
@@ -63,7 +64,8 @@ def _request_path_template(req: _RequestLike) -> str:
     try:
         return req.path_template
     except AttributeError:
-        return ""
+        # Falcon calls this value ``uri_template`` on its request object.
+        return getattr(req, "uri_template", "")
 
 
 def _normalize_path(path: str) -> str:
@@ -537,19 +539,22 @@ class WebSocketRouter:
         *,
         hook_manager: HookManager,
     ) -> bool:
-        """Accept or close the connection based on ``resource`` decision."""
+        """Run connection setup, then own the accepted session until closure."""
         context = await self._prepare_connection_context(
             hook_manager, resource, dispatch
         )
         should_accept = await self._execute_resource_handler(
             resource, dispatch, context, hook_manager
         )
-        return await self._finalize_connection(
+        await self._finalize_connection(
             dispatch.ws,
             should_accept=should_accept,
             context=context,
             hook_manager=hook_manager,
         )
+        if should_accept:
+            await drive_session(resource, dispatch.ws, hook_manager)
+        return True
 
     @staticmethod
     async def _prepare_connection_context(
