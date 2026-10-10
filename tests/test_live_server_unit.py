@@ -45,7 +45,7 @@ class _FailingStartupMiddleware:
 
 
 class _FakeAdapter:
-    """Provide deterministic readiness and stop behavior without a server."""
+    """Provide deterministic readiness and stop behaviour without a server."""
 
     def __init__(
         self,
