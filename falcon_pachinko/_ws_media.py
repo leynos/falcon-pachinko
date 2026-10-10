@@ -13,6 +13,8 @@ import falcon.asgi
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+_DEFAULT_WEBSOCKET_MEDIA_HANDLERS = falcon.asgi.WebSocketOptions().media_handlers
+
 
 class _RawWebSocketMediaHandler:
     """Preserve inbound frames while retaining Falcon's outbound serializer."""
@@ -82,14 +84,15 @@ def install_raw_websocket_media_handlers(
         falcon.WebSocketPayloadType.TEXT,
         falcon.WebSocketPayloadType.BINARY,
     )
-    defaults = falcon.asgi.App().ws_options.media_handlers
     custom_handlers = [
         payload_type.name
         for payload_type in payload_types
         if not isinstance(
             (handler := media_handlers[payload_type]), _RawWebSocketMediaHandler
         )
-        and not _matches_default_handler(handler, defaults[payload_type])
+        and not _matches_default_handler(
+            handler, _DEFAULT_WEBSOCKET_MEDIA_HANDLERS[payload_type]
+        )
     ]
     if custom_handlers:
         names = ", ".join(custom_handlers)
