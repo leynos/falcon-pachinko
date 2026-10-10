@@ -50,7 +50,8 @@ the router repeatedly receives raw frames and invokes
 `WebSocketResource.dispatch()` until Falcon reports a disconnect. Cleanup calls
 `on_disconnect(ws, close_code)` once: normal disconnects preserve the peer's
 code or default to `1000`, dispatch failures use `1011`, and local task
-cancellation reports `1006` to cleanup before cancellation is re-raised. The
+cancellation closes with `1001` and passes that code to the cleanup hook
+before cancellation is re-raised. The
 router does not send a close frame to a socket Falcon has already closed.
 
 This implemented contract supersedes the future-tense responder and receive
