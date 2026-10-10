@@ -310,3 +310,22 @@ head and checks after this documentation follow-up.
   checks, a current-head completeness assessment, and CodeRabbit disposition of
   both inline threads and the Developer Documentation pre-merge warning remain
   pending; no final CI pass or review resolution is claimed.
+- Final documentation and review status recorded against published head
+  `3252e3e77d70e037d29c2739684b06782a924aa4` and base
+  `554105de7c9a3f7c413d31a36125271ad759f164`: PR #225 is open, ready, and
+  unmerged. Hosted CI run `38049566593` (job `114205782068`) passed, including
+  172 helper tests with 3 snapshots, the blocking duplication scan with 3
+  reasoned exceptions, and 464 application tests (2 skipped, 20 warnings).
+  CodeScene result `7894054` and Gecko Security Review passed. The final local
+  documentation gates `make check-fmt`, `make markdownlint`, and `make nixie`
+  passed after the documentation edits. The Developer Guide now describes the
+  required `DetectorContext` and `InstallerContext` dependencies and confines
+  process-state snapshots to CLI composition boundaries; the allowlist-scope
+  wording and the historical test-count record are corrected. CodeRabbit's
+  formal review `5478827279` approved this published head, while GitHub's
+  aggregate decision remains `CHANGES_REQUESTED` and the older walkthrough
+  comment `6082073619` still carries a Developer Documentation warning that
+  needs explicit reconciliation. A current-head ExecPlan completeness
+  assessment remains pending; no formal proof was introduced or materially
+  changed, so a proof-specific assessment is not applicable. No merge is
+  claimed.
