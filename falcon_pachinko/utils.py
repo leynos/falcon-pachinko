@@ -29,6 +29,7 @@ __all__ = [
     "to_snake_case",
 ]
 
+
 def duplicate_payload_type_msg(
     payload_type: type, handler_name: str | None = None
 ) -> str:
