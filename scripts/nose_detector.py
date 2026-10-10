@@ -38,6 +38,7 @@ from pathspec import GitIgnoreSpec
 INSTALL_HINT = "run `make install-nose` to install the pinned detector"
 COMMAND_TIMEOUT_SECONDS = 120
 _SUPPORTED_CHANNELS = {"syntax", "semantic", "near"}
+_EMPTY_SOURCE_WARNING = "no supported source files found under:"
 
 type CommandRunner = cabc.Callable[
     [cabc.Sequence[str], Path, cabc.Mapping[str, str]], str
@@ -251,9 +252,18 @@ def _validate_root_sources(
     resolved: Path,
     exclude_spec: GitIgnoreSpec | None,
 ) -> None:
-    """Require one in-scope Python file beneath a configured root."""
+    """Require a source candidate after the gate's explicit exclusions.
+
+    Nose owns filesystem discovery and its ignore precedence. The detector's
+    successful-query warning is checked separately so this preflight does not
+    approximate `.ignore`, hidden-path, or Git-level ignore behavior.
+
+    Raises
+    ------
+    GateConfigError
+        If no Python source candidate remains after explicit exclusions.
+    """
     source_files, is_file_root = _root_sources(candidate, resolved)
-    ignore_cache: dict[Path, GitIgnoreSpec | None] = {}
     for source in source_files:
         if not _is_selected_source(
             source,
@@ -262,8 +272,7 @@ def _validate_root_sources(
             exclude_spec=exclude_spec,
         ):
             continue
-        if is_file_root or not _is_gitignored(source, candidate, ignore_cache):
-            return
+        return
     msg = f"tool.nose.roots entry {root!r} selects no Python source files"
     raise GateConfigError(msg)
 
@@ -321,96 +330,6 @@ def _source_relative_path(
     if not resolved_source.is_relative_to(resolved_root):
         return None
     return resolved_source.relative_to(resolved_root).as_posix()
-
-
-def _is_gitignored(
-    source: Path,
-    scan_root: Path,
-    ignore_cache: dict[Path, GitIgnoreSpec | None],
-) -> bool:
-    """Report whether nose's root-relative ignore files exclude ``source``.
-
-    Only ignore files at or below the configured root apply. A directory
-    excluded by its parent cannot be reopened by a nested ``.gitignore``,
-    matching Git's traversal rules and nose's effective source selection.
-
-    Returns
-    -------
-    bool
-        Whether the source is ignored by the applicable in-root rules.
-    """
-    relative_parts = source.relative_to(scan_root).parts
-    current_directory = scan_root
-    scoped_specs: list[tuple[Path, GitIgnoreSpec]] = []
-    _append_gitignore_spec(scan_root, scoped_specs, ignore_cache)
-
-    for index, part in enumerate(relative_parts):
-        path = current_directory / part
-        is_directory = index < len(relative_parts) - 1
-        if _matches_ignore_rules(
-            path, is_directory=is_directory, scoped_specs=scoped_specs
-        ):
-            return True
-        if is_directory:
-            current_directory = path
-            _append_gitignore_spec(current_directory, scoped_specs, ignore_cache)
-    return False
-
-
-def _append_gitignore_spec(
-    directory: Path,
-    scoped_specs: list[tuple[Path, GitIgnoreSpec]],
-    ignore_cache: dict[Path, GitIgnoreSpec | None],
-) -> None:
-    """Add one directory's ignore rules to the root-to-leaf rule stack."""
-    spec = _load_gitignore_spec(directory, ignore_cache)
-    if spec is not None:
-        scoped_specs.append((directory, spec))
-
-
-def _matches_ignore_rules(
-    path: Path,
-    *,
-    is_directory: bool,
-    scoped_specs: list[tuple[Path, GitIgnoreSpec]],
-) -> bool:
-    """Return the latest matching decision from the in-scope ignore files.
-
-    Returns
-    -------
-    bool
-        Whether the path is ignored after applying rules from root to leaf.
-    """
-    ignored = False
-    for base, spec in scoped_specs:
-        scoped_path = path.relative_to(base).as_posix()
-        if is_directory:
-            scoped_path += "/"
-        match = spec.check_file(scoped_path).include
-        if match is not None:
-            ignored = match
-    return ignored
-
-
-def _load_gitignore_spec(
-    directory: Path,
-    cache: dict[Path, GitIgnoreSpec | None],
-) -> GitIgnoreSpec | None:
-    """Read and cache one in-root Git ignore file for source validation."""
-    if directory in cache:
-        return cache[directory]
-    ignore_file = directory / ".gitignore"
-    if not ignore_file.exists():
-        cache[directory] = None
-        return None
-    try:
-        patterns = ignore_file.read_text(encoding="utf-8").splitlines()
-        spec = GitIgnoreSpec.from_lines(patterns)
-    except (OSError, UnicodeError, ValueError) as error:
-        msg = f"cannot read {ignore_file} while validating nose scan roots: {error}"
-        raise GateConfigError(msg) from error
-    cache[directory] = spec
-    return spec
 
 
 def _is_excluded(path: str, spec: GitIgnoreSpec | None) -> bool:
@@ -595,4 +514,24 @@ def run_command(
         detail = result.stderr.strip() or result.stdout.strip()
         msg = f"{command[0]} exited with status {result.returncode}: {detail}"
         raise GateExecutionError(msg)
+    if len(command) > 1 and command[1] == "query":
+        _reject_empty_source_warnings(result.stderr)
     return result.stdout
+
+
+def _reject_empty_source_warnings(stderr: str) -> None:
+    """Reject roots nose reports as empty after applying its discovery rules."""
+    empty_roots = tuple(
+        line.partition(_EMPTY_SOURCE_WARNING)[2].strip()
+        for line in stderr.splitlines()
+        if _EMPTY_SOURCE_WARNING in line
+    )
+    if not empty_roots:
+        return
+    roots = ", ".join(dict.fromkeys(empty_roots))
+    msg = (
+        "nose selected no supported Python source files under "
+        f"{roots}; check tool.nose.exclude, in-root .ignore/.gitignore rules, "
+        "hidden paths, .git/info/exclude, and global Git ignore rules"
+    )
+    raise GateConfigError(msg)

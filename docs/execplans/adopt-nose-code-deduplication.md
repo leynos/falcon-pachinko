@@ -23,7 +23,7 @@ The delivery maps the requirements to these observable results:
 - `GATE-SCOPE`: `[tool.nose]` names existing shipped Python roots, all three
   channels, the 24-token floor, `surface = "all"` and the explicit top-30
   ranking limit; a root that selects no production Python after configured
-  exclusions and in-root `.gitignore` rules fails closed.
+  exclusions and nose's effective discovery filters fails closed.
 - `GATE-REPORT`: one repository-rooted JSON query validates and
   deterministically reports every selected family, with exit status 0, 1 or 2
   for pass, blocking duplication or configuration/execution failure.
@@ -81,9 +81,12 @@ deliberately replaces the reference's cargo-binstall Git-source installer: the
 release provides checksummed binaries for the supported Linux and macOS
 architectures, so a second bootstrap binary is unnecessary. There is no
 compilation fallback. Missing platform assets or digests fail with an
-actionable error. A pinned `pathspec==1.1.1` tool dependency models nose's
-in-root `.gitignore` selection during preflight; the helper-test environment
-uses the same pin, enforced by a toolchain contract test.
+actionable error. A pinned `pathspec==1.1.1` tool dependency validates
+configured exclusion globs; the helper-test environment uses the same pin,
+enforced by a toolchain contract test. The wrapper does not reimplement nose's
+ignore precedence: its successful-query warning is checked to reject roots
+emptied by `.ignore`, `.gitignore`, hidden paths, `.git/info/exclude`, or
+global Git ignore rules.
 
 The application package list, Python floor, runtime dependencies, supported
 platforms and public behaviour are outside the change. No PyChase, pyscn,
@@ -365,3 +368,21 @@ approval or merge is claimed.
   adjudications are not yet committed or published; hosted checks, current-head
   CodeRabbit reconciliation and a completeness assessment remain pending. No
   merge is claimed.
+- At published head `66a5a729dd2ba6d82d4e421eb3090ab42f99c5ba` against base
+  `f6e637e48a1f862e8dfabb26ea5cda4cbec3279a`, the completeness assessment
+  identified that `.ignore`, hidden paths, `.git/info/exclude`, and global Git
+  ignores could still empty an effective scan. Static inspection did not show
+  that the checked-in production scan was empty. The working fix keeps root and
+  configured-exclusion preflight, then treats nose's empty-source warning from
+  its one JSON query as a configuration error. Real-detector regressions cover
+  `.ignore`-only and hidden-only roots, alongside the existing `.gitignore`
+  case; command tests retain a clean empty-family report. Documentation now
+  describes this boundary. The exact staged tree
+  `ab7fbd6134b20361237451401571da1054ab3ebf` passed the sequential local gate
+  set: `make check-fmt`; `make duplication-test` (174 passed, 3 snapshots, no
+  skips); `make duplication` (4 reasoned exceptions); `make lint` (Ruff and
+  both Pylint passes at 10/10); `make typecheck`; `make test` (655 passed, 2
+  skipped, 19 warnings); spelling; Markdown; Mermaid; and CV005. These results
+  cover the staged tree, not the published PR head. Commit, publication, hosted
+  checks and a candidate-bound follow-up assessment remain pending. No proof
+  was introduced or materially changed.

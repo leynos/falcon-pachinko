@@ -146,10 +146,8 @@ class TestLoadSettings:
         ):
             detector.load_settings(pyproject)
 
-    def test_rejects_a_root_with_only_gitignored_python_files(
-        self, tmp_path: Path
-    ) -> None:
-        """A source ignored by nose cannot satisfy the configured scan scope."""
+    def test_leaves_gitignore_selection_to_the_detector(self, tmp_path: Path) -> None:
+        """Preflight does not approximate nose's ignore-file precedence."""
         ignored_root = tmp_path / "ignored"
         ignored_root.mkdir()
         (ignored_root / "sample.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -159,47 +157,11 @@ class TestLoadSettings:
             _settings_body(roots='["ignored"]'),
         )
 
-        with pytest.raises(
-            detector.GateConfigError, match="selects no Python source files"
-        ):
-            detector.load_settings(pyproject)
-
-    def test_honours_nested_gitignore_reinclusion(self, tmp_path: Path) -> None:
-        """A nested positive rule can restore a source nose will scan."""
-        root = tmp_path / "source"
-        nested = root / "nested"
-        nested.mkdir(parents=True)
-        (root / ".gitignore").write_text("*.py\n", encoding="utf-8")
-        (nested / ".gitignore").write_text("!selected.py\n", encoding="utf-8")
-        (nested / "selected.py").write_text("VALUE = 1\n", encoding="utf-8")
-        pyproject = self._write(
-            tmp_path,
-            _settings_body(roots='["source"]'),
-        )
-
         settings = detector.load_settings(pyproject)
 
-        assert settings.roots == ("source",), "The re-included source is in scope."
-
-    def test_nested_gitignore_cannot_reinclude_a_source_in_ignored_directory(
-        self, tmp_path: Path
-    ) -> None:
-        """Nested rules do not revive files below a parent-ignored directory."""
-        root = tmp_path / "source"
-        nested = root / "ignored"
-        nested.mkdir(parents=True)
-        (root / ".gitignore").write_text("ignored/\n", encoding="utf-8")
-        (nested / ".gitignore").write_text("!selected.py\n", encoding="utf-8")
-        (nested / "selected.py").write_text("VALUE = 1\n", encoding="utf-8")
-        pyproject = self._write(
-            tmp_path,
-            _settings_body(roots='["source"]'),
+        assert settings.roots == ("ignored",), (
+            "Nose's query warning is authoritative for effective selection."
         )
-
-        with pytest.raises(
-            detector.GateConfigError, match="selects no Python source files"
-        ):
-            detector.load_settings(pyproject)
 
     @pytest.mark.parametrize(
         ("body", "diagnostic"),
@@ -740,6 +702,54 @@ class TestRunDetector:
             match=r"nose exited with status 2: bad query",
         ):
             detector.run_command(("nose", "query"), tmp_path, {})
+
+    def test_run_command_rejects_an_empty_effective_scan_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nose's own successful empty-walk warning fails closed."""
+
+        def empty_scan(
+            command: cabc.Sequence[str], *_args: object, **_kwargs: object
+        ) -> detector.subprocess.CompletedProcess[str]:
+            return detector.subprocess.CompletedProcess(
+                args=list(command),
+                returncode=0,
+                stdout='{"families": []}',
+                stderr=("warning: no supported source files found under: planted\n"),
+            )
+
+        monkeypatch.setattr(detector.subprocess, "run", empty_scan)
+
+        with pytest.raises(
+            detector.GateConfigError,
+            match=(
+                r"nose selected no supported Python source files under planted; "
+                r"check tool\.nose\.exclude.*global Git ignore rules"
+            ),
+        ):
+            detector.run_command(("nose", "query", "--format", "json"), tmp_path, {})
+
+    def test_run_command_accepts_a_clean_empty_family_report(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty family list remains valid when nose selected source files."""
+
+        def clean_scan(
+            command: cabc.Sequence[str], *_args: object, **_kwargs: object
+        ) -> detector.subprocess.CompletedProcess[str]:
+            return detector.subprocess.CompletedProcess(
+                args=list(command),
+                returncode=0,
+                stdout='{"families": []}',
+                stderr="",
+            )
+
+        monkeypatch.setattr(detector.subprocess, "run", clean_scan)
+
+        assert (
+            detector.run_command(("nose", "query", "--format", "json"), tmp_path, {})
+            == '{"families": []}'
+        ), "A clean report must remain available for schema validation."
 
     def test_run_command_reports_an_execution_failure(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
