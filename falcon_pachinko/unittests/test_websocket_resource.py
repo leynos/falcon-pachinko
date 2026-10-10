@@ -241,7 +241,7 @@ class InheritedLifecycleResource(LifecycleResource):
 
 
 class AliasedLifecycleResource(WebSocketResource):
-    """Resource that aliases ``on_disconnect`` under a dispatachable name."""
+    """Resource that aliases ``on_disconnect`` under a dispatchable name."""
 
     def __init__(self) -> None:
         self.lifecycle: list[int] = []
