@@ -148,11 +148,15 @@ duplication fix would require a public API or runtime-dependency change.
 
 ## Progress and decision log
 
-Status: the original implementation is published as `dc858da` on open PR #225,
-which remains ready for review and unmerged. This follow-up removes the
-reproduced CodeScene complexity finding and passes all local gates. Commit,
-publication, current-head hosted checks and review reconciliation remain
-pending.
+Status at the start of this documentation follow-up: PR #225 was open, ready
+for review, and unmerged at published head
+`a0f02fe4c9398e4f1530b14c3bcc2137275b268c`, based on
+`554105de7c9a3f7c413d31a36125271ad759f164`. Hosted CI run `38014329831`,
+CodeScene result `7890877`, and Gecko Security Review pass. The CodeRabbit
+review baseline at this head has two unresolved documentation threads and a
+Developer Documentation pre-merge warning; PR readiness is already true. This
+does not clear the separate completeness assessment. See PR #225 for its live
+head and checks after this documentation follow-up.
 
 - Confirmed the reference commit exists locally in an episodic worktree and
   consulted the specified ADR, merged gate modules and v0.20.0 nose usage,
@@ -211,13 +215,13 @@ pending.
   context, and makes toolchain reads explicitly UTF-8. Focused regressions
   cover each boundary, and the maintainer guide now matches lint and cache
   behaviour.
-- The final sequential validation passed on the review fixes before this
-  documentation-only status update: formatting, 166 helper tests with 3
+- At that pre-publication point, the final sequential validation passed on the
+  review fixes: formatting, 166 helper tests with 3
   snapshots, the three-exception duplication scan, Ruff, classic Pylint
   (10/10), df12 Pylint (10/10), ambrleaks, typechecking, spelling and Markdown,
   Mermaid, 439 application tests (2 skipped, 19 warnings), and CV005. The
-  candidate is ready to commit and publish; hosted checks and review
-  reconciliation remain pending for the new head.
+  candidate was then ready to commit and publish; hosted checks and review
+  reconciliation were pending for its next head.
 - CodeRabbit's walkthrough says automatic reviews are paused because the branch
   is under active development. It does not report a rate-limit rejection. The
   current `comenq list` has no request for `falcon-pachinko#225`; request one
@@ -258,8 +262,9 @@ pending.
   final sequential gates passed: 172 helper tests and 3 snapshots with no
   skips, duplication, formatting, lint, typechecking, spelling, Markdown,
   Mermaid, and CV005; `make test` reported 439 passed, 2 skipped and 19
-  warnings. These are local results; hosted checks and review reconciliation
-  remain pending until this follow-up is pushed.
+  warnings. At the `f165b2c` candidate, this follow-up had not yet been pushed,
+  so hosted checks and review reconciliation were then pending. Later
+  publication entries below record the subsequent hosted state.
 - Hosted CI passed on `2d392d9`, while CodeScene rejected the new CLI context
   test for low cohesion and the detector module for a mean complexity of 4.09.
   The context-composition test now has its own focused module, and binary
@@ -269,5 +274,27 @@ pending.
   sequential gate set passed on the working tree based on `2d392d9`: 172
   focused tests, 3 snapshots, the three-exception duplication scan, formatting,
   lint, typechecking, spelling, Markdown, Mermaid, CV005, and 439 application
-  tests (2 skipped, 19 warnings). These are local results; hosted checks for
-  this follow-up remain pending until it is pushed.
+  tests (2 skipped, 19 warnings). At this then-current `2d392d9` entry, hosted
+  checks for that follow-up were pending until publication; the later
+  current-head publication entry below records the hosted results.
+- Current-head publication and validation: on
+  `a0f02fe4c9398e4f1530b14c3bcc2137275b268c` against base
+  `554105de7c9a3f7c413d31a36125271ad759f164`, PR #225 is open, ready for
+  review, and unmerged. Hosted CI run `38014329831`, CodeScene result `7890877`,
+  and Gecko Security Review pass. The final local sequential gates passed:
+  `make duplication-test` reported 172 passed and 3 snapshots with no skips;
+  `make test` reported 439 passed, 2 skipped, and 19 warnings; the standalone
+  duplication scan, formatting, lint (Ruff and both Pylint passes), typecheck,
+  spelling, Markdown, Mermaid, and CV005 checks also passed. The CodeRabbit
+  review baseline at this head has two unresolved documentation threads and a
+  Developer Documentation pre-merge warning. This is not clearance of the
+  separate completeness assessment; readiness is already true, and no proof or
+  completeness assessment clearance is claimed.
+- Documentation follow-up status: at this entry, the published PR head remains
+  `a0f02fe4c9398e4f1530b14c3bcc2137275b268c`. Uncommitted local changes
+  correct the Developer Guide's both-file exception scope and document the
+  `DetectorContext` and `InstallerContext`; `make markdownlint` and `make nixie`
+  passed locally. Commit/publication, new-head hosted checks, a current-head
+  completeness assessment, and CodeRabbit inline-thread/pre-merge-warning
+  reconciliation remain pending. These documentation changes are not yet
+  published, and the findings are not claimed as resolved.

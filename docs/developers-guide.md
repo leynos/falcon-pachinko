@@ -335,6 +335,14 @@ errors, with no source-build fallback. `NOSE_BIN` may select another binary;
 relative paths resolve from the repository root, and the expected version is
 checked before every scan and after installation.
 
+Detector and installer operations receive explicit runtime contexts. The
+`DetectorContext` carries the repository root, environment, binary discoverer,
+and command runner. The `InstallerContext` carries repository, configuration,
+and manifest paths; environment and process runner; system, machine, and libc
+metadata; downloader; and output callback. The CLI composition boundaries
+assemble these contexts and snapshot process state, so detector and installer
+operations use supplied dependencies rather than reading ambient globals.
+
 The isolated helper-test environment pins Syrupy 6.1.1 for exact snapshots of
 the CLI report and detector argument vectors. It also installs nose before
 running the acceptance suite; real-detector canaries fail if the binary is
@@ -372,7 +380,7 @@ The repository's initial families were adjudicated as follows:
 | Family                                                                      | Decision and reason                                                                                                                                                                                                                                                                                                                                                                                                      | Regression evidence                                                                                          |
 | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
 | `exceptions.py::__init__` and `websocket.py::__init__`                      | Intentional. The constructors belong to independent exception base classes and preserve different parameter and message contracts. A shared base or formatter would couple separate error domains without shared validation logic.                                                                                                                                                                                       | `falcon_pachinko/unittests/test_exceptions.py`                                                               |
-| Import fragments in `router.py` and `__init__.py`                           | Intentional. The router imports implementation dependencies; the package initializer re-exports the public package surface. A separate helper would add an import-only module, while routing router imports through the initializer would create a cycle. Nose gives this fragment no unit name, so exact path-only keys are necessary; they can also match future unnamed families wholly contained in these two files. | `tests/test_package_exports.py`                                                                              |
+| Import fragments in `router.py` and `__init__.py`                           | Intentional. The router imports implementation dependencies; the package initializer re-exports the public package surface. A separate helper would add an import-only module, while routing router imports through the initializer would create a cycle. Nose gives this fragment no unit name, so exact path-only keys are necessary; a future unnamed family would match only if it includes locations in both files. | `tests/test_package_exports.py`                                                                              |
 | `router.py::compile_uri_template` and `router.py::_compile_prefix_template` | Retained as separate thin variants of the existing `_compile_template_with_suffix`: complete URI matching permits an optional trailing slash, while prefix matching enforces segment boundaries.                                                                                                                                                                                                                         | `falcon_pachinko/unittests/test_router.py::test_template_compilers_keep_complete_and_prefix_match_semantics` |
 
 No application code was changed to clear the initial report. The gate modules
