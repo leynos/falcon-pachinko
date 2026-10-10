@@ -362,6 +362,9 @@ class WebSocketRouter:
 
         with self._mount_lock:
             self._registration.check_conflicts(canonical, name, path=path)
+            if self._mount_prefix:
+                full = f"{self._mount_prefix.rstrip('/')}{canonical}"
+                compile_uri_template(full)
             self._raw.append(WebSocketRouter._RawRoute(path, canonical, factory))
             if name:
                 self._names[name] = path

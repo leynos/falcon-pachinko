@@ -265,6 +265,21 @@ def test_add_route_duplicates_after_mount() -> None:
         router.add_route("/other", DummyResource, name="dup")
 
 
+def test_mount_parameter_collision_does_not_register_route() -> None:
+    """A mount-prefix name conflict leaves route registration untouched."""
+    router = WebSocketRouter()
+    router.mount("/ws/{room}")
+
+    with pytest.raises(ValueError, match="Duplicate parameter name 'room'"):
+        router.add_route("/chat/{room}", DummyResource, name="chat")
+
+    assert not router._raw, "failed route compilation should not store a raw route"
+    assert not router._routes, "failed route compilation should not store a matcher"
+    assert "chat" not in router._names, (
+        "failed route compilation should not store its name"
+    )
+
+
 def test_add_route_invalid_template() -> None:
     """Empty parameter names should raise ``ValueError``."""
     router = WebSocketRouter()
