@@ -12,7 +12,9 @@ See
 for the full design rationale. For practical guidance, start with the
 [User Guide](docs/users-guide.md) and the
 [Migration Guide](docs/migration-guide.md). Maintainer-facing notes live in the
-[Developer Guide](docs/developers-guide.md).
+[Developer Guide](docs/developers-guide.md),
+including the
+[nose code duplication gate](docs/developers-guide.md#nose-code-duplication-gate).
 
 ## Requirements
 

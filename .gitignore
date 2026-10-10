@@ -6,6 +6,10 @@ __pycache__/
 .uv-tools/
 # PyPy interpreter provisioned for the classic Pylint pass (see Makefile).
 .uv-python/
+# Verified nose release binary installed by `make install-nose`.
+.tools/nose/
+# Advisory sidecar locks used while updating duplication exceptions.
+.*.duplication-gate.lock
 *.py[cod]
 *$py.class
 
