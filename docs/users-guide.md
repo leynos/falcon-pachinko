@@ -153,6 +153,12 @@ class ChatResource(WebSocketResource):
   `on_unhandled(self, ws, raw)`.
 - The decorator supports `strict=False` to allow extra fields when required.
 
+The stable import path is `from falcon_pachinko.utils import ValidationError`.
+It is the same class as `msgspec.ValidationError`, so existing
+`except msgspec.ValidationError` handlers continue to work. The dispatcher
+routes validation failures to `on_unhandled`; a `ValidationError` raised inside
+a handler propagates.
+
 ### Reserved lifecycle names
 
 A peer chooses the envelope `type`, so the set of method names the dispatcher
@@ -191,12 +197,6 @@ Schema-backed dispatch restricts tags to declared `Struct` types, but a struct
 may be tagged with a reserved name; the conventional fallback refuses it there
 too, so an unregistered struct tagged `"disconnect"` falls back rather than
 calling through.
-
-The stable import path is `from falcon_pachinko.utils import ValidationError`.
-It is the same class as `msgspec.ValidationError`, so existing
-`except msgspec.ValidationError` handlers continue to work. The dispatcher
-routes validation failures to `on_unhandled`; a `ValidationError` raised inside
-a handler propagates.
 
 ### Diagnostic output and raw payloads
 
