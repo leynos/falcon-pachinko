@@ -376,7 +376,11 @@ avoids a monolithic receive loop with extensive conditional logic.
      is refused on the same terms: `WebSocketResource.add_handler` and
      `@handles_message` raise `ReservedHandlerRegistrationError` for a callable
      implementing a reserved callback, while the reserved tag string stays legal
-     on a distinct method.
+     on a distinct method. The decorator classifies the callback before it
+     validates the handler signature, so a decorated lifecycle method is refused
+     for being reserved rather than for the shape its lifecycle signature has;
+     aliases and inherited copies, which cannot be judged until the class exists,
+     are refused at class creation.
 
   ```python
   from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message

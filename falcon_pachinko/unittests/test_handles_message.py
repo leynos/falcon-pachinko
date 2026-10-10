@@ -172,7 +172,8 @@ def test_decorating_lifecycle_name_under_unrelated_tag_is_rejected() -> None:
 
     The signature is deliberately handler-shaped here so the reserved-name
     check is the one under test; ``on_connect``'s real lifecycle signature is
-    rejected earlier by the decorator's own signature validation.
+    rejected by the same check at decoration time, which
+    :func:`test_decorating_real_lifecycle_signature_is_rejected` pins.
     """
     with pytest.raises(ReservedHandlerRegistrationError, match="on_connect"):
 
@@ -183,15 +184,44 @@ def test_decorating_lifecycle_name_under_unrelated_tag_is_rejected() -> None:
             async def on_connect(self, ws: WebSocketLike, payload: object) -> None: ...
 
 
+def test_decorating_real_lifecycle_signature_is_rejected() -> None:
+    """The reserved check precedes signature validation at decoration time.
+
+    ``on_connect(self, req, ws, **params)`` is the base class's own signature.
+    Signature validation would reject it first as ambiguous, because two
+    parameters after ``self`` are annotated, so the decorator must classify
+    the callback before it inspects the signature for the documented
+    ``ReservedHandlerRegistrationError`` to be reachable at decoration time.
+    """
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_connect"):
+
+        class DecoratedRealConnect(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
+            WebSocketResource
+        ):
+            @handles_message(  # ty: ignore[invalid-argument-type]  # the real lifecycle signature returns bool
+                "anything"
+            )
+            async def on_connect(
+                self, req: object, ws: WebSocketLike, **params: object
+            ) -> bool:
+                return True
+
+
 def test_decorating_inherited_lifecycle_callback_is_rejected() -> None:
     """A subclass cannot register the callback under a new method name.
 
     The child defines no ``on_disconnect`` of its own, so identity against
     the parent's implementation is the only thing that can reject this; a
     name-only check would let the inherited callback into the registry.
+    Registration goes through the child, because that is the path a subclass
+    takes and the path the predicate must resolve against a subclass ``cls``.
     """
+
+    class InheritingChild(LifecycleParent):
+        """Child that inherits ``on_disconnect`` without redefining it."""
+
     with pytest.raises(ReservedHandlerRegistrationError, match="on_disconnect"):
-        LifecycleParent.add_handler("bye", LifecycleParent.on_disconnect, strict=False)
+        InheritingChild.add_handler("bye", InheritingChild.on_disconnect, strict=False)
 
 
 def test_decorated_handler_under_reserved_name_is_rejected() -> None:
@@ -294,7 +324,15 @@ def test_lifecycle_callback_names_cover_the_base_class_hooks() -> None:
 
 
 def test_lifecycle_predicate_recognises_every_rejected_shape() -> None:
-    """The predicate accepts each way a lifecycle callback can be presented."""
+    """The predicate accepts each way a lifecycle callback can be presented.
+
+    Each entry is genuinely a lifecycle callback of ``LifecycleParent``: by
+    name, by alias, by inheritance, or through a wrapper. A descriptor is not
+    listed here because a descriptor over a neutrally named function is not a
+    lifecycle callback — it only becomes one when a class stores it under a
+    reserved name, which
+    :func:`test_decorated_handler_under_reserved_name_is_rejected` covers.
+    """
     partial_disconnect = functools.partial(LifecycleParent.on_disconnect)
 
     class Aliased(WebSocketResource):
@@ -309,13 +347,8 @@ def test_lifecycle_predicate_recognises_every_rejected_shape() -> None:
     async def ordinary(self: object, ws: WebSocketLike, payload: object) -> None:
         """Stand in for an ordinary message handler."""
 
-    async def on_unhandled(self: object, ws: WebSocketLike, payload: object) -> None:
-        """Stand in for the fallback with a handler-shaped signature."""
-
-    # ``@handles_message`` returns a descriptor, and the descriptor itself is
-    # callable-shaped only through ``__get__``. The predicate unwraps it so a
-    # descriptor presented directly is judged on the function it registers.
-    descriptor = handles_message("bye")(on_unhandled)
+    async def cleanup(self: object, ws: WebSocketLike, payload: object) -> None:
+        """Stand in for an ordinary function presented through a descriptor."""
 
     rejected = {
         "direct": LifecycleParent.on_disconnect,
@@ -323,7 +356,6 @@ def test_lifecycle_predicate_recognises_every_rejected_shape() -> None:
         "inherited": Child.on_disconnect,
         "partial": partial_disconnect,
         "nested partial": functools.partial(partial_disconnect),
-        "decorated descriptor": descriptor,
     }
     for label, callable_ in rejected.items():
         assert is_lifecycle_callback(LifecycleParent, callable_), (
@@ -335,6 +367,26 @@ def test_lifecycle_predicate_recognises_every_rejected_shape() -> None:
     assert not is_lifecycle_callback(LifecycleParent, 42), (
         "a non-callable must not be classified as a lifecycle callback"
     )
+    assert not is_lifecycle_callback(
+        LifecycleParent, handles_message("bye")(functools.partial(cleanup))
+    ), "a descriptor over an ordinary function must not be over-rejected"
+
+
+def test_decorating_a_reserved_function_name_is_refused_at_decoration() -> None:
+    """Decoration refuses a reserved ``__name__`` before any owner exists.
+
+    ``__set_name__`` runs later, at class creation, so the decoration-time
+    check is the only one available while the decorator is applied. It cannot
+    see aliases or inherited copies, which is what the class-creation check
+    adds; it does catch the function's own reserved name.
+    """
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_unhandled"):
+
+        @handles_message("bye")
+        async def on_unhandled(
+            self: object, ws: WebSocketLike, payload: object
+        ) -> None:
+            """Stand in for a reserved callback decorated directly."""
 
 
 class ParentResource(WebSocketResource):

@@ -41,6 +41,7 @@ from .exceptions import (
     DuplicateHandlerRegistrationError,
     HandlerNotAsyncError,
     HandlerSignatureError,
+    ReservedHandlerRegistrationError,
     SignatureInspectionError,
 )
 
@@ -82,6 +83,24 @@ def _unwrap_handler(action: object) -> object:
     return action
 
 
+def _has_reserved_name(action: object) -> bool:
+    """Return whether ``action`` carries a reserved lifecycle ``__name__``.
+
+    This is the half of :func:`is_lifecycle_callback` that needs no owner, so
+    a decorator can refuse a lifecycle callback at decoration time, before the
+    class it will live on exists. Identity against the owner's MRO — which
+    catches aliases and rebinding — still waits for class creation.
+
+    Returns
+    -------
+    bool
+        ``True`` when the unwrapped callable is named for a reserved callback.
+    """
+    return (
+        getattr(_unwrap_handler(action), "__name__", None) in LIFECYCLE_CALLBACK_NAMES
+    )
+
+
 def is_lifecycle_callback(owner: type, action: object) -> bool:
     """Return whether ``action`` implements a reserved lifecycle callback.
 
@@ -116,7 +135,7 @@ def is_lifecycle_callback(owner: type, action: object) -> bool:
     resolved = _unwrap_handler(action)
     if not callable(resolved):
         return False
-    if getattr(resolved, "__name__", None) in LIFECYCLE_CALLBACK_NAMES:
+    if _has_reserved_name(resolved):
         return True
     return any(
         resolved is _unwrap_handler(base.__dict__.get(name))
@@ -212,6 +231,14 @@ class _HandlesMessageDescriptor:
     def __init__(
         self, message_type: str, func: Handler, *, strict: bool = True
     ) -> None:
+        # The reserved check runs before ``get_payload_type`` so that a
+        # lifecycle callback is refused for what it is, not for the signature
+        # it happens to have. ``on_connect(self, req, ws, **params)`` has two
+        # annotated parameters after ``self``, which signature validation
+        # would reject as ambiguous before the reserved name was considered.
+        if _has_reserved_name(func):
+            func_name: str = getattr(func, "__qualname__", repr(func))
+            raise ReservedHandlerRegistrationError(message_type, func_name)
         self.message_type = message_type
         self.func = func
         self.payload_type = get_payload_type(func)
