@@ -12,8 +12,6 @@ from .diagnostics import _class_name
 from .utils import duplicate_payload_type_msg, raise_unknown_fields
 
 if typ.TYPE_CHECKING:  # pragma: no cover - used for type hints
-    import collections.abc as cabc
-
     from .handlers import HandlerInfo
     from .resource import WebSocketResource
 
@@ -26,52 +24,45 @@ def _require_struct_type(candidate: object) -> type[ms.Struct]:
     return candidate
 
 
-def _require_struct_tag(struct: type[ms.Struct]) -> None:
-    """Ensure ``struct`` declares the tag schema dispatch relies upon."""
-    info = msinspect.type_info(struct)
-    if not isinstance(info, msinspect.StructType) or info.tag is None:
-        msg = "schema Struct types must define a tag"
-        raise TypeError(msg)
+def _require_struct_tag(struct: type[ms.Struct]) -> type:
+    """Ensure ``struct`` declares the tag schema dispatch relies upon.
 
-
-def _require_uniform_tag_kinds(structs: cabc.Sequence[type[ms.Struct]]) -> None:
-    """Ensure ``structs`` agree on a single kind of dispatch tag.
-
-    msgspec accepts both integer and string tags, but rejects a union that
-    contains both kinds. It does so only when the union is first derived at
-    decode time, so an invalid schema would otherwise pass class creation and
-    then break the receive loop on the first message. Catching it here reports
-    the mistake where it was made. A lone Struct has nothing to disagree with,
-    and ``msgspec`` already rejects any tag that is neither an ``int`` nor a
-    ``str``.
+    Returns
+    -------
+    type
+        ``int`` or ``str``: the kind of the declared dispatch tag.
 
     Raises
     ------
     TypeError
-        If the members do not all use the same kind of dispatch tag.
+        If ``struct`` is not a tagged :class:`msgspec.Struct`.
     """
-    kinds = {
-        type(info.tag)
-        for struct in structs
-        if isinstance(info := msinspect.type_info(struct), msinspect.StructType)
-    }
-    if len(kinds) > 1:
-        names = [_class_name(struct) for struct in structs]
-        msg = f"schema tags must all be strings or all be integers: {names!r}"
+    info = msinspect.type_info(struct)
+    if not isinstance(info, msinspect.StructType) or info.tag is None:
+        msg = "schema Struct types must define a tag"
         raise TypeError(msg)
+    return type(info.tag)
 
 
 def validate_schema_types(schema: type) -> None:
     """Ensure all schema types are :class:`msgspec.Struct` with tags."""
     types = typ.get_args(schema) or (schema,)
-    structs: list[type[ms.Struct]] = []
+    kinds: set[type] = set()
     for t in types:
         # Narrow before inspecting metadata: a non-struct member must fail on
         # the membership check rather than inside ``msgspec.inspect``.
         struct = _require_struct_type(t)
-        _require_struct_tag(struct)
-        structs.append(struct)
-    _require_uniform_tag_kinds(structs)
+        kinds.add(_require_struct_tag(struct))
+    # msgspec accepts both integer and string tags, but rejects a union mixing
+    # them -- and only when it first derives that union at decode time. Left
+    # unchecked the schema would pass class creation and then break the receive
+    # loop on the first message, so report the mistake where it was made. A
+    # lone Struct has nothing to disagree with, and msgspec already rejects any
+    # tag that is neither an ``int`` nor a ``str``.
+    if len(kinds) > 1:
+        names = [_class_name(struct) for struct in types]
+        msg = f"schema tags must all be strings or all be integers: {names!r}"
+        raise TypeError(msg)
 
 
 def populate_struct_handlers(cls: type[WebSocketResource]) -> dict[type, HandlerInfo]:
