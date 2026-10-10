@@ -63,9 +63,21 @@ LIFECYCLE_CALLBACK_NAMES: frozenset[str] = frozenset({
 })
 
 
-def _unwrap_partials(action: object) -> object:
-    """Peel ``functools.partial`` layers down to the wrapped callable."""
-    while isinstance(action, functools.partial):
+def _unwrap_handler(action: object) -> object:
+    """Peel the wrappers that hide the function a handler ultimately invokes.
+
+    Two wrappers matter. A ``functools.partial`` exposes neither the wrapped
+    function's ``__name__`` nor its identity. A ``_HandlesMessageDescriptor``
+    is the object ``@handles_message`` returns; it is not callable itself
+    until ``__get__`` binds it, and a class may store it under any name,
+    including a reserved one.
+
+    Returns
+    -------
+    object
+        The innermost callable, or ``action`` unchanged when it is not wrapped.
+    """
+    while isinstance(action, (functools.partial, _HandlesMessageDescriptor)):
         action = action.func
     return action
 
@@ -79,10 +91,13 @@ def is_lifecycle_callback(owner: type, action: object) -> bool:
     catches an alias such as ``on_bye = on_disconnect`` or a function copied
     onto the class under a new name.
 
-    ``functools.partial`` wrappers are unwrapped first: a partial exposes
-    neither the wrapped function's ``__name__`` nor its identity, so without
-    that step a partial would read as an ordinary handler while still
-    invoking ``on_disconnect`` when a peer frame selected it.
+    Both sides of every comparison are unwrapped, because either may be
+    wrapped. ``functools.partial`` hides the wrapped function's ``__name__``
+    and identity. A ``_HandlesMessageDescriptor`` under a reserved name — for
+    example ``on_disconnect = handles_message("bye")(cleanup)`` — hides the
+    function that ``__set_name__`` registers, so comparing the descriptor
+    against a registered function would both miss the reserved name and fail
+    the identity test.
 
     Parameters
     ----------
@@ -96,15 +111,15 @@ def is_lifecycle_callback(owner: type, action: object) -> bool:
     bool
         ``True`` when the callable is a reserved lifecycle callback.
     """
-    if isinstance(action, _HandlesMessageDescriptor):
-        action = action.func
-    if not callable(action):
+    if not callable(action) and not isinstance(action, _HandlesMessageDescriptor):
         return False
-    resolved = _unwrap_partials(action)
+    resolved = _unwrap_handler(action)
+    if not callable(resolved):
+        return False
     if getattr(resolved, "__name__", None) in LIFECYCLE_CALLBACK_NAMES:
         return True
     return any(
-        resolved is base.__dict__.get(name)
+        resolved is _unwrap_handler(base.__dict__.get(name))
         for base in owner.__mro__
         for name in LIFECYCLE_CALLBACK_NAMES
     )
