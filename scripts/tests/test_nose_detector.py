@@ -231,6 +231,53 @@ class TestLoadSettings:
             detector.load_settings(pyproject)
 
 
+class TestSourceRelativePath:
+    """Normalization of source candidates against one configured root."""
+
+    def test_returns_a_root_relative_posix_path(self, tmp_path: Path) -> None:
+        """Nested source candidates retain their stable relative location."""
+        root = tmp_path / "source"
+        nested = root / "nested"
+        nested.mkdir(parents=True)
+        source = nested / "sample.py"
+        source.write_text("VALUE = 1\n", encoding="utf-8")
+
+        relative_path = detector._source_relative_path(
+            source,
+            resolved_root=root.resolve(),
+            is_file_root=False,
+        )
+
+        assert relative_path == "nested/sample.py", (
+            "Directory scans must use POSIX paths relative to their configured root."
+        )
+
+    def test_accepts_only_the_file_selected_as_a_file_root(
+        self, tmp_path: Path
+    ) -> None:
+        """A file root cannot admit a neighbouring source candidate."""
+        selected = tmp_path / "selected.py"
+        neighbour = tmp_path / "neighbour.py"
+        selected.write_text("VALUE = 1\n", encoding="utf-8")
+        neighbour.write_text("VALUE = 2\n", encoding="utf-8")
+
+        selected_relative_path = detector._source_relative_path(
+            selected,
+            resolved_root=selected.resolve(),
+            is_file_root=True,
+        )
+        relative_path = detector._source_relative_path(
+            neighbour,
+            resolved_root=selected.resolve(),
+            is_file_root=True,
+        )
+
+        assert selected_relative_path == selected.name, (
+            "A selected file root must retain its repository-relative filename."
+        )
+        assert relative_path is None, "A file root must select one exact file."
+
+
 class TestResolveBinary:
     """Discovery and version verification of the pinned binary."""
 

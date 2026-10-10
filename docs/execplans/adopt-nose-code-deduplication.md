@@ -148,9 +148,11 @@ duplication fix would require a public API or runtime-dependency change.
 
 ## Progress and decision log
 
-Status: implementation is complete; PR #225 is open, ready for review, and
-unmerged. CodeRabbit follow-up gates pass; commit, publication and hosted
-review reconciliation remain pending.
+Status: the original implementation is published as `dc858da` on open PR #225,
+which remains ready for review and unmerged. This follow-up removes the
+reproduced CodeScene complexity finding and passes all local gates. Commit,
+publication, current-head hosted checks and review reconciliation remain
+pending.
 
 - Confirmed the reference commit exists locally in an episodic worktree and
   consulted the specified ADR, merged gate modules and v0.20.0 nose usage,
@@ -218,5 +220,23 @@ review reconciliation remain pending.
   reconciliation remain pending for the new head.
 - CodeRabbit's walkthrough says automatic reviews are paused because the branch
   is under active development. It does not report a rate-limit rejection. The
-  managed review queue already contains a pending request for PR #225, so no
-  duplicate request was added.
+  current `comenq list` has no request for `falcon-pachinko#225`; request one
+  review after the next validated head is pushed.
+- At `dc858da5ec08e65f8acbb5a37038c3163631e48f`, the CodeScene delta reproduced
+  a mean complexity of 4.14 in the new detector module. Splitting root-relative
+  source-path validation from exclusion policy preserves selection behaviour;
+  the two focused tests pass, `cs review` now scores the module 10.0 with no
+  findings, and `cs delta` against the PR base reports no findings. Full
+  sequential repository gates pass on the resulting three-file working diff:
+  the helper tests report 168 passed and 3 snapshots with no skips; the
+  duplication gate, formatting, Ruff and both Pylint passes, typechecking,
+  spelling, Markdown, Mermaid, application tests (439 passed, 2 skipped), and
+  CV005 all pass. Scrutineer logs are under `/tmp`; each is named
+  `<gate>-falcon-pachinko-adopt-nose-code-deduplication-2.out`.
+- The latest supplied CodeRabbit assessment is pinned to `369993c`, before the
+  published `dc858da` fixes. At `dc858da`, effective-scan validation, malformed
+  allowlist-container rejection, acceptance-target provisioning and explicit
+  detector/installer contexts are present with regression coverage. The
+  separately reported CodeScene complexity finding is resolved in this
+  follow-up. The current CodeRabbit queue has no request; a new review remains
+  pending publication of the validated head.
