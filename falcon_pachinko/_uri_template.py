@@ -14,31 +14,24 @@ import re
 _MAX_PARAMETERS_PER_SEGMENT = 2
 
 
-def _parse_parameter(template: str, start: int) -> tuple[str, int]:
-    """Return a validated parameter name and the first index after its brace.
+def _raise_nested_brace(template: str, start: int, closing_brace: int) -> None:
+    """Raise the template error for a nested or doubled opening brace."""
+    placeholder_end = closing_brace + 1 if closing_brace >= 0 else len(template)
+    placeholder = template[start:placeholder_end]
+    msg = (
+        f"Nested or doubled brace in parameter {placeholder!r} in template: {template}"
+    )
+    raise ValueError(msg)
 
-    Returns
-    -------
-    tuple[str, int]
-        The parameter name and the first index after its closing brace.
 
-    Raises
-    ------
-    ValueError
-        If braces are malformed or the parameter name is invalid.
-    """
+def _find_parameter_closing_brace(template: str, start: int) -> int:
+    """Return the closing brace index after checking for malformed braces."""
     closing_brace = template.find("}", start + 1)
     nested_brace = template.find(
         "{", start + 1, closing_brace if closing_brace >= 0 else len(template)
     )
     if nested_brace >= 0:
-        placeholder_end = closing_brace + 1 if closing_brace >= 0 else len(template)
-        placeholder = template[start:placeholder_end]
-        msg = (
-            f"Nested or doubled brace in parameter {placeholder!r} "
-            f"in template: {template}"
-        )
-        raise ValueError(msg)
+        _raise_nested_brace(template, start, closing_brace)
     if closing_brace < 0:
         parameter_name = template[start + 1 :]
         msg = (
@@ -46,8 +39,11 @@ def _parse_parameter(template: str, start: int) -> tuple[str, int]:
             f"in template: {template}"
         )
         raise ValueError(msg)
+    return closing_brace
 
-    parameter_name = template[start + 1 : closing_brace]
+
+def _validate_parameter_name(parameter_name: str, template: str) -> None:
+    """Raise when ``parameter_name`` is empty or not a Python identifier."""
     if not parameter_name:
         msg = f"Empty parameter name in template: {template}"
         raise ValueError(msg)
@@ -55,7 +51,42 @@ def _parse_parameter(template: str, start: int) -> tuple[str, int]:
         msg = f"Invalid parameter name {parameter_name!r} in template: {template}"
         raise ValueError(msg)
 
+
+def _parse_parameter(template: str, start: int) -> tuple[str, int]:
+    """Return a validated parameter name and the first index after its brace.
+
+    Returns
+    -------
+    tuple[str, int]
+        The parameter name and the first index after its closing brace.
+    """
+    closing_brace = _find_parameter_closing_brace(template, start)
+    parameter_name = template[start + 1 : closing_brace]
+    _validate_parameter_name(parameter_name, template)
     return parameter_name, closing_brace + 1
+
+
+def _append_literal_token(
+    tokens: list[tuple[bool, str]], template: str, start: int, end: int
+) -> None:
+    """Append non-empty literal text before a placeholder."""
+    if start < end:
+        tokens.append((False, template[start:end]))
+
+
+def _append_parameter_token(
+    tokens: list[tuple[bool, str]],
+    parameter_name: str,
+    template: str,
+    parameter_names: set[str],
+) -> None:
+    """Append a unique validated placeholder."""
+    if parameter_name in parameter_names:
+        msg = f"Duplicate parameter name {parameter_name!r} in template: {template}"
+        raise ValueError(msg)
+
+    parameter_names.add(parameter_name)
+    tokens.append((True, parameter_name))
 
 
 def _tokenize_template(template: str) -> list[tuple[bool, str]]:
@@ -85,21 +116,13 @@ def _tokenize_template(template: str) -> list[tuple[bool, str]]:
         if char == "}":
             msg = f"Unmatched closing brace '}}' in template: {template}"
             raise ValueError(msg)
-        if char != "{":
+        if char == "{":
+            _append_literal_token(tokens, template, literal_start, index)
+            parameter_name, index = _parse_parameter(template, index)
+            _append_parameter_token(tokens, parameter_name, template, parameter_names)
+            literal_start = index
+        else:
             index += 1
-            continue
-
-        if literal_start < index:
-            tokens.append((False, template[literal_start:index]))
-
-        parameter_name, index = _parse_parameter(template, index)
-        if parameter_name in parameter_names:
-            msg = f"Duplicate parameter name {parameter_name!r} in template: {template}"
-            raise ValueError(msg)
-
-        parameter_names.add(parameter_name)
-        tokens.append((True, parameter_name))
-        literal_start = index
 
     if literal_start < len(template):
         tokens.append((False, template[literal_start:]))
@@ -135,15 +158,20 @@ def _split_template_segments(
     for is_parameter, text in tokens:
         if is_parameter:
             segments[-1].append((True, text))
-            continue
-
-        parts = text.split("/")
-        for index, part in enumerate(parts):
-            if part:
-                segments[-1].append((False, part))
-            if index < len(parts) - 1:
-                segments.append([])
+        else:
+            _append_literal_segments(segments, text)
     return segments
+
+
+def _append_literal_segments(segments: list[list[tuple[bool, str]]], text: str) -> None:
+    """Append literal text to the current segment, splitting on slashes."""
+    parts = text.split("/")
+    for part in parts[:-1]:
+        if part:
+            segments[-1].append((False, part))
+        segments.append([])
+    if parts[-1]:
+        segments[-1].append((False, parts[-1]))
 
 
 def _is_terminal_parameter_pair(

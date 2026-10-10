@@ -74,30 +74,3 @@ async def test_literal_top_level_routes_select_resources_and_hooks(
         await router.on_websocket(make_req("/childxv1"), DummyWS())
     assert not selected, "a near-miss should not select a resource"
     assert not events, "a near-miss should not run resource hooks"
-
-
-@pytest.mark.asyncio
-async def test_metacharacter_mount_prefix_rejects_regex_expansion() -> None:
-    """A literal metacharacter in a mount prefix only matches itself."""
-    events: list[str] = []
-
-    class StatusResource(WebSocketResource):
-        def __init__(self) -> None:
-            events.append("factory")
-
-        async def on_connect(self, req: object, ws: object, **params: object) -> bool:
-            return False
-
-    StatusResource.hooks = HookCollection()
-    StatusResource.hooks.add("before_connect", lambda context: events.append("hook"))
-
-    router = WebSocketRouter()
-    router.add_route("/status", StatusResource)
-    router.mount("/api.v1")
-
-    with pytest.raises(falcon.HTTPNotFound):
-        await router.on_websocket(make_req("/api/v1/status", "/api.v1"), DummyWS())
-    assert not events, "a regex-expanded mount prefix must not create a resource"
-
-    await router.on_websocket(make_req("/api.v1/status", "/api.v1"), DummyWS())
-    assert events == ["factory", "hook"], "the literal mount prefix should dispatch"

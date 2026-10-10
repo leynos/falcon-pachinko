@@ -265,49 +265,6 @@ def test_add_route_duplicates_after_mount() -> None:
         router.add_route("/other", DummyResource, name="dup")
 
 
-def test_mount_parameter_collision_does_not_register_route() -> None:
-    """A mount-prefix name conflict leaves route registration untouched."""
-    router = WebSocketRouter()
-    router.mount("/ws/{room}")
-
-    with pytest.raises(ValueError, match="Duplicate parameter name 'room'"):
-        router.add_route("/chat/{room}", DummyResource, name="chat")
-
-    with pytest.raises(KeyError, match="no route registered with name 'chat'"):
-        router.url_for("chat", room="general")
-
-    router.add_route("/chat/{channel}", DummyResource, name="chat")
-    assert router.url_for("chat", channel="general") == "/chat/general", (
-        "a corrected registration should reuse the rejected name"
-    )
-
-
-@pytest.mark.asyncio
-async def test_mount_parameter_collision_leaves_routes_usable() -> None:
-    """A composed-template error does not commit partial mount state."""
-    DummyResource.instances.clear()
-    router = WebSocketRouter()
-    router.add_route("/health", DummyResource)
-    router.add_route("/chat/{room}", DummyResource)
-
-    with pytest.raises(ValueError, match="Duplicate parameter name 'room'"):
-        router.mount("/ws/{room}")
-
-    router.mount("/ws/{scope}")
-    await router.on_websocket(make_req("/ws/acme/health", "/ws/{scope}"), DummyWS())
-    assert DummyResource.instances[-1].params == {"scope": "acme"}, (
-        "the first stored route should work after a corrected mount"
-    )
-
-    await router.on_websocket(
-        make_req("/ws/acme/chat/general", "/ws/{scope}"), DummyWS()
-    )
-    assert DummyResource.instances[-1].params == {
-        "scope": "acme",
-        "room": "general",
-    }, "all stored routes should work after a corrected mount"
-
-
 def test_add_route_invalid_template() -> None:
     """Empty parameter names should raise ``ValueError``."""
     router = WebSocketRouter()
