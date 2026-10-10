@@ -90,9 +90,9 @@ def add_route(
 - `on_disconnect(ws, close_code) -> None`
   - Clean up resources after the persistent receive loop ends. A client
     disconnect preserves Falcon's close code (or defaults to `1000`); a
-    dispatch failure reports `1011`; local task cancellation reports `1006` to
-    cleanup and is re-raised. The router does not send a close frame to an
-    already disconnected socket.
+    dispatch failure reports `1011`; local task cancellation passes `1006` to
+    the cleanup hook before cancellation is re-raised. The router does not send
+    a close frame to an already disconnected socket.
 - Session frames arrive as raw `str` or `bytes` from `ws.receive_media()` and
   are passed to `WebSocketResource.dispatch()`. After acceptance, the router
   continues receiving and dispatching frames until Falcon reports a disconnect.
