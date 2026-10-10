@@ -184,6 +184,21 @@ def _is_terminal_parameter_pair(
     return second == first + 1 and second == len(segment) - 1
 
 
+def _render_template_tokens(tokens: list[tuple[bool, str]]) -> str:
+    """Render validated tokens as escaped literals and named captures."""
+    pattern_parts = []
+    for index, (is_parameter, text) in enumerate(tokens):
+        if is_parameter:
+            # The greedy first capture leaves one character for its adjacent
+            # partner, avoiding quadratic retries on later segment mismatches.
+            is_adjacent_capture = index > 0 and tokens[index - 1][0]
+            quantifier = "" if is_adjacent_capture else "+"
+            pattern_parts.append(f"(?P<{text}>[^/]{quantifier})")
+        else:
+            pattern_parts.append(re.escape(text))
+    return "".join(pattern_parts)
+
+
 def _compile_template_with_suffix(template: str, suffix: str) -> re.Pattern[str]:
     """Compile a template with escaped literals and ``suffix`` appended.
 
@@ -206,17 +221,7 @@ def _compile_template_with_suffix(template: str, suffix: str) -> re.Pattern[str]
             raise
         msg = f"{exc} (original template: {template})"
         raise ValueError(msg) from exc
-    pattern_parts = []
-    for index, (is_parameter, text) in enumerate(tokens):
-        if is_parameter:
-            # Validated adjacent pairs end their segment: the greedy first
-            # capture always leaves one character for the second. Fixing that
-            # width avoids quadratic retries when a later segment mismatches.
-            quantifier = "" if index > 0 and tokens[index - 1][0] else "+"
-            pattern_parts.append(f"(?P<{text}>[^/]{quantifier})")
-        else:
-            pattern_parts.append(re.escape(text))
-    return re.compile(f"^{''.join(pattern_parts)}{suffix}")
+    return re.compile(f"^{_render_template_tokens(tokens)}{suffix}")
 
 
 def compile_uri_template(template: str) -> re.Pattern[str]:
