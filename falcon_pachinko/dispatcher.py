@@ -78,8 +78,25 @@ def _expected_type_label(info: object) -> str:
 def find_conventional_handler(
     resource: WebSocketResource, tag: str
 ) -> HandlerInfo | None:
-    """Return a handler matching ``on_{tag}`` if present."""
+    """Return a handler matching ``on_{tag}`` if the class allows that name.
+
+    Only names in ``_conventional_handler_names`` are considered. That
+    allowlist is built once when the class is created and excludes the
+    lifecycle callbacks, so a peer-chosen tag cannot reach ``on_connect``,
+    ``on_disconnect`` or ``on_unhandled``, nor an alias of one. A class
+    without the attribute (a non-monitored stand-in) offers no conventional
+    handlers at all.
+
+    Returns
+    -------
+    HandlerInfo | None
+        The discovered handler, or ``None`` when the class exposes no usable
+        conventional handler for ``tag``.
+    """
     name = f"on_{to_snake_case(tag)}"
+    allowed = getattr(resource.__class__, "_conventional_handler_names", frozenset())
+    if name not in allowed:
+        return None
     func = getattr(resource.__class__, name, None)
     if func is None or not inspect.iscoroutinefunction(func):
         return None
