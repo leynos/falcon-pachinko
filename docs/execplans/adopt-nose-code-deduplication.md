@@ -148,15 +148,27 @@ duplication fix would require a public API or runtime-dependency change.
 
 ## Progress and decision log
 
-Status at the start of this documentation follow-up: PR #225 was open, ready
-for review, and unmerged at published head
-`a0f02fe4c9398e4f1530b14c3bcc2137275b268c`, based on
-`554105de7c9a3f7c413d31a36125271ad759f164`. Hosted CI run `38014329831`,
-CodeScene result `7890877`, and Gecko Security Review pass. The CodeRabbit
-review baseline at this head has two unresolved documentation threads and a
-Developer Documentation pre-merge warning; PR readiness is already true. This
-does not clear the separate completeness assessment. See PR #225 for its live
-head and checks after this documentation follow-up.
+Latest status: PR #225 remains open, ready for review, and unmerged. GitHub's
+published head is `ed5819c486b467d732874998f793b1ef657d4c79` on the original
+base `554105de7c9a3f7c413d31a36125271ad759f164`; the local branch has been
+rebased onto current `main` at `f6e637e48a1f862e8dfabb26ea5cda4cbec3279a`, but
+that candidate is not yet committed or published. The published head's latest
+CI run `38090679914` failed the duplication step because the main-branch
+URI-template extraction moved a named family and the ranked report surfaced two
+diagnostics fragments. CodeScene result `7897226` passed for that published
+head; this is not a result for the rebased candidate. On the local candidate,
+the full sequential gates now pass: `make lint` including Ruff, both Pylint
+passes and the duplication scan with four reasoned exceptions; `make typecheck`;
+`make test` (655 passed, 2 skipped, 19 warnings); and `make duplication-test`
+(172 passed, 3 snapshots, no skips). Formatting, spelling, Markdown and Mermaid
+checks also pass. The first Markdown check reported two table-alignment errors
+after the latest wording edit; `make fmt` corrected the table, and the final
+`make check-fmt`, `make markdownlint` (0 errors), and `make nixie` passed.
+Commit and publication, hosted checks, current-head CodeRabbit review and
+documentation-thread reconciliation, and the ExecPlan completeness assessment
+remain pending. The latest published CodeRabbit review has two documentation
+comments and the aggregate review decision is `CHANGES_REQUESTED`; no
+assessment clearance or merge is claimed.
 
 - Confirmed the reference commit exists locally in an episodic worktree and
   consulted the specified ADR, merged gate modules and v0.20.0 nose usage,
@@ -329,3 +341,25 @@ head and checks after this documentation follow-up.
   assessment remains pending; no formal proof was introduced or materially
   changed, so a proof-specific assessment is not applicable. No merge is
   claimed.
+- Rebase and current-main adjudication follow-up: the 17-commit PR range from
+  `554105de7c9a3f7c413d31a36125271ad759f164` through
+  `ed5819c486b467d732874998f793b1ef657d4c79` was replayed onto current `main` at
+  `f6e637e48a1f862e8dfabb26ea5cda4cbec3279a`. The rebase completed without
+  conflicts; `compileall` passed after every replayed commit, and `range-diff`
+  showed all 17 commits preserved. The first post-rebase scan surfaced the URI
+  compiler family after the main-branch extraction and two unnamed delimiter
+  fragments in `diagnostics.py`. Source and caller inspection confirmed the URI
+  wrappers retain separate full-URI and prefix-boundary contracts, while the
+  diagnostic fragments sit in sequence and mapping traversals with different
+  shape, key-filtering, normalization and omission-budget behaviour. No
+  application implementation changed. The URI exception now names the moved
+  `_uri_template.py` units; a reasoned path-only diagnostics exception records
+  the unnamed-fragment limitation and requires future same-file families to be
+  inspected individually. The Developer Guide records both adjudications. On
+  the working tree after those changes, `make duplication` passed with four
+  reasoned exceptions, and `make duplication-test` reported 172 passed and 3
+  snapshots with no skips. Formatting, Markdown and Mermaid documentation gates
+  passed before this progress entry was added. The rebased candidate and these
+  adjudications are not yet committed or published; hosted checks, current-head
+  CodeRabbit reconciliation and a completeness assessment remain pending. No
+  merge is claimed.
