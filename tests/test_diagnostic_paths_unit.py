@@ -212,6 +212,25 @@ def test_client_decode_error_omits_frames_and_exception_chains(
     )
 
 
+def test_client_decode_error_omits_surrogate_text_frames() -> None:
+    """Invalid Unicode must not leave the original text frame in an error."""
+    raw = f'{{"token":"{CANARY}\ud800"}}'
+    session = WebSocketSession(
+        typ.cast("WebSocketClientProtocol", object()), path="/", trace=[]
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to decode JSON payload") as caught:
+        session._decode_json_frame(raw, None)
+
+    assert CANARY not in str(caught.value), "client errors must omit frame values"
+    assert CANARY not in repr(caught.value), "exception repr must omit frame values"
+    assert CANARY not in "".join(traceback.format_exception(caught.value)), (
+        "formatted client errors must omit raw frames"
+    )
+    assert caught.value.__cause__ is None, "client errors must not retain a cause"
+    assert caught.value.__context__ is None, "client errors must not retain context"
+
+
 @pytest.mark.parametrize("binary", [False, True])
 @pytest.mark.parametrize("typed", [False, True])
 @pytest.mark.asyncio

@@ -24,6 +24,7 @@ from ._common import (
     FrameKind,
     MissingDependencyError,
     PayloadKind,
+    _decode_json,
     _json_decode_message,
 )
 
@@ -241,13 +242,13 @@ class WebSocketSession:
         self, message: str | bytes, payload_type: type[object] | None
     ) -> object:
         """Decode ``message`` as JSON using ``payload_type`` when provided."""
-        data = message.encode("utf-8") if isinstance(message, str) else message
-        decoder = self._decoder_for(payload_type)
+        exception_name: str
         try:
-            return decoder.decode(data)
-        except ms.DecodeError as exc:
+            return _decode_json(self._decoder_for(payload_type), message, payload_type)
+        except (ms.DecodeError, UnicodeError) as exc:
             exception_name = _type_name(exc)
-        # A fresh error outside the handler has no retained vendor chain.
+        # Keep the same safe error contract as the simulator while hiding its
+        # internal decode exception from callers and monitoring integrations.
         raise RuntimeError(_json_decode_message(message, payload_type, exception_name))
 
     @staticmethod
