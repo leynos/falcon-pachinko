@@ -368,7 +368,7 @@ def test_lifecycle_predicate_recognises_every_rejected_shape() -> None:
         "a non-callable must not be classified as a lifecycle callback"
     )
     assert not is_lifecycle_callback(
-        LifecycleParent, handles_message("bye")(functools.partial(cleanup))
+        LifecycleParent, handles_message("bye")(cleanup)
     ), "a descriptor over an ordinary function must not be over-rejected"
 
 
