@@ -72,6 +72,13 @@ async def test_decorator_registers_handler() -> None:
     assert r.seen == ["hi"], "decorated handler should record the ping payload text"
 
 
+def test_decorator_registers_resolved_payload_type() -> None:
+    """The handler registry retains the resolved payload class."""
+    assert DecoratedResource.handlers["ping"].payload_type is PingPayload, (
+        "the registry should retain the handler's resolved payload type"
+    )
+
+
 def test_duplicate_handler_raises() -> None:
     """Test that registering duplicate handlers for the same message type raises error.
 
@@ -184,6 +191,41 @@ class ChildResource(ParentResource):
         self.invoked.append("parent")
 
 
+def test_child_handler_registry_is_isolated() -> None:
+    """Adding a child handler does not mutate the parent registry."""
+    assert ChildResource.handlers is not ParentResource.handlers, (
+        "a child resource should have its own handler registry"
+    )
+    assert "child" not in ParentResource.handlers, (
+        "the child handler should not appear in the parent registry"
+    )
+    assert "child" in ChildResource.handlers, (
+        "the child registry should include its decorated handler"
+    )
+
+
+def test_none_handlers_mapping_is_replaced_before_registration() -> None:
+    """A class-body None mapping is replaced with a fresh handler registry."""
+
+    class NoneHandlersResource(WebSocketResource):
+        """A resource that asks the descriptor to initialise its registry."""
+
+        handlers = None  # pyright: ignore[reportAssignmentType]  # tests None setup
+
+        @handles_message("fresh")
+        async def handle_fresh(self, ws: WebSocketLike, payload: PingPayload) -> None:
+            """Handle the fresh-registry test message."""
+
+    handlers = NoneHandlersResource.handlers
+    assert isinstance(handlers, dict), (
+        "the descriptor should replace the None class attribute with a mapping"
+    )
+    assert handlers is not ParentResource.handlers, (
+        "the None class attribute should become a fresh child mapping"
+    )
+    assert "fresh" in handlers, "the fresh mapping should contain the decorated handler"
+
+
 class DecoratedOverride(ParentResource):
     """A resource that overrides a parent handler using the decorator.
 
@@ -269,4 +311,27 @@ def test_unresolved_annotation_is_ignored() -> None:
 
     assert UnknownAnnoResource.handlers["unknown"].payload_type is None, (
         "unresolved annotations should fall back to a None payload type"
+    )
+
+
+def test_unannotated_payload_type_is_none() -> None:
+    """A handler without a payload annotation registers no payload type."""
+
+    class UnannotatedPayloadResource(WebSocketResource):
+        """A resource whose handler intentionally omits its payload type."""
+
+        def __init__(self) -> None:
+            self.received: object | None = None
+
+        @handles_message("unannotated")
+        async def handle_unannotated(
+            self,
+            ws: WebSocketLike,
+            payload,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]  # ruff: ignore[missing-type-function-argument]  # deliberately unannotated
+        ) -> None:
+            """Handle the unannotated-payload test message."""
+            self.received = payload
+
+    assert UnannotatedPayloadResource.handlers["unannotated"].payload_type is None, (
+        "an unannotated payload should register as None"
     )
