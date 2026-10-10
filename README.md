@@ -29,7 +29,8 @@ for the full design rationale. For practical guidance, start with the
 - Message payloads are parsed into `msgspec.Struct` classes for speed and type
   safety.
 - Define a `schema` union of tagged `msgspec.Struct` types to enable automatic
-  dispatch based on the message tag.
+  dispatch based on the message tag. Every member must use the same kind of
+  tag: all string tags, or all integer tags.
 - Use the canonical `@handles_message("type")` decorator to register message
   handlers.
 - `WebSocketConnectionManager` tracks connections, manages rooms, and lets
