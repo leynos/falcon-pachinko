@@ -243,10 +243,10 @@ pending.
 - At `40cddb965a81d1212c3a55be8dab4cb20e349584`, the remote branch matches the
   local head and PR #225 is open and ready for review. Hosted CI run
   `38010083980` and CodeScene result `7890493` pass; Gecko Security Review also
-  passes. The latest local sequential gates passed before publication, with
-  168 focused helper tests, 3 snapshots and no skips; `make test` reported 439
+  passes. The latest local sequential gates passed before publication, with 168
+  focused helper tests, 3 snapshots and no skips; `make test` reported 439
   passed, 2 skipped and 19 warnings. CodeRabbit's inline threads are resolved.
-  A fresh full review is queued as `cee4b22f`; its estimated wait was about
-  8 hours 48 minutes at the latest queue check. The request is pending, not a
+  A fresh full review is queued as `cee4b22f`; its estimated wait was about 8
+  hours 48 minutes at the latest queue check. The request is pending, not a
   completed review, and GitHub's aggregate review decision remains
   `CHANGES_REQUESTED` from an earlier review.
