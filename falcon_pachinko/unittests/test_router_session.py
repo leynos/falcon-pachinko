@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import typing as typ
+import warnings
 
 import falcon
 import falcon.asgi
@@ -140,6 +141,15 @@ def test_router_attach_requires_falcon_asgi_app() -> None:
     """Attach rejects objects that cannot serve Falcon ASGI routes."""
     with pytest.raises(TypeError, match=r"falcon\.asgi\.App"):
         WebSocketRouter().attach(object(), "/ws")
+
+
+def test_router_attach_does_not_warn_for_falcon_default_media_handlers() -> None:
+    """Fresh bound default handlers compare by configuration, not identity."""
+    app = falcon.asgi.App()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        WebSocketRouter().attach(app, "/ws")
 
 
 def test_root_router_attach_registers_path_converter() -> None:

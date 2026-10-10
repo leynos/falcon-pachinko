@@ -63,10 +63,12 @@ The live harness captures failures from Falcon's `Exception` handler and from
 exceptions escaping the ASGI callable. Tests can inspect the read-only
 `server.errors` snapshot or acknowledge asserted failures with
 `server.pop_errors()`. Applications that register their own `Exception` handler
-must call `server.record_error(ex)` from that handler; otherwise Falcon may
-consume the exception before the harness can report it. Unacknowledged server
-failures fail context teardown, while `pop_errors()` marks failures that the
-scenario intentionally asserted.
+must register it after `live_websocket_server.start(app)` because the harness
+installs its capture handler during startup and replaces a handler registered
+earlier. The application handler must call `server.record_error(ex)`; otherwise
+Falcon may consume the exception before the harness can report it.
+Unacknowledged server failures fail context teardown, while `pop_errors()`
+marks failures that the scenario intentionally asserted.
 
 The `testing` extra and `dev` dependency group include `uvicorn>=0.29,<1`. The
 test server imports Uvicorn lazily and uses its lifespan readiness and
