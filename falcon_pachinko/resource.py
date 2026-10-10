@@ -41,6 +41,13 @@ _RESERVED_HANDLER_NAMES: frozenset[str] = frozenset({
 })
 
 
+def _unwrap_partials(action: object) -> object:
+    """Peel ``functools.partial`` layers down to the wrapped callable."""
+    while isinstance(action, functools.partial):
+        action = action.func
+    return action
+
+
 def _is_lifecycle_callback(owner: type, action: object) -> bool:
     """Return whether ``action`` implements a reserved lifecycle callback.
 
@@ -57,10 +64,11 @@ def _is_lifecycle_callback(owner: type, action: object) -> bool:
     """
     if not callable(action):
         return False
-    if getattr(action, "__name__", None) in _RESERVED_HANDLER_NAMES:
+    resolved = _unwrap_partials(action)
+    if getattr(resolved, "__name__", None) in _RESERVED_HANDLER_NAMES:
         return True
     return any(
-        action is base.__dict__.get(name)
+        resolved is base.__dict__.get(name)
         for base in owner.__mro__
         for name in _RESERVED_HANDLER_NAMES
     )
@@ -245,17 +253,24 @@ class WebSocketResource:
         """Record the ``on_*`` names the conventional dispatcher may resolve.
 
         The set is fixed when the class is created so that dispatch never
-        consults an attribute the class did not intend to expose. Inheritance
-        is honoured because resolution goes through ``getattr``, which walks
-        the MRO; only reserved lifecycle names, synchronous shadows and
-        descriptors are dropped. Nested classes are skipped because
-        ``getattr`` returns a ``type`` for them.
+        consults an attribute the class did not intend to expose. Resolution
+        walks the MRO, so inheritance is honoured; only reserved lifecycle
+        names, synchronous shadows and descriptors are dropped.
+
+        ``getattr_static`` is used rather than ``getattr`` so that a
+        descriptor an application happens to name ``on_*`` cannot run, or
+        raise, while a resource class is being created. It returns the raw
+        function object for a plain method, so ``iscoroutinefunction`` still
+        sees through nothing: a wrapped coroutine stays wrapped unless the
+        wrapper sets ``__wrapped__``, which ``getattr_static`` follows.
         """
         names = {
             name
             for name in dir(cls)
             if name.startswith("on_")
-            and inspect.iscoroutinefunction(member := getattr(cls, name))
+            and inspect.iscoroutinefunction(
+                member := inspect.getattr_static(cls, name, None)
+            )
             and not _is_lifecycle_callback(cls, member)
         }
         cls._conventional_handler_names = frozenset(names)

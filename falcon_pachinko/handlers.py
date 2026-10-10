@@ -1,4 +1,25 @@
-"""Utilities for registering and validating message handlers."""
+"""Utilities for registering and validating message handlers.
+
+Registration rejects a handler that implements a reserved lifecycle callback
+so that a peer-chosen tag can never reach ``on_connect``, ``on_disconnect`` or
+``on_unhandled``. The check recognises a lifecycle callback by its name and by
+identity against the class it was defined on, including through
+``functools.partial`` wrappers.
+
+A wrapper then, that *calls* a lifecycle method rather than *being* one reads
+as an ordinary handler:
+
+```python
+async def sneaky(self, ws, payload):  # not recognised as a callback
+    await self.on_disconnect(ws, 1000)
+```
+
+Registering such a wrapper from application code is the same act as calling
+the lifecycle method directly, so it confers no capability the application did
+not already have — it cannot be told apart from a legitimate handler that
+happens to consult lifecycle state. What the check does prevent is a
+conventional name or an alias *drifting* into the peer-reachable registry.
+"""
 
 from __future__ import annotations
 

@@ -138,38 +138,6 @@ async def test_on_disconnect_removes_connection_and_audits_closure() -> None:
     assert metadata["project"] == _PROJECT, "project must match"
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("tag", ["disconnect", "Disconnect", "DISCONNECT"])
-async def test_reserved_envelope_tag_leaves_live_membership_intact(tag: str) -> None:
-    """A ``disconnect`` envelope cannot evict a live connection.
-
-    The payload is a valid close code, so nothing but the reserved-name
-    refusal stops ``on_disconnect`` from tearing down a connected session.
-    """
-    conn_mgr = WebSocketConnectionManager()
-    resource, _repo, audit, _feed = _build_resource(conn_mgr)
-    ws = RecordingWebSocket()
-    await resource.on_connect(
-        _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
-    )
-
-    await _dispatch(resource, ws, {"type": tag, "payload": 1000})
-
-    assert dict(conn_mgr.websockets) == {resource._conn_id: ws}, (
-        f"the live connection must survive a reserved envelope: {conn_mgr.websockets}"
-    )
-    assert dict(conn_mgr.rooms) == {f"workspace:{_WORKSPACE}": {resource._conn_id}}, (
-        f"workspace membership must be unchanged: {conn_mgr.rooms}"
-    )
-    assert not [r for r in audit.records if r["event"] == "session.closed"], (
-        "a reserved envelope must not audit a closure"
-    )
-    assert ws.messages[-1] == {
-        "type": "error",
-        "payload": "unsupported message",
-    }, f"the application fallback must answer the reserved envelope: {ws.messages}"
-
-
 class EnvelopeTaskStreamResource(TaskStreamResource):
     """``TaskStreamResource`` without a schema, so envelopes are decoded.
 
@@ -183,6 +151,51 @@ class EnvelopeTaskStreamResource(TaskStreamResource):
     schema = None
 
 
+def _envelope_resource(
+    conn_mgr: WebSocketConnectionManager,
+) -> EnvelopeTaskStreamResource:
+    """Build an envelope-dispatching task stream sharing real collaborators."""
+    resource, _repo, _audit, _feed = _build_resource(conn_mgr)
+    return EnvelopeTaskStreamResource(
+        workspace_repo=resource._repo,
+        audit_trail=resource._audit,
+        announcement_feed=resource._feed,
+        conn_mgr=conn_mgr,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tag", ["disconnect", "Disconnect", "DISCONNECT"])
+async def test_reserved_envelope_tag_leaves_live_membership_intact(tag: str) -> None:
+    """A ``disconnect`` envelope cannot evict a live connection.
+
+    The payload is a valid close code, so nothing but the reserved-name
+    refusal stops ``on_disconnect`` from tearing down a connected session.
+    """
+    conn_mgr = WebSocketConnectionManager()
+    resource = _envelope_resource(conn_mgr)
+    ws = RecordingWebSocket()
+    await resource.on_connect(
+        _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
+    )
+
+    await _dispatch(resource, ws, {"type": tag, "payload": 1000})
+
+    assert dict(conn_mgr.websockets) == {resource._conn_id: ws}, (
+        f"the live connection must survive a reserved envelope: {conn_mgr.websockets}"
+    )
+    assert dict(conn_mgr.rooms) == {f"workspace:{_WORKSPACE}": {resource._conn_id}}, (
+        f"workspace membership must be unchanged: {conn_mgr.rooms}"
+    )
+    assert not [r for r in resource._audit.records if r["event"] == "session.closed"], (
+        "a reserved envelope must not audit a closure"
+    )
+    assert ws.messages[-1] == {
+        "type": "error",
+        "payload": "unsupported message",
+    }, f"the application fallback must answer the reserved envelope: {ws.messages}"
+
+
 @pytest.mark.asyncio
 async def test_reserved_envelope_cannot_evict_through_real_lifecycle() -> None:
     """A ``disconnect`` envelope cannot reach the real cleanup callback.
@@ -192,20 +205,14 @@ async def test_reserved_envelope_cannot_evict_through_real_lifecycle() -> None:
     teardown.
     """
     conn_mgr = WebSocketConnectionManager()
-    resource, _repo, audit, _feed = _build_resource(conn_mgr)
-    envelope_resource = EnvelopeTaskStreamResource(
-        workspace_repo=resource._repo,
-        audit_trail=resource._audit,
-        announcement_feed=resource._feed,
-        conn_mgr=conn_mgr,
-    )
+    resource = _envelope_resource(conn_mgr)
     ws = RecordingWebSocket()
-    await envelope_resource.on_connect(
+    await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
-    conn_id = envelope_resource._conn_id
+    conn_id = resource._conn_id
 
-    await _dispatch(envelope_resource, ws, {"type": "disconnect", "payload": 1000})
+    await _dispatch(resource, ws, {"type": "disconnect", "payload": 1000})
 
     assert dict(conn_mgr.websockets) == {conn_id: ws}, (
         f"the live connection must survive: {conn_mgr.websockets}"
@@ -213,7 +220,7 @@ async def test_reserved_envelope_cannot_evict_through_real_lifecycle() -> None:
     assert dict(conn_mgr.rooms) == {f"workspace:{_WORKSPACE}": {conn_id}}, (
         f"workspace membership must be unchanged: {conn_mgr.rooms}"
     )
-    assert not [r for r in audit.records if r["event"] == "session.closed"], (
+    assert not [r for r in resource._audit.records if r["event"] == "session.closed"], (
         "the reserved envelope must not audit a closure"
     )
     assert ws.messages[-1] == {
@@ -222,9 +229,10 @@ async def test_reserved_envelope_cannot_evict_through_real_lifecycle() -> None:
     }, f"the application fallback must answer the frame: {ws.messages}"
 
     # The session must still be usable afterwards, not merely reported live.
-    await _dispatch(envelope_resource, ws, {"type": "task.list", "payload": {}})
+    await _dispatch(resource, ws, {"type": "task.list", "payload": {}})
     last = ws.messages[-1]
-    assert isinstance(last, dict) and last["type"] == "task.list", (
+    assert isinstance(last, dict), f"the reply must be a mapping: {ws.messages}"
+    assert last["type"] == "task.list", (
         f"a genuine message must still be served: {ws.messages}"
     )
 
@@ -233,7 +241,7 @@ async def test_reserved_envelope_cannot_evict_through_real_lifecycle() -> None:
 async def test_connect_envelope_tag_does_not_reconnect() -> None:
     """A ``connect`` envelope cannot re-run the connect lifecycle."""
     conn_mgr = WebSocketConnectionManager()
-    resource, _repo, _audit, _feed = _build_resource(conn_mgr)
+    resource = _envelope_resource(conn_mgr)
     ws = RecordingWebSocket()
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
