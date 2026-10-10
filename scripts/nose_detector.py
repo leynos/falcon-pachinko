@@ -300,19 +300,27 @@ def _is_selected_source(
     exclude_spec: GitIgnoreSpec | None,
 ) -> bool:
     """Report whether one source is in scope after safety and glob checks."""
-    if not source.is_file() or source.suffix != ".py":
-        return False
-    resolved_source = source.resolve()
-    if is_file_root and resolved_source != resolved_root:
-        return False
-    if not is_file_root and not resolved_source.is_relative_to(resolved_root):
-        return False
-    relative_path = (
-        source.name
-        if is_file_root
-        else resolved_source.relative_to(resolved_root).as_posix()
+    relative_path = _source_relative_path(
+        source, resolved_root=resolved_root, is_file_root=is_file_root
     )
-    return not _is_excluded(relative_path, exclude_spec)
+    return relative_path is not None and not _is_excluded(relative_path, exclude_spec)
+
+
+def _source_relative_path(
+    source: Path,
+    *,
+    resolved_root: Path,
+    is_file_root: bool,
+) -> str | None:
+    """Return a safe root-relative Python path, or reject the candidate."""
+    if not source.is_file() or source.suffix != ".py":
+        return None
+    resolved_source = source.resolve()
+    if is_file_root:
+        return source.name if resolved_source == resolved_root else None
+    if not resolved_source.is_relative_to(resolved_root):
+        return None
+    return resolved_source.relative_to(resolved_root).as_posix()
 
 
 def _is_gitignored(
