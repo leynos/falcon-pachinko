@@ -182,7 +182,11 @@ spelling.
 
 Registration is closed on the same terms. Registering a lifecycle callback as a
 message handler, whether by `@handles_message` or `add_handler`, raises
-`ReservedHandlerRegistrationError`. The reserved *tag* string itself stays
+`ReservedHandlerRegistrationError`. The decorator refuses a reserved method
+name as soon as it is applied, before it validates the handler's signature, so
+the error names the reserved callback rather than reporting a shape problem. An
+alias or an inherited copy cannot be judged until the class exists, so those
+are refused when the class is created. The reserved *tag* string itself stays
 legal: a distinct method may handle `"disconnect"` provided it is not the
 lifecycle callback:
 
