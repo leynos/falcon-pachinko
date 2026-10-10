@@ -24,11 +24,15 @@ PROJECT = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8
 @pytest.fixture
 def falcon_requirement() -> Requirement:
     """Return the Falcon dependency declared for the project."""
+    falcon_requirement = None
     for dependency in PROJECT["dependencies"]:
         requirement = Requirement(dependency)
         if requirement.name == "falcon":
-            return requirement
-    return pytest.fail("pyproject.toml must declare a Falcon dependency")
+            falcon_requirement = requirement
+            break
+    if falcon_requirement is None:
+        pytest.fail("pyproject.toml must declare a Falcon dependency")
+    return falcon_requirement
 
 
 def test_falcon_dependency_has_lower_and_upper_bounds(
