@@ -10,11 +10,12 @@ from urllib.parse import urlsplit
 import msgspec as ms
 import msgspec.json as msjson
 
+from falcon_pachinko.diagnostics import _frame_metadata, _safe_scalar, _type_name
+
 from ._common import (
     _BINARY_PAYLOAD_REQUIRED_MSG,
     _EXPECTED_BYTES_MSG,
     _EXPECTED_TEXT_MSG,
-    _FAILED_JSON_DECODE_MSG,
     _INSECURE_WEBSOCKET_MSG,
     _MISSING_WEBSOCKETS_MSG,
     _TEXT_PAYLOAD_REQUIRED_MSG,
@@ -23,6 +24,8 @@ from ._common import (
     FrameKind,
     MissingDependencyError,
     PayloadKind,
+    _decode_json,
+    _json_decode_message,
 )
 
 try:  # pragma: no cover - optional dependency exercised in tests
@@ -37,7 +40,7 @@ if typ.TYPE_CHECKING:  # pragma: no cover - typing only
     from websockets.client import WebSocketClientProtocol
 
 
-@dc.dataclass(slots=True)
+@dc.dataclass(slots=True, repr=False)
 class TraceEvent:
     """Describe a frame exchanged during a traced websocket session."""
 
@@ -45,6 +48,34 @@ class TraceEvent:
     direction: Direction
     kind: PayloadKind
     payload: object
+
+    def summary(self) -> dict[str, object]:
+        """Return safe structured trace metadata without rendering the payload."""
+        frame_kind, length = _frame_metadata(self.payload)
+        direction = (
+            self.direction
+            if type(self.direction) is str
+            and self.direction in {"send", "receive", "close", "error"}
+            else "<omitted>"
+        )
+        kind = (
+            self.kind
+            if type(self.kind) is str
+            and self.kind in {"text", "bytes", "json", "close"}
+            else "<omitted>"
+        )
+        return {
+            "index": _safe_scalar(self.index),
+            "direction": direction,
+            "kind": kind,
+            "payload_type": _type_name(self.payload),
+            "frame_kind": frame_kind,
+            "payload_length": length,
+        }
+
+    def __repr__(self) -> str:
+        """Display only the same trusted metadata returned by summary."""
+        return f"TraceEvent({self.summary()!r})"
 
 
 class WebSocketSession:
@@ -211,12 +242,14 @@ class WebSocketSession:
         self, message: str | bytes, payload_type: type[object] | None
     ) -> object:
         """Decode ``message`` as JSON using ``payload_type`` when provided."""
-        data = message.encode("utf-8") if isinstance(message, str) else message
-        decoder = self._decoder_for(payload_type)
+        exception_name: str
         try:
-            return decoder.decode(data)
-        except ms.DecodeError as exc:  # pragma: no cover - msgspec raised
-            raise RuntimeError(_FAILED_JSON_DECODE_MSG.format(message=message)) from exc
+            return _decode_json(self._decoder_for(payload_type), message, payload_type)
+        except (ms.DecodeError, UnicodeError) as exc:
+            exception_name = _type_name(exc)
+        # Keep the same safe error contract as the simulator while hiding its
+        # internal decode exception from callers and monitoring integrations.
+        raise RuntimeError(_json_decode_message(message, payload_type, exception_name))
 
     @staticmethod
     def _decode_text_frame(message: str | bytes) -> str:
@@ -258,7 +291,7 @@ class WebSocketSession:
             self._log(
                 "error",
                 "close",
-                {"code": code, "reason": reason, "exception": str(exc)},
+                {"code": code, "reason": reason, "exception": _type_name(exc)},
             )
             raise
         self._log("close", "close", {"code": code, "reason": reason})

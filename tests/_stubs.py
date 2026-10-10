@@ -128,3 +128,22 @@ class RecordingBackend(ConnectionBackend):
         return [
             (cid, self._websockets[cid]) for cid in members if cid in self._websockets
         ]
+
+
+class Hostile:
+    """Catch accidental reflection of caller-controlled objects."""
+
+    def __repr__(self) -> str:
+        """Reject representation calls."""
+        msg = "repr invoked"
+        raise AssertionError(msg)
+
+    def __str__(self) -> str:
+        """Reject string conversion calls."""
+        msg = "str invoked"
+        raise AssertionError(msg)
+
+    def __len__(self) -> int:
+        """Reject length calls."""
+        msg = "len invoked"
+        raise AssertionError(msg)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import msgspec as ms
 import pytest
 
-from falcon_pachinko import utils
+from falcon_pachinko import DiagnosticSanitizer, utils
 
 
 def test_validation_error_is_msgspec_validation_error() -> None:
@@ -90,20 +90,36 @@ def test_raise_unknown_fields_omits_payload_by_default() -> None:
     )
 
 
-def test_raise_unknown_fields_truncates_included_payload() -> None:
-    """Included payload snippets are bounded and end with an ellipsis."""
+def test_raise_unknown_fields_uses_bounded_sanitized_sample() -> None:
+    """Opt-in samples use the configured sanitizer and omit canary values."""
+    sanitizer = DiagnosticSanitizer(max_string_length=16, max_output_length=128)
+    payload = {"password": "canary-secret", "value": "x" * 260}
     with pytest.raises(ms.ValidationError) as error:
         utils.raise_unknown_fields(
-            {"a"}, payload={"value": "x" * 260}, include_payload=True
+            {"a"}, payload=payload, include_payload=True, sanitizer=sanitizer
         )
 
     _, separator, snippet = str(error.value).partition(" -> ")
     assert separator == " -> ", (
         "Included payload text must follow the documented separator."
     )
-    assert len(snippet) == 200, "The included payload snippet must be 200 characters."
-    assert snippet.endswith("..."), (
-        "A truncated payload snippet must end in an ellipsis."
+    assert snippet == sanitizer.format_sample(payload), (
+        "Included payload text must come from the configured sanitizer."
+    )
+    assert len(snippet) <= sanitizer.max_output_length, (
+        "The sanitized payload sample must respect its output budget."
+    )
+    assert "canary-secret" not in snippet, "Sensitive sample values must be redacted."
+    assert "<redacted>" in snippet, "Sensitive sample keys must remain recognizable."
+
+
+def test_raise_unknown_fields_escapes_identifier_quotes_and_backslashes() -> None:
+    """Bounded names preserve the established single-quoted representation."""
+    with pytest.raises(utils.ValidationError) as raised:
+        utils.raise_unknown_fields({"quote'\\name"})
+
+    assert str(raised.value) == "Unknown fields in payload: ['quote\\'\\\\name']", (
+        "field identifiers must remain escaped within the compatible format"
     )
 
 
