@@ -45,10 +45,58 @@ installing Falcon 4.0.0 with `uv pip install falcon==4.0.0` and running
 `make build` afterwards to restore the normal environment. The latest CI build
 checked for this change resolved Falcon 4.4.0.
 
-The repository has no committed lock file, and `.gitignore` excludes `uv.lock`.
-CI therefore resolves the newest release allowed by the dependency bounds on
-each build. Lower-bound coverage in CI and the decision to commit a lock file
-are tracked separately from this support policy.
+`uv.lock` is committed and `.gitignore` no longer excludes it. The dependency
+bounds above are deliberately wide, so the lockfile is what pins an actual
+release. See "Dependency management with uv" below for how it is kept current.
+Lower-bound coverage in CI stays tracked separately from this support policy.
+
+## Dependency management with uv
+
+The project is uv-managed. `pyproject.toml` declares runtime dependencies under
+`[project]`, development tooling under `[dependency-groups]`, and the
+`examples` and `testing` sets as `[project.optional-dependencies]` extras. The
+lockfile `uv.lock` resolves all three, including every interpreter version in
+`requires-python`, and is committed alongside them.
+
+`make build` runs:
+
+```sh
+uv sync --group dev --locked
+```
+
+`--locked` is what makes the committed lockfile load-bearing. A plain `uv sync`
+re-resolves whenever `pyproject.toml` and `uv.lock` disagree, so a branch that
+edited one but not the other would install a dependency set nobody reviewed and
+report success. With `--locked` the same disagreement fails the build instead,
+which is the behaviour CI needs: `ci.yml` installs the project by running
+`make build`, so the lockfile CI installs is the lockfile the branch committed.
+
+### Changing a dependency
+
+- After editing any dependency in `pyproject.toml`, run `uv lock` and commit
+  the regenerated `uv.lock` in the same change. `make build` fails until it is
+  refreshed.
+- To upgrade one dependency without disturbing the rest, use
+  `uv lock --upgrade-package <name>`. A bare `uv lock --upgrade` re-resolves
+  everything and produces a diff no reviewer can attribute to a reason.
+- Bump the `ruff` and `ty` pins in the Makefile and in `ci.yml` together, not
+  through the lockfile: they run as `uv tool run --from <tool>==<pin>` outside
+  the project environment, and `tests/test_toolchain_versions.py` holds the two
+  sites to one another.
+
+### Dependabot
+
+`.github/dependabot.yml` reads Python dependencies through the `uv` ecosystem,
+which is the ecosystem that understands `uv.lock`; `pip` reads
+`requirements*.txt` and the older `pyproject.toml` layout and would leave the
+lockfile unmaintained. Dependabot's lockfile updates and the entry's grouping,
+limits, labels and cooldown are held by `tests/test_uv_toolchain.py`, which
+also asserts that the lockfile is committed, not ignored, and that `make build`
+installs it with `--locked`.
+
+The auto-merge workflow needs no change for this: `dependabot-automerge.yml`
+keys on the actor `dependabot[bot]`, not on the ecosystem that opened the pull
+request.
 
 ## Validation error import boundary
 
@@ -325,15 +373,84 @@ The `build` target owns the local virtual environment. It depends on the
 uv venv --clear
 ```
 
-This deliberately replaces an existing `.venv` before `uv sync --group dev`.
-The behaviour matches CI, where a previous step may already have created the
-directory. Without `--clear`, modern `uv` exits with an error when `.venv`
-exists, causing downstream gates such as `make typecheck` to fail before they
-reach analysis.
+This deliberately replaces an existing `.venv` before
+`uv sync --group dev --locked`. The behaviour matches CI, where a previous step
+may already have created the directory. Without `--clear`, modern `uv` exits
+with an error when `.venv` exists, causing downstream gates such as
+`make typecheck` to fail before they reach analysis.
+
+`uv.lock` is a prerequisite of `build` for the same reason `pyproject.toml` is
+one of `.venv`: a lockfile change should visibly invalidate the environment
+rather than leave the build graph claiming nothing changed.
 
 Prefer Makefile targets over invoking tools directly. When changing the
 Makefile, run `mbake validate Makefile` and the relevant commit gates before
 committing.
+
+## Mutation testing
+
+Mutation testing asks a different question from the rest of the suite. The
+tests answer "does this behaviour work"; a mutation run answers "would the
+suite notice if `falcon_pachinko` were wrong". It is informational, it is slow,
+and it never gates a pull request.
+
+Run it locally with:
+
+```sh
+make mutation           # mutate the package against the whole suite
+make mutation-results   # list the last run's mutants and their statuses
+```
+
+`make mutation` runs `mutmut` through `uv run --with mutmut==3.6.0`, so the
+tool is injected at call time and is deliberately not a project dependency.
+`make mutation-results` prints one line per mutant, grouped by status. To see
+what a surviving mutant actually changed, ask mutmut directly:
+
+```sh
+UV_PYTHON=3.13 uv run --with mutmut==3.6.0 mutmut show <mutant-name>
+```
+
+The `[tool.mutmut]` section in `pyproject.toml` is the whole configuration:
+
+- **`source_paths`** is `falcon_pachinko/`, so the CLI, the harness in
+  `falcon_pachinko/testing/` and the rest of the package are mutated.
+- **`do_not_mutate`** excludes `falcon_pachinko/unittests/` and
+  `falcon_pachinko/behaviour/`. Those are the package's own tests, and a
+  mutation in a test module can never be killed: mutmut pairs a mutant with the
+  tests that execute it, and a test module is not executed by the suite it
+  belongs to. Left in, they were 1448 of 3769 mutants, every one reported
+  `no tests`, and a mutation that raised on import — `test_app_install.py` is
+  loaded as a pytest plugin — stopped collection outright rather than failing a
+  test.
+- **`also_copy`** carries `tools/` and `examples/` into the `mutants/` tree
+  that mutmut runs in. mutmut copies only `tests/`, `pyproject.toml`,
+  `setup.cfg` and root `test*.py` by default, and two modules in `tests/`
+  import those trees through `sys.path`.
+- **`pytest_add_cli_args_test_selection`** names the three test trees the run
+  uses: `tests/`, `falcon_pachinko/unittests/` and `falcon_pachinko/behaviour/`.
+- **`pytest_add_cli_args`** drops three modules and one marker.
+  `--ignore=tests/workflow_contracts`,
+  `--ignore=tests/test_toolchain_versions.py` and
+  `--ignore=tests/test_uv_toolchain.py` are repository-tooling contracts that
+  read `.github/workflows/`, `Makefile`, `uv.lock`, `pylintrc-df12.toml` and
+  `.markdownlint-cli2.jsonc` — none of which mutmut copies into `mutants/`, so
+  all three fail the baseline there. They say nothing about
+  `falcon_pachinko/`'s behaviour, so excluding them costs the mutation score
+  nothing. `-m "not lint_toolchain"` drops the tests that provision a PyPy
+  interpreter and reach the network; `-p no:cacheprovider` keeps the run from
+  writing a cache into the copied tree. Mutmut has no `runner` key in 3.6.0, so
+  these arguments are the whole lever.
+
+`.github/workflows/mutation.yml` runs the estate's reusable workflow
+(`leynos/shared-actions/.github/workflows/mutation-mutmut.yml`) weekly and on
+manual dispatch. There is no pull-request trigger: a mutation run executes the
+whole suite once per mutant, which is not a per-commit cost. The caller passes
+`paths: "falcon_pachinko/"`, an empty `module-prefix-strip` (the package is
+top-level, not `src/`-layout) and `python-version: "3.13"` to match
+`.github/cv005.toml` and `ci.yml`. The scheduled run is scoped to files changed
+in the last week, so a quiet week finishes in seconds; a dispatch runs
+everything. Results land in the job summary and as the `mutation-report-mutmut`
+artefact.
 
 ## Coverage and CodeScene
 
