@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
 import typing as typ
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 import falcon.asgi
 import msgspec.json as msjson
@@ -115,6 +116,26 @@ class SimulatorConnection:
         """Queue a binary frame for the resource."""
         await self.simulator.push_bytes(payload)
 
+    async def next_sent(self) -> object:
+        """Wait for a response after the router processes inbound frames."""
+        return await self.simulator.next_sent()
+
+    async def wait_for_sent_count(self, count: int) -> None:
+        """Wait for a response count without consuming queued frames."""
+        await self.simulator.wait_for_sent_count(count)
+
+    async def next_sent_json(self, payload_type: type[object] | None = None) -> object:
+        """Wait for and decode the next JSON response."""
+        raw = await self.next_sent()
+        match raw:
+            case str():
+                data = raw.encode("utf-8")
+            case bytes() | bytearray() | memoryview():
+                data = bytes(raw)
+            case _:
+                raise TypeError(_JSON_FRAME_REQUIRED_MSG)
+        return self._decoder_for(payload_type).decode(data)
+
 
 class SimulatorRouterHarness:
     """Manage a simulator-backed router mounted on a Falcon ASGI app."""
@@ -203,8 +224,10 @@ class SimulatorRouterHarness:
         request_path = self._compose_path(path)
         request = _TestRequest(path=request_path, path_template=self._mount_prefix)
         original = _OriginalWebSocket()
+        router_task = asyncio.create_task(self.router.on_websocket(request, original))
+        readiness_task = asyncio.create_task(simulator.lifecycle_event.wait())
         try:
-            await self.router.on_websocket(request, original)
+            await _await_router_readiness(router_task, readiness_task)
             yield SimulatorConnection(
                 path=request_path,
                 router=self.router,
@@ -214,7 +237,40 @@ class SimulatorRouterHarness:
             )
         finally:
             self._pending_simulator = None
-            if not simulator.closed:
-                await simulator.close()
-            if not original.closed:
-                await original.close()
+            readiness_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await readiness_task
+            try:
+                if not simulator.closed:
+                    await simulator.close(1000)
+                await _join_router_task(router_task)
+            finally:
+                if not original.closed:
+                    await original.close()
+
+
+async def _await_router_readiness(
+    router_task: asyncio.Task[None],
+    readiness_task: asyncio.Task[typ.Literal[True]],
+) -> None:
+    """Wait for acceptance, rejection, or an early router failure."""
+    done, _ = await asyncio.wait(
+        (router_task, readiness_task),
+        timeout=5,
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    if not done:
+        msg = "router did not accept or reject the simulated connection"
+        raise TimeoutError(msg)
+    if router_task in done:
+        router_task.result()
+
+
+async def _join_router_task(router_task: asyncio.Task[None]) -> None:
+    """Wait for cleanup, cancelling and joining a session that stalls."""
+    try:
+        await asyncio.wait_for(asyncio.shield(router_task), timeout=5)
+    except TimeoutError:
+        router_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await router_task

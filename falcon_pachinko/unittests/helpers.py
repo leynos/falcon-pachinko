@@ -5,6 +5,8 @@ from __future__ import annotations
 import types
 import typing as typ
 
+import falcon
+
 
 def make_req(path: str, path_template: str = "") -> types.SimpleNamespace:
     """Build a minimal request stand-in for router tests.
@@ -27,6 +29,10 @@ def make_req(path: str, path_template: str = "") -> types.SimpleNamespace:
 class DummyWS:
     """A dummy WebSocket implementation for testing purposes."""
 
+    def __init__(self, *frames: object) -> None:
+        self.unaccepted = True
+        self._frames = list(frames)
+
     async def accept(self, subprotocol: str | None = None) -> None:  # pragma: no cover
         """Accept the WebSocket handshake.
 
@@ -35,6 +41,7 @@ class DummyWS:
         subprotocol : str or None, optional
             The WebSocket subprotocol to use, by default None
         """
+        self.unaccepted = False
 
     async def close(self, code: int = 1000) -> None:  # pragma: no cover
         """Close the WebSocket connection.
@@ -54,10 +61,14 @@ class DummyWS:
             The data to send over the WebSocket connection
         """
 
-    @staticmethod
-    async def receive_media() -> object:  # pragma: no cover
-        """Receive structured data over the connection."""
-        return None
+    async def receive_media(self) -> object:  # pragma: no cover
+        """Receive a seeded frame or report the simulated client close."""
+        if self._frames:
+            frame = self._frames.pop(0)
+            if isinstance(frame, BaseException):
+                raise frame
+            return frame
+        raise falcon.WebSocketDisconnected(1000)
 
 
 class RecordingWS(DummyWS):
@@ -65,6 +76,7 @@ class RecordingWS(DummyWS):
 
     def __init__(self) -> None:
         """Initialize empty call logs for accept and close."""
+        super().__init__()
         self.accepted: list[str | None] = []
         self.closed: list[int] = []
 
@@ -78,6 +90,7 @@ class RecordingWS(DummyWS):
             The WebSocket subprotocol to use, by default None
         """
         self.accepted.append(subprotocol)
+        self.unaccepted = False
 
     @typ.override
     async def close(self, code: int = 1000) -> None:

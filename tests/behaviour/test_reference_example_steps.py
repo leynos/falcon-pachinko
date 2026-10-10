@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses as dc
 import typing as typ
+from contextlib import suppress
 
 import msgspec.json as msjson
 import pytest
@@ -34,6 +35,7 @@ class ReferenceScenario:
     instances: list[WebSocketResource]
     resource: TaskStreamResource | None = None
     last_event: tuple[str, dict[str, object]] | None = None
+    router_task: asyncio.Task[None] | None = None
 
 
 _MISSING_TASK_RESOURCE_MSG = "TaskStreamResource was not instantiated"
@@ -58,7 +60,10 @@ def test_reference_example() -> None:  # pragma: no cover - scenario registratio
 
 
 @given("the reference router with a recording factory", target_fixture="context")
-def given_reference_router(event_loop: asyncio.AbstractEventLoop) -> ReferenceScenario:
+def given_reference_router(
+    event_loop: asyncio.AbstractEventLoop,
+    request: pytest.FixtureRequest,
+) -> ReferenceScenario:
     """Build the router wiring using the shared DI container."""
     conn_mgr = WebSocketConnectionManager()
     container = build_container(conn_mgr)
@@ -81,13 +86,33 @@ def given_reference_router(event_loop: asyncio.AbstractEventLoop) -> ReferenceSc
         simulator_factory=lambda *_: simulator,
         resource_factory=recording_factory,
     )
-    return ReferenceScenario(
+    context = ReferenceScenario(
         router=router,
         container=container,
         feed=feed,
         simulator=simulator,
         instances=instances,
     )
+
+    def finish_session() -> None:
+        router_task = context.router_task
+        if router_task is None:
+            return
+
+        async def close() -> None:
+            if not context.simulator.closed:
+                await context.simulator.close(1000)
+            try:
+                await asyncio.wait_for(asyncio.shield(router_task), timeout=5)
+            except TimeoutError:
+                router_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await router_task
+
+        event_loop.run_until_complete(close())
+
+    request.addfinalizer(finish_session)
+    return context
 
 
 def _select_task_resource(instances: list[WebSocketResource]) -> TaskStreamResource:
@@ -110,7 +135,17 @@ def when_client_connects(
         "/ws/workspaces/atlas/projects/triage/tasks",
         headers={"x-workspace-token": "seekrit", "x-user": "casey"},
     )
-    event_loop.run_until_complete(context.router.on_websocket(req, context.simulator))
+
+    async def connect() -> None:
+        router_task = asyncio.create_task(
+            context.router.on_websocket(req, context.simulator)
+        )
+        context.router_task = router_task
+        await asyncio.wait_for(context.simulator.lifecycle_event.wait(), timeout=5)
+        if router_task.done():
+            router_task.result()
+
+    event_loop.run_until_complete(connect())
     context.resource = _select_task_resource(context.instances)
     return context
 
@@ -120,11 +155,13 @@ def when_send_task_add(
     context: ReferenceScenario, event_loop: asyncio.AbstractEventLoop
 ) -> ReferenceScenario:
     """Dispatch a schema-defined message through the active resource."""
-    resource = context.resource
-    assert resource is not None, "the connection step must have selected the resource"
+    assert context.resource is not None, (
+        "the connection step must have selected the resource"
+    )
     payload = AddTask(task_id="T-42", title="Investigate event loop")
     raw = msjson.encode(payload)
-    event_loop.run_until_complete(resource.dispatch(context.simulator, raw))
+    event_loop.run_until_complete(context.simulator.push_bytes(raw))
+    event_loop.run_until_complete(context.simulator.wait_for_sent_count(2))
     context.last_event = event_loop.run_until_complete(context.feed.next_event())
     return context
 

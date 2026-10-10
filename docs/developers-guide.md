@@ -89,14 +89,16 @@ pipeline only needs a small request surface before handing control to resource
 callbacks:
 
 - `path`: the concrete request path used for route matching.
-- `path_template`: the Falcon mount template used to verify that the request
-  belongs to the mounted router prefix.
+- Optional Falcon `uri_template`: the mount template used to verify that the
+  request belongs to the mounted router prefix. Structural test requests may
+  expose `path_template` instead; the router defaults to the root template if
+  neither attribute exists.
 
-The router models that surface with the private `_RequestLike` protocol in
+The router models the concrete path with the private `_RequestLike` protocol in
 `falcon_pachinko/router.py`. Internal routing helpers should accept
-`_RequestLike` instead of broad `object` parameters. This keeps request-shaped
-test doubles type-checkable while documenting the attributes the router
-actually consumes.
+`_RequestLike` instead of broad `object` parameters. The optional mount
+template is probed at the boundary so Falcon requests and lightweight test
+doubles remain type-checkable.
 
 Keep casts to `falcon.Request` at the edge where the router calls APIs whose
 public contract is Falcon-specific, such as hook notification and
@@ -130,6 +132,52 @@ threaded positionally through each helper.
 
 `req` is cast to `falcon.Request` at the point `_Dispatch` is constructed in
 `_try_route`, consistent with the cast-at-the-edge policy described above.
+
+## WebSocket session lifecycle
+
+`WebSocketRouter.on_websocket()` owns each session through disconnect and
+completed cleanup. The session moves through `CONNECTING`, `ESTABLISHED`,
+`DISCONNECTING`, and `CLOSED`. The router establishes the session when
+`on_connect` returns a truthy result or when the resource has already accepted
+the socket. A rejection before either event does not promise post-accept
+cleanup. If `on_connect` or a later setup step fails after resource-owned
+acceptance, the router still runs cleanup.
+
+Setup ordering remains `before_connect`, resource `on_connect`,
+`after_connect`, then router acceptance when the resource has not accepted the
+socket. A resource that needs to send data before router acceptance can accept
+itself during `on_connect`; the router detects this and avoids duplicate
+acceptance. After setup, the router receives raw frames on the final resource
+in the resolved child chain and dispatches each frame through the existing
+resource and hook manager. Text and binary frames pass through unchanged; other
+media values are encoded as JSON with `msgspec`. Invalid media that cannot be
+encoded fails the session as an unexpected error.
+
+The receive loop ends on Falcon's `WebSocketDisconnected`, retaining its close
+code when present and using `1006` when it is absent. An ordinary handler or
+post-establishment setup failure triggers a best-effort close with `1011`; a
+task cancellation triggers a best-effort close with `1001`. `on_disconnect`
+receives that effective code for these failures, the reported code for a clean
+client or server close when available, and `1006` for transport loss without a
+reported code. A server-initiated `ws.close(code)` sends that code to the peer;
+cleanup uses the disconnect code Falcon reports to the router.
+
+Cleanup first changes the phase to `DISCONNECTING`, which guards both receive
+and resource dispatch so no further receive hooks or handlers begin. It then
+runs `before_disconnect` with the request, socket, route parameters, effective
+close code, and primary error, followed by `on_disconnect(ws, close_code)` even
+if the hook fails. The latter is the place to remove connection-manager
+membership established during `on_connect`; setup code that registers
+membership and then fails before establishment must roll that registration back
+itself.
+
+Cleanup runs in a separate shielded task and the router keeps awaiting that
+task through repeated cancellation. There is no cleanup timeout, so
+`on_disconnect` must terminate. A single session or cleanup failure is
+re-raised unchanged. Multiple ordinary failures are raised in an
+`ExceptionGroup`, with the session failure first. Cancellation remains a bare
+`CancelledError`; failures that cannot be grouped with it are sent to the
+running loop's exception handler.
 
 ## Lint and Typecheck Toolchain
 

@@ -25,13 +25,12 @@ workers, and testing utilities.
 ## 2. Quickstart (Composable Routing)
 
 ```python
-import falcon
+import falcon.asgi
 from falcon_pachinko import WebSocketResource, WebSocketRouter, handles_message
 
 
 class ChatResource(WebSocketResource):
     async def on_connect(self, req, ws, room: str) -> bool:
-        await ws.accept()
         self.state["room"] = room
         return True  # continue to message handling
 
@@ -40,15 +39,22 @@ class ChatResource(WebSocketResource):
         await ws.send_media({"type": "echo", "text": payload.text})
 
 
-app = falcon.App()
+app = falcon.asgi.App()
 router = WebSocketRouter()
 router.add_route("/chat/{room}", ChatResource)
-app.add_route("/ws", router)  # router is a Falcon resource
 router.mount("/ws")
+app.add_route("/ws", router)
+app.add_route("/ws/{pachinko_path:path}", router)
 ```
 
-- The router is mounted once (`router.mount("/ws")`) and handles all descendant
-  paths relative to that prefix.
+- The router is mounted once (`router.mount("/ws")`). In Falcon, register it
+  both at the exact prefix and at one descendant route ending in
+  `/{pachinko_path:path}` so it receives descendant paths. The router matches
+  using the concrete request path.
+- `on_connect` runs before router acceptance. Return `True` to ask the router
+  to accept; do not also call `ws.accept()` in this pattern. A resource may
+  instead call `ws.accept()` itself and return `True`; the router detects that
+  acceptance and will not accept twice.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
 
@@ -86,15 +92,43 @@ def add_route(
 ## 3. Resource Lifecycle & State
 
 - `on_connect(req, ws, **params) -> bool | None`
-  - Accept/close/inspect headers, seed `self.state`, return `False` to stop
-    processing after connect.
-- `on_disconnect(req, ws, close_code, **params) -> None`
-  - Clean up resources; runs even if connection negotiation fails after
-    acceptance.
+  - Runs before router acceptance. Inspect headers, seed `self.state`, and
+    return a truthy value to approve the session. Returning a falsey value
+    rejects it. A resource may accept the socket itself when acceptance must
+    precede resource setup; the router then owns its subsequent session loop.
+- `on_disconnect(ws, close_code) -> None`
+  - Called exactly once after approval or resource-owned acceptance. Use it to
+    release per-session resources, including connection-manager membership.
+    Rejected, never-accepted connections do not run post-accept cleanup.
 - `self.state`
   - Dict-like proxy shared across all resources in the same connection chain.
   - Override via `get_child_context()` to supply a custom state store (e.g.,
     Redis-backed proxy).
+
+### Disconnect and cleanup contract
+
+Once `on_connect` approves the connection or a resource accepts it, the router
+owns the session through disconnect cleanup. `on_disconnect(ws, close_code)`
+runs exactly once, including when setup fails after this establishment point.
+This lets a resource roll back registrations made during `on_connect`. A
+rejected connection that was never accepted skips this post-accept cleanup.
+
+| Session ending                                    | `close_code` passed to `on_disconnect`                                                               |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Client sends a close frame                        | The close code Falcon reports                                                                        |
+| Resource or server initiates a close              | Falcon's reported disconnect code, when available; the requested outbound code is sent to the client |
+| Transport disappears without a close frame        | `1006` (abnormal closure)                                                                            |
+| Task is cancelled                                 | `1001` (going away); the router attempts to close with this code                                     |
+| Handler or setup fails with an ordinary exception | `1011` (internal error); the router attempts to close with this code                                 |
+
+The router runs `before_disconnect` before `on_disconnect`, then marks the
+session closed. Once disconnect begins, receive and dispatch hooks do not run
+for later frames. Cleanup runs in a shielded task and has no timeout, so
+`on_disconnect` must terminate. A cleanup exception does not replace a lone
+session exception; when both are ordinary exceptions, they are raised in an
+`ExceptionGroup` with the session exception first. A single failure is raised
+unchanged. Cancellation remains a bare `CancelledError`; cleanup failures that
+cannot be grouped with it are reported to the event loop's exception handler.
 
 ### Nested resources
 

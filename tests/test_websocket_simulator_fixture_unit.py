@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import typing as typ
 
+import msgspec.json as msjson
 import pytest
 
 from falcon_pachinko import (
@@ -20,7 +22,7 @@ if typ.TYPE_CHECKING:
 
 
 class EchoResource(WebSocketResource):
-    """Resource that echoes inbound JSON payloads and closes the connection."""
+    """Resource that echoes inbound JSON payloads over an accepted session."""
 
     instances: typ.ClassVar[list[EchoResource]] = []
 
@@ -31,14 +33,21 @@ class EchoResource(WebSocketResource):
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
-        """Handle the simulated connection for the test resource."""
+        """Approve the connection and leave receive ownership to the router."""
         assert isinstance(ws, WebSocketSimulator), (
             "the harness must inject the simulator instance"
         )
-        payload = await ws.receive_json(dict)
+        del req, params
+        return True
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record and acknowledge the seeded message from the router loop."""
+        payload = msjson.decode(message)
         self.received.append(payload)
-        await ws.send_json({"type": "ack", "payload": payload})
-        return False
+        await typ.cast("WebSocketSimulator", ws).send_json({
+            "type": "ack",
+            "payload": payload,
+        })
 
 
 class GreeterResource(WebSocketResource):
@@ -58,6 +67,8 @@ class GreeterResource(WebSocketResource):
 class ChattyResource(WebSocketResource):
     """Resource that negotiates a subprotocol and closes with a custom code."""
 
+    disconnect_codes: typ.ClassVar[list[int]] = []
+
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
@@ -65,6 +76,11 @@ class ChattyResource(WebSocketResource):
         await ws.accept(subprotocol="chat")
         await ws.close(code=1001)
         return False
+
+    async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+        """Remember the code delivered by the completed session lifecycle."""
+        del ws
+        self.disconnect_codes.append(close_code)
 
 
 @pytest.mark.asyncio
@@ -89,19 +105,22 @@ class TestWebSocketSimulatorFixture:
             assert isinstance(connection, SimulatorConnection), (
                 "connect() must yield a SimulatorConnection"
             )
+            await asyncio.wait_for(connection.wait_for_sent_count(1), timeout=5)
             resource = EchoResource.instances[-1]
             assert resource.received == [{"type": "ping"}], (
                 "the resource must have received the seeded payload"
             )
-            assert connection.closed is True, "the connection must be closed"
-            assert connection.accepted is False, "the connection must not be accepted"
+            assert connection.closed is False, "the accepted session must stay open"
+            assert connection.accepted is True, "the resource must accept the session"
             assert connection.pop_sent_json() == {
                 "type": "ack",
                 "payload": {"type": "ping"},
             }, "the connection must expose the decoded ack frame"
-            assert connection.websocket.closed is True, (
-                "the underlying websocket must be closed"
-            )
+        assert connection.closed is True, "the fixture must close the connection"
+        assert connection.close_code == 1000, "the harness close code must be reported"
+        assert connection.websocket.closed is True, (
+            "the underlying websocket must be closed after the context"
+        )
 
     async def test_fixture_closes_accepted_connections(
         self,
@@ -141,6 +160,7 @@ class TestWebSocketSimulatorFixture:
     ) -> None:
         """Ensure lifecycle metadata mirrors between simulator and original stub."""
         websocket_simulator.router.add_route("/chat", ChattyResource)
+        ChattyResource.disconnect_codes.clear()
 
         async with websocket_simulator.connect("/chat") as connection:
             assert connection.accepted is True, (
@@ -158,6 +178,9 @@ class TestWebSocketSimulatorFixture:
                 "the underlying websocket must be accepted"
             )
             assert connection.closed is True, "the connection must be closed"
+            assert ChattyResource.disconnect_codes == [1001], (
+                "on_disconnect must receive the resource's close code"
+            )
 
         assert connection.subprotocol == "chat", "the subprotocol must persist"
         assert connection.close_code == 1001, "the close code must persist"

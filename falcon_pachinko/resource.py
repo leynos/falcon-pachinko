@@ -204,10 +204,13 @@ class WebSocketResource:
     async def on_connect(  # ruff: ignore[no-self-use] - overridable hook; subclasses use ``self``
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
-        """Decide whether the connection should be accepted after handshake.
+        """Approve or reject a connection before router acceptance.
 
-        Called after the WebSocket handshake is complete to determine
-        acceptance.
+        The router calls this hook after resolving the final resource and
+        before it accepts the WebSocket. A truthy result approves the session;
+        the router accepts the socket unless this hook already did so. A
+        falsey result rejects a socket that remains unaccepted. A resource may
+        accept itself during this hook when setup must send data first.
 
         Parameters
         ----------
@@ -221,19 +224,29 @@ class WebSocketResource:
         Returns
         -------
         bool
-            ``True`` to accept the WebSocket connection; ``False`` to reject it
+            A truthy value to approve the session, or a falsey value to reject
+            it while the socket remains unaccepted
         """
         return True
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
-        """Handle cleanup or custom logic when the connection is closed.
+        """Clean up an established session after disconnect begins.
+
+        The router invokes this hook exactly once after ``on_connect`` approves
+        the session or the resource accepts the socket, including when setup
+        fails after resource-owned acceptance. A rejected, never-accepted
+        socket does not receive post-accept cleanup. Use this hook to remove
+        session registrations, such as connection-manager membership. Cleanup
+        is shielded from task cancellation but has no timeout, so this hook
+        must terminate.
 
         Parameters
         ----------
         ws : WebSocketLike
             The WebSocket connection instance
         close_code : int
-            The close code indicating the reason for disconnection
+            The reported close code when available, or the effective fallback
+            code for transport loss, cancellation, or an unexpected failure
         """
 
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
@@ -266,7 +279,11 @@ class WebSocketResource:
     async def dispatch(self, ws: WebSocketLike, raw: str | bytes) -> None:
         """Decode ``raw`` and route it to the appropriate handler."""
         manager = self._require_hook_manager()
-        async with _receive_hooks(manager, self, ws=ws, raw=raw):
+        if not _can_receive(manager, ws):
+            return
+        async with _receive_hooks(manager, self, ws=ws, raw=raw) as should_dispatch:
+            if not should_dispatch:
+                return
             await dispatch(self, ws, raw)
 
 
@@ -277,17 +294,27 @@ async def _receive_hooks(
     *,
     ws: WebSocketLike,
     raw: str | bytes,
-) -> cabc.AsyncGenerator[None, None]:
+) -> cabc.AsyncGenerator[bool, None]:
     """Balance before/after receive hooks while guarding original errors."""
     context = await manager.notify_before_receive(target, ws=ws, raw=raw)
+    should_dispatch = _can_receive(manager, ws)
     try:
-        yield
+        yield should_dispatch
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         context.error = exc
-        with suppress(Exception):
-            await manager.notify_after_receive(context)
+        if _can_receive(manager, ws):
+            with suppress(Exception):
+                await manager.notify_after_receive(context)
         raise
-    # Every handler above re-raises, so reaching here means the body succeeded.
-    await manager.notify_after_receive(context)
+    if _can_receive(manager, ws):
+        await manager.notify_after_receive(context)
+
+
+def _can_receive(manager: HookManager, ws: WebSocketLike) -> bool:
+    """Guard bound sessions after cleanup or a transport close has begun."""
+    session = manager.session
+    if session is None:
+        return True
+    return session.can_receive and not getattr(ws, "closed", False)

@@ -79,12 +79,11 @@ async def test_router_global_hooks_wrap_lifecycle() -> None:
     router.add_route("/hooks", GlobalHookResource)
     router.mount("/")
 
-    ws = DummyWS()
+    ws = DummyWS(b'{"type":"noop"}')
     req = make_req("/hooks")
     await router.on_websocket(req, ws)
 
     resource = GlobalHookResource.instances[-1]
-    await resource.dispatch(ws, b'{"type":"noop"}')
 
     assert resource.params["injected"] is True, (
         "before_connect hook should be able to amend connect params"

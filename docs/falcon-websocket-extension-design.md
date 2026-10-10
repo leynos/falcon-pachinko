@@ -276,24 +276,21 @@ logic.
 
 - **Lifecycle Methods**:
 
-  - `async def on_connect(self, req, ws, **params) -> bool`: WebSocket
-    connection is established and routed to this resource. `req` is the
-    standard Falcon `Request` object associated with the initial HTTP upgrade
-    request, and `ws` is a `WebSocketLike` **connection**. The protocol defines
-    the minimal `send_media`, `accept`, and `close` methods needed by the
-    resource. `params` will contain any path parameters from the route. It
-    returns `True` to accept the connection or `False` to reject it. If `False`
-    is returned, the library will handle sending an appropriate closing
-    handshake (e.g., HTTP 403 or a custom code if supported by an extension
-    like WebSocket Denial Response 12). This boolean return abstracts the
-    direct `await ws.accept()` or `await ws.close()` call, simplifying the
-    resource method to focus on connection logic rather than raw ASGI
-    mechanics. This design aligns with Falcon's higher-level approach for HTTP
-    handlers, where the framework manages response sending.
+  - `async def on_connect(self, req, ws, **params) -> bool`: Called before the
+    router accepts the WebSocket. `req` is the Falcon `Request` associated
+    with the upgrade request, and `ws` is a `WebSocketLike` connection.
+    Returning a truthy result approves the session and lets the router accept
+    unless the resource has already done so. A falsey result rejects a socket
+    that is still unaccepted. Resources may accept during `on_connect` when
+    setup needs to send data before router acceptance; the router detects this
+    and skips duplicate acceptance.
 
-  - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: Called
-    when the WebSocket connection is closed, either by the client or the
-    server. `close_code` provides the WebSocket close code.
+  - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: Runs
+    exactly once after `on_connect` approves the session or the resource
+    accepts the socket. It also runs if setup fails after resource-owned
+    acceptance. Rejected, never-accepted sockets do not run post-accept
+    cleanup. Use this hook to release connection-scoped state such as
+    connection-manager membership.
 
   - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str,
     bytes])`
@@ -1003,15 +1000,38 @@ sequenceDiagram
     WebSocketRouter->>WebSocketRouter: Run before_connect hooks
     WebSocketRouter->>WebSocketResource: on_connect(req, ws, **params)
     WebSocketRouter->>WebSocketRouter: Run after_connect hooks
-    alt on_connect returns False
-        WebSocketRouter->>Client: Close WebSocket
-    else on_connect returns True
-        WebSocketRouter->>Client: Accept WebSocket
-    end
-    alt Unhandled exception during dispatch
-        WebSocketRouter->>Client: Close WebSocket
+    alt Approved or accepted by resource
+        opt Resource has not accepted
+            WebSocketRouter->>Client: Accept WebSocket
+        end
+        loop Until Falcon reports disconnect
+            Client-->>WebSocketRouter: Raw text or binary frame
+            WebSocketRouter->>WebSocketResource: Dispatch frame and hooks
+        end
+        WebSocketRouter->>WebSocketRouter: Begin disconnect once
+        WebSocketRouter->>WebSocketRouter: before_disconnect hook
+        WebSocketRouter->>WebSocketResource: on_disconnect(ws, close_code)
+    else Rejected and never accepted
+        WebSocketRouter->>Client: Close or reject WebSocket
     end
 ```
+
+The router owns an established session through cleanup. Falcon's reported
+disconnect code is passed to `on_disconnect`; absent a code, the effective code
+is `1006`. A server-initiated `ws.close(code)` sends that code to the peer;
+cleanup uses the disconnect code Falcon reports to the router. On task
+cancellation the router attempts a `1001` close and reports `1001` to cleanup.
+An unexpected ordinary failure triggers a best-effort `1011` close and reports
+`1011`. Cleanup runs in a shielded task without a timeout, so `on_disconnect`
+must terminate. The router invokes `before_disconnect` before `on_disconnect`
+and prevents new receive or dispatch hooks once disconnect begins.
+
+A lone session or cleanup failure is re-raised unchanged. Multiple ordinary
+failures are grouped in an `ExceptionGroup`, with the primary session failure
+first. Cancellation remains a bare `CancelledError`; cleanup failures that
+cannot be grouped with cancellation are reported through the running loop's
+exception handler. This cleanup guarantee is what makes membership added during
+approved connection setup reliably removable by `on_disconnect`.
 
 ```mermaid
 erDiagram
@@ -1257,8 +1277,9 @@ class ChatResource(WebSocketResource):
 
 #### 5.3.2. Automated Dispatch Logic
 
-The base `WebSocketResource` would contain a receive loop that performs the
-following steps:
+After setup, `WebSocketRouter` owns the long-lived receive loop and dispatches
+raw frames to the final `WebSocketResource` in the resolved child chain. The
+resource dispatcher performs the following steps for each frame:
 
 1. Receive a raw message from the WebSocket.
 

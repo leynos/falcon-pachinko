@@ -2,29 +2,38 @@
 
 from __future__ import annotations
 
+import collections as cl
 import dataclasses as dc
 from types import SimpleNamespace
 
-from .testing._common import _ORIGINAL_WS_RECEIVE_MSG, _LifecycleSocket
+import falcon
+
+from .testing._common import _LifecycleSocket
 from .testing.simulator import WebSocketSimulator
 
 
 class _OriginalWebSocket(_LifecycleSocket):
     """Minimal stub representing the ASGI-provided websocket."""
 
-    def __init__(self) -> None:
+    def __init__(self, frames: tuple[object, ...] = ()) -> None:
         super().__init__()
         self.sent: list[object] = []
+        self._frames: cl.deque[object] = cl.deque(frames)
 
     async def send_media(  # pylint: disable=trivial-attribute-wrapper  # protocol stub
         self, data: object
     ) -> None:
         self.sent.append(data)  # pragma: no cover - unused
 
-    async def receive_media(  # ruff: ignore[no-self-use] - protocol needs an instance method
-        self,
-    ) -> object:
-        raise RuntimeError(_ORIGINAL_WS_RECEIVE_MSG)  # pragma: no cover - unused
+    async def receive_media(self) -> object:
+        if self.closed and not self._frames:
+            raise falcon.WebSocketDisconnected(self.close_code)
+        if self._frames:
+            frame = self._frames.popleft()
+            if isinstance(frame, BaseException):
+                raise frame
+            return frame
+        raise falcon.WebSocketDisconnected(1000)
 
 
 class _HarnessSimulator(WebSocketSimulator):

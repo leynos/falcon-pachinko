@@ -19,7 +19,18 @@ import threading
 import typing as typ
 
 import falcon
+import msgspec.json as msjson
 
+from ._session import (
+    ABNORMAL_CLOSURE,
+    SessionPhase,
+    SessionState,
+)
+from ._session_cleanup import (
+    _CleanupContext,
+    _raise_session_failures,
+    _run_shielded_cleanup,
+)
 from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
 
@@ -50,17 +61,19 @@ class _RequestLike(typ.Protocol):
     def path(self) -> str:
         """The request path."""
 
-    @property
-    def path_template(self) -> str:
-        """The mount path template."""
-
 
 def _request_path_template(req: _RequestLike) -> str:
     """Return the mounted path template, defaulting like Falcon does."""
-    try:
-        return req.path_template
-    except AttributeError:
-        return ""
+    template = getattr(req, "path_template", None)
+    if template is None:
+        template = getattr(req, "uri_template", "")
+
+    # Falcon does not treat a `{name:path}` route as a mount prefix. The
+    # descendant route therefore has to be reduced to the mounted identity.
+    match = re.fullmatch(r"(?P<prefix>.*)/\{[A-Za-z_]\w*:path\}", template)
+    if match is not None:
+        return match.group("prefix") or "/"
+    return template
 
 
 def _replace_param_in_template(match: re.Match[str], template: str) -> str:
@@ -124,6 +137,7 @@ class _Dispatch:
     req: falcon.Request
     ws: WebSocketLike
     match: _RouteMatch
+    session: SessionState | None = None
 
 
 class WebSocketRouter:
@@ -284,13 +298,15 @@ class WebSocketRouter:
         return _normalize_path(template.format(**params))
 
     async def on_websocket(
-        self, req: _RequestLike, ws: WebSocketLike
-    ) -> None:  # pragma: no cover - simple wrapper
-        """Dispatch the connection to the first matching route.
+        self, req: _RequestLike, ws: WebSocketLike, **_params: object
+    ) -> None:
+        """Own the routed session through disconnect and completed cleanup.
 
         ``req.path_template`` is assumed to be a prefix of ``req.path``. If the
         assumption fails, :class:`falcon.HTTPNotFound` is raised to signal that
-        the requested path does not map to this router's mount point.
+        the requested path does not map to this router's mount point. Falcon
+        may pass route parameters for a mounted ``{name:path}`` descendant; the
+        router matches against ``req.path`` and does not need those values.
 
         Raises
         ------
@@ -359,7 +375,13 @@ class WebSocketRouter:
             ws_for_cleanup = dispatch.ws
             return await self._process_route_resolution(dispatch)
         except Exception as exc:
-            if not getattr(exc, "_pachinko_factory_closed", False):
+            session_is_established = (
+                dispatch.session is not None
+                and dispatch.session.phase is not SessionPhase.CONNECTING
+            )
+            if not session_is_established and not getattr(
+                exc, "_pachinko_factory_closed", False
+            ):
                 with contextlib.suppress(Exception):
                     await ws_for_cleanup.close()
             raise
@@ -547,19 +569,80 @@ class WebSocketRouter:
         *,
         hook_manager: HookManager,
     ) -> bool:
-        """Accept or close the connection based on ``resource`` decision."""
-        context = await self._prepare_connection_context(
-            hook_manager, resource, dispatch
-        )
-        should_accept = await self._execute_resource_handler(
-            resource, dispatch, context, hook_manager
-        )
-        return await self._finalize_connection(
-            dispatch.ws,
-            should_accept=should_accept,
-            context=context,
-            hook_manager=hook_manager,
-        )
+        """Run setup, receive frames, and finish the accepted session."""
+        session = SessionState()
+        dispatch.session = session
+        hook_manager.bind_session(session)
+        context: HookContext | None = None
+        primary_error: BaseException | None = None
+
+        try:
+            context = await self._prepare_connection_context(
+                hook_manager, resource, dispatch
+            )
+            should_accept = await self._execute_resource_handler(
+                resource, dispatch, context, hook_manager
+            )
+            if should_accept or _is_websocket_accepted(dispatch.ws):
+                session.establish()
+            await self._finalize_connection(
+                dispatch.ws,
+                should_accept=should_accept,
+                context=context,
+                hook_manager=hook_manager,
+            )
+            if session.can_receive:
+                await self._receive_session(resource, dispatch, session)
+        except BaseException as exc:
+            if session.phase is SessionPhase.CONNECTING and _is_websocket_accepted(
+                dispatch.ws
+            ):
+                session.establish()
+            if session.phase is SessionPhase.ESTABLISHED:
+                primary_error = exc
+                session.primary_error = exc
+            else:
+                raise
+
+        if session.phase is SessionPhase.ESTABLISHED:
+            params = (
+                context.params
+                if context is not None and context.params is not None
+                else dict(dispatch.match.params)
+            )
+            cleanup_context = _CleanupContext(
+                resource=resource,
+                dispatch=dispatch,
+                hook_manager=hook_manager,
+                session=session,
+                params=dict(params),
+                primary_error=primary_error,
+            )
+            cleanup_failures, interrupted = await _run_shielded_cleanup(cleanup_context)
+            _raise_session_failures(primary_error, cleanup_failures, interrupted)
+
+        return True
+
+    @staticmethod
+    async def _receive_session(
+        resource: WebSocketResource,
+        dispatch: _Dispatch,
+        session: SessionState,
+    ) -> None:
+        """Receive and route frames until Falcon reports a disconnect."""
+        while session.can_receive:
+            try:
+                media = await dispatch.ws.receive_media()
+            except falcon.WebSocketDisconnected as exc:
+                session.close_code = _effective_disconnect_code(exc)
+                return
+
+            # A close can be initiated by another task while receive_media is
+            # suspended. Do not dispatch the late frame into receive hooks.
+            if not session.can_receive:
+                return
+            raw = media if isinstance(media, str | bytes) else msjson.encode(media)
+            await resource.dispatch(dispatch.ws, raw)
 
     @staticmethod
     async def _prepare_connection_context(
@@ -605,15 +688,34 @@ class WebSocketRouter:
         should_accept: bool,
         context: HookContext,
         hook_manager: HookManager,
-    ) -> bool:
+    ) -> None:
         """Complete the connection lifecycle and honour ``should_accept``."""
         context.result = should_accept
         await hook_manager.notify_after_connect(context)
+        session = hook_manager.session
+        has_approval = should_accept or _is_websocket_accepted(ws)
+        if session is not None and has_approval:
+            session.establish()
         if not should_accept:
             await ws.close()
-            return True
-        await ws.accept()
-        return True
+            return
+        if not _is_websocket_accepted(ws):
+            await ws.accept()
+
+
+def _is_websocket_accepted(ws: WebSocketLike) -> bool:
+    """Probe Falcon's public acceptance state without changing the protocol."""
+    try:
+        unaccepted = typ.cast("typ.Any", ws).unaccepted
+    except AttributeError:
+        return False
+    return unaccepted is False
+
+
+def _effective_disconnect_code(error: BaseException) -> int:
+    """Return the effective close code, using abnormal closure when absent."""
+    close_code = getattr(error, "code", None)
+    return close_code if isinstance(close_code, int) else ABNORMAL_CLOSURE
 
 
 class _RouteRegistrationService:
