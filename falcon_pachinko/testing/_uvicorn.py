@@ -90,12 +90,14 @@ class _UvicornAdapter:
         """Request graceful shutdown and join the Uvicorn serve task."""
         server = self._server
         if server is None:
-            if not self._start_request.done():
-                self._task.cancel()
+            self._task.cancel()
         else:
             server.should_exit = True
-        if not self._task.cancelled():
+        try:
             await self._task
+        except asyncio.CancelledError:
+            if not self._task.cancelled():
+                raise
 
     async def _serve_after_start(self) -> None:
         """Create the Uvicorn server after the harness supplies its socket."""

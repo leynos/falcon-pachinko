@@ -38,9 +38,6 @@ class _ConnectOptions(typ.TypedDict, total=False):
     trace: list[TraceEvent] | bool | None
 
 
-_Result = typ.TypeVar("_Result")
-
-
 class ServerAdapter(typ.Protocol):
     """Minimal adapter contract for a server that serves an ASGI app."""
 
@@ -135,10 +132,10 @@ class LiveWebSocketServer:
         self._errors.append(ex)
 
     @staticmethod
-    async def wait_for(
-        awaitable: cabc.Awaitable[_Result],
+    async def wait_for[ResultT](
+        awaitable: cabc.Awaitable[ResultT],
         timeout: float,  # ruff: ignore[async-function-with-timeout] -- required API
-    ) -> _Result:
+    ) -> ResultT:
         """Wait for an awaitable for at most ``timeout`` seconds."""
         return await asyncio.wait_for(awaitable, timeout=timeout)
 

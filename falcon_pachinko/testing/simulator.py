@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import typing as typ
 from contextlib import asynccontextmanager
 
@@ -23,6 +24,13 @@ from ._common import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _DisconnectMarker:
+    """Queue an explicit peer disconnect with its close code."""
+
+    code: int
 
 
 class WebSocketSimulator(_LifecycleSocket):
@@ -76,6 +84,9 @@ class WebSocketSimulator(_LifecycleSocket):
     async def receive_media(self) -> object:
         """Return the next inbound frame queued via :meth:`push_message`."""
         message = await self._inbound.get()
+        if isinstance(message, _DisconnectMarker):
+            await self.close(code=message.code)
+            raise falcon.WebSocketDisconnected(code=message.code)
         if message is _CLOSED_SENTINEL:
             self._inbound.put_nowait(_CLOSED_SENTINEL)
             raise falcon.WebSocketDisconnected(self.close_code)
@@ -143,6 +154,10 @@ class WebSocketSimulator(_LifecycleSocket):
             raise falcon.WebSocketDisconnected(self.close_code)
         data = self._prepare_inbound_payload(payload, kind)
         await self._inbound.put(data)
+
+    async def push_disconnect(self, code: int = 1000) -> None:
+        """Queue a peer disconnect after any frames already in the queue."""
+        await self._inbound.put(_DisconnectMarker(code))
 
     def _prepare_inbound_payload(self, payload: object, kind: FrameKind) -> object:
         match kind:

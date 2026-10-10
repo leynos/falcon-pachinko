@@ -13,8 +13,6 @@ if typ.TYPE_CHECKING:
 
     import falcon.asgi
 
-    _Result = typ.TypeVar("_Result")
-
     from .live import ServerAdapter
 
     class _LiveServerOptions(typ.TypedDict, total=False):
@@ -76,9 +74,9 @@ class _LiveServerRunner:
         self._servers.append(server)
         return server
 
-    def run(
-        self, awaitable: cabc.Awaitable[_Result], timeout: float | None = None
-    ) -> _Result:
+    def run[ResultT](
+        self, awaitable: cabc.Awaitable[ResultT], timeout: float | None = None
+    ) -> ResultT:
         """Run an awaitable to completion, optionally enforcing a deadline."""
         if self._closed:
             msg = "the live server runner is already closed"
