@@ -386,7 +386,11 @@ class WebSocketResource:
     async def dispatch(self, ws: WebSocketLike, raw: str | bytes) -> None:
         """Decode ``raw`` and route it to the appropriate handler."""
         manager = self._require_hook_manager()
-        async with _receive_hooks(manager, self, ws=ws, raw=raw):
+        if not manager.can_receive(ws):
+            return
+        async with _receive_hooks(manager, self, ws=ws, raw=raw) as should_dispatch:
+            if not should_dispatch:
+                return
             await dispatch(self, ws, raw)
 
 
@@ -397,17 +401,20 @@ async def _receive_hooks(
     *,
     ws: WebSocketLike,
     raw: str | bytes,
-) -> cabc.AsyncGenerator[None, None]:
+) -> cabc.AsyncGenerator[bool, None]:
     """Balance before/after receive hooks while guarding original errors."""
     context = await manager.notify_before_receive(target, ws=ws, raw=raw)
+    should_dispatch = manager.can_receive(ws)
     try:
-        yield
+        yield should_dispatch
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         context.error = exc
-        with suppress(Exception):
-            await manager.notify_after_receive(context)
+        if manager.can_receive(ws):
+            with suppress(Exception):
+                await manager.notify_after_receive(context)
         raise
     # Every handler above re-raises, so reaching here means the body succeeded.
-    await manager.notify_after_receive(context)
+    if manager.can_receive(ws):
+        await manager.notify_after_receive(context)

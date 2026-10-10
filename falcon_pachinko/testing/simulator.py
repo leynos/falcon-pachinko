@@ -7,13 +7,14 @@ import dataclasses as dc
 import typing as typ
 from contextlib import asynccontextmanager
 
+import falcon
 import msgspec.json as msjson
 
 from falcon_pachinko._disconnect import _PeerDisconnectedError
 
 from ._common import (
     _BINARY_PAYLOAD_REQUIRED_MSG,
-    _CLOSED_SENTINEL,
+    DisconnectSentinel,
     _EXPECTED_BYTES_MSG,
     _EXPECTED_TEXT_MSG,
     _TEXT_PAYLOAD_REQUIRED_MSG,
@@ -60,6 +61,7 @@ class WebSocketSimulator(_LifecycleSocket):
         self._decoders: dict[type[object], msjson.Decoder] = {}
         self.sent_messages: list[object] = []
         self.received_messages: list[object] = []
+        self._outbound_event = asyncio.Event()
 
     # pylint: disable-next=trivial-attribute-wrapper  # deliberate public API: the inbound queue is private, so callers need this accessor to inspect backlog depth
     def pending_inbound(self) -> int:
@@ -83,29 +85,45 @@ class WebSocketSimulator(_LifecycleSocket):
         """Record ``data`` as an outbound frame."""
         await self._outbound.put(data)
         self.sent_messages.append(data)
+        self._outbound_event.set()
 
     async def close(self, code: int = 1000) -> None:
         """Close the socket and wake any pending receive operation."""
         if self.closed:
             return
         await super().close(code)
-        self._inbound.put_nowait(_CLOSED_SENTINEL)
+        # A full queue already wakes receivers. Preserve queued frames, then
+        # let the closed-and-empty check report the first close code.
+        close_code = self.close_code if self.close_code is not None else code
+        if not self._inbound.full():
+            self._inbound.put_nowait(DisconnectSentinel(close_code))
 
     async def receive_media(self) -> object:
         """Return the next inbound frame queued via :meth:`push_message`."""
+        if self.closed and self._inbound.empty():
+            raise falcon.WebSocketDisconnected(self.close_code)
         message = await self._inbound.get()
-        if isinstance(message, _DisconnectMarker):
-            await self.close(code=message.code)
-            raise _PeerDisconnectedError(code=message.code)
-        if message is _CLOSED_SENTINEL:
-            self._inbound.put_nowait(_CLOSED_SENTINEL)
-            raise _PeerDisconnectedError(self.close_code)
-        self.received_messages.append(message)
-        return message
+        match message:
+            case DisconnectSentinel(code=code):
+                raise falcon.WebSocketDisconnected(code)
+            case _DisconnectMarker(code=code):
+                await self.close(code=code)
+                raise _PeerDisconnectedError(code=code)
+            case _:
+                self.received_messages.append(message)
+                return message
 
     async def next_sent(self) -> object:
         """Await the next outbound frame emitted by the simulator."""
         return await self._outbound.get()
+
+    async def wait_for_sent_count(self, count: int) -> None:
+        """Wait until at least ``count`` outbound frames have been processed."""
+        while len(self.sent_messages) < count:
+            self._outbound_event.clear()
+            if len(self.sent_messages) >= count:
+                return
+            await self._outbound_event.wait()
 
     def pop_sent(self) -> object:
         """Pop the next outbound frame synchronously."""
@@ -161,7 +179,7 @@ class WebSocketSimulator(_LifecycleSocket):
     async def push_message(self, payload: object, *, kind: FrameKind = "json") -> None:
         """Queue ``payload`` as if it were received from the peer."""
         if self.closed:
-            raise _PeerDisconnectedError(self.close_code)
+            raise falcon.WebSocketDisconnected(self.close_code)
         data = self._prepare_inbound_payload(payload, kind)
         await self._inbound.put(data)
 

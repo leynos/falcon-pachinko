@@ -33,7 +33,8 @@ from ._route_support import (
 )
 from ._router_attachment import attach_router
 from ._router_resources import _ResourceResolver
-from ._router_session import _ConnectionSession
+from ._session import SessionPhase, SessionState
+from ._session_driver import run_session
 from ._uri_template import _compile_prefix_template, compile_uri_template
 from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
@@ -66,11 +67,7 @@ class _Dispatch:
     req: falcon.Request
     ws: WebSocketLike
     match: _RouteMatch
-    session_close_attempted: bool = False
-
-    def mark_session_close_attempted(self) -> None:
-        """Record when the session driver owns the policy close."""
-        self.session_close_attempted = True
+    session: SessionState | None = None
 
 
 @dc.dataclass(slots=True)
@@ -395,8 +392,12 @@ class WebSocketRouter:
             ws_for_cleanup = dispatch.ws
             return await self._process_route_resolution(dispatch)
         except Exception as exc:
+            session_is_established = (
+                dispatch.session is not None
+                and dispatch.session.phase is not SessionPhase.CONNECTING
+            )
             factory_closed = getattr(exc, "_pachinko_factory_closed", False)
-            if not dispatch.session_close_attempted and not factory_closed:
+            if not session_is_established and not factory_closed:
                 with contextlib.suppress(Exception):
                     await ws_for_cleanup.close()
             raise
@@ -508,36 +509,20 @@ class WebSocketRouter:
         hook_manager: HookManager,
     ) -> bool:
         """Run connection setup, then own the accepted session until closure."""
+        if self._receive_loop:
+            return await run_session(resource, dispatch, hook_manager=hook_manager)
+
         context = await self._prepare_connection_context(
             hook_manager, resource, dispatch
         )
         should_accept = await self._execute_resource_handler(
             resource, dispatch, context, hook_manager
         )
-        if should_accept:
-            connection_session = _ConnectionSession(resource, dispatch.ws, hook_manager)
-            acceptance = self._finalize_connection(
-                _ConnectionFinalization(
-                    resource=resource,
-                    ws=dispatch.ws,
-                    should_accept=True,
-                    context=context,
-                    hook_manager=hook_manager,
-                    on_accept=connection_session.mark_accepted,
-                )
-            )
-            await connection_session.run(
-                acceptance,
-                on_policy_close=dispatch.mark_session_close_attempted,
-                receive_loop=self._receive_loop,
-            )
-            return True
-
         acceptance = self._finalize_connection(
             _ConnectionFinalization(
                 resource=resource,
                 ws=dispatch.ws,
-                should_accept=False,
+                should_accept=should_accept,
                 context=context,
                 hook_manager=hook_manager,
             )

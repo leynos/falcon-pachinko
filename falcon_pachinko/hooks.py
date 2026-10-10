@@ -22,6 +22,7 @@ if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints only
 
     import falcon
 
+    from ._session import SessionState
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
 
@@ -50,7 +51,7 @@ class _HookContextKwargs(typ.TypedDict, total=False):
     params: dict[str, object]
     raw: str | bytes
     result: bool
-    error: BaseException
+    error: BaseException | None
     close_code: int
 
 
@@ -180,6 +181,16 @@ class HookManager:
             raise ValueError(msg)
         self._global_hooks = global_hooks
         self._resources = list(resources)
+        self._session: SessionState | None = None
+
+    def bind_session(self, session: SessionState) -> None:
+        """Bind router-owned lifecycle state for receive dispatch guards."""
+        self._session = session
+
+    @property
+    def session(self) -> SessionState | None:
+        """Router-bound session state, if any."""
+        return self._session
 
     def _build_hook_layers(
         self, event_name: str, context: HookContext
@@ -262,14 +273,7 @@ class HookManager:
         context.event = HookEvent.AFTER_RECEIVE
         await self._run_hooks(HookEvent.AFTER_RECEIVE, context, reverse=True)
 
-    async def notify_before_disconnect(
-        self,
-        target: WebSocketResource,
-        *,
-        ws: WebSocketLike,
-        close_code: int,
-    ) -> HookContext:
-        """Run ``before_disconnect`` hooks and return the shared context."""
-        return await self._notify_before_event(
-            HookEvent.BEFORE_DISCONNECT, target, ws=ws, close_code=close_code
-        )
+    async def notify_before_disconnect(self, context: HookContext) -> None:
+        """Run ``before_disconnect`` with the final session outcome."""
+        context.event = HookEvent.BEFORE_DISCONNECT
+        await self._run_hooks(HookEvent.BEFORE_DISCONNECT, context)
