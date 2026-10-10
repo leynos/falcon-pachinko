@@ -7,7 +7,7 @@ import typing as typ
 
 import pytest
 
-from falcon_pachinko.router import (
+from falcon_pachinko._uri_template import (
     _compile_prefix_template,
     compile_uri_template,
 )
