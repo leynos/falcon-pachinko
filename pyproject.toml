@@ -33,6 +33,7 @@ dev = [
     "pytest-asyncio",
     "pytest-bdd",
     "ruff",
+    "uvicorn>=0.29,<1",
     "pyright[nodejs]",
     "websockets>=11,<13",
     "pyyaml>=6.0.3",
@@ -41,8 +42,8 @@ dev = [
 ]
 
 [project.optional-dependencies]
-examples = ["aiosqlite", "uvicorn", "websocket-client"]
-testing = ["websockets>=11,<13"]
+examples = ["aiosqlite", "uvicorn>=0.29,<1", "websocket-client"]
+testing = ["uvicorn>=0.29,<1", "websockets>=11,<13"]
 
 [tool.pyright]
 pythonVersion = "3.12"
@@ -382,5 +383,6 @@ markers = [
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["falcon_pachinko"]
+[tool.setuptools.packages.find]
+include = ["falcon_pachinko", "falcon_pachinko.testing"]
+exclude = ["falcon_pachinko.behaviour*", "falcon_pachinko.unittests*"]
