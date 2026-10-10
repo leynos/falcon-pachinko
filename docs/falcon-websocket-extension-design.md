@@ -349,6 +349,23 @@ avoids a monolithic receive loop with extensive conditional logic.
      Consequently, the naming convention remains best-effort and is primarily
      suited to simple ASCII tags.
 
+     The set of conventional names a class will resolve is computed once, in
+     `__init_subclass__`, and stored as `_conventional_handler_names`. Dispatch
+     consults that allowlist before it touches an attribute, rather than
+     deriving a name from the peer's `type` and calling `getattr`. Fixing the
+     set at class creation keeps the decision with the class author, who is the
+     only party that can judge which `on_*` methods are message handlers.
+
+     The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are
+     reserved and are never admitted to the allowlist, along with any alias or
+     inherited copy of them. They are lifecycle-driven, so a peer-chosen tag
+     that names one would let a remote client drive cleanup for a live socket.
+     A reserved tag is instead treated as unhandled and reaches
+     `on_unhandled(self, ws, raw)`. Registration is refused on the same terms:
+     `WebSocketResource.add_handler` and `@handles_message` raise
+     `ReservedHandlerRegistrationError` for a callable implementing a reserved
+     callback, while the reserved tag string stays legal on a distinct method.
+
   ```python
   from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
   import msgspec as ms
