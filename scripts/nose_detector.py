@@ -436,6 +436,17 @@ def _has_supported_channels(mode: str) -> bool:
     )
 
 
+def _binary_candidate(context: DetectorContext) -> str | None:
+    """Select the explicit override or injected binary-discovery result."""
+    override = context.environment.get("NOSE_BIN")
+    if not override:
+        return context.binary_discoverer(context.repository_root, context.environment)
+    override_path = Path(override)
+    if not override_path.is_absolute():
+        override_path = context.repository_root / override_path
+    return str(override_path.resolve())
+
+
 def resolve_binary(settings: NoseSettings, *, context: DetectorContext) -> str:
     """Locate the pinned nose binary and verify its version.
 
@@ -457,18 +468,7 @@ def resolve_binary(settings: NoseSettings, *, context: DetectorContext) -> str:
     GateExecutionError
         If no binary is found or the reported version does not match.
     """
-    # Resolve against the repository root so a relative NOSE_BIN keeps
-    # working for callers that run the detector from another directory.
-    override = context.environment.get("NOSE_BIN")
-    if override:
-        override_path = Path(override)
-        if not override_path.is_absolute():
-            override_path = context.repository_root / override_path
-        candidate = str(override_path.resolve())
-    else:
-        candidate = context.binary_discoverer(
-            context.repository_root, context.environment
-        )
+    candidate = _binary_candidate(context)
     if candidate is None:
         default_binary = context.repository_root / ".tools" / "nose" / "nose"
         msg = (

@@ -260,3 +260,14 @@ pending.
   Mermaid, and CV005; `make test` reported 439 passed, 2 skipped and 19
   warnings. These are local results; hosted checks and review reconciliation
   remain pending until this follow-up is pushed.
+- Hosted CI passed on `2d392d9`, while CodeScene rejected the new CLI context
+  test for low cohesion and the detector module for a mean complexity of 4.09.
+  The context-composition test now has its own focused module, and binary
+  candidate selection is separated from pinned-version verification. Local
+  CodeScene reviews score the detector, command tests and new context test 10.0
+  with no findings; `cs delta` against the PR base reports no issues. The full
+  sequential gate set passed on the working tree based on `2d392d9`: 172
+  focused tests, 3 snapshots, the three-exception duplication scan, formatting,
+  lint, typechecking, spelling, Markdown, Mermaid, CV005, and 439 application
+  tests (2 skipped, 19 warnings). These are local results; hosted checks for
+  this follow-up remain pending until it is pushed.
