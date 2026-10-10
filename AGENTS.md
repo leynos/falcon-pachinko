@@ -69,8 +69,9 @@ When implementing changes, adhere to the following testing procedures:
   `dev` dependency group. Prefer these targets over invoking tools directly.
   When editing `Makefile`, run `mbake validate Makefile` to confirm the syntax
   is correct. The `dev` dependency group includes all CLI tooling such as
-  linters and markdown checks, so `make build` installs everything required for
-  development and CI.
+  linters and Markdown checks. It does not install the optional `examples`
+  extra; use `uv sync --group dev --extra examples` to run example programs and
+  tests that require example-only dependencies such as `aiosqlite`.
 
 - **Atomicity:** Aim for small, focused, atomic changes. Each change (and
   subsequent commit) should represent a single logical unit of work.

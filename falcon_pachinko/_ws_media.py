@@ -78,7 +78,7 @@ def install_raw_websocket_media_handlers(
 
     Falcon shares ``ws_options.media_handlers`` across all WebSocket routes in
     an application. Warn if those handlers have been customized because this
-    wrapper replaces their inbound deserializer with pass-through behavior.
+    wrapper replaces their inbound deserializer with pass-through behaviour.
     """
     payload_types = (
         falcon.WebSocketPayloadType.TEXT,

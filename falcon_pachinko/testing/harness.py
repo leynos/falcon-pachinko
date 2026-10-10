@@ -253,7 +253,7 @@ class SimulatorRouterHarness:
     ) -> None:
         """Preserve a body failure and report responder teardown problems."""
         if body_error is not None:
-            if task_error is not None:
+            if task_error is not None and task_error is not body_error:
                 body_error.add_note(
                     f"Simulator responder task also failed: {task_error!r}"
                 )

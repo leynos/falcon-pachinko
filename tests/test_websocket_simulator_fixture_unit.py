@@ -252,6 +252,31 @@ class TestWebSocketSimulatorFixture:
         with pytest.raises(RuntimeError):
             await run_failing_connection()
 
+    async def test_startup_failure_is_not_reported_as_a_second_task_error(
+        self,
+        websocket_simulator: SimulatorRouterHarness,
+    ) -> None:
+        """The same startup exception is not described as a second failure."""
+        failure = RuntimeError("responder failed before accepting")
+
+        class EarlyFailingResource(WebSocketResource):
+            async def on_connect(
+                self, req: falcon.Request, ws: WebSocketLike, **params: object
+            ) -> bool:
+                raise failure
+
+        websocket_simulator.router.add_route("/early-failure", EarlyFailingResource)
+
+        with pytest.raises(RuntimeError, match="before accepting") as raised:
+            async with websocket_simulator.connect("/early-failure"):
+                pytest.fail("a failing responder must fail before yielding a session")
+
+        assert raised.value is failure, "the original startup exception must propagate"
+        notes = getattr(raised.value, "__notes__", ())
+        assert not any("responder task also failed" in note for note in notes), (
+            "the exception must not report itself as an additional task failure"
+        )
+
     async def test_server_initiated_close_stops_the_receive_loop(
         self,
         websocket_simulator: SimulatorRouterHarness,
