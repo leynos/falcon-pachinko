@@ -275,10 +275,13 @@ class WebSocketResource:
     async def on_connect(  # ruff: ignore[no-self-use] - overridable hook; subclasses use ``self``
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
-        """Decide whether the router should accept the WebSocket connection.
+        """Approve or reject a connection before router acceptance.
 
-        The router calls this during connection setup. The ``after_connect``
-        hooks run after this method and before the router calls ``accept()``.
+        The router calls this hook after resolving the final resource and
+        before it accepts the WebSocket. A truthy result approves the session;
+        the router accepts the socket unless this hook already did so. A
+        falsey result rejects a socket that remains unaccepted. A resource may
+        accept itself during this hook when setup must send data first.
 
         Parameters
         ----------
@@ -297,24 +300,22 @@ class WebSocketResource:
         return True
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
-        """Handle cleanup for a router-owned WebSocket session.
+        """Clean up a router-owned session after disconnect begins.
 
-        With ``WebSocketRouter(receive_loop=True)``, after an accepting
-        ``on_connect``, the router attempts this callback once after the
-        ``before_disconnect`` hooks. This includes cleanup when
-        ``after_connect`` or ``accept`` fails. A peer close code is passed
-        through, or 1006 when the peer code is unavailable or acceptance setup
-        does not complete. Cancellation before disconnect cleanup starts closes
-        with 1001 and passes 1001 here. If cancellation interrupts a peer-close
-        callback already in progress, the callback retains its peer code and is
-        not attempted again, though the socket closes with 1001. Unexpected
-        receive or handler failures close with 1011 and pass 1011 here. These
-        failures propagate after cleanup.
+        With ``WebSocketRouter(receive_loop=True)``, the router attempts this
+        callback exactly once after ``on_connect`` approves the session or the
+        resource accepts the socket. Cleanup runs even if setup fails after
+        that point. A rejected, never-accepted connection does not receive
+        post-accept cleanup. Use this hook to remove session registrations such
+        as connection-manager membership. A failed ``on_connect`` that neither
+        approves nor accepts the socket must roll back its own partial setup.
 
-        Rejected connections and failed ``on_connect`` calls do not invoke this
-        method. Cancellation inside this callback does not cause a second
-        callback attempt. With the default ``receive_loop=False``, the
-        application owns session reception and cleanup.
+        The callback receives Falcon's reported close code when available, or
+        1006 when transport loss omits it. Cancellation selects 1001 and an
+        unexpected setup, receive, or handler failure selects 1011. The router
+        shields cleanup through repeated cancellation and has no timeout, so
+        this callback must terminate. With the default ``receive_loop=False``,
+        the application owns session reception and cleanup.
 
         Parameters
         ----------
@@ -366,7 +367,11 @@ class WebSocketResource:
     async def dispatch(self, ws: WebSocketLike, raw: str | bytes) -> None:
         """Decode ``raw`` and route it to the appropriate handler."""
         manager = self._require_hook_manager()
-        async with _receive_hooks(manager, self, ws=ws, raw=raw):
+        if not manager.can_receive(ws):
+            return
+        async with _receive_hooks(manager, self, ws=ws, raw=raw) as should_dispatch:
+            if not should_dispatch:
+                return
             await dispatch(self, ws, raw)
 
 
@@ -377,17 +382,20 @@ async def _receive_hooks(
     *,
     ws: WebSocketLike,
     raw: str | bytes,
-) -> cabc.AsyncGenerator[None, None]:
+) -> cabc.AsyncGenerator[bool, None]:
     """Balance before/after receive hooks while guarding original errors."""
     context = await manager.notify_before_receive(target, ws=ws, raw=raw)
+    should_dispatch = manager.can_receive(ws)
     try:
-        yield
+        yield should_dispatch
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         context.error = exc
-        with suppress(Exception):
-            await manager.notify_after_receive(context)
+        if manager.can_receive(ws):
+            with suppress(Exception):
+                await manager.notify_after_receive(context)
         raise
     # Every handler above re-raises, so reaching here means the body succeeded.
-    await manager.notify_after_receive(context)
+    if manager.can_receive(ws):
+        await manager.notify_after_receive(context)

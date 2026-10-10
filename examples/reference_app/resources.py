@@ -201,6 +201,7 @@ class TaskStreamResource(WebSocketResource):
                 project=project_id,
                 user=self.state["user"],
             )
+            await ws.accept()
             await ws.send_media({
                 "type": "session.ready",
                 "payload": {
@@ -208,7 +209,8 @@ class TaskStreamResource(WebSocketResource):
                     "project": project_id,
                 },
             })
-        except Exception:
+        except BaseException:
+            # Rollback must include cancellation after manager registration.
             await self._conn_mgr.remove_connection(conn_id)
             self._conn_id = None
             raise
@@ -218,10 +220,12 @@ class TaskStreamResource(WebSocketResource):
         """Remove the websocket from the connection manager on disconnect."""
         if self._conn_id is None:
             return
-        await self._conn_mgr.remove_connection(self._conn_id)
+        conn_id = self._conn_id
+        await self._conn_mgr.remove_connection(conn_id)
+        self._conn_id = None
         await self._audit.record(
             "session.closed",
-            connection=self._conn_id,
+            connection=conn_id,
             close_code=close_code,
             workspace=self.state.get("workspace_id"),
             project=self.state.get("project_id"),

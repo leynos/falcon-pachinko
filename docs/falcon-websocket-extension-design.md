@@ -36,31 +36,41 @@ will be discussed.
 ## Current implementation: Falcon routing and session contract
 
 The implementation uses `falcon.asgi.App` and
-`WebSocketRouter.attach(app, prefix)` to register both the exact mount and a
-catch-all descendant route. `attach()` also enables pass-through TEXT and
-BINARY input in the application's shared WebSocket media-handler mapping,
-preserving the configured outgoing serializers. The public
-`configure_raw_frame_media(app)` helper uses the same idempotent setup for
-manually mounted routers and other Falcon WebSocket routes. Either entry point
-warns when it replaces customized inbound handlers. Falcon's default media
-decoding remains in effect when neither is used.
+`WebSocketRouter.attach(app, prefix)` to register the exact mount and a
+catch-all descendant route. `attach()` enables pass-through TEXT and BINARY
+input while preserving the configured outgoing serializers. The public
+`configure_raw_frame_media(app)` helper provides the same setup for manually
+mounted routers and other Falcon WebSocket routes. Falcon's default media
+decoding remains in effect when neither entry point is used.
 
-After Falcon routes a connection to the router, `on_connect()` decides whether
-to accept it. The router owns acceptance after that hook; a resource that sends
-a frame from `on_connect()` must call `await ws.accept()` first. With
-`receive_loop=True`, the router receives frames in order and invokes
-`WebSocketResource.dispatch()` until the session ends; the default `False`
-returns after acceptance and leaves further receives and cleanup to the
-application. The driver handles Falcon's `WebSocketDisconnected` exception and
-the simulator's framework-independent package signal. After a successful
-`on_connect`, opt-in sessions attempt `on_disconnect` once, including setup
-failure in `after_connect` or `accept`. A missing peer code and setup failure
-use `1006`; unexpected receive or dispatch failures close with `1011` and
-propagate. Cancellation before cleanup starts closes with `1001` and
-propagates. If cancellation interrupts a peer-close callback already in
-progress, that callback retains its peer code and is not retried, while the
-socket closes with `1001`. Rejected connections and failed `on_connect` calls
-do not call the callback.
+`WebSocketRouter(receive_loop=True)` opts into a router-owned session; the
+default `False` returns after acceptance and leaves later receives and cleanup
+to the application. The opted-in driver preserves the selected child resource,
+prepared socket, and bound hook manager while it runs `before_connect`,
+`on_connect`, `after_connect`, acceptance, ordered frame dispatch, and cleanup.
+A truthy `on_connect` result or resource-owned acceptance establishes the
+exactly-once cleanup promise. A rejected, never-accepted socket does not run
+post-accept cleanup. If setup fails after establishment, cleanup still runs;
+`on_connect` failures before approval or acceptance must roll back their own
+partial registrations.
+
+The session phases are `CONNECTING`, `ESTABLISHED`, `DISCONNECTING`, and
+`CLOSED`. The raw adapter preserves `str` and `bytes` returned by
+`receive_media()` and encodes other decoded media as JSON. Native Falcon sockets
+use the private raw receive seam; malformed media is an unexpected failure.
+Once disconnect starts, resource receive hooks and dispatch do not run for later
+frames.
+
+The callback receives Falcon's close code when available. A transport ending
+without a code uses `1006`; cancellation selects `1001`; unexpected setup,
+receive, or handler failure selects `1011`. A clean peer close does not trigger
+a redundant close send. Cleanup runs in a shielded task through repeated caller
+cancellation and has no timeout, so `on_disconnect` must terminate. Disconnect
+hooks run before the resource callback, and callback cleanup still runs if a
+hook fails. A lone failure propagates unchanged; multiple ordinary failures are
+raised in an `ExceptionGroup` with the primary failure first. Cancellation
+remains a bare `CancelledError`, with hidden cleanup failures reported to the
+loop exception handler.
 
 The diagrams below show the opted-in `receive_loop=True` session path.
 
@@ -70,23 +80,23 @@ The diagrams below show the opted-in `receive_loop=True` session path.
 stateDiagram-v2
     accTitle: WebSocket session state transitions
     accDescr {
-        The opted-in session starts while the router runs on_connect. A false
-        result closes the session; a true result leads to acceptance and a
-        persistent receive and dispatch loop. Disconnect, failure or
-        cancellation leads to cleanup and then the disconnected state.
+        Approval or resource-owned acceptance establishes cleanup. A false
+        result on an unaccepted socket is a rejection. An opted-in accepted
+        socket receives frames until disconnect, failure or cancellation, then
+        runs cleanup once.
     }
 
     [*] --> Connecting
-    Connecting --> Accepted: on_connect returns true
-    Connecting --> Closed: on_connect returns false
-    Accepted --> Receiving: accept()
+    Connecting --> Established: on_connect approval or resource acceptance
+    Connecting --> Closed: false result while unaccepted
+    Established --> Accepted: accept if needed
+    Established --> Disconnecting: setup failure
+    Accepted --> Receiving: receive loop enabled
     Receiving --> Receiving: receive_media() and dispatch(ws, raw)
-    Receiving --> CleanDisconnect: WebSocketDisconnected
-    Receiving --> Failed: dispatch exception
-    Receiving --> Cancelled: task cancellation
-    CleanDisconnect --> Disconnected: on_disconnect(peer code or 1006)
-    Failed --> Disconnected: close(1011), on_disconnect(ws, 1011)
-    Cancelled --> Disconnected: close(1001), on_disconnect(ws, 1001)
+    Receiving --> Disconnecting: WebSocketDisconnected
+    Receiving --> Disconnecting: dispatch exception
+    Receiving --> Disconnecting: task cancellation
+    Disconnecting --> Disconnected: on_disconnect(effective code)
     Closed --> [*]
     Disconnected --> [*]
 ```
@@ -99,9 +109,10 @@ sequenceDiagram
     accTitle: Falcon WebSocket responder lifecycle
     accDescr {
         With receive_loop enabled, Falcon routes the connection to
-        WebSocketRouter, which calls on_connect before accepting. The router
-        then receives and dispatches frames until disconnect, followed by the
-        resource's on_disconnect hook with the final close code.
+        WebSocketRouter, which calls on_connect and after_connect hooks before
+        router acceptance. It then receives and dispatches frames until
+        disconnect, followed by before_disconnect hooks and on_disconnect with
+        the effective close code.
     }
 
     participant Client
@@ -113,13 +124,14 @@ sequenceDiagram
     Client->>FalconApp: WebSocket connection
     FalconApp->>WebSocketRouter: on_websocket(req, ws)
     WebSocketRouter->>WebSocketResource: on_connect(req, ws, params)
-    WebSocketResource-->>WebSocketRouter: continue session
+    WebSocketRouter->>WebSocketRouter: after_connect hooks
     WebSocketRouter->>WebSocket: accept()
     loop Until disconnect
         WebSocketRouter->>WebSocket: receive_media()
         WebSocket-->>WebSocketRouter: raw str or bytes frame
         WebSocketRouter->>WebSocketResource: dispatch(ws, raw)
     end
+    WebSocketRouter->>WebSocketRouter: before_disconnect hooks
     WebSocketRouter->>WebSocketResource: on_disconnect(ws, close_code)
 ```
 
@@ -1220,34 +1232,54 @@ sequenceDiagram
     participant WebSocketRouter
     participant WebSocketResource
 
-    Client->>FalconApp: Initiate WebSocket connection (URL)
+    Client->>FalconApp: Initiate WebSocket connection
     FalconApp->>WebSocketRouter: on_websocket(req, ws)
-    WebSocketRouter->>WebSocketRouter: Validate mount prefix
-    WebSocketRouter->>WebSocketRouter: Match path against a route's prefix
-    WebSocketRouter->>WebSocketResource: Instantiate resource from factory
-    WebSocketRouter->>WebSocketResource: Resolve subroutes (consume remaining path)
-    WebSocketRouter->>WebSocketRouter: Run before_connect hooks
+    WebSocketRouter->>WebSocketRouter: Select route and resolve resource chain
+    WebSocketRouter->>WebSocketRouter: before_connect hooks
     WebSocketRouter->>WebSocketResource: on_connect(req, ws, **params)
-    WebSocketRouter->>WebSocketRouter: Run after_connect hooks
-    alt on_connect returns False
-        WebSocketRouter->>Client: Close WebSocket
-    else on_connect returns True
-        WebSocketRouter->>Client: Accept WebSocket
-        loop while the session is open
-            Client->>WebSocketRouter: TEXT or BINARY frame
-            WebSocketRouter->>WebSocketResource: dispatch(frame)
-            WebSocketResource-->>Client: optional response
+    WebSocketRouter->>WebSocketRouter: after_connect hooks
+    alt Rejected and never accepted
+        WebSocketRouter->>Client: Reject or close handshake
+    else Approved or resource accepted
+        opt Router has not accepted the socket
+            WebSocketRouter->>Client: Accept WebSocket
         end
-        alt Unexpected receive or dispatch exception
-            WebSocketRouter->>Client: Close WebSocket with 1011
-            WebSocketRouter->>WebSocketRouter: before_disconnect hooks (best effort)
-            WebSocketRouter->>WebSocketResource: Best-effort on_disconnect(1011)
-        else Peer disconnect
-            WebSocketRouter->>WebSocketRouter: before_disconnect hooks
-            WebSocketRouter->>WebSocketResource: on_disconnect(peer code)
+        loop Until the session disconnects
+            Client->>WebSocketRouter: Raw TEXT or BINARY frame
+            WebSocketRouter->>WebSocketResource: Dispatch frame and receive hooks
+            WebSocketResource-->>Client: Optional response
         end
+        WebSocketRouter->>WebSocketRouter: Begin disconnect exactly once
+        WebSocketRouter->>WebSocketRouter: before_disconnect(req, ws, code, error)
+        WebSocketRouter->>WebSocketResource: on_disconnect(ws, effective code)
     end
 ```
+
+`WebSocketRouter(receive_loop=True)` owns this sequence through completed
+cleanup; the default `receive_loop=False` leaves reception and cleanup to the
+application. A truthy `on_connect` result or observed resource acceptance
+establishes the cleanup promise. A rejection that remains unaccepted skips
+post-accept cleanup, while a failure after approval or acceptance still runs
+cleanup. An approved socket that never becomes accepted skips frame reception
+and is cleaned up with `1011`.
+
+Falcon's `WebSocketDisconnected` supplies the effective client close code when
+available; otherwise the router uses `1006`. A server-requested close code is
+sent to the peer, but Falcon may report the peer's close response to cleanup.
+Task cancellation selects `1001`, and an unexpected ordinary failure selects
+`1011`. Once disconnect begins, no later frame is dispatched or receive hook
+run; a handler that closes the socket also suppresses remaining
+`after_receive` hooks for that frame.
+
+The router runs `before_disconnect` before `on_disconnect`, even if the first
+hook fails. Cleanup uses one shielded task without a timeout, so
+`on_disconnect` must terminate. A lone failure is re-raised unchanged; multiple
+ordinary failures use an `ExceptionGroup` with the session failure first.
+Cancellation remains a bare `CancelledError`, and cleanup failures that cannot
+be grouped with it go to the running loop's exception handler. This guarantee
+lets resources remove connection-manager membership in `on_disconnect`; setup
+that registered membership before either approval or acceptance must roll it
+back itself.
 
 ```mermaid
 erDiagram
@@ -1600,43 +1632,34 @@ This provides maximum control, allowing outer layers to act as setup/teardown
 guards for inner layers. An exception in a `before_*` hook should terminate the
 connection attempt immediately.
 
-With `WebSocketRouter(receive_loop=True)`, after Falcon accepts the connection,
-the router owns a single inline receive loop. It passes each text or binary
-frame to the selected resource's dispatcher and waits for that dispatch to
-finish before receiving the next frame. The loop creates no task per frame. A
-normal peer close runs `before_disconnect` hooks and attempts `on_disconnect`
-once; a missing peer close code maps to 1006. Cancellation before disconnect
-cleanup starts closes with 1001 and propagates. If cancellation interrupts a
-peer-close callback already in progress, that callback retains its peer code
-and is not retried, though the socket closes with 1001. An unexpected receive
-or handler exception closes with 1011, runs best-effort cleanup, and propagates
-the original exception. Failure during `after_connect` or `accept` uses 1006
-for cleanup. Cancellation cleanup may retry a disconnect hook interrupted
-before the callback, but interruption inside the callback does not call it
-again. With the default `receive_loop=False`, the router returns after
-acceptance and the application owns receiving and cleanup. Returning normally
-from `on_unhandled` leaves an opted-in session open.
+The lifecycle and failure contract for the implemented opt-in session is
+specified in [Current implementation: Falcon routing and session
+contract](#current-implementation-falcon-routing-and-session-contract). In
+particular, establishment begins at approval or observed acceptance, and
+cleanup is shielded, exactly once, and completed before the router task exits.
+The default `receive_loop=False` leaves later receives and cleanup to the
+application. Returning normally from `on_unhandled` leaves an opted-in session
+open.
 
 ```mermaid
 stateDiagram-v2
     accTitle: WebSocket session state transitions
-    accDescr: Negotiation accepts or rejects. Active dispatches until close, error, or cancellation; cleanup follows.
+    accDescr: Approval or acceptance establishes cleanup. Opted-in sessions receive until disconnect, failure, or cancellation, then clean up once.
     [*] --> Negotiating
-    Negotiating --> Rejected: on_connect returns False
-    Negotiating --> Active: accept()
-    Active --> Active: receive_media() / dispatch()
-    Active --> Closing: WebSocketDisconnected
-    Active --> Failed: receive or handler exception
-    Active --> Cancelled: task cancellation
-    Closing --> Disconnected: before_disconnect / on_disconnect
-    Failed --> Disconnected: close(1011) / best-effort cleanup
-    Cancelled --> Disconnected: close(1001) / best-effort cleanup
+    Negotiating --> Established: on_connect approval or resource acceptance
+    Negotiating --> Rejected: false result while unaccepted
+    Established --> Accepted: accept if needed
+    Established --> Disconnecting: setup failure
+    Accepted --> Receiving: receive loop enabled
+    Receiving --> Receiving: receive_media() / dispatch()
+    Receiving --> Disconnecting: peer close / failure / cancellation
+    Disconnecting --> Disconnected: before_disconnect / on_disconnect
     Rejected --> [*]
     Disconnected --> [*]
 ```
 
-Figure 5.4.2a. WebSocket session states from negotiation and dispatch through
-peer closure, failure, or cancellation cleanup.
+Figure 5.4.2a. Opted-in session states through acceptance, dispatch, and
+exactly-once disconnect cleanup.
 
 ```mermaid
 sequenceDiagram

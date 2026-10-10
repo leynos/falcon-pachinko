@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses as dc
 import typing as typ
 
 import msgspec as ms
@@ -29,7 +31,6 @@ _FAILED_JSON_DECODE_MSG = (
     "expected_type={expected}, exception={exception}"
 )
 _JSON_FRAME_REQUIRED_MSG = "JSON frames must be text or binary payloads"
-_CLOSED_SENTINEL = object()
 _ORIGINAL_WS_RECEIVE_MSG = "Original websocket stub does not support receiving frames"
 _INSECURE_WEBSOCKET_MSG = (
     "Insecure websocket URLs require allow_insecure=True. "
@@ -91,6 +92,13 @@ class MissingDependencyError(RuntimeError):
     """Raised when optional testing dependencies are unavailable."""
 
 
+@dc.dataclass(frozen=True, slots=True)
+class DisconnectSentinel:
+    """Wake a simulator receive call with the transport's first close code."""
+
+    code: int
+
+
 class _LifecycleSocket:
     """Track websocket lifecycle state and mirror events to an optional peer."""
 
@@ -100,6 +108,7 @@ class _LifecycleSocket:
         self._close_code: int | None = None
         self._subprotocol: str | None = None
         self._peer: _LifecycleSocket | None = None
+        self._lifecycle_event = asyncio.Event()
 
     def bind_peer(self, peer: _LifecycleSocket) -> None:
         """Mirror lifecycle events to ``peer`` when accepting or closing."""
@@ -109,6 +118,11 @@ class _LifecycleSocket:
     def accepted(self) -> bool:
         """``True`` once :meth:`accept` has been invoked."""
         return self._accepted
+
+    @property
+    def unaccepted(self) -> bool:
+        """Match Falcon's public handshake state."""
+        return not self._accepted
 
     @property
     def closed(self) -> bool:
@@ -125,12 +139,18 @@ class _LifecycleSocket:
         """Negotiated subprotocol, if any."""
         return self._subprotocol
 
+    @property
+    def lifecycle_event(self) -> asyncio.Event:
+        """Signal the first accept or close for harness readiness checks."""
+        return self._lifecycle_event
+
     async def accept(self, subprotocol: str | None = None) -> None:
         """Record handshake acceptance and mirror to any bound peer."""
         if self._accepted:
             return
         self._accepted = True
         self._subprotocol = subprotocol
+        self._lifecycle_event.set()
         peer = self._peer
         if peer is not None and not peer.accepted:
             await peer.accept(subprotocol=subprotocol)
@@ -141,6 +161,7 @@ class _LifecycleSocket:
             return
         self._closed = True
         self._close_code = code
+        self._lifecycle_event.set()
         peer = self._peer
         if peer is not None and not peer.closed:
             await peer.close(code)

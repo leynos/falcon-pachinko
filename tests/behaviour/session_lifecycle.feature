@@ -1,0 +1,49 @@
+Feature: WebSocket session disconnect lifecycle
+  The production router owns every accepted connection through disconnect
+  and completed resource cleanup.
+
+  Scenario: A normal client close runs disconnect once with its close code
+    Given a live Falcon ASGI WebSocket server
+    When the client closes the session with code 4000
+    Then disconnect cleanup is recorded once with code 4000
+
+  Scenario: A server close runs disconnect once with its close code
+    Given a live Falcon ASGI WebSocket server
+    When the connection manager closes the session with code 4002
+    Then the client observes close code 4002
+    And disconnect cleanup is recorded once
+
+  Scenario: A handler close runs disconnect once with its close code
+    Given a live Falcon ASGI WebSocket server
+    When the handler closes the session
+    Then the client observes close code 4001
+    And disconnect cleanup is recorded once with code 4001
+
+  Scenario: Messages are handled before a client close removes membership
+    Given a live Falcon ASGI WebSocket server
+    When the client exchanges messages and closes the session
+    Then all replies arrive and the manager has no connection
+    And disconnect cleanup is recorded once with code 4000
+
+  Scenario: A handler failure still runs disconnect cleanup
+    Given a live Falcon ASGI WebSocket server
+    When a handler raises an unexpected error
+    Then the client observes close code 1011
+    And disconnect cleanup is recorded once with code 1011
+    And the original handler error is captured and membership is removed
+
+  Scenario: Stopping the server closes an idle accepted session
+    Given a live Falcon ASGI WebSocket server
+    When the server stops with an idle accepted session
+    Then disconnect cleanup records the close code sent by Uvicorn
+
+  Scenario: Stopping the server cancels a blocked handler safely
+    Given a live Falcon ASGI WebSocket server
+    When the server stops while a handler is blocked
+    Then disconnect cleanup is recorded once with code 1001
+    And the manager has no connection
+
+  Scenario: A rejected handshake does not run disconnect cleanup
+    Given a live Falcon ASGI WebSocket server
+    When the client attempts a rejected handshake
+    Then the handshake is rejected without disconnect cleanup

@@ -125,6 +125,7 @@ async def test_on_disconnect_removes_connection_and_audits_closure() -> None:
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
+    assert ws.accepted is True, "the resource must accept before its ready frame"
 
     await resource.on_disconnect(ws, close_code=1001)
 
