@@ -370,11 +370,13 @@ avoids a monolithic receive loop with extensive conditional logic.
      reserved and are never admitted to the allowlist, along with any alias or
      inherited copy of them. They are lifecycle-driven, so a peer-chosen tag
      that names one would let a remote client drive cleanup for a live socket.
-     A reserved tag is instead treated as unhandled and reaches
-     `on_unhandled(self, ws, raw)`. Registration is refused on the same terms:
-     `WebSocketResource.add_handler` and `@handles_message` raise
-     `ReservedHandlerRegistrationError` for a callable implementing a reserved
-     callback, while the reserved tag string stays legal on a distinct method.
+     A reserved tag is instead treated as unhandled: the explicit registry is
+     consulted first by exact tag string, and only when it holds no handler for
+     that string does the frame reach `on_unhandled(self, ws, raw)`. Registration
+     is refused on the same terms: `WebSocketResource.add_handler` and
+     `@handles_message` raise `ReservedHandlerRegistrationError` for a callable
+     implementing a reserved callback, while the reserved tag string stays legal
+     on a distinct method.
 
   ```python
   from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message

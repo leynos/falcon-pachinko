@@ -194,6 +194,27 @@ def test_decorating_inherited_lifecycle_callback_is_rejected() -> None:
         LifecycleParent.add_handler("bye", LifecycleParent.on_disconnect, strict=False)
 
 
+def test_decorated_handler_under_reserved_name_is_rejected() -> None:
+    """A ``@handles_message`` descriptor under a reserved name is rejected.
+
+    ``on_disconnect = handles_message("bye")(cleanup)`` registers ``cleanup``,
+    whose name is not reserved, so a name-only check passes it. The descriptor
+    is stored in the class dictionary under a reserved name, so the identity
+    check must unwrap the descriptor before comparing it with ``cleanup``.
+    Without that unwrapping a peer could send a ``"bye"`` envelope to invoke
+    the live connection's disconnect callback.
+    """
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_disconnect"):
+
+        class DescriptorAlias(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
+            WebSocketResource
+        ):
+            async def cleanup(self, ws: WebSocketLike, close_code: int) -> None:
+                """Stand in for a lifecycle callback under a neutral name."""
+
+            on_disconnect = handles_message("bye")(cleanup)
+
+
 def test_add_handler_rejects_partial_lifecycle_callback() -> None:
     """A ``functools.partial`` wrapper does not launder a lifecycle callback.
 

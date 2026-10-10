@@ -168,12 +168,17 @@ driven by the connection lifecycle and are **never** dispatchable. An alias
 such as `on_bye = on_disconnect`, and a copy inherited from a parent resource,
 are excluded on the same terms.
 
-An envelope that normalizes to a reserved name is treated as unhandled: it
-reaches `on_unhandled(self, ws, raw)` with the original frame, and no lifecycle
-callback runs. So `{"type": "disconnect", "payload": 1000}` cannot invoke
+A tag that normalizes to a reserved name — `disconnect`, `Disconnect` and
+`DISCONNECT` all reduce to `on_disconnect` — cannot select the lifecycle
+callback. The explicit registry is consulted first, by exact tag string; if it
+holds no handler for that string, conventional lookup is refused because the
+name is reserved, so the envelope reaches `on_unhandled(self, ws, raw)` with
+the original frame. So `{"type": "disconnect", "payload": 1000}` cannot invoke
 `on_disconnect` — and therefore cannot unregister a socket or release
-connection-scoped state — while the transport is still connected, however the
-tag is spelled or cased.
+connection-scoped state — while the transport is still connected. A misspelt
+tag such as `dis_connect` is not a reserved name at all: it normalizes to
+`on_dis_connect`, so it is unhandled only because no handler claims that
+spelling.
 
 Registration is closed on the same terms. Registering a lifecycle callback as a
 message handler, whether by `@handles_message` or `add_handler`, raises
