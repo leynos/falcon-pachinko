@@ -45,7 +45,19 @@ def _require_struct_tag(struct: type[ms.Struct]) -> type:
 
 
 def validate_schema_types(schema: type) -> None:
-    """Ensure all schema types are :class:`msgspec.Struct` with tags."""
+    """Ensure all schema types are :class:`msgspec.Struct` with tags.
+
+    Parameters
+    ----------
+    schema : type
+        A tagged :class:`msgspec.Struct`, or a union of them.
+
+    Raises
+    ------
+    TypeError
+        If a member is not a tagged Struct, or if the members do not all use
+        the same kind of tag.
+    """
     types = typ.get_args(schema) or (schema,)
     kinds: set[type] = set()
     for t in types:
