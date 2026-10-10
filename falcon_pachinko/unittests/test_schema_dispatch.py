@@ -103,6 +103,30 @@ class RegisteredIntegerTagResource(WebSocketResource):
         self.events.append(("raw", message))
 
 
+class ReservedTag(ms.Struct, tag="disconnect"):
+    """Message tagged with a reserved lifecycle name but not registered."""
+
+    reason: str
+
+
+class ReservedTagResource(WebSocketResource):
+    """Resource whose schema carries a reserved tag with no handler."""
+
+    schema = ReservedTag
+
+    def __init__(self) -> None:
+        self.lifecycle: list[int] = []
+        self.raw: list[str | bytes] = []
+
+    async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+        """Record the close code the lifecycle supplied."""
+        self.lifecycle.append(close_code)
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record fallback frames."""
+        self.raw.append(message)
+
+
 class UntaggedFallbackResource(WebSocketResource):
     """Resource with handlers that must not match an untagged schema."""
 
@@ -186,6 +210,24 @@ async def test_schema_decode_error_calls_fallback() -> None:
     assert r.events == [
         ("raw", b"not json"),
     ], "decode failures should fall back to on_unhandled with the raw payload"
+
+
+@pytest.mark.asyncio
+async def test_schema_reserved_tag_does_not_reach_lifecycle_callback() -> None:
+    """A schema struct tagged ``disconnect`` cannot select ``on_disconnect``.
+
+    Schema-backed dispatch restricts tags to declared Structs, but a struct
+    may still be tagged with a reserved name, so the conventional fallback
+    has to refuse it here too.
+    """
+    r = ReservedTagResource()
+    r.bind_default_hook_manager()
+    raw = msjson.encode(ReservedTag(reason="peer"))
+    await r.dispatch(DummyWS(), raw)
+    assert not r.lifecycle, (
+        f"the reserved tag must not invoke on_disconnect: {r.lifecycle}"
+    )
+    assert r.raw == [raw], "the reserved tag must fall back with the raw frame"
 
 
 def test_invalid_schema_type_raises() -> None:

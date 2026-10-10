@@ -159,6 +159,54 @@ It is the same class as `msgspec.ValidationError`, so existing
 routes validation failures to `on_unhandled`; a `ValidationError` raised inside
 a handler propagates.
 
+### Reserved lifecycle names
+
+A peer chooses the envelope `type`, so the set of method names the dispatcher
+is willing to resolve from that choice is fixed when the resource class is
+created. The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are
+driven by the connection lifecycle and are **never** dispatchable. An alias
+such as `on_bye = on_disconnect`, and a copy inherited from a parent resource,
+are excluded on the same terms.
+
+A tag that normalizes to a reserved name — `disconnect`, `Disconnect` and
+`DISCONNECT` all reduce to `on_disconnect` — cannot select the lifecycle
+callback. The explicit registry is consulted first, by exact tag string; if it
+holds no handler for that string, conventional lookup is refused because the
+name is reserved, so the envelope reaches `on_unhandled(self, ws, raw)` with
+the original frame. So `{"type": "disconnect", "payload": 1000}` cannot invoke
+`on_disconnect` — and therefore cannot unregister a socket or release
+connection-scoped state — while the transport is still connected. A misspelt
+tag such as `dis_connect` is not a reserved name at all: it normalizes to
+`on_dis_connect`, so it is unhandled only because no handler claims that
+spelling.
+
+Registration is closed on the same terms. Registering a lifecycle callback as a
+message handler, whether by `@handles_message` or `add_handler`, raises
+`ReservedHandlerRegistrationError`. The decorator refuses a reserved method
+name as soon as it is applied, before it validates the handler's signature, so
+the error names the reserved callback rather than reporting a shape problem. An
+alias or an inherited copy cannot be judged until the class exists, so those
+are refused when the class is created. The reserved *tag* string itself stays
+legal: a distinct method may handle `"disconnect"` provided it is not the
+lifecycle callback:
+
+```python
+class ChatResource(WebSocketResource):
+    @handles_message("disconnect")
+    async def handle_disconnect(
+        self, ws, payload: object
+    ) -> None: ...  # runs for {"type": "disconnect"}; on_disconnect does not
+
+    async def on_disconnect(
+        self, ws, close_code: int
+    ) -> None: ...  # connection lifecycle only
+```
+
+Schema-backed dispatch restricts tags to declared `Struct` types, but a struct
+may be tagged with a reserved name; the conventional fallback refuses it there
+too, so an unregistered struct tagged `"disconnect"` falls back rather than
+calling through.
+
 ### Diagnostic output and raw payloads
 
 Framework-generated validation errors, logs, trace summaries and object

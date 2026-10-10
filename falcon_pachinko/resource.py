@@ -26,7 +26,13 @@ if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints
     from .protocols import WebSocketLike
 
 from .dispatcher import dispatch
-from .handlers import Handler, HandlerInfo, _HandlesMessageDescriptor
+from .exceptions import ReservedHandlerRegistrationError
+from .handlers import (
+    Handler,
+    HandlerInfo,
+    _HandlesMessageDescriptor,
+    is_lifecycle_callback,
+)
 from .hooks import HookCollection, HookManager
 from .schema import populate_struct_handlers, validate_schema_types
 
@@ -39,10 +45,21 @@ class WebSocketResource:
     incoming messages are decoded using this tagged union and dispatched based
     on the message tag. This enables high-performance, schema-driven routing
     without additional boilerplate.
+
+    Message handlers are either registered explicitly with
+    :func:`~falcon_pachinko.handles_message` or discovered by naming
+    convention. In both cases the lifecycle callbacks ``on_connect``,
+    ``on_disconnect`` and ``on_unhandled`` are reserved: peer tags can never
+    select them, and registering one as a message handler raises
+    :class:`~falcon_pachinko.exceptions.ReservedHandlerRegistrationError`.
     """
 
     handlers: typ.ClassVar[dict[str, HandlerInfo]]
     _struct_handlers: typ.ClassVar[dict[type, HandlerInfo]] = {}
+    #: Attribute names the conventional dispatcher may resolve. Built once per
+    #: class by :meth:`_init_conventional_handler_names`; the base class lists
+    #: nothing, so ``WebSocketResource`` itself never resolves a peer tag.
+    _conventional_handler_names: typ.ClassVar[frozenset[str]] = frozenset()
     schema: type | None = None
     hooks: typ.ClassVar[HookCollection] = HookCollection()
     _hook_manager: HookManager | None
@@ -154,8 +171,10 @@ class WebSocketResource:
         handlers = cls._collect_base_handlers()
         handlers.update(existing)
         cls._apply_overrides(handlers)
+        cls._validate_handler_registry(handlers)
         cls.handlers = handlers
         cls._init_schema_registry()
+        cls._init_conventional_handler_names()
 
         # Locate the nearest ancestor with a hook registry so that subclasses
         # observe later parent registrations without sharing mutable state.
@@ -191,6 +210,46 @@ class WebSocketResource:
                 handlers[msg_type] = HandlerInfo(
                     cls.__dict__[handler_name], info.payload_type, info.strict
                 )
+
+    @classmethod
+    def _init_conventional_handler_names(cls) -> None:
+        """Record the ``on_*`` names the conventional dispatcher may resolve.
+
+        The set is fixed when the class is created so that dispatch never
+        consults an attribute the class did not intend to expose. Resolution
+        walks the MRO, so inheritance is honoured.
+
+        ``getattr_static`` is used rather than ``getattr`` so that a
+        descriptor an application happens to name ``on_*`` cannot run, or
+        raise, while a resource class is being created. It returns the raw
+        attribute, so only a plain coroutine function is admitted:
+        ``@staticmethod`` and ``@classmethod`` return the descriptor object
+        rather than the function, and both fail the coroutine test. That is
+        deliberate: a ``staticmethod`` has no ``self``, so the dispatcher
+        cannot pass the resource the registered handler signature promises,
+        and a ``classmethod`` receives the class in that position. Both
+        shapes are rejected here rather than failing at call time.
+        """
+        names = {
+            name
+            for name in dir(cls)
+            if name.startswith("on_")
+            and inspect.iscoroutinefunction(
+                member := inspect.getattr_static(cls, name, None)
+            )
+            and not is_lifecycle_callback(cls, member)
+        }
+        cls._conventional_handler_names = frozenset(names)
+
+    @classmethod
+    def _validate_handler_registry(cls, handlers: dict[str, HandlerInfo]) -> None:
+        """Reject registered handlers that implement a lifecycle callback."""
+        for message_type, info in handlers.items():
+            if is_lifecycle_callback(cls, info.handler):
+                qualname: str = getattr(
+                    info.handler, "__qualname__", repr(info.handler)
+                )
+                raise ReservedHandlerRegistrationError(message_type, qualname)
 
     @classmethod
     def _init_schema_registry(cls) -> None:
@@ -260,7 +319,18 @@ class WebSocketResource:
         payload_type: type | None = None,
         strict: bool = True,
     ) -> None:
-        """Register ``handler`` for ``message_type``."""
+        """Register ``handler`` for ``message_type``.
+
+        Raises
+        ------
+        ReservedHandlerRegistrationError
+            If ``handler`` implements a reserved lifecycle callback. A
+            lifecycle callback is reachable through the connection lifecycle
+            only, so a peer tag must never be able to invoke one.
+        """
+        if is_lifecycle_callback(cls, handler):
+            qualname: str = getattr(handler, "__qualname__", repr(handler))
+            raise ReservedHandlerRegistrationError(message_type, qualname)
         cls.handlers[message_type] = HandlerInfo(handler, payload_type, strict)
 
     async def dispatch(self, ws: WebSocketLike, raw: str | bytes) -> None:

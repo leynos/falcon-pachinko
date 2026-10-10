@@ -195,6 +195,101 @@ class StrictResource(WebSocketResource):
         self.seen.append(payload.val)
 
 
+class LifecycleResource(WebSocketResource):
+    """Resource whose lifecycle callbacks must not be peer-selectable.
+
+    The overrides record every lifecycle call so a test can prove that no
+    reserved tag reached them while the ordinary handler kept working.
+    """
+
+    def __init__(self) -> None:
+        self.lifecycle: list[str] = []
+        self.fallback: list[str | bytes] = []
+        self.messages: list[object] = []
+
+    async def on_connect(
+        self, req: object, ws: WebSocketLike, **params: object
+    ) -> bool:
+        """Record the connect decision requested by the lifecycle."""
+        self.lifecycle.append("connect")
+        return True
+
+    async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+        """Record the close code the lifecycle supplied."""
+        self.lifecycle.append(f"disconnect:{close_code}")
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record the original frame handed to the fallback."""
+        self.fallback.append(message)
+
+    async def on_ping(self, ws: WebSocketLike, payload: object) -> None:
+        """Record payloads from ``ping`` messages."""
+        self.messages.append(payload)
+
+
+class InheritedLifecycleResource(LifecycleResource):
+    """Child resource inheriting the parent's lifecycle callbacks."""
+
+    def __init__(self) -> None:
+        """Initialize the child's own event log alongside the parent's."""
+        super().__init__()
+        self.child_messages: list[object] = []
+
+    async def on_child(self, ws: WebSocketLike, payload: object) -> None:
+        """Record payloads from ``child`` messages."""
+        self.child_messages.append(payload)
+
+
+class AliasedLifecycleResource(WebSocketResource):
+    """Resource that aliases ``on_disconnect`` under a dispatchable name."""
+
+    def __init__(self) -> None:
+        self.lifecycle: list[int] = []
+        self.fallback: list[str | bytes] = []
+
+    async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+        """Record the close code the lifecycle supplied."""
+        self.lifecycle.append(close_code)
+
+    on_bye = on_disconnect
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record the original frame handed to the fallback."""
+        self.fallback.append(message)
+
+
+class InheritedAliasLifecycleResource(AliasedLifecycleResource):
+    """Child resource inheriting an alias of a lifecycle callback."""
+
+
+class DecoratedReservedTagResource(WebSocketResource):
+    """Resource that reuses a reserved tag on an ordinary method."""
+
+    def __init__(self) -> None:
+        self.lifecycle: list[int] = []
+        self.messages: list[object] = []
+
+    async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+        """Record the close code the lifecycle supplied."""
+        self.lifecycle.append(close_code)
+
+    @handles_message("disconnect")
+    async def handle_disconnect(self, ws: WebSocketLike, payload: object) -> None:
+        """Record payloads sent to the reserved tag ``disconnect``."""
+        self.messages.append(payload)
+
+
+class PunctuationResource(WebSocketResource):
+    """Resource whose handler name only matches after normalisation."""
+
+    def __init__(self) -> None:
+        self.seen: list[object] = []
+
+    async def on_send_message(self, ws: WebSocketLike, payload: object) -> None:
+        """Record payloads from dotted tags."""
+        self.seen.append(payload)
+
+
 class LenientResource(WebSocketResource):
     """Resource with lenient payload conversion (allows extra fields)."""
 
@@ -358,6 +453,150 @@ async def test_sync_handler_ignored_and_fallback_behaviour() -> None:
     await r.dispatch(DummyWS(), raw)
     assert not r.seen, "the synchronous handler should not be called by dispatch"
     assert r.fallback == [raw], "a sync-only handler should be treated as unhandled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tag",
+    ["connect", "disconnect", "unhandled", "Disconnect", "DISCONNECT"],
+)
+async def test_reserved_tags_never_reach_lifecycle_callback(tag: str) -> None:
+    """Reserved tags fall back without invoking a lifecycle callback.
+
+    The case variants matter because the convention normalises the
+    discriminator before lookup, so ``Disconnect`` and ``DISCONNECT`` both
+    reduce to the reserved name.
+    """
+    r = LifecycleResource()
+    r.bind_default_hook_manager()
+    raw = msjson.encode({"type": tag, "payload": 1000})
+    await r.dispatch(DummyWS(), raw)
+    assert not r.lifecycle, (
+        f"tag {tag!r} must not invoke a lifecycle callback: {r.lifecycle}"
+    )
+    assert r.fallback == [raw], (
+        f"tag {tag!r} must reach on_unhandled with the original frame"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tag", ["disconnect", "connect", "unhandled"])
+async def test_inherited_lifecycle_callbacks_are_not_peer_selectable(tag: str) -> None:
+    """Lifecycle callbacks inherited from a parent cannot be selected."""
+    r = InheritedLifecycleResource()
+    r.bind_default_hook_manager()
+    raw = msjson.encode({"type": tag, "payload": 1000})
+    await r.dispatch(DummyWS(), raw)
+    assert not r.lifecycle, (
+        f"an inherited lifecycle callback must not run for {tag!r}: {r.lifecycle}"
+    )
+    assert r.fallback == [raw], "an inherited reserved name must fall back"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tag", ["bye", "Bye", "bYe"])
+async def test_lifecycle_alias_is_not_peer_selectable(tag: str) -> None:
+    """An alias bound to a lifecycle callback stays unreachable."""
+    r = AliasedLifecycleResource()
+    r.bind_default_hook_manager()
+    raw = msjson.encode({"type": tag, "payload": 1000})
+    await r.dispatch(DummyWS(), raw)
+    assert not r.lifecycle, (
+        f"the on_bye alias must not invoke on_disconnect for {tag!r}: {r.lifecycle}"
+    )
+    assert r.fallback == [raw], "an aliased lifecycle callback must fall back"
+
+
+@pytest.mark.asyncio
+async def test_inherited_lifecycle_alias_is_not_peer_selectable() -> None:
+    """A child inherits the parent's alias without exposing it to peers."""
+    r = InheritedAliasLifecycleResource()
+    r.bind_default_hook_manager()
+    raw = msjson.encode({"type": "bye", "payload": 1000})
+    await r.dispatch(DummyWS(), raw)
+    assert not r.lifecycle, (
+        f"the inherited on_bye alias must not run on_disconnect: {r.lifecycle}"
+    )
+    assert r.fallback == [raw], "an inherited alias must fall back"
+
+
+@pytest.mark.asyncio
+async def test_reserved_tag_string_on_distinct_method_is_registered() -> None:
+    """A reserved tag stays legal when a different method handles it."""
+    r = DecoratedReservedTagResource()
+    r.bind_default_hook_manager()
+    raw = msjson.encode({"type": "disconnect", "payload": 1000})
+    await r.dispatch(DummyWS(), raw)
+    assert r.messages == [1000], (
+        f"the decorated handler must receive the payload: {r.messages}"
+    )
+    assert not r.lifecycle, (
+        f"the registered handler must not invoke on_disconnect: {r.lifecycle}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_punctuation_normalisation_still_resolves_handler() -> None:
+    """Non-alphanumeric tag characters normalise to underscores."""
+    r = PunctuationResource()
+    r.bind_default_hook_manager()
+    await r.dispatch(DummyWS(), msjson.encode({"type": "send.message", "payload": 7}))
+    assert r.seen == [7], "send.message should resolve to on_send_message"
+
+
+class DescriptorWrappedResource(WebSocketResource):
+    """Resource whose ``on_*`` attributes are descriptor-wrapped coroutines.
+
+    ``getattr_static`` returns the descriptor object rather than the function
+    for these, so none of them satisfies the coroutine test the conventional
+    dispatcher applies.
+    """
+
+    def __init__(self) -> None:
+        self.fallback: list[str | bytes] = []
+
+    @staticmethod
+    async def on_static(resource: object, ws: WebSocketLike, payload: object) -> None:
+        """Synchronous-attribute handler that must not be admitted."""
+
+    @classmethod
+    async def on_classm(cls, ws: WebSocketLike, payload: object) -> None:
+        """Class-bound handler that must not be admitted."""
+
+    @property
+    def on_prop(self) -> object:
+        """Descriptor that must not be run during class creation."""
+        msg = "a peer tag must never evaluate this property"
+        raise AssertionError(msg)
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record fallback messages."""
+        self.fallback.append(message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tag", ["static", "classm", "prop"])
+async def test_descriptor_wrapped_attributes_are_not_dispatchable(tag: str) -> None:
+    """Only a plain coroutine function is admitted to the allowlist."""
+    r = DescriptorWrappedResource()
+    r.bind_default_hook_manager()
+    raw = msjson.encode({"type": tag, "payload": None})
+    await r.dispatch(DummyWS(), raw)
+    assert r.fallback == [raw], (
+        f"a descriptor-wrapped attribute must fall back for {tag!r}: {r.fallback}"
+    )
+
+
+def test_conventional_registry_excludes_lifecycle_names() -> None:
+    """The class registry lists message names and never lifecycle names."""
+    names = LifecycleResource._conventional_handler_names
+    assert "on_ping" in names, "an ordinary conventional handler stays registered"
+    assert names.isdisjoint({"on_connect", "on_disconnect", "on_unhandled"}), (
+        f"lifecycle names must not be dispatchable: {sorted(names)}"
+    )
+    assert WebSocketResource._conventional_handler_names == frozenset(), (
+        "the base class must expose no conventional handlers"
+    )
 
 
 def test_state_defaults_to_empty_dict() -> None:
