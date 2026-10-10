@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
+import msgspec.json as msjson
 import pytest
 from pytest_bdd import given, scenario, then, when
 
@@ -49,14 +50,20 @@ class EchoResource(WebSocketResource):
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
-        """Handle the echo interaction for the simulator scenario."""
+        """Accept before the router starts its receive loop."""
         assert isinstance(ws, WebSocketSimulator), (
             "the harness must inject the simulator instance"
         )
-        payload = await ws.receive_json(dict)
+        return True
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Decode and acknowledge the frame delivered through dispatch."""
+        assert isinstance(ws, WebSocketSimulator), (
+            "the fixture must pass the active simulator to the handler"
+        )
+        payload = msjson.decode(message)
         self.received.append(payload)
         await ws.send_json({"type": "ack", "payload": payload})
-        return False
 
 
 @dc.dataclass(slots=True)

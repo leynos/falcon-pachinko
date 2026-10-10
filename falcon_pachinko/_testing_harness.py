@@ -5,7 +5,9 @@ from __future__ import annotations
 import dataclasses as dc
 from types import SimpleNamespace
 
-from .testing._common import _ORIGINAL_WS_RECEIVE_MSG, _LifecycleSocket
+import falcon
+
+from .testing._common import _LifecycleSocket
 from .testing.simulator import WebSocketSimulator
 
 
@@ -24,7 +26,7 @@ class _OriginalWebSocket(_LifecycleSocket):
     async def receive_media(  # ruff: ignore[no-self-use] - protocol needs an instance method
         self,
     ) -> object:
-        raise RuntimeError(_ORIGINAL_WS_RECEIVE_MSG)  # pragma: no cover - unused
+        raise falcon.WebSocketDisconnected(code=1000)  # pragma: no cover - unused
 
 
 class _HarnessSimulator(WebSocketSimulator):

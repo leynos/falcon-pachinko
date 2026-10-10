@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import typing as typ
 from contextlib import asynccontextmanager
 
+import falcon
 import msgspec.json as msjson
 
 from ._common import (
@@ -23,7 +25,15 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 
-class WebSocketSimulator(_LifecycleSocket):
+@dc.dataclass(frozen=True, slots=True)
+class _DisconnectMarker:
+    """Signal a peer disconnect through the simulator's inbound queue."""
+
+    code: int
+
+
+# The simulator API exposes focused queue and lifecycle controls.
+class WebSocketSimulator(_LifecycleSocket):  # ruff: ignore[too-many-public-methods]
     """In-memory :class:`WebSocketLike` implementation for hermetic tests."""
 
     def __init__(
@@ -35,6 +45,8 @@ class WebSocketSimulator(_LifecycleSocket):
         super().__init__()
         self._inbound = inbound or asyncio.Queue()
         self._outbound = outbound or asyncio.Queue()
+        self.lifecycle_event = asyncio.Event()
+        self._disconnect_code: int | None = None
         self._json_encoder = msjson.Encoder()
         self._default_decoder = msjson.Decoder()
         self._decoders: dict[type[object], msjson.Decoder] = {}
@@ -66,9 +78,27 @@ class WebSocketSimulator(_LifecycleSocket):
 
     async def receive_media(self) -> object:
         """Return the next inbound frame queued via :meth:`push_message`."""
+        if self._disconnect_code is not None:
+            raise falcon.WebSocketDisconnected(code=self._disconnect_code)
         message = await self._inbound.get()
+        if isinstance(message, _DisconnectMarker):
+            self._disconnect_code = message.code
+            await self.close(code=message.code)
+            raise falcon.WebSocketDisconnected(code=message.code)
         self.received_messages.append(message)
         return message
+
+    @typ.override
+    async def accept(self, subprotocol: str | None = None) -> None:
+        """Accept the simulated peer and wake lifecycle waiters."""
+        await super().accept(subprotocol=subprotocol)
+        self.lifecycle_event.set()
+
+    @typ.override
+    async def close(self, code: int = 1000) -> None:
+        """Close the simulated peer and wake lifecycle waiters."""
+        await super().close(code=code)
+        self.lifecycle_event.set()
 
     async def next_sent(self) -> object:
         """Await the next outbound frame emitted by the simulator."""
@@ -140,6 +170,10 @@ class WebSocketSimulator(_LifecycleSocket):
         """Queue ``payload`` as if it were received from the peer."""
         data = self._prepare_inbound_payload(payload, kind)
         await self._inbound.put(data)
+
+    async def push_disconnect(self, code: int = 1000) -> None:
+        """Queue a peer disconnect after any frames already in the queue."""
+        await self._inbound.put(_DisconnectMarker(code))
 
     def _prepare_inbound_payload(self, payload: object, kind: FrameKind) -> object:
         match kind:

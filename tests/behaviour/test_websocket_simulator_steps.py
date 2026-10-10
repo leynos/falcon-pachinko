@@ -28,17 +28,22 @@ class EchoResource(WebSocketResource):
         EchoResource.instances.append(self)
 
     async def on_connect(self, req: object, ws: object, **_: object) -> bool:
-        """Capture the simulator and record the first inbound message."""
+        """Capture the simulator before the router starts receiving frames."""
         assert isinstance(ws, WebSocketSimulator), (
             "the router must inject the simulator instance"
         )
         self.websocket = ws
-        raw = await ws.receive_media()
-        assert isinstance(raw, bytes), "push_json must queue an encoded JSON frame"
-        payload = msjson.decode(raw)
+        return True
+
+    async def on_unhandled(self, ws: object, message: str | bytes) -> None:
+        """Record the dispatched frame and acknowledge it."""
+        assert isinstance(ws, WebSocketSimulator), (
+            "the router must dispatch through the simulator instance"
+        )
+        assert isinstance(message, bytes), "push_json must queue an encoded JSON frame"
+        payload = msjson.decode(message)
         self.received.append(payload)
         await ws.send_media({"type": "ack"})
-        return False
 
 
 @dc.dataclass(slots=True)
@@ -89,6 +94,7 @@ def given_message(
 ) -> SimulatorScenario:
     """Queue a payload that the resource will consume during connect."""
     event_loop.run_until_complete(context.simulator.push_json({"type": "ping"}))
+    event_loop.run_until_complete(context.simulator.push_disconnect())
     return context
 
 

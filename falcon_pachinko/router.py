@@ -19,7 +19,10 @@ import threading
 import typing as typ
 
 import falcon
+import falcon.asgi
 
+from ._session import run_session
+from ._ws_media import install_raw_websocket_media_handlers
 from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
 
@@ -56,7 +59,10 @@ class _RequestLike(typ.Protocol):
 
 
 def _request_path_template(req: _RequestLike) -> str:
-    """Return the mounted path template, defaulting like Falcon does."""
+    """Return Falcon's selected route template, with a legacy fallback."""
+    template = getattr(req, "uri_template", None)
+    if template:
+        return template
     try:
         return req.path_template
     except AttributeError:
@@ -216,6 +222,39 @@ class WebSocketRouter:
             for raw in self._raw:
                 self._compile_and_store_route(raw.canonical, raw.factory)
 
+    def attach(self, app: object, prefix: str) -> None:
+        """Mount this router on a real Falcon ASGI ``app``.
+
+        Falcon's normal route table serves the WebSocket responder. The exact
+        mount route handles a connection at ``prefix`` and the path converter
+        routes descendants through the same responder. ``attach`` also
+        configures raw text and binary media handlers so ``receive_media()``
+        returns frames for :meth:`WebSocketResource.dispatch`.
+
+        Raises
+        ------
+        TypeError
+            If ``app`` is not a Falcon ASGI application.
+        """
+        if not isinstance(app, falcon.asgi.App):
+            msg = "attach() requires a falcon.asgi.App instance"
+            raise TypeError(msg)
+
+        self.mount(prefix)
+        media_handlers = typ.cast(
+            "cabc.MutableMapping[falcon.WebSocketPayloadType, object]",
+            app.ws_options.media_handlers,
+        )
+        install_raw_websocket_media_handlers(media_handlers)
+
+        canonical = self._mount_prefix
+        if canonical == "/":
+            app.add_route("/{pachinko_path:path}", self)
+            return
+
+        app.add_route(canonical, self)
+        app.add_route(f"{canonical}/{{pachinko_path:path}}", self)
+
     def add_route(
         self,
         path: str,
@@ -284,27 +323,34 @@ class WebSocketRouter:
         return _normalize_path(template.format(**params))
 
     async def on_websocket(
-        self, req: _RequestLike, ws: WebSocketLike
+        self, req: _RequestLike, ws: WebSocketLike, **params: object
     ) -> None:  # pragma: no cover - simple wrapper
         """Dispatch the connection to the first matching route.
 
-        ``req.path_template`` is assumed to be a prefix of ``req.path``. If the
-        assumption fails, :class:`falcon.HTTPNotFound` is raised to signal that
-        the requested path does not map to this router's mount point.
+        Falcon passes parameters captured by its path converter as keyword
+        arguments. They are ignored because the router re-matches ``req.path``
+        against its own route table, preserving nested-resource and hook
+        parameter handling. The selected Falcon template may be either the
+        mount itself or its descendant catch-all route.
 
         Raises
         ------
         falcon.HTTPNotFound
-            If ``req.path_template`` does not match this router's mount point,
+            If the Falcon route template does not match this router's mount point,
             or if no registered route matches ``req.path``.
         """
-        # Handle missing or empty path_template by defaulting to root "/"
-        prefix = _request_path_template(req).rstrip("/") or "/"
-        if prefix != self._mount_prefix:
-            msg = (
-                f"path_template '{prefix}' does not match router mount "
-                f"'{self._mount_prefix}'"
-            )
+        del params
+        template = _request_path_template(req).rstrip("/") or "/"
+        mount = self._mount_prefix.rstrip("/") or "/"
+        is_mount = template == mount
+        descendant_template = (
+            "/{pachinko_path:path}"
+            if mount == "/"
+            else f"{mount}/{{pachinko_path:path}}"
+        )
+        is_descendant_template = template == descendant_template
+        if not is_mount and not is_descendant_template:
+            msg = f"route template '{template}' does not match router mount '{mount}'"
             raise falcon.HTTPNotFound(description=msg)
 
         # Routes are tested in the order they were added. Register more
@@ -359,7 +405,9 @@ class WebSocketRouter:
             ws_for_cleanup = dispatch.ws
             return await self._process_route_resolution(dispatch)
         except Exception as exc:
-            if not getattr(exc, "_pachinko_factory_closed", False):
+            if not getattr(
+                exc, "_pachinko_factory_closed", False
+            ) and not self._is_socket_closed(ws_for_cleanup):
                 with contextlib.suppress(Exception):
                     await ws_for_cleanup.close()
             raise
@@ -554,12 +602,15 @@ class WebSocketRouter:
         should_accept = await self._execute_resource_handler(
             resource, dispatch, context, hook_manager
         )
-        return await self._finalize_connection(
+        await self._finalize_connection(
             dispatch.ws,
             should_accept=should_accept,
             context=context,
             hook_manager=hook_manager,
         )
+        if should_accept and not self._is_socket_closed(dispatch.ws):
+            await self._run_session(resource, dispatch.ws)
+        return True
 
     @staticmethod
     async def _prepare_connection_context(
@@ -610,10 +661,31 @@ class WebSocketRouter:
         context.result = should_accept
         await hook_manager.notify_after_connect(context)
         if not should_accept:
-            await ws.close()
+            if not WebSocketRouter._is_socket_closed(ws):
+                await ws.close()
             return True
-        await ws.accept()
+        if WebSocketRouter._is_socket_unaccepted(ws):
+            await ws.accept()
         return True
+
+    @staticmethod
+    def _is_socket_closed(ws: WebSocketLike) -> bool:
+        """Return whether ``ws`` has already closed or disconnected."""
+        closed = getattr(ws, "closed", False)
+        return bool(closed)
+
+    @staticmethod
+    def _is_socket_unaccepted(ws: WebSocketLike) -> bool:
+        """Return whether the handshake still needs router-owned acceptance."""
+        unaccepted = getattr(ws, "unaccepted", None)
+        if isinstance(unaccepted, bool):
+            return unaccepted
+        return not bool(getattr(ws, "accepted", False))
+
+    @staticmethod
+    async def _run_session(resource: WebSocketResource, ws: WebSocketLike) -> None:
+        """Run one persistent session through the responder lifecycle."""
+        await run_session(resource, ws)
 
 
 class _RouteRegistrationService:
