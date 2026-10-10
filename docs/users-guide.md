@@ -83,6 +83,23 @@ def add_route(
   router.add_route("/p", functools.partial(MyResource, name="x"), name="route")
   ```
 
+### Route template syntax
+
+Route templates match their literal text exactly. Regular-expression
+metacharacters such as `.`, `+`, brackets, and parentheses have no special
+meaning in a route. A parameter written as `{name}` captures one or more
+non-`/` characters; parameter names must be valid Python identifiers. A path
+segment may contain one parameter or an adjacent pair at its end. Other
+multiple-parameter layouts are rejected to bound regex matching work.
+
+Braces are reserved for parameters. Empty, unmatched, nested, or doubled
+braces, invalid names, duplicate parameter names, and ambiguous multiple-
+parameter layouts raise `ValueError` during route or subroute registration. A
+conflict between a mount-prefix parameter and a route parameter raises
+`ValueError` when the router is mounted. Full routes and nested subroutes are
+checked in registration order, so the first matching registration selects the
+resource and its hooks.
+
 ## 3. Resource Lifecycle & State
 
 - `on_connect(req, ws, **params) -> bool | None`

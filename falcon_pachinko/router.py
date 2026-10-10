@@ -14,12 +14,12 @@ import contextlib
 import dataclasses as dc
 import functools
 import inspect
-import re
 import threading
 import typing as typ
 
 import falcon
 
+from ._uri_template import _compile_prefix_template, compile_uri_template
 from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
 
@@ -28,6 +28,9 @@ from .protocols import WebSocketLike
 # that raises NameError when introspected would be a trap for runtime
 # consumers, so the name it references has to resolve at runtime too.
 from .resource import WebSocketResource
+
+if typ.TYPE_CHECKING:
+    import re
 
 __all__ = ["ResourceFactory", "SimulatorFactory", "WebSocketRouter"]
 
@@ -61,36 +64,6 @@ def _request_path_template(req: _RequestLike) -> str:
         return req.path_template
     except AttributeError:
         return ""
-
-
-def _replace_param_in_template(match: re.Match[str], template: str) -> str:
-    """Return a regex group for ``match`` ensuring the param is non-empty."""
-    param_name = match.group(1)
-    if not param_name:
-        msg = f"Empty parameter name in template: {template}"
-        raise ValueError(msg)
-    return f"(?P<{param_name}>[^/]+)"
-
-
-def _compile_template_with_suffix(template: str, suffix: str) -> re.Pattern[str]:
-    """Compile ``template`` with ``suffix`` appended."""
-    pattern = re.sub(
-        r"{([^}]*)}",
-        functools.partial(_replace_param_in_template, template=template),
-        template.rstrip("/"),
-    )
-    pattern = f"^{pattern}{suffix}"
-    return re.compile(pattern)
-
-
-def compile_uri_template(template: str) -> re.Pattern[str]:
-    """Compile a simple URI template into a regex pattern."""
-    return _compile_template_with_suffix(template, "/?$")
-
-
-def _compile_prefix_template(template: str) -> re.Pattern[str]:
-    """Compile ``template`` to match a path prefix."""
-    return _compile_template_with_suffix(template, "(?:/|$)")
 
 
 def _normalize_path(path: str) -> str:
@@ -171,33 +144,35 @@ class WebSocketRouter:
         self._resource_factory = resource_factory or (lambda factory: factory())
         self._simulator_factory = simulator_factory
 
-    def _compile_and_store_route(
-        self,
+    @staticmethod
+    def _compile_route(
         canonical: str,
         factory: cabc.Callable[..., WebSocketResource],
-    ) -> None:
-        """Compile ``canonical`` with the mount prefix and store it.
+        mount_prefix: str,
+        existing_routes: cabc.Iterable[WebSocketRouter._CompiledRoute],
+    ) -> WebSocketRouter._CompiledRoute:
+        """Compile one route without mutating router registration state.
 
-        This helper mutates :attr:`_routes` and therefore assumes the caller
-        already holds :attr:`_mount_lock`. The router relies on this lock to
-        guard all mount-related state, preventing race conditions when routes
-        are added concurrently with mounting.
+        Returns
+        -------
+        WebSocketRouter._CompiledRoute
+            The compiled full and prefix patterns for the route.
 
         Raises
         ------
         ValueError
             If an identical pattern is already registered.
         """
-        base = self._mount_prefix.rstrip("/")
+        base = mount_prefix.rstrip("/")
         full = f"{base}{canonical}"
         pattern = compile_uri_template(full)
         prefix = _compile_prefix_template(full)
-        for existing in self._routes:
+        for existing in existing_routes:
             if existing.pattern.pattern == pattern.pattern:
                 msg = f"route path {full!r} already registered"
                 raise ValueError(msg)
 
-        self._routes.append(WebSocketRouter._CompiledRoute(prefix, pattern, factory))
+        return WebSocketRouter._CompiledRoute(prefix, pattern, factory)
 
     def mount(self, prefix: str) -> None:
         """Compile stored routes with the given mount ``prefix``."""
@@ -212,9 +187,19 @@ class WebSocketRouter:
                 msg = f"router already mounted at '{self._mount_prefix}'"
                 raise RuntimeError(msg)
 
-            self._mount_prefix = canonical
+            compiled_routes: list[WebSocketRouter._CompiledRoute] = []
             for raw in self._raw:
-                self._compile_and_store_route(raw.canonical, raw.factory)
+                compiled_routes.append(
+                    self._compile_route(
+                        raw.canonical,
+                        raw.factory,
+                        canonical,
+                        self._routes + compiled_routes,
+                    )
+                )
+
+            self._mount_prefix = canonical
+            self._routes.extend(compiled_routes)
 
     def add_route(
         self,
@@ -252,11 +237,16 @@ class WebSocketRouter:
 
         with self._mount_lock:
             self._registration.check_conflicts(canonical, name, path=path)
+            compiled_route: WebSocketRouter._CompiledRoute | None = None
+            if self._mount_prefix:
+                compiled_route = self._compile_route(
+                    canonical, factory, self._mount_prefix, self._routes
+                )
             self._raw.append(WebSocketRouter._RawRoute(path, canonical, factory))
             if name:
                 self._names[name] = path
-            if self._mount_prefix:
-                self._compile_and_store_route(canonical, factory)
+            if compiled_route is not None:
+                self._routes.append(compiled_route)
 
     @staticmethod
     def _validate_resource_type(

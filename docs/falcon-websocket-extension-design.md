@@ -982,6 +982,13 @@ registered routes, parsing any path parameters (like `{room_id}`),
 instantiating the correct `WebSocketResource` with its specific initialization
 arguments, and handing off control of the connection.
 
+**Current URI-template contract:** Full, prefix, and nested route matchers use
+the shared compiler, which escapes literal text and validates unique Python
+identifier placeholders before registration. Parameters capture non-empty path
+segments; malformed templates fail during registration. Route matching emits no
+diagnostics from request paths or payloads, so the payload-safe diagnostic
+helpers used by message dispatch and hooks do not belong in the matcher.
+
 #### 5.1.3. Router Flow and Structure
 
 The diagrams below illustrate the flow of a WebSocket connection through the

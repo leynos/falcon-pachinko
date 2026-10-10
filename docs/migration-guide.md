@@ -120,6 +120,25 @@ app.ws_connection_manager = WebSocketConnectionManager(backend=MyBackend(...))
 - Replace `add_websocket_worker` with `WorkerController` and `@app.lifespan`
   hooks to start/stop workers.
 
+### Route Template Compatibility
+
+Before an upgrade, applications should audit configured templates whose literal
+path text contains regular-expression metacharacters such as `.`, `+`, `?`,
+`*`, brackets, parentheses, `^`, `$`, or `|`. Route matching now treats text
+outside placeholders as literal, so a route containing `child.v1` matches that
+exact text rather than regex alternatives such as `child/v1`. Applications that
+relied on regex expansion should update their configuration; arbitrary
+regex-shaped templates were not a supported route syntax.
+
+Placeholders use the form `{name}`, where `name` is a unique Python identifier.
+Each captures one or more non-slash characters. A path segment can contain one
+placeholder or a terminal adjacent pair such as `{left}{right}`; other
+multi-placeholder layouts in one segment are rejected as ambiguous. Braces are
+reserved for placeholders, so unmatched or nested braces are invalid. Invalid
+names, repeated names, ambiguous layouts, and a placeholder name repeated
+between a mount prefix and its route raise `ValueError` during route
+registration or mounting, before the route can handle a connection.
+
 ## Testing Checklist
 
 - **Unit tests:** cover resource constructors, state handling, and any custom

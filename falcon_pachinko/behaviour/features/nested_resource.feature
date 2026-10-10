@@ -5,6 +5,11 @@ Feature: Nested resource composition
     When a client connects to "/parents/42/child"
     Then the child resource should receive params {"pid": "42"}
 
+  Scenario: Competing literal siblings select their matching resource
+    Given a router with competing literal child resources
+    When a client connects to "/parents/42/child.v1"
+    Then the dotted child resource should be selected
+
   Scenario: Unmatched nested path returns 404
     Given a router with a nested child resource
     When a client connects to "/parents/42/missing"
