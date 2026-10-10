@@ -148,27 +148,28 @@ duplication fix would require a public API or runtime-dependency change.
 
 ## Progress and decision log
 
-Latest status: PR #225 remains open, ready for review, and unmerged. GitHub's
-published head is `ed5819c486b467d732874998f793b1ef657d4c79` on the original
-base `554105de7c9a3f7c413d31a36125271ad759f164`; the local branch has been
-rebased onto current `main` at `f6e637e48a1f862e8dfabb26ea5cda4cbec3279a`, but
-that candidate is not yet committed or published. The published head's latest
-CI run `38090679914` failed the duplication step because the main-branch
-URI-template extraction moved a named family and the ranked report surfaced two
-diagnostics fragments. CodeScene result `7897226` passed for that published
-head; this is not a result for the rebased candidate. On the local candidate,
-the full sequential gates now pass: `make lint` including Ruff, both Pylint
-passes and the duplication scan with four reasoned exceptions; `make typecheck`;
-`make test` (655 passed, 2 skipped, 19 warnings); and `make duplication-test`
-(172 passed, 3 snapshots, no skips). Formatting, spelling, Markdown and Mermaid
-checks also pass. The first Markdown check reported two table-alignment errors
-after the latest wording edit; `make fmt` corrected the table, and the final
-`make check-fmt`, `make markdownlint` (0 errors), and `make nixie` passed.
-Commit and publication, hosted checks, current-head CodeRabbit review and
-documentation-thread reconciliation, and the ExecPlan completeness assessment
-remain pending. The latest published CodeRabbit review has two documentation
-comments and the aggregate review decision is `CHANGES_REQUESTED`; no
-assessment clearance or merge is claimed.
+Status recorded after the rebase adjudication was committed and pushed as
+`0c271df2ee53e44d6e9218646260745e0ecb7665`: PR #225 is open, ready for review,
+unmerged, and based on current `main` at
+`f6e637e48a1f862e8dfabb26ea5cda4cbec3279a`. The earlier published head's CI run
+`38090679914` had failed the duplication step after main moved the URI compiler
+and the ranked report surfaced two diagnostics fragments; both families were
+inspected, adjudicated, and the blocking gate now passes with four reasoned
+exceptions. The full sequential local gates passed on the rebased candidate:
+`make lint` including Ruff, both Pylint passes and the duplication scan;
+`make typecheck`; `make test` (655 passed, 2 skipped, 19 warnings);
+`make duplication-test` (172 passed, 3 snapshots, no skips); and formatting,
+spelling, Markdown and Mermaid checks. The first Markdown check found two
+table-alignment errors after the last wording change; `make fmt` corrected them
+and final `make check-fmt`, `make markdownlint` (0 errors), and `make nixie`
+passed. Hosted CI run `38092077952`, CodeScene result `7897343`, and Gecko
+Security Review passed for that candidate. CodeRabbit's automatic check still
+says `Review paused`; its latest formal review is from an older head and the
+aggregate decision remains `CHANGES_REQUESTED`, though its two documentation
+findings are now addressed. A formal current-head review and ExecPlan
+completeness assessment have not yet been requested or cleared. This
+progress-record edit is documentation-only and will trigger fresh hosted checks
+when published. No approval or merge is claimed.
 
 - Confirmed the reference commit exists locally in an episodic worktree and
   consulted the specified ADR, merged gate modules and v0.20.0 nose usage,
