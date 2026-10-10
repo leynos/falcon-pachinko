@@ -396,9 +396,9 @@ async def test_runtime_assigned_mixed_tag_union_surfaces_the_error() -> None:
     # check, which is the point of the regression.
     r.schema = MixedTagUnion  # ty: ignore[invalid-assignment]  # deliberately bypasses validation
     raw = msjson.encode(IntegerTaggedMessage(value="eleven"))
-    with pytest.raises(TypeError, match="both .int. and .str. tags"):
+    with pytest.raises(TypeError, match=r"both .int. and .str. tags"):
         await r.dispatch(DummyWS(), raw)
-    assert r.events == [], "an invalid schema must not be reported as a bad frame"
+    assert not r.events, "an invalid schema must not be reported as a bad frame"
 
 
 @pytest.mark.asyncio
