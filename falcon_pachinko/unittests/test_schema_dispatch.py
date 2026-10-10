@@ -1,5 +1,6 @@
 """Tests for schema-driven dispatch using msgspec tagged unions."""
 
+import asyncio
 import re
 import typing as typ
 
@@ -34,6 +35,36 @@ class Untagged(ms.Struct):
 
     value: str
 
+
+class ZeroTagMessage(ms.Struct, tag=0):
+    """Message structure whose tag is a falsy, but valid, integer."""
+
+    value: str
+
+
+class EmptyTagMessage(ms.Struct, tag=""):
+    """Message structure whose tag is a falsy, but valid, empty string."""
+
+    value: str
+
+
+class IntegerTaggedMessage(ms.Struct, tag=11):
+    """Message structure with an integer tag, for building mixed-kind schemas."""
+
+    value: str
+
+
+class StringTaggedMessage(ms.Struct, tag="eleven"):
+    """Message structure with a string tag, for building mixed-kind schemas."""
+
+    value: str
+
+
+# msgspec accepts either tag kind, but rejects a union combining them. Nothing
+# validates this assignment: only ``schema`` attributes declared on a
+# ``WebSocketResource`` subclass are checked, which is what the runtime
+# assignment regression below relies on.
+MixedTagUnion = IntegerTaggedMessage | StringTaggedMessage
 
 MessageUnion = Join | Leave
 
@@ -113,6 +144,55 @@ class UntaggedFallbackResource(WebSocketResource):
     async def on_none(self, ws: WebSocketLike, payload: Untagged) -> None:
         """Record the handler that would match a stringified ``None`` tag."""
         self.events.append(("on_none", payload.value))
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record fallback messages."""
+        self.events.append(("raw", message))
+
+
+class MixedTagFallbackResource(WebSocketResource):
+    """Resource whose schema mixes tag kinds, applied at runtime.
+
+    No ``schema`` attribute is declared here, so class creation performs no
+    validation. The mixed union is assigned to the instance in the test
+    instead, mirroring the runtime assignment that defeats the eager check.
+    """
+
+    def __init__(self) -> None:
+        """Initialize with an empty events list."""
+        self.events: list[tuple[str, str | bytes]] = []
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record fallback messages."""
+        self.events.append(("raw", message))
+
+
+class ZeroTagResource(WebSocketResource):
+    """Resource with a conventional handler for a falsy integer tag."""
+
+    schema = ZeroTagMessage
+
+    def __init__(self) -> None:
+        """Initialize with an empty events list."""
+        self.events: list[tuple[str, str | bytes]] = []
+
+    async def on_0(self, ws: WebSocketLike, payload: ZeroTagMessage) -> None:
+        """Record the conventional handler for the zeroth tag."""
+        self.events.append(("on_0", payload.value))
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record fallback messages."""
+        self.events.append(("raw", message))
+
+
+class EmptyTagResource(WebSocketResource):
+    """Resource with a conventional handler for a falsy empty-string tag."""
+
+    schema = EmptyTagMessage
+
+    def __init__(self) -> None:
+        """Initialize with an empty events list."""
+        self.events: list[tuple[str, str | bytes]] = []
 
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Record fallback messages."""
@@ -237,4 +317,108 @@ def test_duplicate_payload_type_raises() -> None:
     assert "Payload" in str(exc.value), "error should name the duplicated payload type"
     assert "BadResource.h2" in str(exc.value), (
         "error should name the second handler that caused the duplicate"
+    )
+
+
+def test_mixed_tag_kinds_raise() -> None:
+    """A schema must not mix integer-tagged and string-tagged Structs.
+
+    msgspec rejects such a union, but only when it first derives the type at
+    decode time, so it must be caught at class creation instead.
+    """
+    with pytest.raises(
+        TypeError, match="schema tags must all be strings or all be integers"
+    ):
+
+        class BadResource(WebSocketResource):
+            schema = IntegerTaggedMessage | StringTaggedMessage
+
+
+def test_class_name_sentinel_mixed_with_integer_tag_raises() -> None:
+    """``tag=True`` supplies a string tag, so it cannot mix with integer tags."""
+
+    class ClassNameTagged(ms.Struct, tag=True):
+        pass
+
+    with pytest.raises(
+        TypeError, match="schema tags must all be strings or all be integers"
+    ):
+
+        class BadResource(WebSocketResource):
+            schema = ClassNameTagged | IntegerTaggedMessage
+
+
+def test_homogeneous_integer_tags_are_accepted() -> None:
+    """An all-integer tag schema is valid and still dispatches conventionally."""
+
+    class Peer(ms.Struct, tag=12):
+        value: str
+
+    class Resource(WebSocketResource):
+        schema = IntegerMessage | Peer
+
+        def __init__(self) -> None:
+            self.events: list[tuple[str, str | bytes]] = []
+
+        async def on_1(self, ws: WebSocketLike, payload: IntegerMessage) -> None:
+            """Record the conventional integer-tag handler event."""
+            self.events.append(("on_1", payload.value))
+
+        async def on_12(self, ws: WebSocketLike, payload: Peer) -> None:
+            """Record the second conventional integer-tag handler event."""
+            self.events.append(("on_12", payload.value))
+
+        async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+            """Record fallback messages."""
+            self.events.append(("raw", message))
+
+    r = Resource()
+    r.bind_default_hook_manager()
+    raw = msjson.encode(Peer(value="peer"))
+    asyncio.run(r.dispatch(DummyWS(), raw))
+    assert r.events == [("on_12", "peer")], (
+        "homogeneous integer-tag schemas must validate and dispatch"
+    )
+
+
+@pytest.mark.asyncio
+async def test_runtime_assigned_mixed_tag_union_falls_back() -> None:
+    """A mixed union assigned after class creation must reach ``on_unhandled``.
+
+    Class-creation validation cannot see this schema, so the dispatcher itself
+    has to treat msgspec's ``TypeError`` as a decode failure rather than
+    letting it escape and break the receive loop.
+    """
+    r = MixedTagFallbackResource()
+    r.bind_default_hook_manager()
+    # Assigning the invalid schema after class creation bypasses the eager
+    # check, which is the point of the regression.
+    r.schema = MixedTagUnion  # ty: ignore[invalid-assignment]  # deliberately bypasses validation
+    raw = msjson.encode(IntegerTaggedMessage(value="eleven"))
+    await r.dispatch(DummyWS(), raw)
+    assert r.events == [("raw", raw)], (
+        "a mixed tag union must fall back instead of raising TypeError"
+    )
+
+
+@pytest.mark.asyncio
+async def test_zero_tag_dispatches_to_conventional_handler() -> None:
+    """A falsy integer tag still reaches its conventional handler."""
+    r = ZeroTagResource()
+    r.bind_default_hook_manager()
+    await r.dispatch(DummyWS(), msjson.encode(ZeroTagMessage(value="zero")))
+    assert r.events == [("on_0", "zero")], (
+        "tag=0 must dispatch rather than being mistaken for an absent tag"
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_string_tag_falls_back_without_conventional_handler() -> None:
+    """An empty-string tag has no conventional handler but must not raise."""
+    r = EmptyTagResource()
+    r.bind_default_hook_manager()
+    raw = msjson.encode(EmptyTagMessage(value="empty"))
+    await r.dispatch(DummyWS(), raw)
+    assert r.events == [("raw", raw)], (
+        "tag='' must fall back cleanly rather than raising TypeError"
     )
