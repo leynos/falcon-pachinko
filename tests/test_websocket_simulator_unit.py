@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
+import falcon
 import msgspec.json as msjson
 import pytest
 from hypothesis import example, given
@@ -109,3 +110,47 @@ async def test_pending_counts_reflect_queue_sizes() -> None:
 
     assert simulator.pending_inbound() == 1, "one inbound frame must be queued"
     assert simulator.pending_outbound() == 1, "one outbound frame must be queued"
+
+
+@pytest.mark.asyncio
+async def test_close_wakes_a_blocked_receive_with_disconnect_code() -> None:
+    """Closing the simulator releases a task waiting for its next frame."""
+    simulator = WebSocketSimulator()
+    pending_receive = asyncio.create_task(simulator.receive_media())
+    await asyncio.sleep(0)
+
+    await simulator.close(code=4001)
+
+    with pytest.raises(falcon.WebSocketDisconnected) as caught:
+        await asyncio.wait_for(pending_receive, timeout=1)
+    assert caught.value.code == 4001, "the wake-up must preserve the close code"
+
+
+@pytest.mark.asyncio
+async def test_receive_after_close_raises_disconnect() -> None:
+    """Later receives report the already-recorded close code."""
+    simulator = WebSocketSimulator()
+    await simulator.close(code=4002)
+
+    with pytest.raises(falcon.WebSocketDisconnected) as caught:
+        await simulator.receive_text()
+    assert caught.value.code == 4002, "closed sockets must keep reporting their code"
+
+
+@pytest.mark.asyncio
+async def test_queued_frames_are_delivered_before_disconnect() -> None:
+    """Frames queued before close are drained before the disconnect sentinel."""
+    simulator = WebSocketSimulator()
+    await simulator.push_text("first")
+    await simulator.push_bytes(b"second")
+    await simulator.close(code=4003)
+
+    assert await simulator.receive_text() == "first", (
+        "the first queued frame must be delivered"
+    )
+    assert await simulator.receive_bytes() == b"second", (
+        "the second queued frame must be delivered"
+    )
+    with pytest.raises(falcon.WebSocketDisconnected) as caught:
+        await simulator.receive_media()
+    assert caught.value.code == 4003, "disconnect follows the queued frames"

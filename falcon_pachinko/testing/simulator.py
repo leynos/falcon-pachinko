@@ -6,10 +6,12 @@ import asyncio
 import typing as typ
 from contextlib import asynccontextmanager
 
+import falcon
 import msgspec.json as msjson
 
 from ._common import (
     _BINARY_PAYLOAD_REQUIRED_MSG,
+    _CLOSED_SENTINEL,
     _EXPECTED_BYTES_MSG,
     _EXPECTED_TEXT_MSG,
     _FAILED_JSON_DECODE_MSG,
@@ -64,9 +66,19 @@ class WebSocketSimulator(_LifecycleSocket):
         await self._outbound.put(data)
         self.sent_messages.append(data)
 
+    async def close(self, code: int = 1000) -> None:
+        """Close the socket and wake any pending receive operation."""
+        if self.closed:
+            return
+        await super().close(code)
+        self._inbound.put_nowait(_CLOSED_SENTINEL)
+
     async def receive_media(self) -> object:
         """Return the next inbound frame queued via :meth:`push_message`."""
         message = await self._inbound.get()
+        if message is _CLOSED_SENTINEL:
+            self._inbound.put_nowait(_CLOSED_SENTINEL)
+            raise falcon.WebSocketDisconnected(self.close_code)
         self.received_messages.append(message)
         return message
 
@@ -138,6 +150,8 @@ class WebSocketSimulator(_LifecycleSocket):
 
     async def push_message(self, payload: object, *, kind: FrameKind = "json") -> None:
         """Queue ``payload`` as if it were received from the peer."""
+        if self.closed:
+            raise falcon.WebSocketDisconnected(self.close_code)
         data = self._prepare_inbound_payload(payload, kind)
         await self._inbound.put(data)
 

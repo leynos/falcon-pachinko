@@ -204,10 +204,10 @@ class WebSocketResource:
     async def on_connect(  # ruff: ignore[no-self-use] - overridable hook; subclasses use ``self``
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
-        """Decide whether the connection should be accepted after handshake.
+        """Decide whether the router should accept the WebSocket connection.
 
-        Called after the WebSocket handshake is complete to determine
-        acceptance.
+        The router calls this during connection setup. The ``after_connect``
+        hooks run after this method and before the router calls ``accept()``.
 
         Parameters
         ----------
@@ -226,7 +226,13 @@ class WebSocketResource:
         return True
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
-        """Handle cleanup or custom logic when the connection is closed.
+        """Handle cleanup after an accepted session ends.
+
+        The router calls this after the ``before_disconnect`` hooks for a
+        peer disconnect, cancellation, or unexpected session failure. It
+        passes the peer close code when available, 1001 for cancellation, and
+        1011 when receive or handler execution fails. A rejected connection
+        never starts a session and does not call this method.
 
         Parameters
         ----------
