@@ -25,6 +25,7 @@ from falcon_pachinko import (
 from falcon_pachinko.exceptions import (
     DuplicateHandlerRegistrationError,
     HandlerSignatureError,
+    ReservedHandlerRegistrationError,
 )
 from falcon_pachinko.handlers import get_payload_type
 from falcon_pachinko.unittests.helpers import DummyWS
@@ -141,6 +142,91 @@ def test_ambiguous_payload_param_raises() -> None:
                 first: int,
                 second: str,
             ) -> None: ...
+
+
+def test_decorating_lifecycle_callback_is_rejected() -> None:
+    """A decorated lifecycle callback cannot be registered for a tag.
+
+    Registering ``on_disconnect`` would put a lifecycle callback in the
+    peer-reachable registry, which is the hole this guards.
+    """
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_disconnect"):
+
+        class DecoratedDisconnect(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
+            WebSocketResource
+        ):
+            @handles_message("disconnect")
+            async def on_disconnect(
+                self, ws: WebSocketLike, payload: object
+            ) -> None: ...
+
+
+def test_decorating_lifecycle_name_under_unrelated_tag_is_rejected() -> None:
+    """The reserved name, not the tag, is what rejects the registration.
+
+    The signature is deliberately handler-shaped here so the reserved-name
+    check is the one under test; ``on_connect``'s real lifecycle signature is
+    rejected earlier by the decorator's own signature validation.
+    """
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_connect"):
+
+        class DecoratedConnect(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
+            WebSocketResource
+        ):
+            @handles_message("anything")
+            async def on_connect(self, ws: WebSocketLike, payload: object) -> None: ...
+
+
+def test_decorating_inherited_lifecycle_callback_is_rejected() -> None:
+    """A subclass cannot re-register a lifecycle callback it inherits."""
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_disconnect"):
+
+        class DecoratedInheritedDisconnect(LifecycleParent):  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
+            @handles_message("bye")
+            async def on_disconnect(
+                self, ws: WebSocketLike, payload: object
+            ) -> None: ...
+
+
+def test_add_handler_rejects_lifecycle_callback() -> None:
+    """``add_handler`` refuses a callback that implements a lifecycle method."""
+
+    class ManualResource(WebSocketResource):
+        """Resource used to exercise manual registration."""
+
+        async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+            """Stand in for the lifecycle callback under test."""
+
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_disconnect"):
+        ManualResource.add_handler("disconnect", ManualResource.on_disconnect)
+
+
+def test_add_handler_accepts_ordinary_handler() -> None:
+    """An ordinary coroutine remains registrable through ``add_handler``."""
+
+    class ManualResource(WebSocketResource):
+        """Resource used to exercise manual registration."""
+
+        async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+            """Stand in for the lifecycle callback under test."""
+
+    async def handle_note(
+        self: ManualResource, ws: WebSocketLike, payload: object
+    ) -> None:
+        """Stand in for an application message handler."""
+
+    ManualResource.add_handler("disconnect", handle_note, payload_type=None)
+
+    assert ManualResource.handlers["disconnect"].handler is handle_note, (
+        "an ordinary handler stays registrable under a reserved tag string"
+    )
+
+
+class LifecycleParent(WebSocketResource):
+    """Parent resource supplying a lifecycle callback to its children."""
+
+    async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+        """Stand in for the lifecycle callback under test."""
 
 
 class ParentResource(WebSocketResource):
