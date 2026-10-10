@@ -144,8 +144,13 @@ class ChatResource(WebSocketResource):
         await ws.send_media({"type": "joined", "room": payload.room})
 ```
 
-- Messages are decoded with `msgspec`; unknown tags fall back to
-  `on_unhandled(self, ws, raw)` when defined.
+- Messages are decoded with `msgspec`.
+- Registered `@handles_message` handlers match by payload type and take
+  precedence over conventional handlers.
+- Conventional handlers use `on_<snake_case(str(tag))>`:
+  `tag="sendMessage"` maps to `on_send_message`, and `tag=1` maps to `on_1`.
+- Messages without a matching handler fall back to
+  `on_unhandled(self, ws, raw)`.
 - The decorator supports `strict=False` to allow extra fields when required.
 
 The stable import path is `from falcon_pachinko.utils import ValidationError`.

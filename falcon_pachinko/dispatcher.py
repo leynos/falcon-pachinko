@@ -98,7 +98,11 @@ async def dispatch(
 async def dispatch_with_schema(
     resource: WebSocketResource, ws: WebSocketLike, raw: str | bytes
 ) -> None:
-    """Decode and dispatch ``raw`` using ``resource.schema``."""
+    """Decode and dispatch ``raw`` using ``resource.schema``.
+
+    Non-``None`` tags are converted with ``str()`` for conventional handler
+    lookup; ``None`` tags fall back to ``on_unhandled``.
+    """
     try:
         message = msjson.decode(raw, type=resource.schema)
     except (ms.DecodeError, ms.ValidationError):
@@ -109,8 +113,9 @@ async def dispatch_with_schema(
     if not entry:
         info = msinspect.type_info(type(message))
         tag = info.tag if isinstance(info, msinspect.StructType) else None
+        # msgspec permits integer tags; conventional lookup uses strings.
         conv = (
-            find_conventional_handler(resource, tag) if isinstance(tag, str) else None
+            find_conventional_handler(resource, str(tag)) if tag is not None else None
         )
         if conv is None:
             await resource.on_unhandled(ws, raw)
