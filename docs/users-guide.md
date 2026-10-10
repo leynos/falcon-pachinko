@@ -169,8 +169,8 @@ callback runs. So `{"type": "disconnect", "payload": 1000}` cannot invoke
 connection-scoped state — while the transport is still connected, however the
 tag is spelled or cased.
 
-Registration is closed on the same terms. Registering a lifecycle callback as
-a message handler, whether by `@handles_message` or `add_handler`, raises
+Registration is closed on the same terms. Registering a lifecycle callback as a
+message handler, whether by `@handles_message` or `add_handler`, raises
 `ReservedHandlerRegistrationError`. The reserved *tag* string itself stays
 legal: a distinct method may handle `"disconnect"` provided it is not the
 lifecycle callback:
