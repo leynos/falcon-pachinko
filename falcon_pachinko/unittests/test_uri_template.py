@@ -151,7 +151,7 @@ def test_multiple_and_adjacent_parameters_keep_segment_capture_semantics() -> No
 
 
 @pytest.mark.parametrize("compiler", [compile_uri_template, _compile_prefix_template])
-def test_adjacent_parameter_runs_are_bounded(
+def test_ambiguous_parameter_segments_are_rejected(
     compiler: cabc.Callable[[str], re.Pattern[str]],
 ) -> None:
     """The compiler permits only a terminal adjacent pair per segment."""

@@ -18,6 +18,14 @@ def test_connect_to_nested_child_resource() -> None:
     """Scenario: Connect to nested child resource."""
 
 
+@scenario(
+    "features/nested_resource.feature",
+    "Competing literal siblings select their matching resource",
+)
+def test_competing_literal_siblings_select_matching_resource() -> None:
+    """Scenario: Competing literal siblings select their matching resource."""
+
+
 @scenario("features/nested_resource.feature", "Unmatched nested path returns 404")
 def test_unmatched_nested_path_returns_404() -> None:
     """Scenario: Unmatched nested path returns 404."""
@@ -91,6 +99,42 @@ class ParentResource(WebSocketResource):
         """Store params for later inspection."""
         self.params = params
         return False
+
+
+class DottedSiblingResource(WebSocketResource):
+    """Child resource for a dotted literal sibling route."""
+
+    instances: typ.ClassVar[list[DottedSiblingResource]] = []
+
+    def __init__(self) -> None:
+        DottedSiblingResource.instances.append(self)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Store params for the selected-route assertion."""
+        self.params = params
+        return False
+
+
+class SlashedSiblingResource(WebSocketResource):
+    """Child resource for a slashed literal sibling route."""
+
+    instances: typ.ClassVar[list[SlashedSiblingResource]] = []
+
+    def __init__(self) -> None:
+        SlashedSiblingResource.instances.append(self)
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Store params for the selected-route assertion."""
+        self.params = params
+        return False
+
+
+class CompetingSiblingParent(WebSocketResource):
+    """Parent that registers routes with similar literal text."""
+
+    def __init__(self) -> None:
+        self.add_subroute("child.v1", DottedSiblingResource)
+        self.add_subroute("child/v1", SlashedSiblingResource)
 
 
 class ShadowChildResource(WebSocketResource):
@@ -169,6 +213,17 @@ def setup_router(context: dict[str, typ.Any]) -> None:
     context["router"] = router
 
 
+@given("a router with competing literal child resources")
+def setup_competing_literal_router(context: dict[str, typ.Any]) -> None:
+    """Register both similar-looking literal siblings."""
+    DottedSiblingResource.instances.clear()
+    SlashedSiblingResource.instances.clear()
+    router = WebSocketRouter()
+    router.add_route("/parents/{pid}", CompetingSiblingParent)
+    router.mount("/")
+    context["router"] = router
+
+
 @given("a router with parameter shadowing resources")
 def setup_shadow_router(context: dict[str, typ.Any]) -> None:
     """Prepare router for parameter shadowing scenario."""
@@ -215,6 +270,12 @@ def connect_child(context: dict[str, typ.Any]) -> None:
     _simulate_connection(context, "/parents/42/child")
 
 
+@when('a client connects to "/parents/42/child.v1"')
+def connect_dotted_literal_sibling(context: dict[str, typ.Any]) -> None:
+    """Connect using the dotted sibling's exact literal path."""
+    _simulate_connection(context, "/parents/42/child.v1")
+
+
 @when('a client connects to "/parents/42/missing"')
 def connect_missing(context: dict[str, typ.Any]) -> None:
     """Attempt connection to an invalid path."""
@@ -244,6 +305,20 @@ def assert_child_params() -> None:
     """Verify child resource captured parent parameter."""
     assert ChildResource.instances[-1].params == {"pid": "42"}, (
         "child should receive the parent's path param"
+    )
+
+
+@then("the dotted child resource should be selected")
+def assert_dotted_child_selected() -> None:
+    """Verify the literal dotted sibling handles the connection."""
+    assert len(DottedSiblingResource.instances) == 1, (
+        "the dotted route should create exactly its configured child"
+    )
+    assert not SlashedSiblingResource.instances, (
+        "the slash route should not be selected for dotted literal text"
+    )
+    assert DottedSiblingResource.instances[-1].params == {"pid": "42"}, (
+        "the dotted child should receive the parent route parameter"
     )
 
 

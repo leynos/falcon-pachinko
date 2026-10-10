@@ -181,9 +181,8 @@ def compile_uri_template(template: str) -> re.Pattern[str]:
     """Compile a URI template for full-path matching.
 
     Literal text is matched exactly. Named parameters use Python identifier
-    names and capture one or more characters up to the next slash. At most two
-    parameters may appear consecutively; this bounds backtracking for
-    ambiguous captures.
+    names and capture one or more non-slash characters. A path segment may
+    contain one parameter or a terminal adjacent pair.
 
     Parameters
     ----------
