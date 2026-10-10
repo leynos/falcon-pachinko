@@ -45,10 +45,12 @@ installing Falcon 4.0.0 with `uv pip install falcon==4.0.0` and running
 `make build` afterwards to restore the normal environment. The latest CI build
 checked for this change resolved Falcon 4.4.0.
 
-The repository has no committed lock file, and `.gitignore` excludes `uv.lock`.
-CI therefore resolves the newest release allowed by the dependency bounds on
-each build. Lower-bound coverage in CI and the decision to commit a lock file
-are tracked separately from this support policy.
+`uv.lock` is committed and `.gitignore` no longer excludes it. The dependency
+bounds above are deliberately wide, so the lockfile is what pins an actual
+release: `make build` runs `uv sync --group dev --locked`, which refuses to
+resolve past the committed lockfile rather than silently installing a set the
+repository never reviewed. Lower-bound coverage in CI stays tracked separately
+from this support policy.
 
 ## Validation error import boundary
 

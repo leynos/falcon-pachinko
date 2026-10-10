@@ -120,11 +120,18 @@ all: build check-fmt test test-workflow-contracts typecheck spelling
 .venv: pyproject.toml
 	uv venv --clear
 
-build: uv .venv ## Build virtual-env and install deps
-	uv sync --group dev
+# `--locked` refuses to resolve past the committed uv.lock, so a stale or
+# edited lockfile fails here instead of silently installing a different set
+# than the one the repository reviewed. `uv.lock` is named as a prerequisite
+# so the dependency is visible in the build graph; the recipe itself always
+# runs, because `build` is phony.
+build: uv .venv uv.lock ## Build virtual-env and install deps
+	uv sync --group dev --locked
 
+# `uv build` writes both artefacts into `dist/`, which is the directory
+# `make clean` removes and `.gitignore` excludes.
 build-release: ## Build artefacts (sdist & wheel)
-	python -m build --sdist --wheel
+	uv build --sdist --wheel
 
 clean: ## Remove build artefacts
 	rm -rf build dist *.egg-info \
