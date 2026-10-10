@@ -206,10 +206,16 @@ def _compile_template_with_suffix(template: str, suffix: str) -> re.Pattern[str]
             raise
         msg = f"{exc} (original template: {template})"
         raise ValueError(msg) from exc
-    pattern_parts = [
-        f"(?P<{text}>[^/]+)" if is_parameter else re.escape(text)
-        for is_parameter, text in tokens
-    ]
+    pattern_parts = []
+    for index, (is_parameter, text) in enumerate(tokens):
+        if is_parameter:
+            # Validated adjacent pairs end their segment: the greedy first
+            # capture always leaves one character for the second. Fixing that
+            # width avoids quadratic retries when a later segment mismatches.
+            quantifier = "" if index > 0 and tokens[index - 1][0] else "+"
+            pattern_parts.append(f"(?P<{text}>[^/]{quantifier})")
+        else:
+            pattern_parts.append(re.escape(text))
     return re.compile(f"^{''.join(pattern_parts)}{suffix}")
 
 

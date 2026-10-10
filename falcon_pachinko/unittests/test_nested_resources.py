@@ -51,6 +51,7 @@ def _named_hook(events: list[str], scope: str) -> cabc.Callable[[HookContext], N
     """Return a hook that records its scope and lifecycle event."""
 
     def hook(context: HookContext) -> None:
+        """Record this scoped hook's lifecycle event."""
         events.append(f"{scope}.{context.event}")
 
     return hook
@@ -76,22 +77,27 @@ def _create_literal_sibling_router(
 
     class DottedChild(WebSocketResource):
         def __init__(self) -> None:
+            """Record construction of the dotted sibling."""
             created.append("dotted")
 
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Record selection of the dotted sibling."""
             selected.append("dotted")
             return False
 
     class SlashedChild(WebSocketResource):
         def __init__(self) -> None:
+            """Record construction of the slash-delimited sibling."""
             created.append("slashed")
 
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Record selection of the slash-delimited sibling."""
             selected.append("slashed")
             return False
 
     class ParentWithLiteralSiblings(WebSocketResource):
         def __init__(self) -> None:
+            """Register both literal sibling routes in the requested order."""
             routes = [
                 ("child.v1", DottedChild),
                 ("child/v1", SlashedChild),
@@ -178,6 +184,7 @@ async def test_nested_parameter_merging_with_literal_sibling() -> None:
 
     class LiteralChild(WebSocketResource):
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Refuse the literal sibling connection used by this test."""
             return False
 
     class ParameterChild(WebSocketResource):
@@ -185,14 +192,17 @@ async def test_nested_parameter_merging_with_literal_sibling() -> None:
         params: dict[str, object]
 
         def __init__(self) -> None:
+            """Retain the parameter child for merged-parameter assertions."""
             ParameterChild.instances.append(self)
 
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Capture parameters merged from parent and child routes."""
             self.params = params
             return False
 
     class ParentWithMixedSiblings(WebSocketResource):
         def __init__(self) -> None:
+            """Register literal and parameter siblings for the merge test."""
             self.add_subroute("child.v1", LiteralChild)
             self.add_subroute("thing/{cid}", ParameterChild)
 

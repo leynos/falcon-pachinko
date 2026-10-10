@@ -20,17 +20,21 @@ async def test_literal_top_level_routes_select_resources_and_hooks(
 
     class DottedResource(WebSocketResource):
         def __init__(self) -> None:
+            """Record that this literal route's factory was selected."""
             events.append("dotted.factory")
 
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Record the dotted resource selected for the connection."""
             selected.append("dotted")
             return False
 
     class SlashedResource(WebSocketResource):
         def __init__(self) -> None:
+            """Record that this slash route's factory was selected."""
             events.append("slashed.factory")
 
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Record the slash-delimited resource selected for the connection."""
             selected.append("slashed")
             return False
 

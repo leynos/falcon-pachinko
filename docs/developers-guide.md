@@ -138,6 +138,23 @@ Test request doubles should expose both `path` and `path_template`. Use an empty
 `path_template` for root-mounted router tests, matching the runtime default
 used by Falcon-style request objects that do not provide a template.
 
+### URI-template compiler boundary
+
+`falcon_pachinko/_uri_template.py` is the private shared compiler for full-path
+and prefix matchers. The router uses both forms for top-level routes, while
+nested subroutes use the prefix form. The compiler escapes every literal run
+before building the regular expression, and validates placeholder braces,
+unique Python-identifier names, and parameter layouts first. Placeholders
+capture non-empty path segments; a segment may contain one placeholder or a
+terminal adjacent pair, while other multi-placeholder layouts are ambiguous.
+Compilation happens before router registration state is mutated, so invalid
+templates fail at registration or mount time with `ValueError` rather than
+being deferred to connection dispatch.
+
+`uvicorn>=0.30,<1` is in the development dependency group for
+`tests/test_live_routing.py`, which exercises the router through a live Falcon
+ASGI server and real WebSocket connections.
+
 ### `_RouteMatch` and `_Dispatch`
 
 `_RouteMatch` holds what the prefix match produced: `params: dict[str, str]` and

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import re
+import string
 import typing as typ
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from falcon_pachinko._uri_template import (
     _compile_prefix_template,
@@ -64,6 +67,108 @@ def test_regex_metacharacters_are_literal(template: str, regex_near_miss: str) -
     assert prefix_pattern.match(regex_near_miss) is None, (
         "prefix routes must reject a path accepted only by regex expansion"
     )
+
+
+@given(
+    prefix=st.text(alphabet=string.ascii_lowercase, max_size=12),
+    metacharacter=st.sampled_from(tuple(".+?*[]()^$|\\")),
+    suffix=st.text(alphabet=string.ascii_lowercase, max_size=12),
+)
+def test_generated_literal_runs_remain_literal(
+    prefix: str, metacharacter: str, suffix: str
+) -> None:
+    """Both compilers preserve ordinary and regex-special literal text."""
+    segment = f"{prefix}{metacharacter}{suffix}"
+    template = f"/{segment}"
+    full_pattern = compile_uri_template(template)
+    prefix_pattern = _compile_prefix_template(template)
+
+    assert full_pattern.fullmatch(template), "full matching should preserve the text"
+    assert full_pattern.fullmatch(f"{template}/"), (
+        "full matching should retain optional trailing slashes"
+    )
+    assert full_pattern.fullmatch(f"{template}suffix") is None, (
+        "full matching should reject a literal near-miss"
+    )
+    assert prefix_pattern.match(f"{template}/child"), (
+        "prefix matching should preserve the exact literal segment"
+    )
+    assert prefix_pattern.match(f"{template}suffix") is None, (
+        "prefix matching should reject an expanded or partial literal"
+    )
+
+
+def _make_identifier_route_case(
+    name_suffix: str,
+    value: str,
+    layout: typ.Literal["adjacent", "single"],
+) -> tuple[str, str, dict[str, str]]:
+    """Build a route case whose generated names satisfy Python's identifier rule."""
+    if layout == "adjacent":
+        names = (f"left_{name_suffix}", f"right_{name_suffix}")
+        return (
+            f"/rooms/{{{names[0]}}}{{{names[1]}}}",
+            f"/rooms/{value}x",
+            {names[0]: value, names[1]: "x"},
+        )
+
+    name = f"room_{name_suffix}"
+    return f"/rooms/{{{name}}}", f"/rooms/{value}", {name: value}
+
+
+def _assert_generated_route_matches(
+    template: str, route_path: str, expected: dict[str, str]
+) -> None:
+    """Check generated full and prefix matches preserve nonempty captures."""
+    full_pattern = compile_uri_template(template)
+    prefix_pattern = _compile_prefix_template(template)
+    full_match = full_pattern.fullmatch(route_path)
+    trailing_slash_match = full_pattern.fullmatch(f"{route_path}/")
+    prefix_match = prefix_pattern.match(f"{route_path}/child")
+
+    assert full_match is not None, "full matching should capture the generated value"
+    assert full_match.groupdict() == expected, (
+        "full matching should preserve the placeholder name and captured value"
+    )
+    assert trailing_slash_match is not None, (
+        "full matching should preserve its optional trailing slash"
+    )
+    assert trailing_slash_match.groupdict() == expected, (
+        "trailing-slash matching should preserve the captured values"
+    )
+    assert prefix_match is not None, (
+        "prefix matching should capture the generated value"
+    )
+    assert prefix_match.groupdict() == expected, (
+        "prefix matching should preserve the placeholder name and captured value"
+    )
+    assert prefix_match.end() == len(route_path) + 1, (
+        "prefix matching should consume the route and separator only"
+    )
+    assert prefix_pattern.match("/rooms//child") is None, (
+        "prefix placeholders should continue rejecting empty segments"
+    )
+
+
+@given(
+    name_suffix=st.text(alphabet=string.ascii_lowercase + string.digits, max_size=12),
+    layout=st.sampled_from(("adjacent", "single")),
+    value=st.text(
+        alphabet=st.characters(
+            blacklist_characters="/", blacklist_categories=("Cc", "Cs")
+        ),
+        min_size=1,
+        max_size=24,
+    ),
+)
+def test_generated_identifier_placeholders_capture_nonempty_segments(
+    name_suffix: str, layout: typ.Literal["adjacent", "single"], value: str
+) -> None:
+    """Generated identifiers capture nonempty values in both supported layouts."""
+    template, route_path, expected = _make_identifier_route_case(
+        name_suffix, value, layout
+    )
+    _assert_generated_route_matches(template, route_path, expected)
 
 
 def test_root_patterns_preserve_existing_slash_semantics() -> None:
@@ -147,6 +252,41 @@ def test_multiple_and_adjacent_parameters_keep_segment_capture_semantics() -> No
     assert adjacent is not None, "adjacent placeholders should be accepted"
     assert adjacent.groupdict() == {"left": "a", "right": "b"}, (
         "adjacent placeholders should retain regex capture semantics"
+    )
+
+
+@pytest.mark.parametrize(
+    ("compiler", "path", "remainder"),
+    [
+        (compile_uri_template, "/abcdef/ok", ""),
+        (_compile_prefix_template, "/abcdef/ok/child", "child"),
+    ],
+    ids=["full", "prefix"],
+)
+def test_adjacent_parameters_before_another_segment_bound_backtracking(
+    compiler: cabc.Callable[[str], re.Pattern[str]], path: str, remainder: str
+) -> None:
+    """A terminal adjacent pair preserves greedy captures without nested retries."""
+    pattern = compiler("/{left}{right}/ok")
+    match = pattern.match(path)
+
+    assert match is not None, (
+        "adjacent placeholders before another segment should match"
+    )
+    assert match.groupdict() == {"left": "abcde", "right": "f"}, (
+        "the greedy first placeholder should leave only the final character"
+    )
+    assert path[match.end() :] == remainder, (
+        "full and prefix matching should retain their path consumption semantics"
+    )
+    assert "(?P<right>[^/])" in pattern.pattern, (
+        "the second adjacent capture must not retry variable-length splits"
+    )
+    assert pattern.match(f"/{'x' * 8000}/no") is None, (
+        "a long segment with a nonmatching successor should be rejected"
+    )
+    assert pattern.match("/a/ok") is None, (
+        "both adjacent placeholders must still capture a nonempty value"
     )
 
 

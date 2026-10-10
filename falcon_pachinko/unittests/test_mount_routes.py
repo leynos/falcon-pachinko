@@ -22,10 +22,12 @@ class _ParameterizedResource(WebSocketResource):
     instances: typ.ClassVar[list[_ParameterizedResource]] = []
 
     def __init__(self) -> None:
+        """Retain each instance for parameter assertions."""
         self.params: dict[str, object] = {}
         self.instances.append(self)
 
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Capture the merged mount and route parameters."""
         self.params = params
         return False
 
@@ -34,10 +36,12 @@ class _StatusResource(WebSocketResource):
     """Record construction and hook activity for one mounted status route."""
 
     def __init__(self, events: list[str]) -> None:
+        """Record construction for the mounted status route."""
         self.events = events
         events.append("factory")
 
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Refuse the status-route connection used by this test."""
         return False
 
 
@@ -45,6 +49,7 @@ _StatusResource.hooks = HookCollection()
 
 
 def _record_status_hook(context: HookContext) -> None:
+    """Record invocation of the mounted resource's hook."""
     resource = typ.cast("_StatusResource", context.target)
     resource.events.append("hook")
 

@@ -107,6 +107,7 @@ class DottedSiblingResource(WebSocketResource):
     instances: typ.ClassVar[list[DottedSiblingResource]] = []
 
     def __init__(self) -> None:
+        """Track construction of the dotted sibling selected by the BDD."""
         DottedSiblingResource.instances.append(self)
 
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
@@ -121,6 +122,7 @@ class SlashedSiblingResource(WebSocketResource):
     instances: typ.ClassVar[list[SlashedSiblingResource]] = []
 
     def __init__(self) -> None:
+        """Track construction of the slash-delimited BDD sibling."""
         SlashedSiblingResource.instances.append(self)
 
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
@@ -133,6 +135,7 @@ class CompetingSiblingParent(WebSocketResource):
     """Parent that registers routes with similar literal text."""
 
     def __init__(self) -> None:
+        """Register both literal siblings so the BDD can distinguish them."""
         self.add_subroute("child.v1", DottedSiblingResource)
         self.add_subroute("child/v1", SlashedSiblingResource)
 

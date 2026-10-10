@@ -50,6 +50,7 @@ class _RecordingResource(WebSocketResource):
     """Identify the resource selected by a live WebSocket connection."""
 
     def __init__(self, identity: str, observations: _LiveObservations) -> None:
+        """Record which live route factory the matcher selected."""
         self.identity = identity
         self.observations = observations
         observations.factories.append(identity)
@@ -57,6 +58,7 @@ class _RecordingResource(WebSocketResource):
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
+        """Record the selected live resource and accept the connection."""
         self.observations.selected.append(self.identity)
         return True
 
@@ -65,6 +67,7 @@ _RecordingResource.hooks = HookCollection()
 
 
 def _record_resource_hook(context: HookContext) -> None:
+    """Record resource-specific hook order during live dispatch."""
     resource = typ.cast("_RecordingResource", context.target)
     resource.observations.hooks.append(f"{resource.identity}.{context.event}")
 
@@ -79,12 +82,14 @@ class _RoutingAdapter:
     def __init__(
         self, router: WebSocketRouter, observations: _LiveObservations
     ) -> None:
+        """Hold the Pachinko router and live-dispatch observations."""
         self._router = router
         self._observations = observations
 
     async def on_websocket(
         self, req: falcon.asgi.Request, ws: falcon.asgi.WebSocket, rest: str
     ) -> None:
+        """Forward the Falcon request and report the selected resource."""
         self._observations.adapter_calls.append((req.path, rest))
         await self._router.on_websocket(
             _RouterRequest(path=req.path, path_template="/ws"),
@@ -100,6 +105,7 @@ def _create_live_router(observations: _LiveObservations) -> WebSocketRouter:
     router = WebSocketRouter()
 
     def record_global_hook(context: HookContext) -> None:
+        """Record global hook order around the resource-specific chain."""
         observations.hooks.append(f"global.{context.event}")
 
     router.global_hooks.add("before_connect", record_global_hook)
@@ -122,10 +128,12 @@ class _ReadyServer(uvicorn.Server):
     """Signal once Uvicorn has created its listening server."""
 
     def __init__(self, config: uvicorn.Config, started_event: asyncio.Event) -> None:
+        """Retain the event that signals the listening socket is ready."""
         super().__init__(config)
         self._started_event = started_event
 
     async def startup(self, sockets: list[socket.socket] | None = None) -> None:
+        """Signal test clients after Uvicorn finishes server startup."""
         await super().startup(sockets=sockets)
         self._started_event.set()
 
