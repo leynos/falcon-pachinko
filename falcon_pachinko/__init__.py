@@ -12,6 +12,7 @@ from .di import ServiceContainer, ServiceNotFoundError
 from .diagnostics import DEFAULT_SENSITIVE_KEYS, DiagnosticSanitizer
 from .handlers import handles_message
 from .hooks import HookCollection, HookContext, HookManager
+from .media import configure_raw_frame_media
 from .protocols import WebSocketLike
 from .resource import WebSocketResource
 from .router import ResourceFactory, WebSocketRouter
@@ -53,6 +54,7 @@ __all__ = (
     "WebSocketSimulator",
     "WebSocketTestClient",
     "WorkerController",
+    "configure_raw_frame_media",
     "handles_message",
     "install",
     "worker",

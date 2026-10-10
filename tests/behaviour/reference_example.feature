@@ -5,8 +5,7 @@ Feature: Full reference example workflow
 
   Scenario: Task creation flows through the router, schema dispatch, and feed
     Given the reference router with a recording factory
-    When a client connects to "/ws/workspaces/atlas/projects/triage/tasks" using token "seekrit" as user "casey"
-    And they send a "task.add" message for task "T-42"
+    When a client connects to "/ws/workspaces/atlas/projects/triage/tasks" using token "seekrit" as user "casey" and sends a "task.add" message for task "T-42"
     Then the connection is accepted
     And the task stream resource replies with a task acknowledgement
     And the announcement feed captures an event for workspace "atlas"

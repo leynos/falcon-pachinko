@@ -39,10 +39,11 @@ dev = [
     "pyyaml>=6.0.3",
     "hypothesis>=6.168.0",
     "packaging>=26.3,<27",
+    "uvicorn>=0.34,<1",
 ]
 
 [project.optional-dependencies]
-examples = ["aiosqlite", "uvicorn", "websocket-client"]
+examples = ["aiosqlite", "uvicorn>=0.34,<1", "websocket-client"]
 testing = ["websockets>=11,<13"]
 
 [tool.pyright]

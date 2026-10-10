@@ -138,6 +138,40 @@ Test request doubles should expose both `path` and `path_template`. Use an empty
 `path_template` for root-mounted router tests, matching the runtime default
 used by Falcon-style request objects that do not provide a template.
 
+## Router-owned WebSocket sessions
+
+After route resolution, connection hooks, `on_connect`, and `after_connect`
+hooks succeed, `WebSocketRouter` accepts the socket and awaits the selected
+resource's session inline. The session repeatedly calls `receive_media()`,
+adapts decoded values to raw JSON frames when needed, and awaits
+`WebSocketResource.dispatch()` before reading the next frame. It creates no
+per-frame tasks. The selected child resource, bound hook manager, injected
+services, and connection-scoped state proxy are the same objects prepared for
+connection setup.
+
+An ordinary peer disconnect runs `before_disconnect` hooks and then
+`on_disconnect(ws, peer_code)`; a missing peer code maps to 1000. Cancellation
+closes with 1001 and re-raises `CancelledError`. An unexpected receive or
+handler exception closes with 1011, runs best-effort disconnect cleanup, and
+re-raises the original exception. A normal disconnect lifecycle error
+propagates. Failure cleanup errors are logged and do not replace the session
+failure.
+
+Test sockets must terminate receive loops. `DummyWS` and `RecordingWS` return
+their scripted frames in order and then raise `falcon.WebSocketDisconnected`.
+The simulator drains queued frames before reporting closure; `close(code)`
+wakes a pending receive. `SimulatorRouterHarness.connect()` starts
+`router.on_websocket()` as a task, waits for accept/close/readiness, and on
+exit closes the simulator and awaits the router task. Unit and simulator tests
+use this harness for fast lifecycle coverage.
+
+The `tests/behaviour/_live_server.py` fixture runs a real Falcon ASGI app under
+Uvicorn on an ephemeral loopback port. Its router-session scenarios use
+`WebSocketTestClient` to prove frame order, binary handling, fallback
+continuation, replies, failure close codes, and peer disconnect callbacks over
+a real network connection. Run those scenarios with `make test`; run the
+documentation gates with `make markdownlint` and `make spelling`.
+
 ### `_RouteMatch` and `_Dispatch`
 
 `_RouteMatch` holds what the prefix match produced: `params: dict[str, str]` and

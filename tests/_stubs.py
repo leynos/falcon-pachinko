@@ -5,6 +5,8 @@ from __future__ import annotations
 import types
 import typing as typ
 
+import falcon
+
 from falcon_pachinko.websocket import (
     ConnectionBackend,
     WebSocketConnectionNotFoundError,
@@ -41,9 +43,9 @@ class RecordingWebSocket:
         self.close_code = code
 
     async def receive_media(self) -> object:
-        """Record the receive attempt and return a placeholder payload."""
+        """End setup-only router tests with a normal peer disconnect."""
         self.receive_calls += 1
-        return None
+        raise falcon.WebSocketDisconnected(self.close_code or 1000)
 
 
 class RequestStub:
