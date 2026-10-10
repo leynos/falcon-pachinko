@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import types
 import typing as typ
 import warnings
 
@@ -43,6 +44,10 @@ def _configuration_value(value: object) -> object:
                 partial.args,
                 _configuration_value(partial.keywords or {}),
             )
+        case types.MethodType() as method:
+            return method.__func__
+        case types.BuiltinMethodType() as method:
+            return (method.__name__, type(method.__self__))
         case dict() as mapping:
             return tuple(
                 sorted(

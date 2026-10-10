@@ -86,7 +86,7 @@ class _LiveServerRunner:
         return self._loop.run_until_complete(awaitable)
 
     def close(self) -> None:
-        """Exit every started server, then close the per-test event loop."""
+        """Exit servers, cancel leftover tasks, and close the test event loop."""
         if self._closed:
             return
         errors: list[Exception] = []
@@ -98,11 +98,32 @@ class _LiveServerRunner:
                     errors.extend(exc.exceptions)
                 except Exception as exc:  # ruff: ignore[blind-except] -- preserve every server failure
                     errors.append(exc)
+            self._loop.run_until_complete(self._shutdown_loop(errors))
         finally:
             self._closed = True
             self._loop.close()
         if errors:
             raise LiveServerError(errors)
+
+    async def _shutdown_loop(self, errors: list[Exception]) -> None:
+        """Finish pending async work before closing the per-test loop."""
+        current_task = asyncio.current_task()
+        pending_tasks = [
+            task for task in asyncio.all_tasks(self._loop) if task is not current_task
+        ]
+        for task in pending_tasks:
+            task.cancel()
+        results = await asyncio.gather(*pending_tasks, return_exceptions=True)
+        errors.extend(result for result in results if isinstance(result, Exception))
+
+        for shutdown in (
+            self._loop.shutdown_asyncgens(),
+            self._loop.shutdown_default_executor(),
+        ):
+            try:
+                await shutdown
+            except Exception as exc:  # ruff: ignore[blind-except] -- finish every loop shutdown stage
+                errors.append(exc)
 
 
 def _live_websocket_server() -> cabc.Iterator[_LiveServerRunner]:

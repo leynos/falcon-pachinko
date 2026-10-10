@@ -19,6 +19,8 @@ from falcon_pachinko.testing import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from falcon_pachinko.testing.live import ASGIApplication
 
 
@@ -388,3 +390,47 @@ async def test_uvicorn_stop_cancels_task_during_startup_race() -> None:
         assert blocked_task.cancelled(), "stop must cancel before a server exists"
     finally:
         sock.close()
+
+
+def test_live_server_runner_finishes_pending_async_work() -> None:
+    """Fixture teardown cancels tasks and finalizes async generators."""
+    from falcon_pachinko.testing.fixtures import _LiveServerRunner
+
+    runner = _LiveServerRunner()
+    task_finalized = asyncio.Event()
+    task_started = asyncio.Event()
+    generator_finalized = asyncio.Event()
+
+    async def pending_task() -> None:
+        task_started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            task_finalized.set()
+
+    async def pending_generator() -> cabc.AsyncGenerator[str, None]:
+        await asyncio.sleep(0)
+        try:
+            yield "ready"
+        finally:
+            generator_finalized.set()
+
+    async def start_pending_task() -> asyncio.Task[None]:
+        task = asyncio.create_task(pending_task())
+        await task_started.wait()
+        return task
+
+    async def start_generator() -> str:
+        return await generator.__anext__()
+
+    task = runner.run(start_pending_task())
+    generator = pending_generator()
+    assert runner.run(start_generator()) == "ready", (
+        "the async generator must yield before loop shutdown"
+    )
+
+    runner.close()
+
+    assert task.cancelled(), "fixture teardown must await task cancellation"
+    assert task_finalized.is_set(), "task cancellation must run its finally block"
+    assert generator_finalized.is_set(), "fixture teardown must close async generators"
