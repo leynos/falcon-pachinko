@@ -27,51 +27,14 @@ if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints
 
 from .dispatcher import dispatch
 from .exceptions import ReservedHandlerRegistrationError
-from .handlers import Handler, HandlerInfo, _HandlesMessageDescriptor
+from .handlers import (
+    Handler,
+    HandlerInfo,
+    _HandlesMessageDescriptor,
+    is_lifecycle_callback,
+)
 from .hooks import HookCollection, HookManager
 from .schema import populate_struct_handlers, validate_schema_types
-
-#: Lifecycle callbacks are driven by the connection lifecycle, never by peer
-#: frames. The conventional dispatcher refuses to resolve these names, and
-#: handler registration rejects callables that implement them.
-_RESERVED_HANDLER_NAMES: frozenset[str] = frozenset({
-    "on_connect",
-    "on_disconnect",
-    "on_unhandled",
-})
-
-
-def _unwrap_partials(action: object) -> object:
-    """Peel ``functools.partial`` layers down to the wrapped callable."""
-    while isinstance(action, functools.partial):
-        action = action.func
-    return action
-
-
-def _is_lifecycle_callback(owner: type, action: object) -> bool:
-    """Return whether ``action`` implements a reserved lifecycle callback.
-
-    The callable's own name is checked first, which catches a subclass that
-    rebinds a reserved method to a differently named function. Identity
-    against each reserved name in ``owner``'s MRO is checked second, which
-    catches an alias such as ``on_bye = on_disconnect`` or a function copied
-    onto the class under a new name.
-
-    Returns
-    -------
-    bool
-        ``True`` when the callable is a reserved lifecycle callback.
-    """
-    if not callable(action):
-        return False
-    resolved = _unwrap_partials(action)
-    if getattr(resolved, "__name__", None) in _RESERVED_HANDLER_NAMES:
-        return True
-    return any(
-        resolved is base.__dict__.get(name)
-        for base in owner.__mro__
-        for name in _RESERVED_HANDLER_NAMES
-    )
 
 
 class WebSocketResource:
@@ -274,7 +237,7 @@ class WebSocketResource:
             and inspect.iscoroutinefunction(
                 member := inspect.getattr_static(cls, name, None)
             )
-            and not _is_lifecycle_callback(cls, member)
+            and not is_lifecycle_callback(cls, member)
         }
         cls._conventional_handler_names = frozenset(names)
 
@@ -282,7 +245,7 @@ class WebSocketResource:
     def _validate_handler_registry(cls, handlers: dict[str, HandlerInfo]) -> None:
         """Reject registered handlers that implement a lifecycle callback."""
         for message_type, info in handlers.items():
-            if _is_lifecycle_callback(cls, info.handler):
+            if is_lifecycle_callback(cls, info.handler):
                 qualname: str = getattr(
                     info.handler, "__qualname__", repr(info.handler)
                 )
@@ -365,7 +328,7 @@ class WebSocketResource:
             lifecycle callback is reachable through the connection lifecycle
             only, so a peer tag must never be able to invoke one.
         """
-        if _is_lifecycle_callback(cls, handler):
+        if is_lifecycle_callback(cls, handler):
             qualname: str = getattr(handler, "__qualname__", repr(handler))
             raise ReservedHandlerRegistrationError(message_type, qualname)
         cls.handlers[message_type] = HandlerInfo(handler, payload_type, strict)

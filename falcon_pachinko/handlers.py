@@ -1,10 +1,15 @@
 """Utilities for registering and validating message handlers.
 
+This module owns the reserved lifecycle-name contract. ``LIFECYCLE_CALLBACK_NAMES``
+is the single source of truth for the callbacks peers must never select, and
+``is_lifecycle_callback`` is the predicate both registration and conventional
+dispatch use. ``dispatcher.py`` and ``resource.py`` import both from here.
+
 Registration rejects a handler that implements a reserved lifecycle callback
 so that a peer-chosen tag can never reach ``on_connect``, ``on_disconnect`` or
 ``on_unhandled``. The check recognises a lifecycle callback by its name and by
 identity against the class it was defined on, including through
-``functools.partial`` wrappers.
+``functools.partial`` wrappers and ``handles_message`` descriptors.
 
 A wrapper then, that *calls* a lifecycle method rather than *being* one reads
 as an ordinary handler:
@@ -25,6 +30,7 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
+import functools
 import inspect
 import typing as typ
 
@@ -44,6 +50,64 @@ type Handler = cabc.Callable[..., cabc.Awaitable[None]]
 
 # ``self``, the connection, and the payload are the minimum handler parameters.
 _MIN_HANDLER_PARAMS = 3
+
+#: Lifecycle callbacks are driven by the connection lifecycle, never by peer
+#: frames. The conventional dispatcher refuses to resolve these names, and
+#: handler registration rejects callables that implement them. This is the
+#: single source of truth: ``dispatcher.py`` and ``resource.py`` both import it
+#: from here, so no circular import appears.
+LIFECYCLE_CALLBACK_NAMES: frozenset[str] = frozenset({
+    "on_connect",
+    "on_disconnect",
+    "on_unhandled",
+})
+
+
+def _unwrap_partials(action: object) -> object:
+    """Peel ``functools.partial`` layers down to the wrapped callable."""
+    while isinstance(action, functools.partial):
+        action = action.func
+    return action
+
+
+def is_lifecycle_callback(owner: type, action: object) -> bool:
+    """Return whether ``action`` implements a reserved lifecycle callback.
+
+    The callable's own name is checked first, which catches a subclass that
+    rebinds a reserved method to a differently named function. Identity
+    against each reserved name in ``owner``'s MRO is checked second, which
+    catches an alias such as ``on_bye = on_disconnect`` or a function copied
+    onto the class under a new name.
+
+    ``functools.partial`` wrappers are unwrapped first: a partial exposes
+    neither the wrapped function's ``__name__`` nor its identity, so without
+    that step a partial would read as an ordinary handler while still
+    invoking ``on_disconnect`` when a peer frame selected it.
+
+    Parameters
+    ----------
+    owner : type
+        The class whose MRO supplies the reserved entries to compare against.
+    action : object
+        The candidate callable.
+
+    Returns
+    -------
+    bool
+        ``True`` when the callable is a reserved lifecycle callback.
+    """
+    if isinstance(action, _HandlesMessageDescriptor):
+        action = action.func
+    if not callable(action):
+        return False
+    resolved = _unwrap_partials(action)
+    if getattr(resolved, "__name__", None) in LIFECYCLE_CALLBACK_NAMES:
+        return True
+    return any(
+        resolved is base.__dict__.get(name)
+        for base in owner.__mro__
+        for name in LIFECYCLE_CALLBACK_NAMES
+    )
 
 
 class _BindableHandler(typ.Protocol):

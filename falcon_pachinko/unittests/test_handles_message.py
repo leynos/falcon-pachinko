@@ -29,7 +29,11 @@ from falcon_pachinko.exceptions import (
     HandlerSignatureError,
     ReservedHandlerRegistrationError,
 )
-from falcon_pachinko.handlers import get_payload_type
+from falcon_pachinko.handlers import (
+    LIFECYCLE_CALLBACK_NAMES,
+    get_payload_type,
+    is_lifecycle_callback,
+)
 from falcon_pachinko.unittests.helpers import DummyWS
 
 
@@ -249,6 +253,67 @@ class LifecycleParent(WebSocketResource):
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Stand in for the lifecycle callback under test."""
+
+
+def test_lifecycle_callback_names_cover_the_base_class_hooks() -> None:
+    """The reserved set names exactly the base class's lifecycle hooks.
+
+    ``WebSocketResource`` defines three ``on_*`` coroutine callbacks that are
+    not message handlers. If a fourth is added, this test should fail so the
+    set is extended deliberately rather than left behind.
+    """
+    base_hooks = {
+        name
+        for name in dir(WebSocketResource)
+        if name.startswith("on_") and callable(getattr(WebSocketResource, name, None))
+    }
+    assert base_hooks == set(LIFECYCLE_CALLBACK_NAMES), (
+        f"the reserved set must match the base class hooks: {sorted(base_hooks)}"
+    )
+
+
+def test_lifecycle_predicate_recognises_every_rejected_shape() -> None:
+    """The predicate accepts each way a lifecycle callback can be presented."""
+    partial_disconnect = functools.partial(LifecycleParent.on_disconnect)
+
+    class Aliased(WebSocketResource):
+        async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+            """Stand in for the lifecycle callback under test."""
+
+        on_bye = on_disconnect
+
+    class Child(LifecycleParent):
+        """Inherit the parent's callback without redefining it."""
+
+    async def ordinary(self: object, ws: WebSocketLike, payload: object) -> None:
+        """Stand in for an ordinary message handler."""
+
+    async def on_unhandled(self: object, ws: WebSocketLike, payload: object) -> None:
+        """Stand in for the fallback with a handler-shaped signature."""
+
+    # ``@handles_message`` returns a descriptor, and the descriptor itself is
+    # callable-shaped only through ``__get__``. The predicate unwraps it so a
+    # descriptor presented directly is judged on the function it registers.
+    descriptor = handles_message("bye")(on_unhandled)
+
+    rejected = {
+        "direct": LifecycleParent.on_disconnect,
+        "alias": Aliased.__dict__["on_bye"],
+        "inherited": Child.on_disconnect,
+        "partial": partial_disconnect,
+        "nested partial": functools.partial(partial_disconnect),
+        "decorated descriptor": descriptor,
+    }
+    for label, callable_ in rejected.items():
+        assert is_lifecycle_callback(LifecycleParent, callable_), (
+            f"{label} must be recognised as a lifecycle callback"
+        )
+    assert not is_lifecycle_callback(LifecycleParent, ordinary), (
+        "an ordinary coroutine must not be classified as a lifecycle callback"
+    )
+    assert not is_lifecycle_callback(LifecycleParent, 42), (
+        "a non-callable must not be classified as a lifecycle callback"
+    )
 
 
 class ParentResource(WebSocketResource):
