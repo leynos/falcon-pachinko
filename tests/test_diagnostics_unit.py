@@ -214,6 +214,16 @@ def test_sanitize_omits_values_that_do_not_fit_total_budget(
     ), "values that exceed the complete tree budget must become an omission marker"
 
 
+def test_sanitize_collapses_mapping_cut_off_by_output_budget() -> None:
+    """A partially visited mapping must not look like a complete sample."""
+    sample = {"first": "visible", "second": "not inspected"}
+    sanitizer = DiagnosticSanitizer(max_output_length=24)
+
+    assert sanitizer.sanitize(sample) == "<budget>", (
+        "mid-mapping budget exhaustion must collapse the partial tree"
+    )
+
+
 @given(value=_RECURSIVE)
 def test_canary_under_sensitive_key_never_appears(value: object) -> None:
     """Unrelated nesting cannot weaken redaction of a known secret."""
