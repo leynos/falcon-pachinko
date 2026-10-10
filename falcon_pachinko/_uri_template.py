@@ -1,4 +1,11 @@
-"""Compile URI templates into regular expressions safely."""
+"""Compile URI templates into safe regular expressions.
+
+The compiler escapes literal route text and turns named placeholders into
+non-slash path-segment captures. Use :func:`compile_uri_template` for full-path
+matching::
+
+    match = compile_uri_template("/rooms/{room}").fullmatch("/rooms/a")
+"""
 
 from __future__ import annotations
 
@@ -160,7 +167,8 @@ def _compile_template_with_suffix(template: str, suffix: str) -> re.Pattern[str]
     Raises
     ------
     ValueError
-        If the template contains malformed braces or parameter names.
+        If braces are malformed, a parameter name is invalid or duplicated,
+        or a path segment has an ambiguous multiple-parameter layout.
     """
     stripped_template = template.rstrip("/")
     try:
@@ -193,7 +201,6 @@ def compile_uri_template(template: str) -> re.Pattern[str]:
     -------
     re.Pattern[str]
         The compiled full-path regular expression.
-
     """
     return _compile_template_with_suffix(template, "/?$")
 
