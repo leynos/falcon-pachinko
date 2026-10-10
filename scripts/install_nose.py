@@ -137,9 +137,7 @@ def _validated_digest_entry(target: object, digest: object) -> tuple[str, str]:
     return target, digest
 
 
-def binary_path(
-    *, repository_root: Path = REPOSITORY_ROOT, environment: cabc.Mapping[str, str]
-) -> Path:
+def binary_path(*, repository_root: Path, environment: cabc.Mapping[str, str]) -> Path:
     """Resolve ``NOSE_BIN`` against the repository root when it is relative."""
     override = environment.get("NOSE_BIN")
     candidate = (
@@ -280,16 +278,16 @@ def _run_process(
 class InstallerContext:
     """Inject filesystem, process, platform, download, and output boundaries."""
 
-    repository_root: Path = REPOSITORY_ROOT
-    pyproject_path: Path = PYPROJECT
-    manifest_path: Path = MANIFEST
-    environment: cabc.Mapping[str, str] | None = None
-    system: str | None = None
-    machine: str | None = None
-    libc_name: str | None = None
-    downloader: cabc.Callable[[str], bytes] = download_archive
-    output: cabc.Callable[[str], None] = print
-    process_runner: ProcessRunner = _run_process
+    repository_root: Path
+    pyproject_path: Path
+    manifest_path: Path
+    environment: cabc.Mapping[str, str]
+    process_runner: ProcessRunner
+    system: str
+    machine: str
+    libc_name: str
+    downloader: cabc.Callable[[str], bytes]
+    output: cabc.Callable[[str], None]
 
 
 def _run_version(
@@ -298,9 +296,8 @@ def _run_version(
 ) -> str:
     """Run ``--version`` through the supplied process boundary."""
     try:
-        environment = os.environ if context.environment is None else context.environment
         result = context.process_runner(
-            [str(binary), "--version"], context.repository_root, environment
+            [str(binary), "--version"], context.repository_root, context.environment
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         msg = f"cannot verify {binary} --version: {error}"
@@ -341,10 +338,10 @@ def _sync_file_and_directory(binary: Path) -> None:
         os.close(descriptor)
 
 
-def ensure_installed(context: InstallerContext | None = None) -> Path:
+def ensure_installed(context: InstallerContext) -> Path:
     """Reuse or install the pinned platform release, then verify its version."""
-    settings = InstallerContext() if context is None else context
-    env = dict(os.environ if settings.environment is None else settings.environment)
+    settings = context
+    env = dict(settings.environment)
     settings = dc.replace(settings, environment=env)
     version, digests = load_pins(
         pyproject_path=settings.pyproject_path,
@@ -386,8 +383,8 @@ def _download_release(
 ) -> bytes:
     """Download and verify the release selected for the current host."""
     target = platform_target(
-        system=platform.system() if context.system is None else context.system,
-        machine=platform.machine() if context.machine is None else context.machine,
+        system=context.system,
+        machine=context.machine,
         libc_name=context.libc_name,
     )
     digest = digests.get(target)
@@ -403,7 +400,20 @@ def _download_release(
 def main() -> int:
     """Install the configured detector or print an actionable failure."""
     try:
-        ensure_installed()
+        ensure_installed(
+            InstallerContext(
+                environment=dict(os.environ),
+                process_runner=_run_process,
+                repository_root=REPOSITORY_ROOT,
+                pyproject_path=PYPROJECT,
+                manifest_path=MANIFEST,
+                system=platform.system(),
+                machine=platform.machine(),
+                libc_name=platform.libc_ver()[0],
+                downloader=download_archive,
+                output=print,
+            )
+        )
     except NoseInstallError as error:
         print(f"nose installation error: {error}", file=sys.stderr)
         return 2

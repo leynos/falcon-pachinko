@@ -21,6 +21,7 @@ Adapted from ``leynos/episodic`` PR #276 at commit
 
 from __future__ import annotations
 
+import os
 import sys
 import tomllib
 from collections import abc as cabc
@@ -33,10 +34,18 @@ from duplication_allowlist import (
     load_allowlist,
     validate_key,
 )
-from nose_detector import PYPROJECT, load_settings, run_detector
+from nose_detector import (
+    DetectorContext,
+    discover_binary,
+    load_settings,
+    run_command,
+    run_detector,
+)
 from nose_schema import Finding, GateConfigError, GateExecutionError
 
 app = cyclopts.App(help="Run or configure the code-duplication gate.")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 type AllowlistReader = cabc.Callable[[Path], tuple[AllowEntry, ...]]
 type FindingDetector = cabc.Callable[[], list[Finding]]
@@ -94,7 +103,13 @@ def detect_findings() -> list[Finding]:
     Configuration and execution errors from the settings loader and detector
     propagate to the CLI boundary.
     """
-    return run_detector(load_settings(PYPROJECT))
+    context = DetectorContext(
+        repository_root=REPO_ROOT,
+        environment=dict(os.environ),
+        binary_discoverer=discover_binary,
+        command_runner=run_command,
+    )
+    return run_detector(load_settings(PYPROJECT), context=context)
 
 
 def _report(

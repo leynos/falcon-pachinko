@@ -35,8 +35,6 @@ from nose_schema import (
 )
 from pathspec import GitIgnoreSpec
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-PYPROJECT = REPO_ROOT / "pyproject.toml"
 INSTALL_HINT = "run `make install-nose` to install the pinned detector"
 COMMAND_TIMEOUT_SECONDS = 120
 _SUPPORTED_CHANNELS = {"syntax", "semantic", "near"}
@@ -67,9 +65,11 @@ __all__ = [
     "Location",
     "NoseSettings",
     "build_command",
+    "discover_binary",
     "load_settings",
     "normalize_findings",
     "resolve_binary",
+    "run_command",
     "run_detector",
 ]
 
@@ -436,18 +436,16 @@ def _has_supported_channels(mode: str) -> bool:
     )
 
 
-def resolve_binary(
-    settings: NoseSettings, *, context: DetectorContext | None = None
-) -> str:
+def resolve_binary(settings: NoseSettings, *, context: DetectorContext) -> str:
     """Locate the pinned nose binary and verify its version.
 
     Parameters
     ----------
     settings : NoseSettings
         Detector settings supplying the pinned version.
-    context : DetectorContext | None
+    context : DetectorContext
         Explicit repository root, environment, binary discovery and command
-        runner. The default context is assembled at the CLI boundary.
+        runner supplied by the CLI composition boundary.
 
     Returns
     -------
@@ -459,28 +457,27 @@ def resolve_binary(
     GateExecutionError
         If no binary is found or the reported version does not match.
     """
-    runtime = _default_context() if context is None else context
     # Resolve against the repository root so a relative NOSE_BIN keeps
     # working for callers that run the detector from another directory.
-    override = runtime.environment.get("NOSE_BIN")
+    override = context.environment.get("NOSE_BIN")
     if override:
         override_path = Path(override)
         if not override_path.is_absolute():
-            override_path = runtime.repository_root / override_path
+            override_path = context.repository_root / override_path
         candidate = str(override_path.resolve())
     else:
-        candidate = runtime.binary_discoverer(
-            runtime.repository_root, runtime.environment
+        candidate = context.binary_discoverer(
+            context.repository_root, context.environment
         )
     if candidate is None:
-        default_binary = runtime.repository_root / ".tools" / "nose" / "nose"
+        default_binary = context.repository_root / ".tools" / "nose" / "nose"
         msg = (
             f"nose {settings.version} was not found at {default_binary} "
             f"or on PATH: {INSTALL_HINT}"
         )
         raise GateExecutionError(msg)
-    reported = runtime.command_runner(
-        [candidate, "--version"], runtime.repository_root, runtime.environment
+    reported = context.command_runner(
+        [candidate, "--version"], context.repository_root, context.environment
     ).strip()
     expected = f"nose {settings.version}"
     if reported != expected:
@@ -492,17 +489,7 @@ def resolve_binary(
     return candidate
 
 
-def _default_context() -> DetectorContext:
-    """Assemble process-wide dependencies at the detector's CLI boundary."""
-    return DetectorContext(
-        repository_root=REPO_ROOT,
-        environment=dict(os.environ),
-        binary_discoverer=_discover_binary,
-        command_runner=_run_command,
-    )
-
-
-def _discover_binary(
+def discover_binary(
     repository_root: Path, environment: cabc.Mapping[str, str]
 ) -> str | None:
     """Return the repository-local nose binary, else one found on supplied PATH."""
@@ -546,7 +533,7 @@ def build_command(binary: str, settings: NoseSettings) -> list[str]:
 def run_detector(
     settings: NoseSettings,
     *,
-    context: DetectorContext | None = None,
+    context: DetectorContext,
 ) -> list[Finding]:
     """Run the pinned detector and normalize its report.
 
@@ -554,9 +541,9 @@ def run_detector(
     ----------
     settings : NoseSettings
         Detector settings for this repository.
-    context : DetectorContext | None
+    context : DetectorContext
         Explicit repository root, environment, binary discovery and command
-        runner. The default context is assembled at the CLI boundary.
+        runner supplied by the CLI composition boundary.
 
     Returns
     -------
@@ -570,10 +557,9 @@ def run_detector(
         schema violations propagate as ``GateConfigError`` from
         :func:`normalize_findings`.
     """
-    runtime = _default_context() if context is None else context
-    binary = resolve_binary(settings, context=runtime)
-    output = runtime.command_runner(
-        build_command(binary, settings), runtime.repository_root, runtime.environment
+    binary = resolve_binary(settings, context=context)
+    output = context.command_runner(
+        build_command(binary, settings), context.repository_root, context.environment
     )
     try:
         report = json.loads(output)
@@ -583,7 +569,7 @@ def run_detector(
     return normalize_findings(report)
 
 
-def _run_command(
+def run_command(
     command: cabc.Sequence[str],
     repository_root: Path,
     environment: cabc.Mapping[str, str],
