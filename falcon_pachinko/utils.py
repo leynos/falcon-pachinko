@@ -17,8 +17,16 @@ import typing as typ
 
 import msgspec as ms
 
-# Public identity alias for callers that should not depend on msgspec directly.
+# Stable identity re-export: callers receive the original class object.
 ValidationError: typ.TypeAlias = ms.ValidationError  # pylint: disable=prefer-type-statement  # ruff: ignore[non-pep695-type-alias]  # PEP 695 breaks class identity.
+
+
+__all__ = [
+    "ValidationError",
+    "duplicate_payload_type_msg",
+    "raise_unknown_fields",
+    "to_snake_case",
+]
 
 # Cap the payload echoed back in validation errors so logs stay readable.
 _MAX_PAYLOAD_SNIPPET = 200
