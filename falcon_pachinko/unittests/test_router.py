@@ -280,6 +280,26 @@ def test_mount_parameter_collision_does_not_register_route() -> None:
     )
 
 
+def test_mount_parameter_collision_leaves_router_unmounted() -> None:
+    """A composed-template error does not commit partial mount state."""
+    router = WebSocketRouter()
+    router.add_route("/health", DummyResource)
+    router.add_route("/chat/{room}", DummyResource)
+
+    with pytest.raises(ValueError, match="Duplicate parameter name 'room'"):
+        router.mount("/ws/{room}")
+
+    assert not router._mount_prefix, "failed mounting should preserve the prior prefix"
+    assert not router._routes, (
+        "failed mounting should not retain partially compiled routes"
+    )
+
+    router.mount("/ws/{scope}")
+    assert len(router._routes) == 2, (
+        "a corrected mount should compile every stored route"
+    )
+
+
 def test_add_route_invalid_template() -> None:
     """Empty parameter names should raise ``ValueError``."""
     router = WebSocketRouter()

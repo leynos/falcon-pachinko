@@ -14,12 +14,12 @@ import contextlib
 import dataclasses as dc
 import functools
 import inspect
-import re
 import threading
 import typing as typ
 
 import falcon
 
+from ._uri_template import _compile_prefix_template, compile_uri_template
 from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
 
@@ -28,6 +28,9 @@ from .protocols import WebSocketLike
 # that raises NameError when introspected would be a trap for runtime
 # consumers, so the name it references has to resolve at runtime too.
 from .resource import WebSocketResource
+
+if typ.TYPE_CHECKING:
+    import re
 
 __all__ = ["ResourceFactory", "SimulatorFactory", "WebSocketRouter"]
 
@@ -61,146 +64,6 @@ def _request_path_template(req: _RequestLike) -> str:
         return req.path_template
     except AttributeError:
         return ""
-
-
-def _parse_parameter(template: str, start: int) -> tuple[str, int]:
-    """Return a validated parameter name and the first index after its brace.
-
-    Returns
-    -------
-    tuple[str, int]
-        The parameter name and the first index after its closing brace.
-
-    Raises
-    ------
-    ValueError
-        If braces are malformed or the parameter name is invalid.
-    """
-    closing_brace = template.find("}", start + 1)
-    nested_brace = template.find(
-        "{", start + 1, closing_brace if closing_brace >= 0 else len(template)
-    )
-    if nested_brace >= 0:
-        placeholder_end = closing_brace + 1 if closing_brace >= 0 else len(template)
-        placeholder = template[start:placeholder_end]
-        msg = (
-            f"Nested or doubled brace in parameter {placeholder!r} "
-            f"in template: {template}"
-        )
-        raise ValueError(msg)
-    if closing_brace < 0:
-        parameter_name = template[start + 1 :]
-        msg = (
-            f"Unmatched opening brace for parameter {parameter_name!r} "
-            f"in template: {template}"
-        )
-        raise ValueError(msg)
-
-    parameter_name = template[start + 1 : closing_brace]
-    if not parameter_name:
-        msg = f"Empty parameter name in template: {template}"
-        raise ValueError(msg)
-    if not parameter_name.isidentifier():
-        msg = f"Invalid parameter name {parameter_name!r} in template: {template}"
-        raise ValueError(msg)
-
-    return parameter_name, closing_brace + 1
-
-
-def _tokenize_template(template: str) -> list[tuple[bool, str]]:
-    """Return ordered literal and parameter tokens from ``template``.
-
-    Each token is ``(is_parameter, text)``. Braces are reserved for parameter
-    names, so malformed or ambiguous brace pairs fail before regex compilation.
-
-    Returns
-    -------
-    list[tuple[bool, str]]
-        Ordered tokens, with ``True`` marking placeholder names.
-
-    Raises
-    ------
-    ValueError
-        If braces are malformed or a parameter name is invalid or duplicated.
-    """
-    tokens: list[tuple[bool, str]] = []
-    parameter_names: set[str] = set()
-    index = 0
-    literal_start = 0
-
-    while index < len(template):
-        char = template[index]
-        if char == "}":
-            msg = f"Unmatched closing brace '}}' in template: {template}"
-            raise ValueError(msg)
-        if char != "{":
-            index += 1
-            continue
-
-        if literal_start < index:
-            tokens.append((False, template[literal_start:index]))
-
-        parameter_name, index = _parse_parameter(template, index)
-        if parameter_name in parameter_names:
-            msg = f"Duplicate parameter name {parameter_name!r} in template: {template}"
-            raise ValueError(msg)
-
-        parameter_names.add(parameter_name)
-        tokens.append((True, parameter_name))
-        literal_start = index
-
-    if literal_start < len(template):
-        tokens.append((False, template[literal_start:]))
-
-    return tokens
-
-
-def _compile_template_with_suffix(template: str, suffix: str) -> re.Pattern[str]:
-    """Compile a template with escaped literals and ``suffix`` appended.
-
-    Returns
-    -------
-    re.Pattern[str]
-        The compiled regular expression.
-
-    Raises
-    ------
-    ValueError
-        If the template contains malformed braces or parameter names.
-    """
-    stripped_template = template.rstrip("/")
-    try:
-        tokens = _tokenize_template(stripped_template)
-    except ValueError as exc:
-        if stripped_template == template:
-            raise
-        msg = f"{exc} (original template: {template})"
-        raise ValueError(msg) from exc
-    pattern_parts = [
-        f"(?P<{text}>[^/]+)" if is_parameter else re.escape(text)
-        for is_parameter, text in tokens
-    ]
-    return re.compile(f"^{''.join(pattern_parts)}{suffix}")
-
-
-def compile_uri_template(template: str) -> re.Pattern[str]:
-    """Compile a URI template for full-path matching.
-
-    Literal text is matched exactly. Named parameters use Python identifier
-    names and capture one or more characters up to the next slash.
-
-    Returns
-    -------
-    re.Pattern[str]
-        The compiled full-path regular expression.
-
-    """
-    return _compile_template_with_suffix(template, "/?$")
-
-
-def _compile_prefix_template(template: str) -> re.Pattern[str]:
-    """Compile ``template`` to match a path prefix."""
-    return _compile_template_with_suffix(template, "(?:/|$)")
 
 
 def _normalize_path(path: str) -> str:
@@ -281,33 +144,35 @@ class WebSocketRouter:
         self._resource_factory = resource_factory or (lambda factory: factory())
         self._simulator_factory = simulator_factory
 
-    def _compile_and_store_route(
-        self,
+    @staticmethod
+    def _compile_route(
         canonical: str,
         factory: cabc.Callable[..., WebSocketResource],
-    ) -> None:
-        """Compile ``canonical`` with the mount prefix and store it.
+        mount_prefix: str,
+        existing_routes: cabc.Iterable[WebSocketRouter._CompiledRoute],
+    ) -> WebSocketRouter._CompiledRoute:
+        """Compile one route without mutating router registration state.
 
-        This helper mutates :attr:`_routes` and therefore assumes the caller
-        already holds :attr:`_mount_lock`. The router relies on this lock to
-        guard all mount-related state, preventing race conditions when routes
-        are added concurrently with mounting.
+        Returns
+        -------
+        WebSocketRouter._CompiledRoute
+            The compiled full and prefix patterns for the route.
 
         Raises
         ------
         ValueError
             If an identical pattern is already registered.
         """
-        base = self._mount_prefix.rstrip("/")
+        base = mount_prefix.rstrip("/")
         full = f"{base}{canonical}"
         pattern = compile_uri_template(full)
         prefix = _compile_prefix_template(full)
-        for existing in self._routes:
+        for existing in existing_routes:
             if existing.pattern.pattern == pattern.pattern:
                 msg = f"route path {full!r} already registered"
                 raise ValueError(msg)
 
-        self._routes.append(WebSocketRouter._CompiledRoute(prefix, pattern, factory))
+        return WebSocketRouter._CompiledRoute(prefix, pattern, factory)
 
     def mount(self, prefix: str) -> None:
         """Compile stored routes with the given mount ``prefix``."""
@@ -322,9 +187,19 @@ class WebSocketRouter:
                 msg = f"router already mounted at '{self._mount_prefix}'"
                 raise RuntimeError(msg)
 
-            self._mount_prefix = canonical
+            compiled_routes: list[WebSocketRouter._CompiledRoute] = []
             for raw in self._raw:
-                self._compile_and_store_route(raw.canonical, raw.factory)
+                compiled_routes.append(
+                    self._compile_route(
+                        raw.canonical,
+                        raw.factory,
+                        canonical,
+                        self._routes + compiled_routes,
+                    )
+                )
+
+            self._mount_prefix = canonical
+            self._routes.extend(compiled_routes)
 
     def add_route(
         self,
@@ -362,14 +237,16 @@ class WebSocketRouter:
 
         with self._mount_lock:
             self._registration.check_conflicts(canonical, name, path=path)
+            compiled_route: WebSocketRouter._CompiledRoute | None = None
             if self._mount_prefix:
-                full = f"{self._mount_prefix.rstrip('/')}{canonical}"
-                compile_uri_template(full)
+                compiled_route = self._compile_route(
+                    canonical, factory, self._mount_prefix, self._routes
+                )
             self._raw.append(WebSocketRouter._RawRoute(path, canonical, factory))
             if name:
                 self._names[name] = path
-            if self._mount_prefix:
-                self._compile_and_store_route(canonical, factory)
+            if compiled_route is not None:
+                self._routes.append(compiled_route)
 
     @staticmethod
     def _validate_resource_type(

@@ -150,6 +150,15 @@ def test_multiple_and_adjacent_parameters_keep_segment_capture_semantics() -> No
     )
 
 
+@pytest.mark.parametrize("compiler", [compile_uri_template, _compile_prefix_template])
+def test_adjacent_parameter_runs_are_bounded(
+    compiler: cabc.Callable[[str], re.Pattern[str]],
+) -> None:
+    """The compiler bounds ambiguous backtracking while supporting pairs."""
+    with pytest.raises(ValueError, match="adjacent parameter limit"):
+        compiler("/{first}{second}{third}")
+
+
 def test_full_template_matches_optional_single_trailing_slash() -> None:
     """Trailing slash behavior remains identical for full patterns."""
     pattern = compile_uri_template("/foo/")
