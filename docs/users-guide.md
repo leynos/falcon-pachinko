@@ -25,13 +25,12 @@ workers, and testing utilities.
 ## 2. Quickstart (Composable Routing)
 
 ```python
-import falcon
+import falcon.asgi
 from falcon_pachinko import WebSocketResource, WebSocketRouter, handles_message
 
 
 class ChatResource(WebSocketResource):
     async def on_connect(self, req, ws, room: str) -> bool:
-        await ws.accept()
         self.state["room"] = room
         return True  # continue to message handling
 
@@ -40,15 +39,14 @@ class ChatResource(WebSocketResource):
         await ws.send_media({"type": "echo", "text": payload.text})
 
 
-app = falcon.App()
+app = falcon.asgi.App()
 router = WebSocketRouter()
 router.add_route("/chat/{room}", ChatResource)
-app.add_route("/ws", router)  # router is a Falcon resource
-router.mount("/ws")
+router.attach(app, "/ws")
 ```
 
-- The router is mounted once (`router.mount("/ws")`) and handles all descendant
-  paths relative to that prefix.
+- `attach()` mounts the router at `/ws` and registers a Falcon catch-all route
+  for descendant paths.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
 
@@ -86,11 +84,26 @@ def add_route(
 ## 3. Resource Lifecycle & State
 
 - `on_connect(req, ws, **params) -> bool | None`
-  - Accept/close/inspect headers, seed `self.state`, return `False` to stop
-    processing after connect.
-- `on_disconnect(req, ws, close_code, **params) -> None`
-  - Clean up resources; runs even if connection negotiation fails after
-    acceptance.
+  - Inspect headers, seed `self.state`, and return `False` to reject the
+    connection. A `True` result lets the router accept the socket after the
+    hook. If `on_connect()` sends a frame itself, call `await ws.accept()` first.
+- `on_disconnect(ws, close_code) -> None`
+  - Clean up resources after the persistent receive loop ends. A client
+    disconnect preserves Falcon's close code (or defaults to `1000`); a
+    dispatch failure reports `1011`; local task cancellation reports `1006` to
+    cleanup and is re-raised. The router does not send a close frame to an
+    already disconnected socket.
+- Session frames arrive as raw `str` or `bytes` from `ws.receive_media()` and
+  are passed to `WebSocketResource.dispatch()`. After acceptance, the router
+  continues receiving and dispatching frames until Falcon reports a disconnect.
+
+`router.attach()` installs pass-through TEXT and BINARY deserializers in the
+application's shared `ws_options.media_handlers` mapping while preserving its
+outbound serializers. Consequently, every Falcon WebSocket responder on that
+application receives raw frames from `receive_media()`; responders that need
+decoded objects must decode those frames themselves. `attach()` warns when it
+finds customized media handlers that it will replace.
+
 - `self.state`
   - Dict-like proxy shared across all resources in the same connection chain.
   - Override via `get_child_context()` to supply a custom state store (e.g.,
@@ -280,6 +293,11 @@ it. An undecorated async function works in the same way.
   designed for integration tests; captures traces for assertions.
 - **WebSocketSimulator** – In-memory fake implementing the WebSocket protocol
   for fast unit tests.
+- **Live server harness** – `LiveWebSocketServer` serves a real Falcon ASGI app
+  on an ephemeral localhost port. The `live_websocket_server` pytest fixture
+  provides `start(app)` and a loop-bound `run(awaitable, timeout=...)` helper.
+  Connect with `server.connect(path)` to use `WebSocketTestClient` over a real
+  RFC WebSocket connection and have the fixture track the client for teardown.
 - **Pytest fixtures** – See `tests/behaviour/*.feature` and
   `falcon_pachinko/unittests` helpers for factory utilities.
 
@@ -295,10 +313,13 @@ router and simulator by hand.
 Recommended strategy:
 
 - Unit test pure resource logic with `WebSocketSimulator`.
-- Behavioural tests with `pytest-bdd` to exercise router composition, hooks,
-  DI, and connection manager flows.
-- Worker tests using the `WorkerController` fixture from
-  `tests/behaviour/lifespan_workers.feature`.
+- Use `pytest-bdd` live-server scenarios as the required acceptance path for
+  every WebSocket lifecycle feature. These prove that real Falcon ASGI
+  responders keep a socket open and exchange frames over a real connection.
+- Keep simulator tests for fast routing, hooks, DI, and connection-manager
+  coverage; they complement the live suite and do not replace it.
+- The `lifespan_workers.feature` BDD scenarios verify workers running during
+  application lifespan; the feature file is not a fixture.
 
 ## 11. Reference Example
 

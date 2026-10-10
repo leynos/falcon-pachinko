@@ -47,6 +47,7 @@ class WebSocketSimulator(_LifecycleSocket):  # ruff: ignore[too-many-public-meth
         self._outbound = outbound or asyncio.Queue()
         self.lifecycle_event = asyncio.Event()
         self._disconnect_code: int | None = None
+        self._receive_waiting = False
         self._json_encoder = msjson.Encoder()
         self._default_decoder = msjson.Decoder()
         self._decoders: dict[type[object], msjson.Decoder] = {}
@@ -80,7 +81,14 @@ class WebSocketSimulator(_LifecycleSocket):  # ruff: ignore[too-many-public-meth
         """Return the next inbound frame queued via :meth:`push_message`."""
         if self._disconnect_code is not None:
             raise falcon.WebSocketDisconnected(code=self._disconnect_code)
-        message = await self._inbound.get()
+        if self.closed:
+            self._disconnect_code = self.close_code or 1000
+            raise falcon.WebSocketDisconnected(code=self._disconnect_code)
+        self._receive_waiting = True
+        try:
+            message = await self._inbound.get()
+        finally:
+            self._receive_waiting = False
         if isinstance(message, _DisconnectMarker):
             self._disconnect_code = message.code
             await self.close(code=message.code)
@@ -96,7 +104,12 @@ class WebSocketSimulator(_LifecycleSocket):  # ruff: ignore[too-many-public-meth
 
     @typ.override
     async def close(self, code: int = 1000) -> None:
-        """Close the simulated peer and wake lifecycle waiters."""
+        """Close the simulated peer and wake receive and lifecycle waiters."""
+        should_signal_receiver = self._disconnect_code is None
+        if should_signal_receiver:
+            self._disconnect_code = code
+            if self._receive_waiting:
+                await self._inbound.put(_DisconnectMarker(code))
         await super().close(code=code)
         self.lifecycle_event.set()
 

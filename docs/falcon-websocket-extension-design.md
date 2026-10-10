@@ -33,6 +33,29 @@ then detail the core components and API of Falcon-Pachinko, followed by an
 illustrative use case. Finally, potential future enhancements and conclusions
 will be discussed.
 
+## Current implementation: Falcon routing and session contract
+
+The implementation uses `falcon.asgi.App` and
+`WebSocketRouter.attach(app, prefix)` to register both the exact mount and a
+catch-all descendant route. `attach()` installs pass-through TEXT and BINARY
+deserializers in the application's shared WebSocket media-handler mapping, so
+every Falcon WebSocket responder on that app receives raw `str` or `bytes` from
+`receive_media()`. Outbound serialization continues through the configured
+handler. Attaching warns when it replaces customized media handlers.
+
+After Falcon routes a connection to the router, `on_connect()` decides whether
+to accept it. The router owns acceptance after that hook; a resource that sends
+a frame from `on_connect()` must call `await ws.accept()` first. Once accepted,
+the router repeatedly receives raw frames and invokes
+`WebSocketResource.dispatch()` until Falcon reports a disconnect. Cleanup calls
+`on_disconnect(ws, close_code)` once: normal disconnects preserve the peer's
+code or default to `1000`, dispatch failures use `1011`, and local task
+cancellation reports `1006` to cleanup before cancellation is re-raised. The
+router does not send a close frame to a socket Falcon has already closed.
+
+This implemented contract supersedes the future-tense responder and receive
+loop descriptions in the original proposal below.
+
 ## 2. Literature Survey and Existing Solutions
 
 Before detailing the proposed design, it is pertinent to survey existing
@@ -282,18 +305,15 @@ logic.
     request, and `ws` is a `WebSocketLike` **connection**. The protocol defines
     the minimal `send_media`, `accept`, and `close` methods needed by the
     resource. `params` will contain any path parameters from the route. It
-    returns `True` to accept the connection or `False` to reject it. If `False`
-    is returned, the library will handle sending an appropriate closing
-    handshake (e.g., HTTP 403 or a custom code if supported by an extension
-    like WebSocket Denial Response 12). This boolean return abstracts the
-    direct `await ws.accept()` or `await ws.close()` call, simplifying the
-    resource method to focus on connection logic rather than raw ASGI
-    mechanics. This design aligns with Falcon's higher-level approach for HTTP
-    handlers, where the framework manages response sending.
+    returns `True` to continue the session or `False` to reject it. The router
+    accepts the connection after this hook unless the resource already accepted
+    it. Because the hook runs before router-owned acceptance, a resource that
+    sends from `on_connect()` must first call `await ws.accept()`.
 
   - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: Called
     when the WebSocket connection is closed, either by the client or the
-    server. `close_code` provides the WebSocket close code.
+    server. `close_code` preserves a normal peer code (default `1000`), reports
+    dispatch failures as `1011`, and reports local cancellation as `1006`.
 
   - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str,
     bytes])`
@@ -698,6 +718,9 @@ class ChatRoomResource(WebSocketResource):
 
         await self.join_room(self.room_name)
 
+        # on_connect runs before router-owned acceptance; accept before sending.
+        await ws.accept()
+
         await ws.send_media({
             "type": "serverSystemMessage",
             "payload": {"text": f"Welcome {self.user.name} to room '{room_name}'!"},
@@ -932,13 +955,8 @@ from falcon_pachinko.router import WebSocketRouter  # New component
 app = falcon.asgi.App()
 chat_router = WebSocketRouter()
 
-# The WebSocketRouter instance is mounted like any other Falcon resource.
-# It will handle all WebSocket connections under the '/ws/chat/' prefix.
-app.add_route("/ws/chat", chat_router)
-
-# To achieve this, the WebSocketRouter will implement the on_websocket
-# responder method, which will contain the logic to dispatch the connection
-# to the correct sub-route defined on the router itself.
+# attach() registers the exact mount and a descendant catch-all route.
+chat_router.attach(app, "/ws/chat")
 ```
 
 This creates a clean architectural boundary and leverages Falcon's existing,
@@ -970,7 +988,7 @@ chat_router = WebSocketRouter(name="chat")  # Give the router a name for reversa
 # Add a route to the router, giving it a name for url_for.
 chat_router.add_route("/{room_id}", ChatResource, name="room", history_size=100)
 
-app.add_route("/ws/chat", chat_router)
+chat_router.attach(app, "/ws/chat")
 
 # Generate a URL:
 # url = app.url_for('chat:room', room_id='general') # Hypothetical top-level reversal
@@ -1257,8 +1275,8 @@ class ChatResource(WebSocketResource):
 
 #### 5.3.2. Automated Dispatch Logic
 
-The base `WebSocketResource` would contain a receive loop that performs the
-following steps:
+`WebSocketRouter` owns the persistent receive loop. For each frame, it performs
+the following steps:
 
 1. Receive a raw message from the WebSocket.
 

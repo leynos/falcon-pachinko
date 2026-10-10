@@ -352,3 +352,39 @@ async def test_uvicorn_import_failure_raises_missing_dependency_error(
         await adapter.task
 
     sock.close()
+
+
+@pytest.mark.asyncio
+async def test_uvicorn_stop_consumes_its_own_task_cancellation() -> None:
+    """Stopping before startup must not leak adapter-owned cancellation."""
+    import falcon_pachinko.testing._uvicorn as uvicorn_adapter
+
+    adapter = uvicorn_adapter._UvicornAdapter(shutdown_timeout=0.1)
+    await adapter.stop()
+
+    assert adapter.task.cancelled(), "stop must cancel the pending serve task"
+
+
+@pytest.mark.asyncio
+async def test_uvicorn_stop_cancels_task_during_startup_race() -> None:
+    """Stopping in the startup race must not wait for an unstarted server."""
+    import falcon_pachinko.testing._uvicorn as uvicorn_adapter
+
+    adapter = uvicorn_adapter._UvicornAdapter(shutdown_timeout=0.1)
+    original_task = adapter.task
+    original_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await original_task
+
+    async def block_forever() -> None:
+        await asyncio.Event().wait()
+
+    blocked_task = asyncio.create_task(block_forever())
+    adapter._task = blocked_task
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    adapter._start_request.set_result((_make_app(), sock))
+    try:
+        await asyncio.wait_for(adapter.stop(), timeout=0.1)
+        assert blocked_task.cancelled(), "stop must cancel before a server exists"
+    finally:
+        sock.close()

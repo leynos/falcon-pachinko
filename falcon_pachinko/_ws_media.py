@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import functools
 import typing as typ
+import warnings
 
 import falcon
+import falcon.asgi
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -31,14 +34,69 @@ class _RawWebSocketMediaHandler:
         return self._serialize(media)
 
 
+def _configuration_value(value: object) -> object:
+    """Normalize mutable handler configuration for a default comparison."""
+    match value:
+        case functools.partial() as partial:
+            return (
+                partial.func,
+                partial.args,
+                _configuration_value(partial.keywords or {}),
+            )
+        case dict() as mapping:
+            return tuple(
+                sorted(
+                    (key, _configuration_value(item)) for key, item in mapping.items()
+                )
+            )
+        case list() | tuple() as sequence:
+            return tuple(_configuration_value(item) for item in sequence)
+        case _:
+            return value
+
+
+def _matches_default_handler(handler: object, default_handler: object) -> bool:
+    """Return whether ``handler`` has Falcon's default class and settings."""
+    if type(handler) is not type(default_handler):
+        return False
+    handler_state = _configuration_value(getattr(handler, "__dict__", {}))
+    default_state = _configuration_value(getattr(default_handler, "__dict__", {}))
+    return handler_state == default_state
+
+
 def install_raw_websocket_media_handlers(
     media_handlers: cabc.MutableMapping[falcon.WebSocketPayloadType, object],
 ) -> None:
-    """Wrap Falcon's text and binary handlers once for raw frame dispatch."""
-    for payload_type in (
+    """Wrap app-wide text and binary handlers once for raw frame dispatch.
+
+    Falcon shares ``ws_options.media_handlers`` across all WebSocket routes in
+    an application. Warn if those handlers have been customized because this
+    wrapper replaces their inbound deserializer with pass-through behavior.
+    """
+    payload_types = (
         falcon.WebSocketPayloadType.TEXT,
         falcon.WebSocketPayloadType.BINARY,
-    ):
+    )
+    defaults = falcon.asgi.App().ws_options.media_handlers
+    custom_handlers = [
+        payload_type.name
+        for payload_type in payload_types
+        if not isinstance(
+            (handler := media_handlers[payload_type]), _RawWebSocketMediaHandler
+        )
+        and not _matches_default_handler(handler, defaults[payload_type])
+    ]
+    if custom_handlers:
+        names = ", ".join(custom_handlers)
+        warnings.warn(
+            "attach() replaces customised app-wide WebSocket media handlers "
+            f"for {names}; all Falcon WebSocket responders on this app will "
+            "receive raw str or bytes from receive_media()",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    for payload_type in payload_types:
         handler = media_handlers[payload_type]
         if not isinstance(handler, _RawWebSocketMediaHandler):
             media_handlers[payload_type] = _RawWebSocketMediaHandler(handler)

@@ -41,9 +41,9 @@ async def _receive_session(resource: WebSocketResource, ws: WebSocketLike) -> in
     while True:
         try:
             raw = await _receive_raw_frame(ws)
+            await resource.dispatch(ws, raw)
         except falcon.WebSocketDisconnected as exc:
             return exc.code if exc.code is not None else _WS_NORMAL_CLOSURE
-        await resource.dispatch(ws, raw)
 
 
 async def _notify_disconnect(

@@ -190,6 +190,61 @@ async def test_router_attach_dispatches_parameterized_route_through_falcon() -> 
 
 
 @pytest.mark.asyncio
+async def test_attach_documents_raw_media_contract_for_other_falcon_routes() -> None:
+    """Falcon responders on the same app observe the installed raw handlers."""
+
+    class PlainWebSocketResource:
+        def __init__(self) -> None:
+            self.received: str | bytes | None = None
+            self.received_event = asyncio.Event()
+
+        async def on_websocket(self, req: object, ws: WebSocketLike) -> None:
+            await ws.accept()
+            payload = await ws.receive_media()
+            assert isinstance(payload, str | bytes), "raw media must stay a frame"
+            self.received = payload
+            self.received_event.set()
+            await ws.close()
+
+    app = falcon.asgi.App()
+    plain_resource = PlainWebSocketResource()
+    app.add_route("/plain", plain_resource)
+    router = WebSocketRouter()
+    router.add_route("/rooms/{room}", AttachedPathResource)
+    router.attach(app, "/ws")
+    conductor = falcon.testing.ASGIConductor(app)
+
+    async with conductor.simulate_ws("/plain") as websocket:
+        await websocket.send_text('{"answer": 42}')
+        await asyncio.wait_for(plain_resource.received_event.wait(), timeout=1.0)
+
+    assert plain_resource.received == '{"answer": 42}', (
+        "all Falcon WebSocket responders on an attached app receive raw frames"
+    )
+
+
+def test_attach_warns_when_websocket_media_handlers_are_customized() -> None:
+    """Warn when attach replaces custom app-wide WebSocket deserializers."""
+
+    class CustomTextHandler:
+        def deserialize(self, payload: object) -> object:
+            return {"decoded": payload}
+
+        def serialize(self, media: object) -> object:
+            return media
+
+    app = falcon.asgi.App()
+    media_handlers = typ.cast(
+        "cabc.MutableMapping[falcon.WebSocketPayloadType, object]",
+        app.ws_options.media_handlers,
+    )
+    media_handlers[falcon.WebSocketPayloadType.TEXT] = CustomTextHandler()
+
+    with pytest.warns(UserWarning, match="app-wide WebSocket"):
+        WebSocketRouter().attach(app, "/ws")
+
+
+@pytest.mark.asyncio
 async def test_on_websocket_rejects_unregistered_descendant_template() -> None:
     """Only the catch-all route registered by attach may dispatch descendants."""
     router = WebSocketRouter()
@@ -267,6 +322,27 @@ async def test_dispatch_error_closes_with_1011_and_runs_cleanup() -> None:
     assert ws.closed == [1011], "dispatch errors use the internal-error close"
     assert ExplodingResource.instances[-1].disconnect_codes == [1011], (
         "dispatch failure must be reported to disconnect cleanup"
+    )
+
+
+@pytest.mark.asyncio
+async def test_disconnect_raised_during_dispatch_is_a_normal_disconnect() -> None:
+    """A send failure caused by peer disconnect keeps the peer close code."""
+
+    class DisconnectingResource(SessionResource):
+        async def on_unhandled(self, ws: object, message: str | bytes) -> None:
+            raise falcon.WebSocketDisconnected(code=1001)
+
+    router = WebSocketRouter()
+    router.add_route("/session", DisconnectingResource)
+    router.mount("/")
+    ws = _QueuedWebSocket(['{"type":"push"}'])
+
+    await router.on_websocket(make_req("/session"), ws)
+
+    assert not ws.closed, "a peer disconnect must not send an internal-error close"
+    assert DisconnectingResource.instances[-1].disconnect_codes == [1001], (
+        "disconnect cleanup must receive the peer's code"
     )
 
 

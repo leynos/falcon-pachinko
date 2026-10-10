@@ -122,9 +122,11 @@ def when_client_connects(
 
     def disconnect_session() -> None:
         task = context.session_task
-        if task is not None and not task.done():
+        if task is None:
+            return
+        if not task.done():
             event_loop.run_until_complete(context.simulator.push_disconnect())
-            event_loop.run_until_complete(task)
+        event_loop.run_until_complete(task)
 
     request.addfinalizer(disconnect_session)
     context.resource = _select_task_resource(context.instances)

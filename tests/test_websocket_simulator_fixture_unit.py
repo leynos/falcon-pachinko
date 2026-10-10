@@ -78,6 +78,27 @@ class ChattyResource(WebSocketResource):
         return False
 
 
+class ClosingResource(WebSocketResource):
+    """Close an accepted session from its message handler."""
+
+    instances: typ.ClassVar[list[ClosingResource]] = []
+
+    def __init__(self) -> None:
+        self.closed_event = asyncio.Event()
+        ClosingResource.instances.append(self)
+
+    async def on_connect(
+        self, req: falcon.Request, ws: WebSocketLike, **params: object
+    ) -> bool:
+        """Keep the session open for the dispatched close frame."""
+        return True
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Close the socket from the active responder session."""
+        await ws.close(code=1000)
+        self.closed_event.set()
+
+
 @pytest.mark.asyncio
 class TestWebSocketSimulatorFixture:
     """Unit tests covering simulator fixture routing and lifecycle mirroring."""
@@ -230,3 +251,18 @@ class TestWebSocketSimulatorFixture:
 
         with pytest.raises(RuntimeError):
             await run_failing_connection()
+
+    async def test_server_initiated_close_stops_the_receive_loop(
+        self,
+        websocket_simulator: SimulatorRouterHarness,
+    ) -> None:
+        """A close from a dispatched handler wakes the blocked receiver."""
+        websocket_simulator.router.add_route("/close", ClosingResource)
+
+        async with websocket_simulator.connect("/close") as connection:
+            resource = ClosingResource.instances[-1]
+            await connection.push_text("close")
+            await asyncio.wait_for(resource.closed_event.wait(), timeout=1.0)
+
+        assert connection.close_code == 1000, "the handler's close code must persist"
+        assert connection.websocket.closed is True, "the peer must be closed too"
