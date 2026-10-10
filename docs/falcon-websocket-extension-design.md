@@ -1291,8 +1291,12 @@ provides "zero-cost" validation via `msgspec`.
 
 The framework must gracefully handle dispatch errors.
 
-- A `msgspec.ValidationError` raised during decoding should be caught, and a
-  customizable error hook should be invoked.
+- During decoding and payload validation, the dispatcher routes
+  `DecodeError` and `ValidationError` failures to `on_unhandled`. The stable
+  package import `falcon_pachinko.utils.ValidationError` is the same class as
+  `msgspec.ValidationError`. The router-owned session driver delegates to that
+  dispatcher and does not translate its errors; exceptions raised by message
+  handlers therefore reach the session's 1011 close-and-propagate policy.
 
 - If a message has a valid tag that does not correspond to any registered
   handler, the `on_unhandled(self, req, ws, msg)` fallback method on the base
