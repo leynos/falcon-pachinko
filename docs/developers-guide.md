@@ -47,10 +47,56 @@ checked for this change resolved Falcon 4.4.0.
 
 `uv.lock` is committed and `.gitignore` no longer excludes it. The dependency
 bounds above are deliberately wide, so the lockfile is what pins an actual
-release: `make build` runs `uv sync --group dev --locked`, which refuses to
-resolve past the committed lockfile rather than silently installing a set the
-repository never reviewed. Lower-bound coverage in CI stays tracked separately
-from this support policy.
+release. See "Dependency management with uv" below for how it is kept current.
+Lower-bound coverage in CI stays tracked separately from this support policy.
+
+## Dependency management with uv
+
+The project is uv-managed. `pyproject.toml` declares runtime dependencies under
+`[project]`, development tooling under `[dependency-groups]`, and the
+`examples` and `testing` sets as `[project.optional-dependencies]` extras. The
+lockfile `uv.lock` resolves all three, including every interpreter version in
+`requires-python`, and is committed alongside them.
+
+`make build` runs:
+
+```sh
+uv sync --group dev --locked
+```
+
+`--locked` is what makes the committed lockfile load-bearing. A plain `uv sync`
+re-resolves whenever `pyproject.toml` and `uv.lock` disagree, so a branch that
+edited one but not the other would install a dependency set nobody reviewed and
+report success. With `--locked` the same disagreement fails the build instead,
+which is the behaviour CI needs: `ci.yml` installs the project by running
+`make build`, so the lockfile CI installs is the lockfile the branch committed.
+
+### Changing a dependency
+
+- After editing any dependency in `pyproject.toml`, run `uv lock` and commit
+  the regenerated `uv.lock` in the same change. `make build` fails until it is
+  refreshed.
+- To upgrade one dependency without disturbing the rest, use
+  `uv lock --upgrade-package <name>`. A bare `uv lock --upgrade` re-resolves
+  everything and produces a diff no reviewer can attribute to a reason.
+- Bump the `ruff` and `ty` pins in the Makefile and in `ci.yml` together, not
+  through the lockfile: they run as `uv tool run --from <tool>==<pin>` outside
+  the project environment, and `tests/test_toolchain_versions.py` holds the two
+  sites to one another.
+
+### Dependabot
+
+`.github/dependabot.yml` reads Python dependencies through the `uv` ecosystem,
+which is the ecosystem that understands `uv.lock`; `pip` reads
+`requirements*.txt` and the older `pyproject.toml` layout and would leave the
+lockfile unmaintained. Dependabot's lockfile updates and the entry's grouping,
+limits, labels and cooldown are held by `tests/test_uv_toolchain.py`, which
+also asserts that the lockfile is committed, not ignored, and that `make build`
+installs it with `--locked`.
+
+The auto-merge workflow needs no change for this: `dependabot-automerge.yml`
+keys on the actor `dependabot[bot]`, not on the ecosystem that opened the pull
+request.
 
 ## Validation error import boundary
 
@@ -327,11 +373,15 @@ The `build` target owns the local virtual environment. It depends on the
 uv venv --clear
 ```
 
-This deliberately replaces an existing `.venv` before `uv sync --group dev`.
-The behaviour matches CI, where a previous step may already have created the
-directory. Without `--clear`, modern `uv` exits with an error when `.venv`
-exists, causing downstream gates such as `make typecheck` to fail before they
-reach analysis.
+This deliberately replaces an existing `.venv` before
+`uv sync --group dev --locked`. The behaviour matches CI, where a previous step
+may already have created the directory. Without `--clear`, modern `uv` exits
+with an error when `.venv` exists, causing downstream gates such as
+`make typecheck` to fail before they reach analysis.
+
+`uv.lock` is a prerequisite of `build` for the same reason `pyproject.toml` is
+one of `.venv`: a lockfile change should visibly invalidate the environment
+rather than leave the build graph claiming nothing changed.
 
 Prefer Makefile targets over invoking tools directly. When changing the
 Makefile, run `mbake validate Makefile` and the relevant commit gates before
