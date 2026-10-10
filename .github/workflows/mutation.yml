@@ -1,0 +1,60 @@
+name: Mutation testing
+
+# Mutation testing is informational: it audits whether the suite would
+# notice a plausible defect in `falcon_pachinko/`, and it never gates a
+# pull request. There is deliberately no `pull_request` or
+# `pull_request_target` trigger — a mutation run costs the whole suite
+# several hundred times over, which is not a per-commit price.
+on:
+  schedule:
+    # Weekly, and left off the hour: GitHub's cron queue is busiest at
+    # :00, and the change-detection window below absorbs the drift.
+    - cron: "41 3 * * 1"
+  workflow_dispatch:
+
+# Least privilege, as in every other lane here. The called workflow's job
+# replaces this scope with its own; declaring it keeps a job added later
+# from inheriting the repository default.
+permissions:
+  contents: read
+
+# One run at a time per ref, matching `coverage-main.yml`. A scheduled run
+# that overlaps a dispatch would mutate the same commit twice and race for
+# the same artefact name, and the older run's results are the ones worth
+# keeping, so a new trigger waits rather than cancelling.
+concurrency:
+  group: mutation-testing-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mutation:
+    # The reusable workflow pins `runs-on: ubuntu-latest` and its own job
+    # ceiling, and declares no secrets, so this job declares neither a
+    # runner nor a timeout: `permissions` is the whole caller-side
+    # contract, plus the `paths` this repository's sources live under.
+    permissions:
+      contents: read
+      # The called workflow resolves its own pinned source through an OIDC
+      # token, which reports `job_workflow_ref`/`job_workflow_sha` and so
+      # lets it check out `leynos/shared-actions` at the pinned commit
+      # rather than resolving the caller repository. Not used for any
+      # external cloud auth.
+      id-token: write
+    uses: leynos/shared-actions/.github/workflows/mutation-mutmut.yml@6ecf4a7691031f92c3e75e176705cf541ad5283d
+    with:
+      # The package is top-level, so the module-glob translation needs no
+      # prefix stripped: `falcon_pachinko/router.py` scopes the run to
+      # `falcon_pachinko.router.*`.
+      paths: "falcon_pachinko/"
+      # One hour wider than the weekly cadence, so the run covers every
+      # commit since the previous one. The default is 25 for a *daily*
+      # schedule; leaving it there would make each weekly run see only the
+      # day before it, and the lane would look scheduled while mutating
+      # almost nothing.
+      window-hours: 169
+      module-prefix-strip: ""
+      # Matches `.github/cv005.toml`, `ci.yml` and the Makefile's mutation
+      # target, and the workflow's own 3.13 floor. The project supports
+      # 3.12 and up, and the workflow requires 3.13 or newer, so this is
+      # the lowest interpreter both accept.
+      python-version: "3.13"

@@ -387,6 +387,71 @@ Prefer Makefile targets over invoking tools directly. When changing the
 Makefile, run `mbake validate Makefile` and the relevant commit gates before
 committing.
 
+## Mutation testing
+
+Mutation testing asks a different question from the rest of the suite. The
+tests answer "does this behaviour work"; a mutation run answers "would the
+suite notice if `falcon_pachinko` were wrong". It is informational, it is slow,
+and it never gates a pull request.
+
+Run it locally with:
+
+```sh
+make mutation           # mutate the package against the whole suite
+make mutation-results   # list the last run's mutants and their statuses
+```
+
+`make mutation` runs `mutmut` through `uv run --with mutmut==3.6.0`, so the
+tool is injected at call time and is deliberately not a project dependency.
+`make mutation-results` prints one line per mutant, grouped by status. To see
+what a surviving mutant actually changed, ask mutmut directly:
+
+```sh
+UV_PYTHON=3.13 uv run --with mutmut==3.6.0 mutmut show <mutant-name>
+```
+
+The `[tool.mutmut]` section in `pyproject.toml` is the whole configuration:
+
+- **`source_paths`** is `falcon_pachinko/`, so the CLI, the harness in
+  `falcon_pachinko/testing/` and the rest of the package are mutated.
+- **`do_not_mutate`** excludes `falcon_pachinko/unittests/` and
+  `falcon_pachinko/behaviour/`. Those are the package's own tests, and a
+  mutation in a test module can never be killed: mutmut pairs a mutant with the
+  tests that execute it, and a test module is not executed by the suite it
+  belongs to. Left in, they were 1448 of 3769 mutants, every one reported
+  `no tests`, and a mutation that raised on import — `test_app_install.py` is
+  loaded as a pytest plugin — stopped collection outright rather than failing a
+  test.
+- **`also_copy`** carries `tools/` and `examples/` into the `mutants/` tree
+  that mutmut runs in. mutmut copies only `tests/`, `pyproject.toml`,
+  `setup.cfg` and root `test*.py` by default, and two modules in `tests/`
+  import those trees through `sys.path`.
+- **`pytest_add_cli_args_test_selection`** names the three test trees the run
+  uses: `tests/`, `falcon_pachinko/unittests/` and `falcon_pachinko/behaviour/`.
+- **`pytest_add_cli_args`** drops three modules and one marker.
+  `--ignore=tests/workflow_contracts`,
+  `--ignore=tests/test_toolchain_versions.py` and
+  `--ignore=tests/test_uv_toolchain.py` are repository-tooling contracts that
+  read `.github/workflows/`, `Makefile`, `uv.lock`, `pylintrc-df12.toml` and
+  `.markdownlint-cli2.jsonc` — none of which mutmut copies into `mutants/`, so
+  all three fail the baseline there. They say nothing about
+  `falcon_pachinko/`'s behaviour, so excluding them costs the mutation score
+  nothing. `-m "not lint_toolchain"` drops the tests that provision a PyPy
+  interpreter and reach the network; `-p no:cacheprovider` keeps the run from
+  writing a cache into the copied tree. Mutmut has no `runner` key in 3.6.0, so
+  these arguments are the whole lever.
+
+`.github/workflows/mutation.yml` runs the estate's reusable workflow
+(`leynos/shared-actions/.github/workflows/mutation-mutmut.yml`) weekly and on
+manual dispatch. There is no pull-request trigger: a mutation run executes the
+whole suite once per mutant, which is not a per-commit cost. The caller passes
+`paths: "falcon_pachinko/"`, an empty `module-prefix-strip` (the package is
+top-level, not `src/`-layout) and `python-version: "3.13"` to match
+`.github/cv005.toml` and `ci.yml`. The scheduled run is scoped to files changed
+in the last week, so a quiet week finishes in seconds; a dispatch runs
+everything. Results land in the job summary and as the `mutation-report-mutmut`
+artefact.
+
 ## Coverage and CodeScene
 
 `coverage-main.yml` owns both persistent coverage outputs: the CodeScene upload

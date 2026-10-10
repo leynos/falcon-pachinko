@@ -111,7 +111,8 @@ AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(DF12_PYTHON) \
 
 .PHONY: help all clean build build-release lint lint-pylint lint-df12 \
 	pylint-pypy-python fmt check-fmt markdownlint nixie spelling test \
-	test-workflow-contracts check-cv005 typecheck $(TOOLS) $(VENV_TOOLS)
+	test-workflow-contracts check-cv005 typecheck mutation mutation-results \
+	$(TOOLS) $(VENV_TOOLS)
 
 .DEFAULT_GOAL := all
 
@@ -213,6 +214,23 @@ nixie: $(NIXIE) ## Validate Mermaid diagrams
 
 test: build uv pytest ## Run tests
 	uv run pytest -v
+
+# Mutation testing is not a commit gate: it is slow and it is informational.
+# `.github/workflows/mutation.yml` calls the estate's reusable workflow, which
+# in turn runs the same `uv run --with mutmut` below; mutmut then reads
+# `[tool.mutmut]` from pyproject.toml. This target reproduces that command
+# locally at the same mutmut pin and on the same interpreter the workflow
+# uses. The interpreter is named here rather than in pyproject.toml because
+# `[tool.mutmut]` has no key for one.
+MUTMUT_VERSION ?= 3.6.0
+MUTMUT_PYTHON ?= 3.13
+MUTMUT = UV_PYTHON=$(MUTMUT_PYTHON) $(UV_ENV) $(UV) run --with mutmut==$(MUTMUT_VERSION) mutmut
+
+mutation: build uv ## Run mutation testing locally (slow)
+	$(MUTMUT) run
+
+mutation-results: uv ## Show the last mutation run's results
+	$(MUTMUT) results
 
 # The CV-005 CodeScene contracts live in shared-actions and run from a full
 # commit, so a fix to the rules is a pin bump. `.github/cv005.toml` holds this

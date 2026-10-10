@@ -379,6 +379,87 @@ markers = [
     "lint_toolchain: drives the real PyPy and CPython Pylint passes through the Makefile",
 ]
 
+# Mutation testing. `make mutation` prints the local command; CI runs the
+# estate's reusable workflow, which injects the pinned mutmut through
+# `uv run --with` rather than declaring it as a project dependency.
+[tool.mutmut]
+# Only the package is mutated. `tests/`, `tools/` and `examples/` would
+# produce mutants of the suite's own assertions and of lint tooling, and a
+# mutant of a test decides nothing about the package's behaviour.
+source_paths = ["falcon_pachinko/"]
+
+# `source_paths` is a directory, so it also sweeps up the package's own
+# test trees, which live inside it: `falcon_pachinko/unittests/` and
+# `falcon_pachinko/behaviour/`. A mutation there cannot be killed --
+# mutmut matches a mutant to the tests that execute it, and a test module
+# is not executed by the suite it belongs to -- and a measured full run
+# marked every one of the 1448 such mutants "no tests", 38% of the total.
+# They are also the one kind of mutant that can break the baseline rather
+# than fail a test: `unittests/test_app_install.py` is loaded as a pytest
+# plugin, so a mutation that raises on import stops collection outright.
+#
+# `falcon_pachinko/testing/` is deliberately *not* excluded. It is shipped
+# code -- the package's public test harness, with its own `__init__.py` --
+# and its mutants are killable (536 of 562 in the same run), so it is real
+# signal about the package rather than noise about itself.
+#
+# The patterns name `*.py` because mutmut matches them with `fnmatch` and
+# warns about anything not ending in `.py` or `*`. `fnmatch`'s `*` already
+# crosses `/`, so one pattern covers a tree's nested modules as well.
+do_not_mutate = [
+    "falcon_pachinko/unittests/*.py",
+    "falcon_pachinko/behaviour/*.py",
+]
+
+# mutmut copies only `tests/`, `test/`, `setup.cfg`, `pyproject.toml` and
+# root `test*.py` into `mutants/`, plus whatever this list names. Two test
+# modules in `tests/` import `tools/` and `examples/` through `sys.path`,
+# so those trees travel with the run. `tests/` itself is copied by mutmut.
+also_copy = ["tools/", "examples/"]
+
+# The whole suite, not just `tests/`: the package's own unit and behaviour
+# tests live in `falcon_pachinko/unittests` and `falcon_pachinko/behaviour`,
+# and they are what actually exercises the mutated code. They are copied
+# because they sit inside `source_paths`. Naming the directories explicitly
+# keeps a bare `tests/` from silently being the selection, which would run
+# the mutation baseline against the smaller half of the suite.
+#
+# mutmut 3.6.0 has no `runner` key: a configurable `TestRunner` is still a
+# TODO upstream, and the only declared settings are the pytest arguments.
+# mutmut invokes pytest in-process, so the arguments below are the whole
+# lever. `pytest_add_cli_args` applies to every invocation, including the
+# baseline.
+pytest_add_cli_args_test_selection = [
+    "tests/",
+    "falcon_pachinko/unittests/",
+    "falcon_pachinko/behaviour/",
+]
+
+# `--ignore` is the only way to drop a directory that mutmut's own `tests/`
+# copy would otherwise collect: the runner builds its argument list from the
+# selection above, and `-m` cannot express "not this module". Three of
+# `tests/`' modules are repository-tooling contracts that read files mutmut
+# never copies -- `.github/workflows/`, `Makefile`, `uv.lock`,
+# `pylintrc-df12.toml`, `.markdownlint-cli2.jsonc` -- so they fail the
+# baseline inside `mutants/`. Their subject is the repository's tooling, not
+# the package's behaviour, so leaving them out costs the mutation score
+# nothing: they never exercise `falcon_pachinko/`.
+#   - tests/workflow_contracts/  (all of it; every module reads workflows)
+#   - tests/test_toolchain_versions.py
+#   - tests/test_uv_toolchain.py
+# `-m "not lint_toolchain"` drops the tests that provision a PyPy
+# interpreter and reach the network. `-p no:cacheprovider` keeps the run
+# from writing a cache into the copied tree.
+pytest_add_cli_args = [
+    "--ignore=tests/workflow_contracts",
+    "--ignore=tests/test_toolchain_versions.py",
+    "--ignore=tests/test_uv_toolchain.py",
+    "-m",
+    "not lint_toolchain",
+    "-p",
+    "no:cacheprovider",
+]
+
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
