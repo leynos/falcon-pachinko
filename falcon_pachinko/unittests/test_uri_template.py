@@ -154,9 +154,15 @@ def test_multiple_and_adjacent_parameters_keep_segment_capture_semantics() -> No
 def test_adjacent_parameter_runs_are_bounded(
     compiler: cabc.Callable[[str], re.Pattern[str]],
 ) -> None:
-    """The compiler bounds ambiguous backtracking while supporting pairs."""
-    with pytest.raises(ValueError, match="adjacent parameter limit"):
-        compiler("/{first}{second}{third}")
+    """The compiler permits only a terminal adjacent pair per segment."""
+    for template in (
+        "/{first}{second}{third}",
+        "/{first}a{second}a{third}z",
+        "/{first}a{second}",
+        "/{first}{second}.json",
+    ):
+        with pytest.raises(ValueError, match=re.escape(template)):
+            compiler(template)
 
 
 def test_full_template_matches_optional_single_trailing_slash() -> None:

@@ -273,15 +273,19 @@ def test_mount_parameter_collision_does_not_register_route() -> None:
     with pytest.raises(ValueError, match="Duplicate parameter name 'room'"):
         router.add_route("/chat/{room}", DummyResource, name="chat")
 
-    assert not router._raw, "failed route compilation should not store a raw route"
-    assert not router._routes, "failed route compilation should not store a matcher"
-    assert "chat" not in router._names, (
-        "failed route compilation should not store its name"
+    with pytest.raises(KeyError, match="no route registered with name 'chat'"):
+        router.url_for("chat", room="general")
+
+    router.add_route("/chat/{channel}", DummyResource, name="chat")
+    assert router.url_for("chat", channel="general") == "/chat/general", (
+        "a corrected registration should reuse the rejected name"
     )
 
 
-def test_mount_parameter_collision_leaves_router_unmounted() -> None:
+@pytest.mark.asyncio
+async def test_mount_parameter_collision_leaves_routes_usable() -> None:
     """A composed-template error does not commit partial mount state."""
+    DummyResource.instances.clear()
     router = WebSocketRouter()
     router.add_route("/health", DummyResource)
     router.add_route("/chat/{room}", DummyResource)
@@ -289,15 +293,19 @@ def test_mount_parameter_collision_leaves_router_unmounted() -> None:
     with pytest.raises(ValueError, match="Duplicate parameter name 'room'"):
         router.mount("/ws/{room}")
 
-    assert not router._mount_prefix, "failed mounting should preserve the prior prefix"
-    assert not router._routes, (
-        "failed mounting should not retain partially compiled routes"
+    router.mount("/ws/{scope}")
+    await router.on_websocket(make_req("/ws/acme/health", "/ws/{scope}"), DummyWS())
+    assert DummyResource.instances[-1].params == {"scope": "acme"}, (
+        "the first stored route should work after a corrected mount"
     )
 
-    router.mount("/ws/{scope}")
-    assert len(router._routes) == 2, (
-        "a corrected mount should compile every stored route"
+    await router.on_websocket(
+        make_req("/ws/acme/chat/general", "/ws/{scope}"), DummyWS()
     )
+    assert DummyResource.instances[-1].params == {
+        "scope": "acme",
+        "room": "general",
+    }, "all stored routes should work after a corrected mount"
 
 
 def test_add_route_invalid_template() -> None:

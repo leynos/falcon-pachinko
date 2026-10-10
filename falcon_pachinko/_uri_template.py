@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-_MAX_ADJACENT_PARAMETERS = 2
+_MAX_PARAMETERS_PER_SEGMENT = 2
 
 
 def _parse_parameter(template: str, start: int) -> tuple[str, int]:
@@ -65,11 +65,11 @@ def _tokenize_template(template: str) -> list[tuple[bool, str]]:
     Raises
     ------
     ValueError
-        If braces are malformed or a parameter name is invalid or duplicated.
+        If braces or names are invalid, or a path segment has an ambiguous
+        multiple-parameter form.
     """
     tokens: list[tuple[bool, str]] = []
     parameter_names: set[str] = set()
-    adjacent_parameter_count = 0
     index = 0
     literal_start = 0
 
@@ -84,28 +84,69 @@ def _tokenize_template(template: str) -> list[tuple[bool, str]]:
 
         if literal_start < index:
             tokens.append((False, template[literal_start:index]))
-            adjacent_parameter_count = 0
 
         parameter_name, index = _parse_parameter(template, index)
         if parameter_name in parameter_names:
             msg = f"Duplicate parameter name {parameter_name!r} in template: {template}"
             raise ValueError(msg)
-        if adjacent_parameter_count >= _MAX_ADJACENT_PARAMETERS:
-            msg = (
-                f"Template exceeds the adjacent parameter limit near "
-                f"{parameter_name!r}: {template}"
-            )
-            raise ValueError(msg)
 
         parameter_names.add(parameter_name)
         tokens.append((True, parameter_name))
-        adjacent_parameter_count += 1
         literal_start = index
 
     if literal_start < len(template):
         tokens.append((False, template[literal_start:]))
 
+    _validate_parameter_segments(tokens, template)
     return tokens
+
+
+def _validate_parameter_segments(tokens: list[tuple[bool, str]], template: str) -> None:
+    """Reject ambiguous parameter layouts within one path segment."""
+    for segment in _split_template_segments(tokens):
+        parameter_positions = [
+            index for index, (is_parameter, _) in enumerate(segment) if is_parameter
+        ]
+        if len(parameter_positions) <= 1 or _is_terminal_parameter_pair(
+            segment, parameter_positions
+        ):
+            continue
+
+        parameter_names = [segment[index][1] for index in parameter_positions]
+        msg = (
+            f"Ambiguous parameters {parameter_names!r} in one path segment "
+            f"in template: {template}"
+        )
+        raise ValueError(msg)
+
+
+def _split_template_segments(
+    tokens: list[tuple[bool, str]],
+) -> list[list[tuple[bool, str]]]:
+    """Split template tokens at literal slashes while preserving token order."""
+    segments: list[list[tuple[bool, str]]] = [[]]
+    for is_parameter, text in tokens:
+        if is_parameter:
+            segments[-1].append((True, text))
+            continue
+
+        parts = text.split("/")
+        for index, part in enumerate(parts):
+            if part:
+                segments[-1].append((False, part))
+            if index < len(parts) - 1:
+                segments.append([])
+    return segments
+
+
+def _is_terminal_parameter_pair(
+    segment: list[tuple[bool, str]], parameter_positions: list[int]
+) -> bool:
+    """Return whether exactly two parameters are adjacent at segment end."""
+    if len(parameter_positions) != _MAX_PARAMETERS_PER_SEGMENT:
+        return False
+    first, second = parameter_positions
+    return second == first + 1 and second == len(segment) - 1
 
 
 def _compile_template_with_suffix(template: str, suffix: str) -> re.Pattern[str]:
