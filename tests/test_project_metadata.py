@@ -1,4 +1,9 @@
-"""Packaging metadata must match the supported project contract."""
+"""Test the published project metadata contract.
+
+These checks protect dependency bounds, discoverability metadata, and
+compatibility between Python classifiers and ``requires-python``. Run them
+with ``uv run pytest -v tests/test_project_metadata.py``.
+"""
 
 from __future__ import annotations
 
@@ -14,16 +19,23 @@ from tests._makefile import REPO_ROOT
 PROJECT = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
     "project"
 ]
-FALCON_REQUIREMENT = next(
-    Requirement(dependency)
-    for dependency in PROJECT["dependencies"]
-    if Requirement(dependency).name == "falcon"
-)
 
 
-def test_falcon_dependency_has_lower_and_upper_bounds() -> None:
+@pytest.fixture
+def falcon_requirement() -> Requirement:
+    """Return the Falcon dependency declared for the project."""
+    for dependency in PROJECT["dependencies"]:
+        requirement = Requirement(dependency)
+        if requirement.name == "falcon":
+            return requirement
+    return pytest.fail("pyproject.toml must declare a Falcon dependency")
+
+
+def test_falcon_dependency_has_lower_and_upper_bounds(
+    falcon_requirement: Requirement,
+) -> None:
     """The Falcon 4 API dependency stays within a bounded version range."""
-    specifier = FALCON_REQUIREMENT.specifier
+    specifier = falcon_requirement.specifier
     operators = {bound.operator for bound in specifier}
 
     assert operators & {">", ">="}, "Falcon must have a lower version bound"
@@ -38,10 +50,12 @@ def test_falcon_dependency_has_lower_and_upper_bounds() -> None:
         pytest.param("4.99.0", id="latest-four-series-boundary"),
     ],
 )
-def test_falcon_dependency_accepts_four_series(version: str) -> None:
+def test_falcon_dependency_accepts_four_series(
+    version: str, falcon_requirement: Requirement
+) -> None:
     """Representative Falcon 4 releases satisfy the declared dependency range."""
-    assert FALCON_REQUIREMENT.specifier.contains(Version(version)), (
-        f"Falcon {version} must satisfy {FALCON_REQUIREMENT.specifier}"
+    assert falcon_requirement.specifier.contains(Version(version)), (
+        f"Falcon {version} must satisfy {falcon_requirement.specifier}"
     )
 
 
@@ -54,10 +68,12 @@ def test_falcon_dependency_accepts_four_series(version: str) -> None:
         pytest.param("5.99.0", id="latest-next-major-boundary"),
     ],
 )
-def test_falcon_dependency_rejects_other_major_series(version: str) -> None:
+def test_falcon_dependency_rejects_other_major_series(
+    version: str, falcon_requirement: Requirement
+) -> None:
     """Falcon releases outside 4.x do not satisfy the dependency range."""
-    assert not FALCON_REQUIREMENT.specifier.contains(Version(version)), (
-        f"Falcon {version} must not satisfy {FALCON_REQUIREMENT.specifier}"
+    assert not falcon_requirement.specifier.contains(Version(version)), (
+        f"Falcon {version} must not satisfy {falcon_requirement.specifier}"
     )
 
 
