@@ -148,28 +148,28 @@ duplication fix would require a public API or runtime-dependency change.
 
 ## Progress and decision log
 
-Status recorded after the rebase adjudication was committed and pushed as
-`0c271df2ee53e44d6e9218646260745e0ecb7665`: PR #225 is open, ready for review,
-unmerged, and based on current `main` at
-`f6e637e48a1f862e8dfabb26ea5cda4cbec3279a`. The earlier published head's CI run
-`38090679914` had failed the duplication step after main moved the URI compiler
-and the ranked report surfaced two diagnostics fragments; both families were
-inspected, adjudicated, and the blocking gate now passes with four reasoned
-exceptions. The full sequential local gates passed on the rebased candidate:
-`make lint` including Ruff, both Pylint passes and the duplication scan;
-`make typecheck`; `make test` (655 passed, 2 skipped, 19 warnings);
-`make duplication-test` (172 passed, 3 snapshots, no skips); and formatting,
-spelling, Markdown and Mermaid checks. The first Markdown check found two
-table-alignment errors after the last wording change; `make fmt` corrected them
-and final `make check-fmt`, `make markdownlint` (0 errors), and `make nixie`
-passed. Hosted CI run `38092077952`, CodeScene result `7897343`, and Gecko
-Security Review passed for that candidate. CodeRabbit's automatic check still
-says `Review paused`; its latest formal review is from an older head and the
-aggregate decision remains `CHANGES_REQUESTED`, though its two documentation
-findings are now addressed. A formal current-head review and ExecPlan
-completeness assessment have not yet been requested or cleared. This
-progress-record edit is documentation-only and will trigger fresh hosted checks
-when published. No approval or merge is claimed.
+Validation checkpoint at published head
+`b35d78abab26d8a9de51be85319318c451a97707`, based on `main` at
+`f6e637e48a1f862e8dfabb26ea5cda4cbec3279a`: PR #225 was open, ready for review,
+and unmerged. The rebase adjudication was committed as
+`0c271df2ee53e44d6e9218646260745e0ecb7665`; `b35d78a` adds only a progress
+record. At `0c271df`, sequential local gates passed: `make lint` including
+Ruff, both Pylint passes and the duplication scan; `make typecheck`;
+`make test` (655 passed, 2 skipped, 19 warnings); `make duplication-test` (172
+passed, 3 snapshots, no skips); formatting, spelling, Markdown and Mermaid
+checks. The first Markdown check found two table-alignment errors; after
+`make fmt`, `make check-fmt`, `make markdownlint` (0 errors), and `make nixie`
+passed. For `b35d78a`, hosted CI run `38092370482`, CodeScene result `7897376`,
+and Gecko Security Review passed; the final local documentation gates also
+passed. The CodeRabbit walkthrough still says automatic reviews are paused
+because the branch has received many commits; it does not report a rate limit.
+Its latest formal review is from an older head, the aggregate decision remains
+`CHANGES_REQUESTED`, and no current-head review is queued. The Developer
+Documentation warning's requested edits are present, but the stale walkthrough
+row still needs explicit reconciliation. No ExecPlan completeness assessment
+response had been recorded at this checkpoint. No proof was introduced or
+materially changed, so a proof-specific assessment is not applicable. No
+approval or merge is claimed.
 
 - Confirmed the reference commit exists locally in an episodic worktree and
   consulted the specified ADR, merged gate modules and v0.20.0 nose usage,
@@ -342,7 +342,8 @@ when published. No approval or merge is claimed.
   assessment remains pending; no formal proof was introduced or materially
   changed, so a proof-specific assessment is not applicable. No merge is
   claimed.
-- Rebase and current-main adjudication follow-up: the 17-commit PR range from
+- Pre-publication checkpoint immediately before commit
+  `0c271df2ee53e44d6e9218646260745e0ecb7665`: the 17-commit PR range from
   `554105de7c9a3f7c413d31a36125271ad759f164` through
   `ed5819c486b467d732874998f793b1ef657d4c79` was replayed onto current `main` at
   `f6e637e48a1f862e8dfabb26ea5cda4cbec3279a`. The rebase completed without
