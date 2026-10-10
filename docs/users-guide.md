@@ -153,6 +153,43 @@ class ChatResource(WebSocketResource):
   `on_unhandled(self, ws, raw)`.
 - The decorator supports `strict=False` to allow extra fields when required.
 
+### Reserved lifecycle names
+
+A peer chooses the envelope `type`, so the set of method names the dispatcher
+is willing to resolve from that choice is fixed when the resource class is
+created. The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are
+driven by the connection lifecycle and are **never** dispatchable. An alias
+such as `on_bye = on_disconnect`, and a copy inherited from a parent resource,
+are excluded on the same terms.
+
+An envelope that normalizes to a reserved name is treated as unhandled: it
+reaches `on_unhandled(self, ws, raw)` with the original frame, and no lifecycle
+callback runs. So `{"type": "disconnect", "payload": 1000}` cannot invoke
+`on_disconnect` — and therefore cannot unregister a socket or release
+connection-scoped state — while the transport is still connected, however the
+tag is spelled or cased.
+
+Registration is closed on the same terms. Registering a lifecycle callback as
+a message handler, whether by `@handles_message` or `add_handler`, raises
+`ReservedHandlerRegistrationError`. The reserved *tag* string itself stays
+legal: a distinct method may handle `"disconnect"` provided it is not the
+lifecycle callback:
+
+```python
+class ChatResource(WebSocketResource):
+    @handles_message("disconnect")
+    async def handle_disconnect(self, ws, payload: object) -> None:
+        ...  # runs for {"type": "disconnect"}; on_disconnect does not
+
+    async def on_disconnect(self, ws, close_code: int) -> None:
+        ...  # connection lifecycle only
+```
+
+Schema-backed dispatch restricts tags to declared `Struct` types, but a struct
+may be tagged with a reserved name; the conventional fallback refuses it there
+too, so an unregistered struct tagged `"disconnect"` falls back rather than
+calling through.
+
 The stable import path is `from falcon_pachinko.utils import ValidationError`.
 It is the same class as `msgspec.ValidationError`, so existing
 `except msgspec.ValidationError` handlers continue to work. The dispatcher
