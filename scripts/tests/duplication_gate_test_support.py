@@ -179,6 +179,18 @@ def stub_detector_context(
     )
 
 
+def repository_detector_context(
+    *, environment: cabc.Mapping[str, str] | None = None
+) -> detector.DetectorContext:
+    """Build a context for exercising the installed detector in this repo."""
+    return detector.DetectorContext(
+        repository_root=REPOSITORY_ROOT,
+        environment=(gate_environment() if environment is None else environment),
+        binary_discoverer=detector.discover_binary,
+        command_runner=detector.run_command,
+    )
+
+
 __all__ = [
     "REPOSITORY_ROOT",
     "STUB_REPORT",

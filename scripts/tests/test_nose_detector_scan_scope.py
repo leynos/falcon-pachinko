@@ -11,6 +11,7 @@ from duplication_gate_test_support import (
     copied_gate_workspace,
     detector,
     gate_environment,
+    repository_detector_context,
     run_gate_command,
 )
 
@@ -47,7 +48,9 @@ def test_ignored_only_root_is_rejected_by_real_detector_gate(tmp_path: Path) -> 
     """A real nose empty-walk report cannot masquerade as a clean scan."""
     workspace = _ignored_only_workspace(tmp_path)
     repository_settings = detector.load_settings(REPOSITORY_ROOT / "pyproject.toml")
-    binary = detector.resolve_binary(repository_settings)
+    binary = detector.resolve_binary(
+        repository_settings, context=repository_detector_context()
+    )
     settings = dc.replace(repository_settings, roots=("planted",))
     query = detector.build_command(binary, settings)
 

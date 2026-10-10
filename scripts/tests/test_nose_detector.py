@@ -2,6 +2,7 @@
 
 import copy
 import dataclasses as dc
+import inspect
 import re
 import textwrap
 import typing as typ
@@ -280,6 +281,17 @@ class TestSourceRelativePath:
 
 class TestResolveBinary:
     """Discovery and version verification of the pinned binary."""
+
+    def test_binary_and_query_boundaries_require_an_explicit_context(self) -> None:
+        """Core detector operations cannot read process dependencies implicitly."""
+        assert (
+            inspect.signature(detector.resolve_binary).parameters["context"].default
+            is inspect.Parameter.empty
+        ), "Binary resolution must receive its environment and adapters."
+        assert (
+            inspect.signature(detector.run_detector).parameters["context"].default
+            is inspect.Parameter.empty
+        ), "Detector execution must receive its environment and adapters."
 
     def test_accepts_the_pinned_version(self, tmp_path: Path) -> None:
         """A binary reporting the pinned version is accepted."""
@@ -707,7 +719,7 @@ class TestRunDetector:
         with pytest.raises(
             detector.GateExecutionError, match="timed out after 120 seconds"
         ):
-            detector._run_command(("nose", "query"), tmp_path, {})
+            detector.run_command(("nose", "query"), tmp_path, {})
 
     def test_run_command_reports_a_non_zero_exit(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -727,7 +739,7 @@ class TestRunDetector:
             detector.GateExecutionError,
             match=r"nose exited with status 2: bad query",
         ):
-            detector._run_command(("nose", "query"), tmp_path, {})
+            detector.run_command(("nose", "query"), tmp_path, {})
 
     def test_run_command_reports_an_execution_failure(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -743,4 +755,4 @@ class TestRunDetector:
             detector.GateExecutionError,
             match=r"cannot run nose: .*Permission denied.*make install-nose",
         ):
-            detector._run_command(("nose", "query"), tmp_path, {})
+            detector.run_command(("nose", "query"), tmp_path, {})

@@ -250,3 +250,13 @@ pending.
   hours 48 minutes at the latest queue check. The request is pending, not a
   completed review, and GitHub's aggregate review decision remains
   `CHANGES_REQUESTED` from an earlier review.
+- The Unit Architecture follow-up makes detector and installer runtime
+  contexts mandatory arguments. Only the gate and installer CLI composition
+  boundaries now snapshot process state and supply discovery, execution,
+  download, platform and output adapters. Regression tests verify those
+  required contexts and CLI wiring. On the working tree based on `f165b2c`, the
+  final sequential gates passed: 172 helper tests and 3 snapshots with no
+  skips, duplication, formatting, lint, typechecking, spelling, Markdown,
+  Mermaid, and CV005; `make test` reported 439 passed, 2 skipped and 19
+  warnings. These are local results; hosted checks and review reconciliation
+  remain pending until this follow-up is pushed.

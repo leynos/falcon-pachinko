@@ -1,6 +1,7 @@
 """Tests for the checksum-pinned nose release installer and Make target."""
 
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -141,6 +142,35 @@ class TestVerifiedArchive:
 class TestEnsureInstalled:
     """Cached-binary, download, checksum, and post-install behaviour."""
 
+    def test_installer_requires_an_explicit_context(self) -> None:
+        """Installation and version checks receive all process dependencies."""
+        assert (
+            inspect.signature(installer.ensure_installed).parameters["context"].default
+            is inspect.Parameter.empty
+        ), "The installer must not read its environment through a hidden default."
+
+    def test_cli_composes_an_explicit_installer_context(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The CLI supplies host settings and process adapters at its boundary."""
+        monkeypatch.setenv("NOSE_BIN", "custom/nose")
+        captured: list[installer.InstallerContext] = []
+
+        def capture(context: installer.InstallerContext) -> None:
+            captured.append(context)
+
+        monkeypatch.setattr(installer, "ensure_installed", capture)
+
+        assert installer.main() == 0, "A successfully composed install returns zero."
+        assert len(captured) == 1, "The CLI must compose one installer context."
+        context = captured[0]
+        assert context.environment["NOSE_BIN"] == "custom/nose", (
+            "The CLI must snapshot its selected binary override."
+        )
+        assert context.process_runner is installer._run_process, (
+            "Version checks must receive the configured process adapter."
+        )
+
     def test_matching_relative_override_is_a_noop(self, tmp_path: Path) -> None:
         """A correct override resolves from the repository root and skips download."""
         archive = _release_archive()
@@ -169,6 +199,9 @@ class TestEnsureInstalled:
                 pyproject_path=pyproject,
                 manifest_path=manifest,
                 environment={"NOSE_BIN": "custom/nose"},
+                system="Linux",
+                machine="x86_64",
+                libc_name="glibc",
                 downloader=unexpected_download,
                 output=messages.append,
                 process_runner=process_runner,
@@ -286,6 +319,7 @@ class TestEnsureInstalled:
                     libc_name="glibc",
                     downloader=lambda _url: archive,
                     output=lambda _message: None,
+                    process_runner=installer._run_process,
                 )
             )
 
@@ -316,6 +350,7 @@ class TestEnsureInstalled:
                     libc_name="glibc",
                     downloader=lambda _url: archive,
                     output=lambda _message: None,
+                    process_runner=installer._run_process,
                 )
             )
 

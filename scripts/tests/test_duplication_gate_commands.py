@@ -16,6 +16,7 @@ from duplication_gate_test_support import (
     detector,
     gate,
     gate_environment,
+    repository_detector_context,
     run_gate_command,
     write_stub_nose,
 )
@@ -38,6 +39,50 @@ def _finding() -> detector.Finding:
 
 class TestGateCommands:
     """CLI orchestration and real workflow contracts."""
+
+    def test_detect_findings_composes_an_explicit_detector_context(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The CLI passes a runtime context into the detector boundary."""
+        selected_settings = detector.NoseSettings(
+            version="0.20.0",
+            roots=("falcon_pachinko",),
+            mode="syntax,semantic,near",
+            min_size=24,
+            surface="all",
+            top=30,
+            exclude=(),
+        )
+        captured: list[tuple[detector.NoseSettings, detector.DetectorContext]] = []
+
+        def run(
+            selected: detector.NoseSettings, *, context: detector.DetectorContext
+        ) -> list[detector.Finding]:
+            captured.append((selected, context))
+            return []
+
+        monkeypatch.setattr(gate, "load_settings", lambda _path: selected_settings)
+        monkeypatch.setattr(gate, "run_detector", run)
+        monkeypatch.setenv("NOSE_BIN", "custom/nose")
+
+        assert gate.detect_findings() == [], "A clean detector report remains empty."
+        assert len(captured) == 1, "One detector call should receive the context."
+        selected, context = captured[0]
+        assert selected is selected_settings, (
+            "The configured settings reach the runner."
+        )
+        assert context.repository_root == gate.REPO_ROOT, (
+            "The CLI supplies the explicit repository root."
+        )
+        assert context.environment["NOSE_BIN"] == "custom/nose", (
+            "The CLI supplies its environment snapshot."
+        )
+        assert context.binary_discoverer is detector.discover_binary, (
+            "Binary discovery is supplied as an adapter."
+        )
+        assert context.command_runner is detector.run_command, (
+            "Both version and query commands use the supplied runner."
+        )
 
     def test_check_reports_blocking_findings(
         self,
@@ -435,7 +480,7 @@ class TestGateCommands:
     def test_real_check_cli_passes(self) -> None:
         """The checked-in gate runs successfully through its real CLI boundary."""
         settings = detector.load_settings(REPOSITORY_ROOT / "pyproject.toml")
-        detector.resolve_binary(settings)
+        detector.resolve_binary(settings, context=repository_detector_context())
         result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed repository gate command
             [
                 sys.executable,
@@ -456,7 +501,9 @@ class TestGateCommands:
     def test_reports_a_planted_verbatim_copy(self, tmp_path: Path) -> None:
         """The pinned detector reports a planted copy through normalization."""
         settings = detector.load_settings(REPOSITORY_ROOT / "pyproject.toml")
-        binary = detector.resolve_binary(settings)
+        binary = detector.resolve_binary(
+            settings, context=repository_detector_context()
+        )
         body = textwrap.dedent(
             """\
             def NAME(items):
@@ -594,7 +641,9 @@ class TestEndToEndBlocking:
     def _run_check(self, workspace: Path) -> subprocess.CompletedProcess[str]:
         """Run the copied gate's real `check` against the pinned detector."""
         settings = detector.load_settings(REPOSITORY_ROOT / "pyproject.toml")
-        binary = detector.resolve_binary(settings)
+        binary = detector.resolve_binary(
+            settings, context=repository_detector_context()
+        )
         return run_gate_command(
             workspace / "scripts" / "duplication_gate.py",
             "check",
