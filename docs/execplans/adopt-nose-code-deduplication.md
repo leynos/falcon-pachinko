@@ -233,10 +233,20 @@ pending.
   spelling, Markdown, Mermaid, application tests (439 passed, 2 skipped), and
   CV005 all pass. Scrutineer logs are under `/tmp`; each is named
   `<gate>-falcon-pachinko-adopt-nose-code-deduplication-2.out`.
-- The latest supplied CodeRabbit assessment is pinned to `369993c`, before the
-  published `dc858da` fixes. At `dc858da`, effective-scan validation, malformed
-  allowlist-container rejection, acceptance-target provisioning and explicit
-  detector/installer contexts are present with regression coverage. The
-  separately reported CodeScene complexity finding is resolved in this
-  follow-up. The current CodeRabbit queue has no request; a new review remains
-  pending publication of the validated head.
+- The earlier CodeRabbit assessment was pinned to `369993c`; its effective-scan,
+  malformed allowlist-container, acceptance-target provisioning, and explicit
+  detector-context findings were fixed at `dc858da` with regression coverage.
+  The later CodeScene complexity finding was fixed in `40cddb9`. The Unit
+  Architecture concern is covered by the explicit `DetectorContext` passed
+  through binary discovery and detector execution; process environment, root,
+  discovery and command execution are assembled only at the CLI boundary.
+- At `40cddb965a81d1212c3a55be8dab4cb20e349584`, the remote branch matches the
+  local head and PR #225 is open and ready for review. Hosted CI run
+  `38010083980` and CodeScene result `7890493` pass; Gecko Security Review also
+  passes. The latest local sequential gates passed before publication, with
+  168 focused helper tests, 3 snapshots and no skips; `make test` reported 439
+  passed, 2 skipped and 19 warnings. CodeRabbit's inline threads are resolved.
+  A fresh full review is queued as `cee4b22f`; its estimated wait was about
+  8 hours 48 minutes at the latest queue check. The request is pending, not a
+  completed review, and GitHub's aggregate review decision remains
+  `CHANGES_REQUESTED` from an earlier review.
