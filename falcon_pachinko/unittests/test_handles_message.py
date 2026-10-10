@@ -13,6 +13,8 @@ cover various scenarios including:
 
 from __future__ import annotations
 
+import functools
+
 import msgspec as ms
 import msgspec.json as msjson
 import pytest
@@ -178,14 +180,34 @@ def test_decorating_lifecycle_name_under_unrelated_tag_is_rejected() -> None:
 
 
 def test_decorating_inherited_lifecycle_callback_is_rejected() -> None:
-    """A subclass cannot re-register a lifecycle callback it inherits."""
-    with pytest.raises(ReservedHandlerRegistrationError, match="on_disconnect"):
+    """A subclass cannot register the callback under a new method name.
 
-        class DecoratedInheritedDisconnect(LifecycleParent):  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
-            @handles_message("bye")
-            async def on_disconnect(
-                self, ws: WebSocketLike, payload: object
-            ) -> None: ...
+    The child defines no ``on_disconnect`` of its own, so identity against
+    the parent's implementation is the only thing that can reject this; a
+    name-only check would let the inherited callback into the registry.
+    """
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_disconnect"):
+        LifecycleParent.add_handler("bye", LifecycleParent.on_disconnect, strict=False)
+
+
+def test_add_handler_rejects_partial_lifecycle_callback() -> None:
+    """A ``functools.partial`` wrapper does not launder a lifecycle callback.
+
+    A partial exposes neither the wrapped function's ``__name__`` nor its
+    identity, so without unwrapping it would read as an ordinary handler
+    while still invoking ``on_disconnect`` when a peer frame selected it.
+    """
+
+    class ManualResource(WebSocketResource):
+        """Resource used to exercise manual registration."""
+
+        async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+            """Stand in for the lifecycle callback under test."""
+
+    wrapped = functools.partial(ManualResource.on_disconnect)
+
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_disconnect"):
+        ManualResource.add_handler("disconnect", wrapped, strict=False)
 
 
 def test_add_handler_rejects_lifecycle_callback() -> None:
