@@ -32,6 +32,23 @@ def test_validation_error_remains_a_decode_error() -> None:
     )
 
 
+def test_raise_unknown_fields_uses_validation_error_export(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The helper resolves the stable public exception name when raising."""
+
+    class SentinelValidationError(Exception):
+        """Distinguish the public export from msgspec's direct exception."""
+
+    monkeypatch.setattr(utils, "ValidationError", SentinelValidationError)
+
+    with pytest.raises(
+        SentinelValidationError,
+        match=r"^Unknown fields in payload: \['a'\]$",
+    ):
+        utils.raise_unknown_fields({"a"})
+
+
 def test_validation_error_is_listed_in_public_exports() -> None:
     """ValidationError is part of the utility module's explicit API."""
     assert "ValidationError" in utils.__all__, (
