@@ -224,7 +224,7 @@ async def test_schema_reserved_tag_does_not_reach_lifecycle_callback() -> None:
     r.bind_default_hook_manager()
     raw = msjson.encode(ReservedTag(reason="peer"))
     await r.dispatch(DummyWS(), raw)
-    assert r.lifecycle == [], (
+    assert not r.lifecycle, (
         f"the reserved tag must not invoke on_disconnect: {r.lifecycle}"
     )
     assert r.raw == [raw], "the reserved tag must fall back with the raw frame"

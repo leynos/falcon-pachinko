@@ -178,11 +178,13 @@ lifecycle callback:
 ```python
 class ChatResource(WebSocketResource):
     @handles_message("disconnect")
-    async def handle_disconnect(self, ws, payload: object) -> None:
-        ...  # runs for {"type": "disconnect"}; on_disconnect does not
+    async def handle_disconnect(
+        self, ws, payload: object
+    ) -> None: ...  # runs for {"type": "disconnect"}; on_disconnect does not
 
-    async def on_disconnect(self, ws, close_code: int) -> None:
-        ...  # connection lifecycle only
+    async def on_disconnect(
+        self, ws, close_code: int
+    ) -> None: ...  # connection lifecycle only
 ```
 
 Schema-backed dispatch restricts tags to declared `Struct` types, but a struct

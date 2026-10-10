@@ -471,7 +471,7 @@ async def test_reserved_tags_never_reach_lifecycle_callback(tag: str) -> None:
     r.bind_default_hook_manager()
     raw = msjson.encode({"type": tag, "payload": 1000})
     await r.dispatch(DummyWS(), raw)
-    assert r.lifecycle == [], (
+    assert not r.lifecycle, (
         f"tag {tag!r} must not invoke a lifecycle callback: {r.lifecycle}"
     )
     assert r.fallback == [raw], (
@@ -487,7 +487,7 @@ async def test_inherited_lifecycle_callbacks_are_not_peer_selectable(tag: str) -
     r.bind_default_hook_manager()
     raw = msjson.encode({"type": tag, "payload": 1000})
     await r.dispatch(DummyWS(), raw)
-    assert r.lifecycle == [], (
+    assert not r.lifecycle, (
         f"an inherited lifecycle callback must not run for {tag!r}: {r.lifecycle}"
     )
     assert r.fallback == [raw], "an inherited reserved name must fall back"
@@ -501,7 +501,7 @@ async def test_lifecycle_alias_is_not_peer_selectable(tag: str) -> None:
     r.bind_default_hook_manager()
     raw = msjson.encode({"type": tag, "payload": 1000})
     await r.dispatch(DummyWS(), raw)
-    assert r.lifecycle == [], (
+    assert not r.lifecycle, (
         f"the on_bye alias must not invoke on_disconnect for {tag!r}: {r.lifecycle}"
     )
     assert r.fallback == [raw], "an aliased lifecycle callback must fall back"
@@ -514,7 +514,7 @@ async def test_inherited_lifecycle_alias_is_not_peer_selectable() -> None:
     r.bind_default_hook_manager()
     raw = msjson.encode({"type": "bye", "payload": 1000})
     await r.dispatch(DummyWS(), raw)
-    assert r.lifecycle == [], (
+    assert not r.lifecycle, (
         f"the inherited on_bye alias must not run on_disconnect: {r.lifecycle}"
     )
     assert r.fallback == [raw], "an inherited alias must fall back"
@@ -530,7 +530,7 @@ async def test_reserved_tag_string_on_distinct_method_is_registered() -> None:
     assert r.messages == [1000], (
         f"the decorated handler must receive the payload: {r.messages}"
     )
-    assert r.lifecycle == [], (
+    assert not r.lifecycle, (
         f"the registered handler must not invoke on_disconnect: {r.lifecycle}"
     )
 
@@ -542,6 +542,49 @@ async def test_punctuation_normalisation_still_resolves_handler() -> None:
     r.bind_default_hook_manager()
     await r.dispatch(DummyWS(), msjson.encode({"type": "send.message", "payload": 7}))
     assert r.seen == [7], "send.message should resolve to on_send_message"
+
+
+class DescriptorWrappedResource(WebSocketResource):
+    """Resource whose ``on_*`` attributes are descriptor-wrapped coroutines.
+
+    ``getattr_static`` returns the descriptor object rather than the function
+    for these, so none of them satisfies the coroutine test the conventional
+    dispatcher applies.
+    """
+
+    def __init__(self) -> None:
+        self.fallback: list[str | bytes] = []
+
+    @staticmethod
+    async def on_static(resource: object, ws: WebSocketLike, payload: object) -> None:
+        """Synchronous-attribute handler that must not be admitted."""
+
+    @classmethod
+    async def on_classm(cls, ws: WebSocketLike, payload: object) -> None:
+        """Class-bound handler that must not be admitted."""
+
+    @property
+    def on_prop(self) -> object:
+        """Descriptor that must not be run during class creation."""
+        msg = "a peer tag must never evaluate this property"
+        raise AssertionError(msg)
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record fallback messages."""
+        self.fallback.append(message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tag", ["static", "classm", "prop"])
+async def test_descriptor_wrapped_attributes_are_not_dispatchable(tag: str) -> None:
+    """Only a plain coroutine function is admitted to the allowlist."""
+    r = DescriptorWrappedResource()
+    r.bind_default_hook_manager()
+    raw = msjson.encode({"type": tag, "payload": None})
+    await r.dispatch(DummyWS(), raw)
+    assert r.fallback == [raw], (
+        f"a descriptor-wrapped attribute must fall back for {tag!r}: {r.fallback}"
+    )
 
 
 def test_conventional_registry_excludes_lifecycle_names() -> None:
