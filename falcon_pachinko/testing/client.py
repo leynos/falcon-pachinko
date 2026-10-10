@@ -75,6 +75,12 @@ class WebSocketSession:
         """Whether the underlying websocket has been closed."""
         return bool(getattr(self._connection, "closed", False))
 
+    @property
+    def close_code(self) -> int | None:
+        """Observed close code from the underlying connection."""
+        code = getattr(self._connection, "close_code", None)
+        return code if isinstance(code, int) else None
+
     def _log(self, direction: Direction, kind: PayloadKind, payload: object) -> None:
         """Append a trace event if tracing is enabled."""
         if self.trace is not None:

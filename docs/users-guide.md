@@ -31,7 +31,6 @@ from falcon_pachinko import WebSocketResource, WebSocketRouter, handles_message
 
 class ChatResource(WebSocketResource):
     async def on_connect(self, req, ws, room: str) -> bool:
-        await ws.accept()
         self.state["room"] = room
         return True  # continue to message handling
 
@@ -51,6 +50,8 @@ router.mount("/ws")
   paths relative to that prefix.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
+- After `on_connect` and the `after_connect` hooks succeed, the router accepts
+  the socket and owns the receive-and-dispatch session until it ends.
 
 ### The `add_route` signature
 
@@ -86,11 +87,16 @@ def add_route(
 ## 3. Resource Lifecycle & State
 
 - `on_connect(req, ws, **params) -> bool | None`
-  - Accept/close/inspect headers, seed `self.state`, return `False` to stop
-    processing after connect.
-- `on_disconnect(req, ws, close_code, **params) -> None`
-  - Clean up resources; runs even if connection negotiation fails after
-    acceptance.
+  - Inspect headers and seed `self.state`; return `False` to reject the
+    connection. The router runs `after_connect` hooks before it calls
+    `accept()`, then begins receiving frames when this method allows the
+    connection.
+- `on_disconnect(ws, close_code) -> None`
+  - Clean up after an accepted session ends. The router runs
+    `before_disconnect` hooks first, then calls `on_disconnect`. The code is
+    the peer's close code, `1001` when the server cancels the session, or
+    `1011` after an unexpected receive or handler failure. Rejected
+    connections do not run this lifecycle.
 - `self.state`
   - Dict-like proxy shared across all resources in the same connection chain.
   - Override via `get_child_context()` to supply a custom state store (e.g.,
@@ -147,6 +153,25 @@ class ChatResource(WebSocketResource):
 - Messages are decoded with `msgspec`; unknown tags fall back to
   `on_unhandled(self, ws, raw)` when defined.
 - The decorator supports `strict=False` to allow extra fields when required.
+- The router dispatches frames sequentially on the accepted connection. It
+  does not start a task per frame, so one handler completes before the next
+  frame is dispatched. Returning normally from `on_unhandled` keeps the session
+  open; application code can call `await ws.close(code=...)` when its policy
+  requires closure.
+
+Falcon's default WebSocket media handlers may decode frames before
+`receive_media()` returns them. When schema dispatch needs the original text or
+binary frame, configure the app before serving requests:
+
+```python
+from falcon_pachinko import configure_raw_frame_media
+
+configure_raw_frame_media(app)
+```
+
+The helper preserves incoming `str` and `bytes` frames and encodes outgoing
+text media as JSON. It encodes non-byte binary media as MessagePack; byte-like
+binary payloads pass through unchanged.
 
 The stable import path is `from falcon_pachinko.utils import ValidationError`.
 It is the same class as `msgspec.ValidationError`, so existing

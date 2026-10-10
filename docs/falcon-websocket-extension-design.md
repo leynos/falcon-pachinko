@@ -291,9 +291,11 @@ logic.
     mechanics. This design aligns with Falcon's higher-level approach for HTTP
     handlers, where the framework manages response sending.
 
-  - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: Called
-    when the WebSocket connection is closed, either by the client or the
-    server. `close_code` provides the WebSocket close code.
+  - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: After
+    an accepted session ends, the router first notifies `before_disconnect`
+    hooks and then calls this method. `close_code` is the peer's code (1000 if
+    absent), 1001 for server cancellation, or 1011 for an unexpected receive or
+    handler failure. Rejected negotiations do not call this method.
 
   - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str,
     bytes])`
@@ -1007,9 +1009,17 @@ sequenceDiagram
         WebSocketRouter->>Client: Close WebSocket
     else on_connect returns True
         WebSocketRouter->>Client: Accept WebSocket
+        loop while the session is open
+            Client->>WebSocketRouter: TEXT or BINARY frame
+            WebSocketRouter->>WebSocketResource: dispatch(frame)
+            WebSocketResource-->>Client: optional response
+        end
+        WebSocketRouter->>WebSocketRouter: before_disconnect hooks
+        WebSocketRouter->>WebSocketResource: on_disconnect(peer code)
     end
     alt Unhandled exception during dispatch
-        WebSocketRouter->>Client: Close WebSocket
+        WebSocketRouter->>Client: Close WebSocket with 1011
+        WebSocketRouter->>WebSocketResource: Best-effort on_disconnect(1011)
     end
 ```
 
@@ -1341,6 +1351,15 @@ This provides maximum control, allowing outer layers to act as setup/teardown
 guards for inner layers. An exception in a `before_*` hook should terminate the
 connection attempt immediately.
 
+Once Falcon accepts the connection, the router owns a single inline receive
+loop. It passes each text or binary frame to the selected resource's dispatcher
+and waits for that dispatch to finish before receiving the next frame. The loop
+creates no task per frame. A normal peer close runs `before_disconnect` hooks
+and then `on_disconnect`; cancellation closes with 1001 and propagates, while
+an unexpected receive or handler exception closes with 1011, runs best-effort
+cleanup, and propagates the original exception. Returning normally from
+`on_unhandled` leaves the session open.
+
 ### 5.5. Architectural Implications
 
 #### 5.5.1. Stateful Per-Connection Resources and Dependency Injection
@@ -1664,7 +1683,9 @@ enables white-box testing of router behaviour without needing an ASGI server.
 - **Interface**: It implements the same async methods as
   `falcon.asgi.WebSocket` (`accept`, `close`, `send_media`, `receive_media`),
   but internally uses asyncio queues so tests can inject messages or spy on
-  emitted frames. Helper shortcuts (`send_json`, `pop_sent`) keep tests concise.
+  emitted frames. `close(code)` wakes a blocked receive; queued frames are
+  returned first, then receives raise `falcon.WebSocketDisconnected` with that
+  code. Helper shortcuts (`send_json`, `pop_sent`) keep tests concise.
 
 - **Spying and Injection**: Tests enqueue inbound messages via
   `await simulator.push_message({...})` before driving the resource's receive
@@ -1699,13 +1720,13 @@ def _websocket_simulator() -> cabc.Iterator[SimulatorRouterHarness]:
 ```
 
 A test registers routes on `harness.router` and then uses the async context
-manager `harness.connect(path, *, initial_inbound=None)` to dispatch a
-simulated connection through the router. `connect()` yields a
-`SimulatorConnection` exposing `accepted`, `closed`, `close_code`,
-`subprotocol`, and `sent_messages`, plus helpers such as `pop_sent()`,
-`pop_sent_json()`, `push_json()`, `push_text()`, and `push_bytes()`. Both the
-simulator and the underlying websocket stub are closed automatically when the
-context exits:
+manager `harness.connect(path, *, initial_inbound=None)` to drive a simulated
+connection through the router. `connect()` runs the router in a task, waits for
+connection readiness, and yields a `SimulatorConnection` exposing `accepted`,
+`closed`, `close_code`, `subprotocol`, and `sent_messages`, plus helpers such as
+`pop_sent()`, `pop_sent_json()`, `push_json()`, `push_text()`, and
+`push_bytes()`. Both the simulator and the underlying websocket stub are closed
+automatically when the context exits:
 
 ```python
 async def test_echo(websocket_simulator: SimulatorRouterHarness) -> None:
@@ -1720,9 +1741,9 @@ async def test_echo(websocket_simulator: SimulatorRouterHarness) -> None:
         }
 ```
 
-- **Lifecycle Management**: `connect()` dispatches the request through
-  `router.on_websocket()` and guarantees the simulator and the underlying
-  websocket stub are closed on exit, even if the resource left them open.
+- **Lifecycle Management**: `connect()` starts `router.on_websocket()` and
+  guarantees the simulator is closed and the router task awaited on exit, even
+  if the resource left the socket open. Session errors propagate to the test.
 
 - **Behavioural Testing**: Because routes can be added to `harness.router` at
   any point before `connect()` is awaited, higher-level fixtures can compose
