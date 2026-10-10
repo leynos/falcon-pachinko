@@ -14,10 +14,12 @@ once. The tests never skip: a missing interpreter is a failure, not a pass.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import sys
 import textwrap
+import typing as typ
 
 import pytest
 
@@ -31,6 +33,9 @@ from tests._makefile import (
     split_command,
     tool_environment,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 pytestmark = [pytest.mark.lint_toolchain]
 
@@ -177,8 +182,18 @@ def _venv_identity() -> dict[str, str]:
     venv = _project_venv(
         pathlib.Path(sys.prefix), pathlib.Path(sys.base_prefix), REPO_ROOT
     )
+    config = venv / "pyvenv.cfg"
+    # A re-created environment can keep its path and its configuration text, so
+    # the file's inode, modification time and status-change time are recorded
+    # as well. The status-change time cannot be set from user space.
+    try:
+        stat = config.stat()
+        text = config.read_text(encoding="utf-8")
+    except OSError as error:
+        pytest.fail(f"cannot read the virtual environment's {config}: {error}")
     return {
-        "pyvenv.cfg": (venv / "pyvenv.cfg").read_text(encoding="utf-8"),
+        "pyvenv.cfg": text,
+        "pyvenv.cfg identity": f"{stat.st_ino}:{stat.st_mtime_ns}:{stat.st_ctime_ns}",
         "python": str((venv / "bin" / "python").resolve()),
     }
 
@@ -546,3 +561,53 @@ def test_the_project_venv_is_the_one_the_suite_runs_in(
     )
 
     assert found == pathlib.Path(expected), f"{prefix} resolved to {found}"
+
+
+def test_the_venv_identity_notices_a_same_content_recreation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """Re-creating the config with identical text changes the recorded identity."""
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "python").touch()
+    config = tmp_path / "pyvenv.cfg"
+    config.write_text("home = /usr/bin\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "prefix", str(tmp_path))
+    before = _venv_identity()
+
+    original_mtime = config.stat().st_mtime_ns
+    # The replacement is created while the original still exists, so it is
+    # given a different inode without any dependence on elapsed time.
+    replacement = tmp_path / "pyvenv.cfg.new"
+    replacement.write_text("home = /usr/bin\n", encoding="utf-8")
+    # Restore the modification time, so only the inode and the status-change
+    # time (which user space cannot set) can reveal the recreation.
+    os.utime(replacement, ns=(original_mtime, original_mtime))
+    replacement.replace(config)
+    after = _venv_identity()
+
+    assert config.stat().st_mtime_ns == original_mtime, "mtime is preserved"
+    assert after["pyvenv.cfg"] == before["pyvenv.cfg"], "the text is unchanged"
+    assert after != before, "a re-created pyvenv.cfg must change the identity"
+
+
+@pytest.mark.parametrize(
+    "make_config",
+    [lambda config: None, lambda config: config.mkdir()],
+    ids=["stat-fails", "read-fails"],
+)
+def test_the_venv_identity_reports_an_unreadable_config_by_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    make_config: cabc.Callable[[pathlib.Path], None],
+) -> None:
+    """A missing or unreadable ``pyvenv.cfg`` fails naming its full path.
+
+    A missing file fails at ``stat``; a directory in its place passes ``stat``
+    and fails at ``read_text``, so both reads of the helper are covered.
+    """
+    config = tmp_path / "pyvenv.cfg"
+    make_config(config)
+    monkeypatch.setattr(sys, "prefix", str(tmp_path))
+
+    with pytest.raises(pytest.fail.Exception, match=re.escape(str(config))):
+        _venv_identity()
