@@ -116,9 +116,6 @@ def when_client_connects(
     context.session_task = event_loop.create_task(
         context.router.on_websocket(req, context.simulator)
     )
-    event_loop.run_until_complete(
-        asyncio.wait_for(context.simulator.lifecycle_event.wait(), timeout=1.0)
-    )
 
     def disconnect_session() -> None:
         task = context.session_task
@@ -129,6 +126,9 @@ def when_client_connects(
         event_loop.run_until_complete(task)
 
     request.addfinalizer(disconnect_session)
+    event_loop.run_until_complete(
+        asyncio.wait_for(context.simulator.lifecycle_event.wait(), timeout=1.0)
+    )
     context.resource = _select_task_resource(context.instances)
     return context
 

@@ -250,8 +250,12 @@ def test_attach_warns_when_websocket_media_handlers_are_customized() -> None:
     )
     media_handlers[falcon.WebSocketPayloadType.TEXT] = CustomTextHandler()
 
-    with pytest.warns(UserWarning, match="app-wide WebSocket"):
+    with pytest.warns(UserWarning, match="app-wide WebSocket") as caught:
         WebSocketRouter().attach(app, "/ws")
+
+    assert caught[0].filename == __file__, (
+        "the warning should identify the application attach() call site"
+    )
 
 
 @pytest.mark.asyncio

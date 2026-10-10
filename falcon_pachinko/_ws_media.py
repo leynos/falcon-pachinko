@@ -101,7 +101,7 @@ def install_raw_websocket_media_handlers(
             f"for {names}; all Falcon WebSocket responders on this app will "
             "receive raw str or bytes from receive_media()",
             UserWarning,
-            stacklevel=2,
+            stacklevel=3,
         )
 
     for payload_type in payload_types:

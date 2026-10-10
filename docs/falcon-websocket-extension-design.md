@@ -945,9 +945,10 @@ creation of modular, hierarchical WebSocket APIs.
 
 #### 5.1.1. Mounting the Router
 
-Instead of assigning a router to a special application attribute, it is mounted
-at a URL prefix using Falcon's standard `app.add_route()` method. This makes the
-`WebSocketRouter` a first-class citizen in Falcon's routing tree.
+Instead of assigning a router to a special application attribute, call
+`router.attach(app, prefix)`. This installs an exact route and a descendant
+catch-all route in Falcon's routing tree, then configures the application's
+shared WebSocket media handlers to preserve raw inbound frames.
 
 ```python
 import falcon.asgi
