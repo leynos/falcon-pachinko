@@ -244,3 +244,17 @@ the library is ready for use.
 
   - [x] Add detailed "how-to" guides for advanced features like DI, state
     management, and custom connection manager backends.
+
+## 6. Live ASGI acceptance and session lifecycle
+
+- [x] Add `WebSocketRouter.attach()` for supported Falcon ASGI registration,
+  raw-frame media handling, and a persistent receive/dispatch loop that owns
+  session cleanup.
+- [x] Keep the simulator harness event-driven and aligned with persistent
+  responder sessions, including deterministic disconnect and task-failure
+  propagation.
+- [x] Add a server-adapter protocol and ephemeral-port live ASGI harness with a
+  lazy Uvicorn default, readiness signalling, tracked clients, and surfaced
+  server failures.
+- [x] Require live-server pytest-bdd acceptance scenarios for WebSocket
+  lifecycle features while retaining simulator coverage for fast tests.

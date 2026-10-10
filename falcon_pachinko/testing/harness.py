@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
 import typing as typ
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 import falcon.asgi
 import msgspec.json as msjson
@@ -105,6 +106,10 @@ class SimulatorConnection:
         """Queue a binary frame for the resource."""
         await self.simulator.push_bytes(payload)
 
+    async def disconnect(self, code: int = 1000) -> None:
+        """Queue a client disconnect after any pending inbound frames."""
+        await self.simulator.push_disconnect(code)
+
 
 class SimulatorRouterHarness:
     """Manage a simulator-backed router mounted on a Falcon ASGI app."""
@@ -161,6 +166,98 @@ class SimulatorRouterHarness:
             return path
         return path if self._mount_prefix == "/" else f"{self._mount_prefix}{path}"
 
+    @staticmethod
+    async def _wait_until_ready(
+        simulator: WebSocketSimulator, task: asyncio.Task[None]
+    ) -> None:
+        """Wait for accept, close, or responder completion without polling."""
+        lifecycle_waiter = asyncio.create_task(simulator.lifecycle_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {lifecycle_waiter, task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if task in done:
+                task.result()
+                return
+            if simulator.closed:
+                await task
+        finally:
+            if not lifecycle_waiter.done():
+                lifecycle_waiter.cancel()
+            with suppress(asyncio.CancelledError):
+                await lifecycle_waiter
+
+    @staticmethod
+    async def _stop_responder(
+        simulator: WebSocketSimulator, task: asyncio.Task[None]
+    ) -> tuple[BaseException | None, TimeoutError | None]:
+        """Signal disconnect and stop the responder within its deadline."""
+        if not simulator.closed:
+            await simulator.push_disconnect()
+        try:
+            async with asyncio.timeout(1.0):
+                await asyncio.shield(task)
+        except TimeoutError as exc:
+            task.cancel()
+            return await SimulatorRouterHarness._await_cancelled_task(task), exc
+        except asyncio.CancelledError as exc:
+            if task.cancelled():
+                return exc, None
+            raise
+        # Any ordinary responder error must reach context-manager exit.
+        except Exception as exc:  # ruff: ignore[blind-except]
+            return exc, None
+        return None, None
+
+    @staticmethod
+    async def _await_cancelled_task(
+        task: asyncio.Task[None],
+    ) -> BaseException | None:
+        """Join a cancelled responder and retain any ordinary task failure."""
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                return None
+            raise
+        # Any ordinary responder error must reach context-manager exit.
+        except Exception as exc:  # ruff: ignore[blind-except]
+            return exc
+        return None
+
+    @staticmethod
+    async def _close_connection(
+        simulator: WebSocketSimulator, original: _OriginalWebSocket
+    ) -> None:
+        """Close both sides of a simulator connection after its task stops."""
+        if not simulator.closed:
+            await simulator.close()
+        if not original.closed:
+            await original.close()
+
+    @staticmethod
+    def _raise_connection_errors(
+        body_error: BaseException | None,
+        task_error: BaseException | None,
+        shutdown_error: TimeoutError | None,
+    ) -> None:
+        """Preserve a body failure and report responder teardown problems."""
+        if body_error is not None:
+            if task_error is not None and task_error is not body_error:
+                body_error.add_note(
+                    f"Simulator responder task also failed: {task_error!r}"
+                )
+            if shutdown_error is not None:
+                body_error.add_note(
+                    "Simulator responder did not stop before the teardown deadline"
+                )
+            raise body_error
+        if task_error is not None:
+            raise task_error
+        if shutdown_error is not None:
+            msg = "Simulator responder did not stop before the teardown deadline"
+            raise TimeoutError(msg) from shutdown_error
+
     @asynccontextmanager
     async def connect(
         self,
@@ -193,8 +290,10 @@ class SimulatorRouterHarness:
         request_path = self._compose_path(path)
         request = _TestRequest(path=request_path, path_template=self._mount_prefix)
         original = _OriginalWebSocket()
+        task = asyncio.create_task(self.router.on_websocket(request, original))
+        body_error: BaseException | None = None
         try:
-            await self.router.on_websocket(request, original)
+            await self._wait_until_ready(simulator, task)
             yield SimulatorConnection(
                 path=request_path,
                 router=self.router,
@@ -202,9 +301,12 @@ class SimulatorRouterHarness:
                 request=request,
                 websocket=original,
             )
+        # Preserve body errors while ensuring responder teardown still runs.
+        except (Exception, asyncio.CancelledError) as exc:  # ruff: ignore[blind-except]
+            body_error = exc
         finally:
             self._pending_simulator = None
-            if not simulator.closed:
-                await simulator.close()
-            if not original.closed:
-                await original.close()
+            task_error, shutdown_error = await self._stop_responder(simulator, task)
+            await self._close_connection(simulator, original)
+
+        self._raise_connection_errors(body_error, task_error, shutdown_error)

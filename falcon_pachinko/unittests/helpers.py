@@ -5,6 +5,8 @@ from __future__ import annotations
 import types
 import typing as typ
 
+import falcon
+
 
 def make_req(path: str, path_template: str = "") -> types.SimpleNamespace:
     """Build a minimal request stand-in for router tests.
@@ -57,7 +59,7 @@ class DummyWS:
     @staticmethod
     async def receive_media() -> object:  # pragma: no cover
         """Receive structured data over the connection."""
-        return None
+        raise falcon.WebSocketDisconnected(code=1000)
 
 
 class RecordingWS(DummyWS):

@@ -32,6 +32,7 @@ class ReferenceScenario:
     feed: AnnouncementFeed
     simulator: WebSocketSimulator
     instances: list[WebSocketResource]
+    session_task: asyncio.Task[None] | None = None
     resource: TaskStreamResource | None = None
     last_event: tuple[str, dict[str, object]] | None = None
 
@@ -103,14 +104,31 @@ def _select_task_resource(instances: list[WebSocketResource]) -> TaskStreamResou
     target_fixture="context",
 )
 def when_client_connects(
-    context: ReferenceScenario, event_loop: asyncio.AbstractEventLoop
+    context: ReferenceScenario,
+    event_loop: asyncio.AbstractEventLoop,
+    request: pytest.FixtureRequest,
 ) -> ReferenceScenario:
-    """Dispatch a connection through the router with valid headers."""
+    """Start a persistent simulated session with valid connection headers."""
     req = RequestStub(
         "/ws/workspaces/atlas/projects/triage/tasks",
         headers={"x-workspace-token": "seekrit", "x-user": "casey"},
     )
-    event_loop.run_until_complete(context.router.on_websocket(req, context.simulator))
+    context.session_task = event_loop.create_task(
+        context.router.on_websocket(req, context.simulator)
+    )
+
+    def disconnect_session() -> None:
+        task = context.session_task
+        if task is None:
+            return
+        if not task.done():
+            event_loop.run_until_complete(context.simulator.push_disconnect())
+        event_loop.run_until_complete(task)
+
+    request.addfinalizer(disconnect_session)
+    event_loop.run_until_complete(
+        asyncio.wait_for(context.simulator.lifecycle_event.wait(), timeout=1.0)
+    )
     context.resource = _select_task_resource(context.instances)
     return context
 
@@ -124,7 +142,7 @@ def when_send_task_add(
     assert resource is not None, "the connection step must have selected the resource"
     payload = AddTask(task_id="T-42", title="Investigate event loop")
     raw = msjson.encode(payload)
-    event_loop.run_until_complete(resource.dispatch(context.simulator, raw))
+    event_loop.run_until_complete(context.simulator.push_bytes(raw))
     context.last_event = event_loop.run_until_complete(context.feed.next_event())
     return context
 

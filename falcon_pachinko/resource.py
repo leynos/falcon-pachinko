@@ -204,10 +204,10 @@ class WebSocketResource:
     async def on_connect(  # ruff: ignore[no-self-use] - overridable hook; subclasses use ``self``
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
-        """Decide whether the connection should be accepted after handshake.
+        """Decide whether the router should accept the connection.
 
-        Called after the WebSocket handshake is complete to determine
-        acceptance.
+        This hook runs before router-owned acceptance. A resource that sends
+        from ``on_connect()`` must call ``ws.accept()`` first.
 
         Parameters
         ----------

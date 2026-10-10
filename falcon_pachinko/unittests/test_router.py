@@ -7,10 +7,13 @@ import inspect
 import typing as typ
 
 import falcon
-import falcon.asgi
 import pytest
 
-from falcon_pachinko import HookContext, WebSocketResource, WebSocketRouter
+from falcon_pachinko import (
+    HookContext,
+    WebSocketResource,
+    WebSocketRouter,
+)
 from falcon_pachinko.unittests.helpers import DummyWS, RecordingWS, make_req
 from falcon_pachinko.unittests.resource_factories import resource_factory
 
@@ -602,24 +605,6 @@ async def test_add_route_accepts_factory() -> None:
         "init": 7,
         "params": {"id": "5"},
     }, "factory-produced resource should receive route args and connect params"
-
-
-@pytest.mark.asyncio
-async def test_router_mount_on_app() -> None:
-    """Verify routers work when mounted on a Falcon ``App``."""
-    DummyResource.instances.clear()
-    router = WebSocketRouter()
-    router.add_route("/rooms/{room}", DummyResource, name="room")
-    router.mount("/ws")
-
-    app = falcon.asgi.App()
-    app.add_route("/ws", router)
-
-    req = make_req("/ws/rooms/42", "/ws")
-    await router.on_websocket(req, DummyWS())
-    assert DummyResource.instances[-1].params == {"room": "42"}, (
-        "router mounted on a Falcon app should still route correctly"
-    )
 
 
 @pytest.mark.asyncio
