@@ -519,5 +519,6 @@ pytest_add_cli_args = [
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["falcon_pachinko"]
+[tool.setuptools.packages.find]
+include = ["falcon_pachinko", "falcon_pachinko.testing"]
+exclude = ["falcon_pachinko.behaviour*", "falcon_pachinko.unittests*"]

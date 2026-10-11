@@ -118,7 +118,7 @@ Falcon may consume the exception before the harness can report it.
 Unacknowledged server failures fail context teardown, while `pop_errors()`
 marks failures that the scenario intentionally asserted.
 
-The `testing` extra and `dev` dependency group include `uvicorn>=0.29,<1`. The
+The `testing` extra and `dev` dependency group include `uvicorn>=0.34,<1`. The
 test server imports Uvicorn lazily and uses its lifespan readiness and
 graceful-shutdown APIs; the behavioural contract belongs to Falcon-Pachinko's
 adapter protocol, not to Uvicorn.

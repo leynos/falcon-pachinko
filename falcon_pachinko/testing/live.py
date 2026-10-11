@@ -85,6 +85,8 @@ class LiveWebSocketServer:
     that Falcon handles internally.
     """
 
+    # @codescene(disable:"Excess Number of Function Arguments")
+    # Public issue #175 API (2026-10-11).
     # pylint: disable-next=too-many-arguments  # Keep the public startup options explicit.
     def __init__(  # ruff: ignore[too-many-arguments] -- documented constructor API
         self,
@@ -167,27 +169,24 @@ class LiveWebSocketServer:
             self._prepare_startup()
             await self._wait_for_startup()
         except asyncio.CancelledError as exc:
-            try:
-                await self._abort_startup()
-            except Exception as cleanup_error:  # ruff: ignore[blind-except] -- retain cancellation
-                exc.add_note(
-                    f"Live server startup cleanup also failed: {cleanup_error!r}"
-                )
-            finally:
-                self._close_socket()
+            await self._cleanup_startup_failure(exc)
             raise
         except Exception as exc:
-            try:
-                await self._abort_startup()
-            except Exception as cleanup_error:  # ruff: ignore[blind-except] -- retain startup failure
-                exc.add_note(
-                    f"Live server startup cleanup also failed: {cleanup_error!r}"
-                )
-            finally:
-                self._close_socket()
+            await self._cleanup_startup_failure(exc)
             msg = "Falcon ASGI server failed to start"
             raise LiveServerStartupError(msg) from exc
         return self
+
+    async def _cleanup_startup_failure(self, error: BaseException) -> None:
+        """Release partial startup resources without masking its cause."""
+        try:
+            await self._abort_startup()
+        except Exception as cleanup_error:  # ruff: ignore[blind-except] -- retain startup error
+            error.add_note(
+                f"Live server startup cleanup also failed: {cleanup_error!r}"
+            )
+        finally:
+            self._close_socket()
 
     def _prepare_startup(self) -> None:
         """Install error capture and select the default server adapter."""
@@ -255,6 +254,8 @@ class LiveWebSocketServer:
 
         return capture_escaped_errors
 
+    # @codescene(disable:"Excess Number of Function Arguments")
+    # Required Falcon callback (2026-10-11).
     # pylint: disable-next=too-many-arguments,too-many-positional-arguments  # Match Falcon's error-handler callback contract.
     async def _handle_exception(  # ruff: ignore[too-many-arguments, too-many-positional-arguments] -- Falcon callback API
         self,

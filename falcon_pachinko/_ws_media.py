@@ -62,13 +62,30 @@ def _configuration_value(value: object) -> object:
             return value
 
 
+def _handler_configuration(handler: object) -> object:
+    """Normalize configuration stored in slots and in an instance dictionary."""
+    state: dict[str, object] = {}
+    for owner in type(handler).__mro__:
+        slots = getattr(owner, "__slots__", ())
+        slot_names = (
+            (slots,)
+            if isinstance(slots, str)
+            else typ.cast("cabc.Iterable[str]", slots)
+        )
+        for name in slot_names:
+            if name not in {"__dict__", "__weakref__"} and hasattr(handler, name):
+                state[name] = getattr(handler, name)
+    handler_dict = getattr(handler, "__dict__", {})
+    if isinstance(handler_dict, dict):
+        state.update(handler_dict)
+    return _configuration_value(state)
+
+
 def _matches_default_handler(handler: object, default_handler: object) -> bool:
     """Return whether ``handler`` has Falcon's default class and settings."""
     if type(handler) is not type(default_handler):
         return False
-    handler_state = _configuration_value(getattr(handler, "__dict__", {}))
-    default_state = _configuration_value(getattr(default_handler, "__dict__", {}))
-    return handler_state == default_state
+    return _handler_configuration(handler) == _handler_configuration(default_handler)
 
 
 def install_raw_websocket_media_handlers(

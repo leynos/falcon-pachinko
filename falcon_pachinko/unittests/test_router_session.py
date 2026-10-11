@@ -8,6 +8,7 @@ import warnings
 
 import falcon
 import falcon.asgi
+import falcon.media
 import falcon.testing
 import pytest
 
@@ -256,6 +257,21 @@ def test_attach_warns_when_websocket_media_handlers_are_customized() -> None:
     assert caught[0].filename == __file__, (
         "the warning should identify the application attach() call site"
     )
+
+
+def test_attach_warns_for_customized_falcon_json_handler() -> None:
+    """Warn when a Falcon handler stores custom settings in slots."""
+    app = falcon.asgi.App()
+    media_handlers = typ.cast(
+        "cabc.MutableMapping[falcon.WebSocketPayloadType, object]",
+        app.ws_options.media_handlers,
+    )
+    media_handlers[falcon.WebSocketPayloadType.TEXT] = falcon.media.JSONHandlerWS(
+        loads=lambda payload: {"decoded": payload}
+    )
+
+    with pytest.warns(UserWarning, match="app-wide WebSocket"):
+        WebSocketRouter().attach(app, "/ws")
 
 
 @pytest.mark.asyncio

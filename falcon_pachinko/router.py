@@ -18,8 +18,19 @@ import threading
 import typing as typ
 
 import falcon
+import falcon.asgi
 
+from ._route_support import (
+    _CompiledRoute,
+    _normalize_path,
+    _RawRoute,
+    _request_path_template,
+    _RequestLike,
+    _RouteMatch,
+    _RouteRegistrationService,
+)
 from ._uri_template import _compile_prefix_template, compile_uri_template
+from ._ws_media import install_raw_websocket_media_handlers
 from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
 
@@ -47,55 +58,11 @@ type SimulatorFactory = cabc.Callable[
 ]
 
 
-class _RequestLike(typ.Protocol):
-    """Request surface consumed by the router before resource dispatch."""
-
-    @property
-    def path(self) -> str:
-        """The request path."""
-
-    @property
-    def path_template(self) -> str:
-        """The mount path template."""
-
-
-def _request_path_template(req: _RequestLike) -> str:
-    """Return the mounted path template, defaulting like Falcon does."""
-    try:
-        return req.path_template
-    except AttributeError:
-        # Falcon calls this value ``uri_template`` on its request object.
-        return getattr(req, "uri_template", "")
-
-
-def _normalize_path(path: str) -> str:
-    """Ensure the path has a leading slash."""
-    if not path.startswith("/"):
-        path = f"/{path}"
-    return path
-
-
-def _canonical_path(path: str) -> str:
-    """Return the normalized path without a trailing slash."""
-    path = _normalize_path(path)
-    if path != "/":
-        path = path.rstrip("/")
-    return path
-
-
-@dc.dataclass(slots=True)
-class _RouteMatch:
-    """Captured route parameters plus the path segment still to be consumed."""
-
-    params: dict[str, str]
-    remaining: str
-
-
 @dc.dataclass(slots=True)
 class _Dispatch:
     """Mutable per-request state threaded through the routing pipeline."""
 
-    route: WebSocketRouter._CompiledRoute
+    route: _CompiledRoute
     req: falcon.Request
     ws: WebSocketLike
     match: _RouteMatch
@@ -116,18 +83,6 @@ class WebSocketRouter:
     included in the template, generated URLs will preserve it.
     """
 
-    @dc.dataclass(slots=True)
-    class _RawRoute:
-        template: str
-        canonical: str
-        factory: cabc.Callable[..., WebSocketResource]
-
-    @dc.dataclass(slots=True)
-    class _CompiledRoute:
-        prefix: re.Pattern[str]
-        pattern: re.Pattern[str]
-        factory: cabc.Callable[..., WebSocketResource]
-
     def __init__(
         self,
         *,
@@ -135,8 +90,8 @@ class WebSocketRouter:
         resource_factory: ResourceFactory | None = None,
         simulator_factory: SimulatorFactory | None = None,
     ) -> None:
-        self._raw: list[WebSocketRouter._RawRoute] = []
-        self._routes: list[WebSocketRouter._CompiledRoute] = []
+        self._raw: list[_RawRoute] = []
+        self._routes: list[_CompiledRoute] = []
         self._mount_prefix: str = ""
         self._mount_lock = threading.Lock()
         self._names: dict[str, str] = {}
@@ -156,13 +111,13 @@ class WebSocketRouter:
         canonical: str,
         factory: cabc.Callable[..., WebSocketResource],
         mount_prefix: str,
-        existing_routes: cabc.Iterable[WebSocketRouter._CompiledRoute],
-    ) -> WebSocketRouter._CompiledRoute:
+        existing_routes: cabc.Iterable[_CompiledRoute],
+    ) -> _CompiledRoute:
         """Compile one route without mutating router registration state.
 
         Returns
         -------
-        WebSocketRouter._CompiledRoute
+        _CompiledRoute
             The compiled full and prefix patterns for the route.
 
         Raises
@@ -179,7 +134,7 @@ class WebSocketRouter:
                 msg = f"route path {full!r} already registered"
                 raise ValueError(msg)
 
-        return WebSocketRouter._CompiledRoute(prefix, pattern, factory)
+        return _CompiledRoute(prefix, pattern, factory)
 
     def mount(self, prefix: str) -> None:
         """Compile stored routes with the given mount ``prefix``."""
@@ -194,7 +149,7 @@ class WebSocketRouter:
                 msg = f"router already mounted at '{self._mount_prefix}'"
                 raise RuntimeError(msg)
 
-            compiled_routes: list[WebSocketRouter._CompiledRoute] = []
+            compiled_routes: list[_CompiledRoute] = []
             for raw in self._raw:
                 compiled_routes.append(
                     self._compile_route(
@@ -207,6 +162,39 @@ class WebSocketRouter:
 
             self._mount_prefix = canonical
             self._routes.extend(compiled_routes)
+
+    def attach(self, app: object, prefix: str) -> None:
+        """Mount this router on a real Falcon ASGI ``app``.
+
+        Falcon's normal route table serves the WebSocket responder. The exact
+        mount route handles a connection at ``prefix`` and the path converter
+        routes descendants through the same responder. ``attach`` also
+        configures raw text and binary media handlers so ``receive_media()``
+        returns frames for :meth:`WebSocketResource.dispatch`.
+
+        Raises
+        ------
+        TypeError
+            If ``app`` is not a Falcon ASGI application.
+        """
+        if not isinstance(app, falcon.asgi.App):
+            msg = "attach() requires a falcon.asgi.App instance"
+            raise TypeError(msg)
+
+        self.mount(prefix)
+        media_handlers = typ.cast(
+            "cabc.MutableMapping[falcon.WebSocketPayloadType, object]",
+            app.ws_options.media_handlers,
+        )
+        install_raw_websocket_media_handlers(media_handlers)
+
+        canonical = self._mount_prefix
+        if canonical == "/":
+            app.add_route("/{pachinko_path:path}", self)
+            return
+
+        app.add_route(canonical, self)
+        app.add_route(f"{canonical}/{{pachinko_path:path}}", self)
 
     def add_route(
         self,
@@ -244,12 +232,12 @@ class WebSocketRouter:
 
         with self._mount_lock:
             self._registration.check_conflicts(canonical, name, path=path)
-            compiled_route: WebSocketRouter._CompiledRoute | None = None
+            compiled_route: _CompiledRoute | None = None
             if self._mount_prefix:
                 compiled_route = self._compile_route(
                     canonical, factory, self._mount_prefix, self._routes
                 )
-            self._raw.append(WebSocketRouter._RawRoute(path, canonical, factory))
+            self._raw.append(_RawRoute(path, canonical, factory))
             if name:
                 self._names[name] = path
             if compiled_route is not None:
@@ -281,36 +269,49 @@ class WebSocketRouter:
         return _normalize_path(template.format(**params))
 
     async def on_websocket(
-        self, req: _RequestLike, ws: WebSocketLike
+        self, req: _RequestLike, ws: WebSocketLike, **params: object
     ) -> None:  # pragma: no cover - simple wrapper
         """Dispatch the connection to the first matching route.
 
-        ``req.path_template`` is assumed to be a prefix of ``req.path``. If the
-        assumption fails, :class:`falcon.HTTPNotFound` is raised to signal that
-        the requested path does not map to this router's mount point.
+        Falcon passes parameters captured by its path converter as keyword
+        arguments. They are ignored because the router re-matches ``req.path``
+        against its own route table, preserving nested-resource and hook
+        parameter handling. The selected Falcon template may be either the
+        mount itself or its descendant catch-all route.
 
         Raises
         ------
         falcon.HTTPNotFound
-            If ``req.path_template`` does not match this router's mount point,
+            If the Falcon route template does not match this router's mount point,
             or if no registered route matches ``req.path``.
         """
-        # Handle missing or empty path_template by defaulting to root "/"
-        prefix = _request_path_template(req).rstrip("/") or "/"
-        if prefix != self._mount_prefix:
-            msg = (
-                f"path_template '{prefix}' does not match router mount "
-                f"'{self._mount_prefix}'"
-            )
+        del params
+        self._validate_mount_template(req)
+        if await self._dispatch_first_route(req, ws):
+            return
+        raise falcon.HTTPNotFound
+
+    def _validate_mount_template(self, req: _RequestLike) -> None:
+        """Reject Falcon templates that are outside this router's mount."""
+        template = _request_path_template(req).rstrip("/") or "/"
+        mount = self._mount_prefix.rstrip("/") or "/"
+        descendant = (
+            "/{pachinko_path:path}"
+            if mount == "/"
+            else f"{mount}/{{pachinko_path:path}}"
+        )
+        if template not in {mount, descendant}:
+            msg = f"route template '{template}' does not match router mount '{mount}'"
             raise falcon.HTTPNotFound(description=msg)
 
+    async def _dispatch_first_route(self, req: _RequestLike, ws: WebSocketLike) -> bool:
+        """Dispatch the first route matching the request path."""
         # Routes are tested in the order they were added. Register more
         # specific paths before general ones to control precedence.
         for route in self._routes:
             if await self._try_route(route, req, ws):
-                return
-
-        raise falcon.HTTPNotFound
+                return True
+        return False
 
     async def _try_route(
         self, route: _CompiledRoute, req: _RequestLike, ws: WebSocketLike
@@ -620,52 +621,3 @@ class WebSocketRouter:
             return True
         await ws.accept()
         return True
-
-
-class _RouteRegistrationService:
-    """Manage route normalization and conflict detection for a router."""
-
-    def __init__(
-        self,
-        *,
-        lock: threading.Lock,
-        raw_routes: list[WebSocketRouter._RawRoute],
-        names: dict[str, str],
-    ) -> None:
-        self._lock = lock
-        self._raw_routes = raw_routes
-        self._names = names
-
-    @staticmethod
-    def normalize_path(path: str) -> tuple[str, str]:
-        """Return normalized and canonical variants of ``path``."""
-        normalized = _normalize_path(path)
-        canonical = _canonical_path(normalized)
-        return normalized, canonical
-
-    def check_conflicts(
-        self, canonical: str, name: str | None, *, path: str | None = None
-    ) -> None:
-        """Raise if ``canonical`` or ``name`` already exists under ``lock``.
-
-        Raises
-        ------
-        RuntimeError
-            If the mount lock is not held by the caller.
-        ValueError
-            If the canonical path or the route name is already registered.
-        """
-        if not self._lock.locked():
-            msg = (
-                "_RouteRegistrationService.check_conflicts requires "
-                "_mount_lock to be held"
-            )
-            raise RuntimeError(msg)
-
-        display_path = path if path is not None else canonical
-        if any(route.canonical == canonical for route in self._raw_routes):
-            msg = f"route path {display_path!r} already registered"
-            raise ValueError(msg)
-        if name and name in self._names:
-            msg = f"route name {name!r} already registered"
-            raise ValueError(msg)
