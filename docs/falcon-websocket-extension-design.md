@@ -1068,12 +1068,14 @@ sequenceDiagram
             WebSocketRouter->>WebSocketResource: dispatch(frame)
             WebSocketResource-->>Client: optional response
         end
-        WebSocketRouter->>WebSocketRouter: before_disconnect hooks
-        WebSocketRouter->>WebSocketResource: on_disconnect(peer code)
-    end
-    alt Unhandled exception during dispatch
-        WebSocketRouter->>Client: Close WebSocket with 1011
-        WebSocketRouter->>WebSocketResource: Best-effort on_disconnect(1011)
+        alt Unexpected receive or dispatch exception
+            WebSocketRouter->>Client: Close WebSocket with 1011
+            WebSocketRouter->>WebSocketRouter: before_disconnect hooks (best effort)
+            WebSocketRouter->>WebSocketResource: Best-effort on_disconnect(1011)
+        else Peer disconnect
+            WebSocketRouter->>WebSocketRouter: before_disconnect hooks
+            WebSocketRouter->>WebSocketResource: on_disconnect(peer code)
+        end
     end
 ```
 
@@ -1470,6 +1472,11 @@ sequenceDiagram
 
 Figure 5.4.2b. The router accepts the connection, dispatches each client frame
 sequentially, and runs disconnect hooks before the resource callback.
+
+Route matching and message policy remain in their shared boundaries: the router
+uses the URI-template compiler, and the session passes each accepted frame to
+`WebSocketResource.dispatch()`. This keeps route safety, schema and tag
+validation, and diagnostic handling out of the transport loop.
 
 ### 5.5. Architectural Implications
 

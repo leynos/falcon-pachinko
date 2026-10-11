@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import typing as typ
 
 import msgspec as ms
@@ -191,16 +192,19 @@ async def test_handler_failure_closes_once_with_1011_and_reraises_original() -> 
 
 
 @pytest.mark.asyncio
-async def test_failure_cleanup_errors_do_not_replace_handler_error() -> None:
+async def test_failure_cleanup_errors_do_not_replace_handler_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Disconnect-hook failures are best-effort during a failed session."""
     events: list[str] = []
+    sensitive_value = "cleanup-sensitive-canary"
 
     class BrokenDisconnectResource(SessionResource):
         async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
             del ws
             events.append(f"resource:{close_code}")
             await asyncio.sleep(0)
-            raise ValueError
+            raise ValueError(sensitive_value)
 
     resource = BrokenDisconnectResource()
     SessionResource.failures.clear()
@@ -208,12 +212,15 @@ async def test_failure_cleanup_errors_do_not_replace_handler_error() -> None:
 
     def broken_before_disconnect(context: HookContext) -> None:
         events.append(f"hook:{context.close_code}")
-        raise LookupError
+        raise LookupError(sensitive_value)
 
     router = _router_for(resource)
     router.global_hooks.add("before_disconnect", broken_before_disconnect)
 
-    with pytest.raises(RuntimeError, match="handler failed") as caught:
+    with (
+        caplog.at_level(logging.ERROR, logger="falcon_pachinko.session"),
+        pytest.raises(RuntimeError, match="handler failed") as caught,
+    ):
         await router.on_websocket(make_req("/session"), ws)
 
     assert caught.value is SessionResource.failures[-1], (
@@ -223,6 +230,11 @@ async def test_failure_cleanup_errors_do_not_replace_handler_error() -> None:
         "both failure-cleanup steps must be attempted in order"
     )
     assert ws.closed == [1011], "cleanup failures must not cause a second close"
+    assert sensitive_value not in caplog.text, (
+        "cleanup logs must not expose exception messages"
+    )
+    assert "LookupError" in caplog.text, "cleanup logs should retain exception types"
+    assert "ValueError" in caplog.text, "cleanup logs should retain exception types"
 
 
 @pytest.mark.asyncio

@@ -209,7 +209,7 @@ Compilation happens before router registration state is mutated, so invalid
 templates fail at registration or mount time with `ValueError` rather than
 being deferred to connection dispatch.
 
-`uvicorn>=0.30,<1` is in the development dependency group for
+`uvicorn>=0.34,<1` is in the development dependency group for
 `tests/test_live_routing.py`, which exercises the router through a live Falcon
 ASGI server and real WebSocket connections.
 

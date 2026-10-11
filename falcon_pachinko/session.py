@@ -10,6 +10,8 @@ import typing as typ
 import falcon
 import msgspec.json as msjson
 
+from .diagnostics import _type_name
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
@@ -36,12 +38,31 @@ def _adapt_frame(media: object) -> str | bytes:
     return msjson.encode(media)
 
 
+def _log_close_failure(close_code: int, error: BaseException) -> None:
+    """Log safe exception metadata when a best-effort close fails."""
+    logger.error(
+        "Failed to close WebSocket with code %s: %s",
+        close_code,
+        _type_name(error),
+    )
+
+
+def _log_cleanup_failure(operation: str, error: BaseException) -> None:
+    """Log safe exception metadata without reflecting caller-controlled text."""
+    logger.error("Failure in %s cleanup: %s", operation, _type_name(error))
+
+
 async def _close_after_failure(websocket: WebSocketLike, close_code: int) -> None:
     """Attempt a policy close while preserving the original session error."""
+    close_error: BaseException | None = None
     try:
         await websocket.close(close_code)
-    except (Exception, asyncio.CancelledError):
-        logger.exception("Failed to close WebSocket with code %s", close_code)
+    except asyncio.CancelledError as exc:
+        close_error = exc
+    except Exception as exc:  # ruff: ignore[blind-except] - preserve session errors
+        close_error = exc
+    if close_error is not None:
+        _log_close_failure(close_code, close_error)
 
 
 async def _attempt_cleanup(
@@ -53,14 +74,14 @@ async def _attempt_cleanup(
     """Run one disconnect step and return its failure when not suppressed."""
     try:
         await cleanup()
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as exc:
         if not suppress_errors:
             raise
-        logger.exception("Failure in %s cleanup", operation)
-    except Exception as exc:
+        _log_cleanup_failure(operation, exc)
+    except Exception as exc:  # ruff: ignore[blind-except] - handle all cleanup failures
         if not suppress_errors:
             return exc
-        logger.exception("Failure in %s cleanup", operation)
+        _log_cleanup_failure(operation, exc)
     return None
 
 
@@ -124,6 +145,8 @@ async def drive_session(
                 close_code = exc.code if exc.code is not None else 1000
                 break
     except asyncio.CancelledError:
+        # CancelledError bypasses the outer Exception-only wrapper, avoiding a
+        # second close after this cancellation policy.
         await _close_after_failure(session.websocket, 1001)
         await _run_disconnect_lifecycle(session, 1001, suppress_errors=True)
         raise
