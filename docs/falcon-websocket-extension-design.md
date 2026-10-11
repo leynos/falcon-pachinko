@@ -1424,6 +1424,53 @@ an unexpected receive or handler exception closes with 1011, runs best-effort
 cleanup, and propagates the original exception. Returning normally from
 `on_unhandled` leaves the session open.
 
+```mermaid
+stateDiagram-v2
+    accTitle: WebSocket session state transitions
+    accDescr: Negotiation accepts or rejects. Active dispatches until close, error, or cancellation; cleanup follows.
+    [*] --> Negotiating
+    Negotiating --> Rejected: on_connect returns False
+    Negotiating --> Active: accept()
+    Active --> Active: receive_media() / dispatch()
+    Active --> Closing: WebSocketDisconnected
+    Active --> Failed: receive or handler exception
+    Active --> Cancelled: task cancellation
+    Closing --> Disconnected: before_disconnect / on_disconnect
+    Failed --> Disconnected: close(1011) / best-effort cleanup
+    Cancelled --> Disconnected: close(1001) / best-effort cleanup
+    Rejected --> [*]
+    Disconnected --> [*]
+```
+
+Figure 5.4.2a. WebSocket session states from negotiation and dispatch through
+peer closure, failure, or cancellation cleanup.
+
+```mermaid
+sequenceDiagram
+    accTitle: WebSocket session message sequence
+    accDescr: Router accepts, dispatches frames in order, may reply, then runs disconnect hooks and on_disconnect.
+    participant Client
+    participant WebSocketRouter
+    participant WebSocketResource
+    participant Hooks
+
+    Client->>WebSocketRouter: WebSocket connection
+    WebSocketRouter->>WebSocketResource: on_connect(req, ws, params)
+    WebSocketRouter->>Hooks: after_connect
+    WebSocketRouter->>Client: accept()
+    loop Until peer disconnects
+        Client->>WebSocketRouter: TEXT or BINARY frame
+        WebSocketRouter->>WebSocketRouter: receive_media()
+        WebSocketRouter->>WebSocketResource: dispatch(ws, raw_frame)
+        WebSocketResource-->>Client: Optional reply
+    end
+    WebSocketRouter->>Hooks: before_disconnect
+    WebSocketRouter->>WebSocketResource: on_disconnect(ws, peer_code)
+```
+
+Figure 5.4.2b. The router accepts the connection, dispatches each client frame
+sequentially, and runs disconnect hooks before the resource callback.
+
 ### 5.5. Architectural Implications
 
 #### 5.5.1. Stateful Per-Connection Resources and Dependency Injection
