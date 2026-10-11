@@ -194,6 +194,12 @@ class EmptyTagResource(WebSocketResource):
         """Initialize with an empty events list."""
         self.events: list[tuple[str, str | bytes]] = []
 
+    async def on_(self, ws: WebSocketLike, payload: EmptyTagMessage) -> None:
+        """Record the conventional handler for the empty-string tag."""
+        # Snake-casing an empty tag yields an empty suffix, so the conventional
+        # name the dispatcher looks up is exactly ``on_``.
+        self.events.append(("on_", payload.value))
+
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Record fallback messages."""
         self.events.append(("raw", message))
@@ -334,6 +340,26 @@ def test_mixed_tag_kinds_raise() -> None:
             schema = IntegerTaggedMessage | StringTaggedMessage
 
 
+def test_mixed_tag_kinds_error_names_every_member() -> None:
+    """The mixed-kind error names each offending Struct so it can be found.
+
+    The message is the whole diagnostic a developer gets, so the class names
+    are part of the contract rather than incidental formatting.
+    """
+    with pytest.raises(TypeError) as exc:
+
+        class BadResource(WebSocketResource):
+            schema = IntegerTaggedMessage | StringTaggedMessage
+
+    message = str(exc.value)
+    assert "IntegerTaggedMessage" in message, (
+        "the error must name the integer-tagged member it rejected"
+    )
+    assert "StringTaggedMessage" in message, (
+        "the error must name the string-tagged member it rejected"
+    )
+
+
 def test_class_name_sentinel_mixed_with_integer_tag_raises() -> None:
     """``tag=True`` supplies a string tag, so it cannot mix with integer tags."""
 
@@ -413,12 +439,15 @@ async def test_zero_tag_dispatches_to_conventional_handler() -> None:
 
 
 @pytest.mark.asyncio
-async def test_empty_string_tag_falls_back_without_conventional_handler() -> None:
-    """An empty-string tag has no conventional handler but must not raise."""
+async def test_empty_string_tag_dispatches_to_conventional_handler() -> None:
+    """An empty-string tag is falsy but still reaches its ``on_`` handler."""
     r = EmptyTagResource()
     r.bind_default_hook_manager()
     raw = msjson.encode(EmptyTagMessage(value="empty"))
     await r.dispatch(DummyWS(), raw)
-    assert r.events == [("raw", raw)], (
-        "tag='' must fall back cleanly rather than raising TypeError"
+    # A truthiness test in place of ``if tag is not None`` would skip the
+    # conventional lookup and land on ``on_unhandled`` instead, so this
+    # assertion is what distinguishes the two implementations.
+    assert r.events == [("on_", "empty")], (
+        "tag='' must dispatch rather than being mistaken for an absent tag"
     )
