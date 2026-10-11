@@ -95,6 +95,7 @@ def test_ignored_only_root_is_rejected_by_real_detector_gate(
         check=False,
         capture_output=True,
         text=True,
+        timeout=detector.COMMAND_TIMEOUT_SECONDS,
     )
     assert raw_report.returncode == 0, raw_report.stderr
     assert json.loads(raw_report.stdout)["families"] == [], (

@@ -425,3 +425,14 @@ approval or merge is claimed.
   passed. CodeRabbit's aggregate decision remains `CHANGES_REQUESTED` due to
   its older review. Managed full review request `acb832fa` is queued, with no
   current-head CodeRabbit review yet. PR #225 remains open and unmerged.
+- CodeRabbit formal review `5484889769` on head
+  `3cf52f79994a80a50f1b4424746130c820937d47` identified a valid finding in
+  `scripts/tests/test_nose_detector_scan_scope.py`: a real-detector subprocess
+  lacked a timeout. The minimal fix adds
+  `timeout=detector.COMMAND_TIMEOUT_SECONDS` (120 seconds). All sequential
+  local gates passed on the resulting working tree: `make check-fmt`;
+  `make duplication-test` (179 passed, 3 snapshots); `make duplication` (four
+  reasoned exceptions); `make lint`; `make typecheck`; `make test` (655 passed,
+  2 skipped, 19 warnings); spelling; `make markdownlint`; `make nixie`; and
+  `make check-cv005`. The source fix is still uncommitted and unpublished;
+  hosted checks, a current-head review, and disposition remain pending.
