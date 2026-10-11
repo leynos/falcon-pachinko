@@ -17,11 +17,12 @@ from falcon_pachinko._testing_harness import (
 )
 from falcon_pachinko.router import WebSocketRouter
 
-from ._common import _JSON_FRAME_REQUIRED_MSG, FrameKind
+from ._common import FrameKind, _decode_json
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from falcon_pachinko.router import ResourceFactory
     from falcon_pachinko.testing.simulator import WebSocketSimulator
 
 
@@ -81,13 +82,10 @@ class SimulatorConnection:
         object
             The decoded JSON payload, using ``payload_type`` when supplied.
 
-        Raises
-        ------
-        TypeError
-            If the popped frame is neither a text nor a binary payload.
-        """  # ruff: ignore[docstring-extraneous-exception] - frame helper raises TypeError
+        Unsupported frames raise ``TypeError`` through the shared decoder.
+        """
         raw = self.pop_sent()
-        return self._decoder_for(payload_type).decode(_json_frame_bytes(raw))
+        return _decode_json(self._decoder_for(payload_type), raw, payload_type)
 
     def _decoder_for(self, payload_type: type[object] | None) -> msjson.Decoder[object]:
         """Return a cached decoder for ``payload_type``."""
@@ -120,17 +118,31 @@ class SimulatorConnection:
     async def next_sent_json(self, payload_type: type[object] | None = None) -> object:
         """Wait for and decode the next JSON response."""
         raw = await self.next_sent()
-        return self._decoder_for(payload_type).decode(_json_frame_bytes(raw))
+        return _decode_json(self._decoder_for(payload_type), raw, payload_type)
+
+    async def disconnect(self, code: int = 1000) -> None:
+        """Queue a client disconnect after any pending inbound frames."""
+        await self.simulator.push_disconnect(code)
 
 
 class SimulatorRouterHarness:
     """Manage a simulator-backed router mounted on a Falcon ASGI app."""
 
-    def __init__(self, *, mount: str = "/") -> None:
+    def __init__(
+        self,
+        *,
+        mount: str = "/",
+        resource_factory: ResourceFactory | None = None,
+    ) -> None:
+        """Create a mounted router whose simulated sessions own frame reception."""
         self.app = falcon.asgi.App()
         self._mount_prefix = self._normalize_mount(mount)
         self._pending_simulator: WebSocketSimulator | None = None
-        self.router = WebSocketRouter(simulator_factory=self._provide_simulator)
+        self.router = WebSocketRouter(
+            resource_factory=resource_factory,
+            simulator_factory=self._provide_simulator,
+            receive_loop=True,
+        )
         self._mounted = False
         self.mount(self._mount_prefix)
 
@@ -178,12 +190,66 @@ class SimulatorRouterHarness:
             return path
         return path if self._mount_prefix == "/" else f"{self._mount_prefix}{path}"
 
+    async def _start_connection(
+        self,
+        path: str,
+        *,
+        initial_inbound: cabc.Iterable[tuple[object, FrameKind]] | None,
+        headers: cabc.Mapping[str, str] | None,
+    ) -> _ConnectionSession:
+        """Create a simulator session and wait until the router is ready."""
+        simulator = _HarnessSimulator()
+        self._pending_simulator = simulator
+        if initial_inbound is not None:
+            for payload, kind in initial_inbound:
+                await simulator.push_message(payload, kind=kind)
+        request_path = self._compose_path(path)
+        request = _TestRequest(
+            path=request_path,
+            path_template=self._mount_prefix,
+            headers={key.lower(): value for key, value in (headers or {}).items()},
+        )
+        original = _OriginalWebSocket()
+        router_task = asyncio.create_task(self.router.on_websocket(request, original))
+        session = _ConnectionSession(
+            request_path, simulator, request, original, router_task
+        )
+        try:
+            await asyncio.wait_for(
+                self._wait_until_ready(simulator, router_task), timeout=5
+            )
+        except (Exception, asyncio.CancelledError):
+            await self._rollback_startup(session)
+            raise
+        return session
+
+    async def _rollback_startup(self, session: _ConnectionSession) -> None:
+        """Clean up a failed setup while preserving its original exception."""
+        self._pending_simulator = None
+        with suppress(Exception, asyncio.CancelledError):
+            await session.simulator.close()
+        with suppress(Exception, asyncio.CancelledError):
+            if not session.websocket.closed:
+                await session.websocket.close()
+        with suppress(Exception, asyncio.CancelledError):
+            await self._await_router_task(session.router_task)
+
+    async def _finish_connection(self, session: _ConnectionSession) -> None:
+        """Close test sockets and await the router's session task."""
+        self._pending_simulator = None
+        if not session.simulator.closed:
+            await session.simulator.close()
+        if not session.websocket.closed:
+            await session.websocket.close()
+        await self._await_router_task(session.router_task)
+
     @asynccontextmanager
     async def connect(
         self,
         path: str,
         *,
         initial_inbound: cabc.Iterable[tuple[object, FrameKind]] | None = None,
+        headers: cabc.Mapping[str, str] | None = None,
     ) -> cabc.AsyncIterator[SimulatorConnection]:
         """Dispatch ``path`` through the router yielding a connection helper.
 
@@ -192,6 +258,9 @@ class SimulatorRouterHarness:
         SimulatorConnection
             A helper bound to the simulator serving ``path``. Both the
             simulator and the underlying websocket stub are closed on exit.
+
+        Cancellation during setup or session waiting is propagated after
+        cleanup.
 
         Raises
         ------
@@ -202,74 +271,50 @@ class SimulatorRouterHarness:
             msg = "router must be mounted before establishing connections"
             raise RuntimeError(msg)
 
-        simulator = _HarnessSimulator()
-        self._pending_simulator = simulator
-        if initial_inbound is not None:
-            for payload, kind in initial_inbound:
-                await simulator.push_message(payload, kind=kind)
-        request_path = self._compose_path(path)
-        request = _TestRequest(path=request_path, path_template=self._mount_prefix)
-        original = _OriginalWebSocket()
-        router_task = asyncio.create_task(self.router.on_websocket(request, original))
-        readiness_task = asyncio.create_task(simulator.lifecycle_event.wait())
+        session = await self._start_connection(
+            path, initial_inbound=initial_inbound, headers=headers
+        )
+
         try:
-            await _await_router_readiness(router_task, readiness_task)
             yield SimulatorConnection(
-                path=request_path,
+                path=session.path,
                 router=self.router,
-                simulator=simulator,
-                request=request,
-                websocket=original,
+                simulator=session.simulator,
+                request=session.request,
+                websocket=session.websocket,
             )
         finally:
-            self._pending_simulator = None
-            readiness_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await readiness_task
-            try:
-                if not simulator.closed:
-                    await simulator.close(1000)
-                await _join_router_task(router_task)
-            finally:
-                if not original.closed:
-                    await original.close()
+            await self._finish_connection(session)
 
-
-async def _await_router_readiness(
-    router_task: asyncio.Task[None],
-    readiness_task: asyncio.Task[typ.Literal[True]],
-) -> None:
-    """Wait for acceptance, rejection, or an early router failure."""
-    done, _ = await asyncio.wait(
-        (router_task, readiness_task),
-        timeout=5,
-        return_when=asyncio.FIRST_COMPLETED,
-    )
-    if not done:
-        msg = "router did not accept or reject the simulated connection"
-        raise TimeoutError(msg)
-    if router_task in done:
-        router_task.result()
-
-
-async def _join_router_task(router_task: asyncio.Task[None]) -> None:
-    """Wait for cleanup, cancelling and joining a session that stalls."""
-    try:
-        await asyncio.wait_for(asyncio.shield(router_task), timeout=5)
-    except TimeoutError:
-        router_task.cancel()
-        with suppress(asyncio.CancelledError):
+    @staticmethod
+    async def _wait_until_ready(
+        simulator: _HarnessSimulator,
+        router_task: asyncio.Task[None],
+    ) -> None:
+        """Wait until routing accepts, closes, or fails before yielding."""
+        await asyncio.wait_for(simulator.ready_event.wait(), timeout=5)
+        if simulator.closed or router_task.done():
             await router_task
 
+    @staticmethod
+    async def _await_router_task(router_task: asyncio.Task[None]) -> None:
+        """Await session completion and cancel it if teardown exceeds timeout."""
+        try:
+            await asyncio.wait_for(asyncio.shield(router_task), timeout=5)
+        except TimeoutError as exc:
+            router_task.cancel()
+            with suppress(asyncio.CancelledError, TimeoutError):
+                await asyncio.wait_for(router_task, timeout=5)
+            msg = "router session did not stop after the simulator closed"
+            raise TimeoutError(msg) from exc
 
-def _json_frame_bytes(raw: object) -> bytes:
-    """Normalize JSON frames using the buffer protocol, not their item type."""
-    match raw:
-        case str():
-            return raw.encode("utf-8")
-        case bytes() | bytearray() | memoryview():
-            # A memoryview's item type varies; JSON decoding only needs bytes
-            # from its buffer, which every member of this branch provides.
-            return bytes(typ.cast("cabc.Buffer", raw))
-        case _:
-            raise TypeError(_JSON_FRAME_REQUIRED_MSG)
+
+@dc.dataclass(slots=True)
+class _ConnectionSession:
+    """Resources owned while one simulator-backed router session is active."""
+
+    path: str
+    simulator: WebSocketSimulator
+    request: object
+    websocket: _OriginalWebSocket
+    router_task: asyncio.Task[None]

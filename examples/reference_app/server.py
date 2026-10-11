@@ -11,16 +11,14 @@
 
 from __future__ import annotations
 
-import contextlib as cl
 import typing as typ
 
 import falcon
-import falcon.asgi as falcon_asgi
+import falcon.asgi
 
 from falcon_pachinko import (
     ServiceContainer,
     WebSocketConnectionManager,
-    WebSocketLike,
     WebSocketResource,
     WebSocketRouter,
     WorkerController,
@@ -43,64 +41,44 @@ if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
 
     from falcon_pachinko.router import SimulatorFactory
 
-try:  # pragma: no cover - used when tests are available
-    from tests.behaviour._lifespan import LifespanApp
-except ImportError:  # pragma: no cover - fallback when running the script
 
-    class LifespanApp(falcon_asgi.App):
-        """Falcon App variant exposing ``@app.lifespan`` for uvicorn."""
+class _WorkerLifecycleMiddleware:
+    """Bind the announcement worker to Falcon's ASGI lifespan."""
 
-        def __init__(self) -> None:
-            super().__init__()
-            self._lifespan_handler: (
-                cabc.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]]
-                | None
-            ) = None
+    def __init__(
+        self,
+        controller: WorkerController,
+        conn_mgr: WebSocketConnectionManager,
+        feed: AnnouncementFeed,
+    ) -> None:
+        self._controller = controller
+        self._conn_mgr = conn_mgr
+        self._feed = feed
 
-        def lifespan(
-            self, fn: cabc.Callable[[LifespanApp], cabc.AsyncIterator[None]]
-        ) -> cabc.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]]:
-            """Register ``fn`` as the lifespan context manager."""
-            manager = cl.asynccontextmanager(fn)
-            self._lifespan_handler = manager
-            return manager
+    async def process_startup(
+        self, scope: cabc.Mapping[str, typ.Any], event: cabc.Mapping[str, typ.Any]
+    ) -> None:
+        """Start the feed consumer after Falcon receives lifespan startup."""
+        del scope, event
+        await self._controller.start(
+            announcement_worker,
+            conn_mgr=self._conn_mgr,
+            announcement_feed=self._feed,
+        )
 
-        def lifespan_context(self) -> cl.AbstractAsyncContextManager[None]:
-            """Return the active lifespan context manager."""
-            if self._lifespan_handler is None:
-                msg = "lifespan handler not set"
-                raise RuntimeError(msg)
-            return self._lifespan_handler(self)
-
-
-if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
-
-    class _PachinkoApp(typ.Protocol):
-        """Attributes attached to the app at runtime by :func:`install`."""
-
-        ws_connection_manager: WebSocketConnectionManager
-
-        def add_websocket_route(
-            self,
-            uri_template: str,
-            resource: type[WebSocketResource] | cabc.Callable[..., WebSocketResource],
-            *args: object,
-            **kwargs: object,
-        ) -> None: ...
+    async def process_shutdown(
+        self, scope: cabc.Mapping[str, typ.Any], event: cabc.Mapping[str, typ.Any]
+    ) -> None:
+        """Stop the feed consumer before Falcon finishes lifespan shutdown."""
+        del scope, event
+        await self._controller.stop()
 
 
-class RouterEndpoint(WebSocketResource):
-    """Adapter that wires a :class:`WebSocketRouter` into the app."""
+class ReferenceApp(falcon.asgi.App):
+    """Falcon ASGI app with one slot for the example's service container."""
 
-    def __init__(self, *, router: WebSocketRouter) -> None:
-        self._router = router
-
-    async def on_connect(
-        self, req: falcon.Request, ws: WebSocketLike, **params: object
-    ) -> bool:
-        """Delegate the connection lifecycle to the router."""
-        await self._router.on_websocket(req, ws)
-        return False
+    __slots__ = ("reference_services",)
+    reference_services: ServiceContainer
 
 
 def _require_token_hook(
@@ -179,6 +157,7 @@ def build_router(
         name="reference",
         resource_factory=resource_factory or container.create_resource,
         simulator_factory=simulator_factory,
+        receive_loop=True,
     )
     router.add_route(
         "/workspaces/{workspace_id}",
@@ -195,33 +174,27 @@ def build_router(
     return router
 
 
-def create_app() -> LifespanApp:
-    """Create the Falcon ASGI app with the full reference configuration."""
-    app = LifespanApp()
-    install(app)
-    # Cast: install() attaches these attributes at runtime, so the type
-    # checker cannot see them on falcon.asgi.App.
-    ws_app = typ.cast("_PachinkoApp", app)
-    conn_mgr = ws_app.ws_connection_manager
+def create_app() -> ReferenceApp:
+    """Create the reference ASGI app.
+
+    The service container is exposed as ``app.reference_services`` for
+    inspection of the example's audit trail, workspace repository, and
+    connection manager.
+
+    Returns
+    -------
+    ReferenceApp
+        The Falcon application with the reference router and worker installed.
+    """
+    app = ReferenceApp()
+    conn_mgr = install(app)
     container = build_container(conn_mgr)
     router = build_router(container)
-
-    ws_app.add_websocket_route("/ws", RouterEndpoint, router=router)
-
+    app.reference_services = container
     controller = WorkerController()
     feed = _resolve_as(container, "announcement_feed", AnnouncementFeed)
-
-    @app.lifespan
-    async def lifespan(_app: LifespanApp) -> cabc.AsyncIterator[None]:
-        await controller.start(
-            announcement_worker,
-            conn_mgr=conn_mgr,
-            announcement_feed=feed,
-        )
-        try:
-            yield
-        finally:
-            await controller.stop()
+    app.add_middleware(_WorkerLifecycleMiddleware(controller, conn_mgr, feed))
+    router.attach(app)
 
     return app
 

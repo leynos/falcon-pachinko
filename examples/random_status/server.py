@@ -217,7 +217,9 @@ def create_app() -> falcon_asgi.App:
                 )
             await db.close()
 
-    router = WebSocketRouter(resource_factory=container.create_resource)
+    router = WebSocketRouter(
+        resource_factory=container.create_resource, receive_loop=True
+    )
     router.add_route("/", StatusResource)
     router.mount("/ws")
     ws_app.add_websocket_route("/ws", RouterEndpoint, router=router)

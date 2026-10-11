@@ -1,0 +1,588 @@
+"""Pinned ``nose`` duplication detector used by the code-duplication gate.
+
+This module owns everything that touches the external detector: reading the
+repository's ``[tool.nose]`` settings, locating the pinned binary, verifying
+its version, checking effective sources per root, and running one combined
+``nose query``. The report schema lives in ``scripts/nose_schema.py``.
+
+Adapted from ``leynos/episodic`` PR #276 at commit
+``d9e5ac0d254f375e2986f52d91a3b88c117c833b``.
+"""
+
+from __future__ import annotations
+
+import dataclasses as dc
+import json
+import os
+import shutil
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - gate runs the pinned repository-owned binary
+import tomllib
+from collections import abc as cabc
+from pathlib import Path
+
+from nose_schema import (
+    Finding,
+    GateConfigError,
+    GateExecutionError,
+    Location,
+    has_python_source_files,
+    is_non_empty_string,
+    is_positive_integer,
+    is_safe_relative_posix_path,
+    normalize_findings,
+    require_string_tuple,
+    require_table,
+    require_value,
+)
+from pathspec import GitIgnoreSpec
+
+INSTALL_HINT = "run `make install-nose` to install the pinned detector"
+COMMAND_TIMEOUT_SECONDS = 120
+_SUPPORTED_CHANNELS = {"syntax", "semantic", "near"}
+_EMPTY_SOURCE_WARNING = "no supported source files found under:"
+
+type CommandRunner = cabc.Callable[
+    [cabc.Sequence[str], Path, cabc.Mapping[str, str]], str
+]
+type BinaryDiscoverer = cabc.Callable[[Path, cabc.Mapping[str, str]], str | None]
+
+
+@dc.dataclass(frozen=True, slots=True)
+class DetectorContext:
+    """Explicit runtime dependencies for binary discovery and query execution."""
+
+    repository_root: Path
+    environment: cabc.Mapping[str, str]
+    binary_discoverer: BinaryDiscoverer
+    command_runner: CommandRunner
+
+
+__all__ = [
+    "BinaryDiscoverer",
+    "CommandRunner",
+    "DetectorContext",
+    "Finding",
+    "GateConfigError",
+    "GateExecutionError",
+    "Location",
+    "NoseSettings",
+    "build_command",
+    "build_stats_command",
+    "discover_binary",
+    "load_settings",
+    "normalize_findings",
+    "resolve_binary",
+    "run_command",
+    "run_detector",
+]
+
+
+@dc.dataclass(frozen=True, slots=True)
+class NoseSettings:
+    """Gate settings read from ``[tool.nose]``.
+
+    Attributes
+    ----------
+    version : str
+        Version string the installed binary must report.
+    roots : tuple[str, ...]
+        Repository-relative paths inventoried independently and handed together
+        to ``nose query``.
+    mode : str
+        Comma-separated detection channels, pinned so a change to nose's
+        defaults cannot silently widen or narrow the gate.
+    min_size : int
+        Smallest unit size, in nose IL tokens, that may be reported.
+    surface : str
+        ``"default"`` for nose's ranked dashboard, or ``"all"`` to include
+        hidden-surface families.
+    top : int | None
+        How many ranked families to adjudicate, or ``None`` for nose's own
+        view size.
+    exclude : tuple[str, ...]
+        Gitignore-style globs excluded from the scan.
+    """
+
+    version: str
+    roots: tuple[str, ...]
+    mode: str
+    min_size: int
+    surface: str
+    top: int | None
+    exclude: tuple[str, ...]
+
+
+def load_settings(pyproject_path: Path) -> NoseSettings:
+    """Load the detector settings from ``[tool.nose]``.
+
+    Parameters
+    ----------
+    pyproject_path : pathlib.Path
+        Path to the repository ``pyproject.toml``.
+
+    Returns
+    -------
+    NoseSettings
+        Validated detector settings.
+
+    """
+    return _settings_from_table(
+        _load_nose_table(pyproject_path), repository_root=pyproject_path.parent
+    )
+
+
+def _load_nose_table(pyproject_path: Path) -> cabc.Mapping[str, object]:
+    """Read TOML and validate the nested table shape before field checks.
+
+    Returns
+    -------
+    collections.abc.Mapping[str, object]
+        The validated ``[tool.nose]`` table.
+    """
+    with pyproject_path.open("rb") as handle:
+        data = tomllib.load(handle)
+    root = require_table(data, context="pyproject")
+    table = require_table(root.get("tool", {}), context="tool")
+    return require_table(table.get("nose", {}), context="tool.nose")
+
+
+def _settings_from_table(
+    nose: cabc.Mapping[str, object], *, repository_root: Path
+) -> NoseSettings:
+    """Validate detector fields and source roots in their reported order.
+
+    Returns
+    -------
+    NoseSettings
+        Validated detector settings.
+
+    Raises
+    ------
+    GateConfigError
+        If a setting is invalid or a configured root selects no source files.
+    """
+    surface = require_value(
+        nose.get("surface", "all"),
+        validator=is_non_empty_string,
+        expected="a non-empty string",
+        context="tool.nose.surface",
+    )
+    if surface not in {"default", "all"}:
+        msg = "tool.nose.surface must be 'default' or 'all'"
+        raise GateConfigError(msg)
+    roots = require_string_tuple(nose.get("roots"), context="tool.nose.roots")
+    if not roots:
+        msg = "tool.nose.roots must not be empty"
+        raise GateConfigError(msg)
+    mode = require_value(
+        nose.get("mode"),
+        validator=is_non_empty_string,
+        expected="a non-empty string",
+        context="tool.nose.mode",
+    )
+    _validate_channels(mode)
+    exclude = require_string_tuple(nose.get("exclude", []), context="tool.nose.exclude")
+    _validate_roots(roots, exclude, repository_root=repository_root)
+    return NoseSettings(
+        version=require_value(
+            nose.get("version"),
+            validator=is_non_empty_string,
+            expected="a non-empty string",
+            context="tool.nose.version",
+        ),
+        roots=roots,
+        mode=mode,
+        min_size=require_value(
+            nose.get("min-size"),
+            validator=is_positive_integer,
+            expected="a positive integer",
+            context="tool.nose.min-size",
+        ),
+        surface=surface,
+        top=(
+            None
+            if nose.get("top") is None
+            else require_value(
+                nose.get("top"),
+                validator=is_positive_integer,
+                expected="a positive integer",
+                context="tool.nose.top",
+            )
+        ),
+        exclude=exclude,
+    )
+
+
+def _validate_roots(
+    roots: tuple[str, ...],
+    exclude: tuple[str, ...],
+    *,
+    repository_root: Path,
+) -> None:
+    """Reject mistyped roots and roots that select no Python source files."""
+    root_directory = repository_root.resolve()
+    exclude_spec = _validate_excludes(exclude)
+
+    for root in roots:
+        candidate, resolved = _resolve_root(
+            root, repository_root=repository_root, root_directory=root_directory
+        )
+        _validate_root_sources(root, candidate, resolved, exclude_spec)
+
+
+def _resolve_root(
+    root: str, *, repository_root: Path, root_directory: Path
+) -> tuple[Path, Path]:
+    """Resolve one safe configured root and reject missing or escaping paths."""
+    if not is_safe_relative_posix_path(root):
+        msg = f"tool.nose.roots entry {root!r} must be a repository-relative POSIX path"
+        raise GateConfigError(msg)
+    candidate = repository_root / root
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        msg = f"tool.nose.roots entry {root!r} does not exist: {error}"
+        raise GateConfigError(msg) from error
+    if not resolved.is_relative_to(root_directory):
+        msg = f"tool.nose.roots entry {root!r} escapes the repository"
+        raise GateConfigError(msg)
+    return candidate, resolved
+
+
+def _validate_root_sources(
+    root: str,
+    candidate: Path,
+    resolved: Path,
+    exclude_spec: GitIgnoreSpec | None,
+) -> None:
+    """Require a source candidate after the gate's explicit exclusions.
+
+    Nose owns filesystem discovery and its ignore precedence. Its per-root
+    stats report checks `.ignore`, hidden-path, and Git-level ignore behavior;
+    this preflight only checks the gate's explicit exclusions.
+
+    Raises
+    ------
+    GateConfigError
+        If no Python source candidate remains after explicit exclusions.
+    """
+    source_files, is_file_root = _root_sources(candidate, resolved)
+    for source in source_files:
+        if not _is_selected_source(
+            source,
+            resolved_root=resolved,
+            is_file_root=is_file_root,
+            exclude_spec=exclude_spec,
+        ):
+            continue
+        return
+    msg = f"tool.nose.roots entry {root!r} selects no Python source files"
+    raise GateConfigError(msg)
+
+
+def _validate_excludes(exclude: tuple[str, ...]) -> GitIgnoreSpec | None:
+    """Validate POSIX exclusion paths and compile their Git-ignore matcher."""
+    for pattern in exclude:
+        if not is_safe_relative_posix_path(pattern):
+            msg = "tool.nose.exclude entries must be non-escaping POSIX globs"
+            raise GateConfigError(msg)
+    if not exclude:
+        return None
+    try:
+        return GitIgnoreSpec.from_lines(exclude)
+    except ValueError as error:
+        msg = f"tool.nose.exclude entries must be valid Git-ignore globs: {error}"
+        raise GateConfigError(msg) from error
+
+
+def _root_sources(candidate: Path, resolved: Path) -> tuple[list[Path], bool]:
+    """List Python candidates for a configured file or directory root."""
+    if resolved.is_file():
+        return [candidate], True
+    if resolved.is_dir():
+        return list(candidate.rglob("*.py")), False
+    return [], False
+
+
+def _is_selected_source(
+    source: Path,
+    *,
+    resolved_root: Path,
+    is_file_root: bool,
+    exclude_spec: GitIgnoreSpec | None,
+) -> bool:
+    """Report whether one source is in scope after safety and glob checks."""
+    relative_path = _source_relative_path(
+        source, resolved_root=resolved_root, is_file_root=is_file_root
+    )
+    return relative_path is not None and not _is_excluded(relative_path, exclude_spec)
+
+
+def _source_relative_path(
+    source: Path,
+    *,
+    resolved_root: Path,
+    is_file_root: bool,
+) -> str | None:
+    """Return a safe root-relative Python path, or reject the candidate."""
+    if not source.is_file() or source.suffix != ".py":
+        return None
+    resolved_source = source.resolve()
+    if is_file_root:
+        return source.name if resolved_source == resolved_root else None
+    if not resolved_source.is_relative_to(resolved_root):
+        return None
+    return resolved_source.relative_to(resolved_root).as_posix()
+
+
+def _is_excluded(path: str, spec: GitIgnoreSpec | None) -> bool:
+    """Report whether a scan-root-relative source path matches an exclusion."""
+    return spec is not None and spec.match_file(path)
+
+
+def _validate_channels(mode: str) -> None:
+    """Reject empty, repeated, or unsupported detector channels."""
+    if not _has_supported_channels(mode):
+        msg = "tool.nose.mode must list unique syntax, semantic, or near channels"
+        raise GateConfigError(msg)
+
+
+def _has_supported_channels(mode: str) -> bool:
+    """Check channel content and uniqueness independently of diagnostics."""
+    channels = tuple(channel.strip() for channel in mode.split(","))
+    return (
+        bool(channels)
+        and all(channels)
+        and len(set(channels)) == len(channels)
+        and set(channels) <= _SUPPORTED_CHANNELS
+    )
+
+
+def _binary_candidate(context: DetectorContext) -> str | None:
+    """Select the explicit override or injected binary-discovery result."""
+    override = context.environment.get("NOSE_BIN")
+    if not override:
+        return context.binary_discoverer(context.repository_root, context.environment)
+    override_path = Path(override)
+    if not override_path.is_absolute():
+        override_path = context.repository_root / override_path
+    return str(override_path.resolve())
+
+
+def resolve_binary(settings: NoseSettings, *, context: DetectorContext) -> str:
+    """Locate the pinned nose binary and verify its version.
+
+    Parameters
+    ----------
+    settings : NoseSettings
+        Detector settings supplying the pinned version.
+    context : DetectorContext
+        Explicit repository root, environment, binary discovery and command
+        runner supplied by the CLI composition boundary.
+
+    Returns
+    -------
+    str
+        Path to a nose binary reporting the pinned version.
+
+    Raises
+    ------
+    GateExecutionError
+        If no binary is found or the reported version does not match.
+    """
+    candidate = _binary_candidate(context)
+    if candidate is None:
+        default_binary = context.repository_root / ".tools" / "nose" / "nose"
+        msg = (
+            f"nose {settings.version} was not found at {default_binary} "
+            f"or on PATH: {INSTALL_HINT}"
+        )
+        raise GateExecutionError(msg)
+    reported = context.command_runner(
+        [candidate, "--version"], context.repository_root, context.environment
+    ).strip()
+    expected = f"nose {settings.version}"
+    if reported != expected:
+        msg = (
+            f"{candidate} reports '{reported}' but the gate pins "
+            f"'{expected}': {INSTALL_HINT}"
+        )
+        raise GateExecutionError(msg)
+    return candidate
+
+
+def discover_binary(
+    repository_root: Path, environment: cabc.Mapping[str, str]
+) -> str | None:
+    """Return the repository-local nose binary, else one found on supplied PATH."""
+    local_binary = repository_root / ".tools" / "nose" / "nose"
+    if local_binary.is_file():
+        return str(local_binary)
+    return shutil.which("nose", path=environment.get("PATH", os.defpath))
+
+
+def build_command(binary: str, settings: NoseSettings) -> list[str]:
+    """Build the ``nose query`` command for the configured gate settings.
+
+    Parameters
+    ----------
+    binary : str
+        Path to the verified nose binary.
+    settings : NoseSettings
+        Detector settings for this repository.
+
+    Returns
+    -------
+    list[str]
+        Argument vector for the detector run.
+    """
+    command = [binary, "query"]
+    for root in settings.roots:
+        command.extend(("--root", root))
+    if settings.surface == "all":
+        # The bare `all` term unhides families nose keeps off its dashboard.
+        command.append("all")
+    if settings.top is not None:
+        command.append(f"top={settings.top}")
+    command.extend(("--mode", settings.mode))
+    command.extend(("--min-size", str(settings.min_size)))
+    for glob in settings.exclude:
+        command.extend(("--exclude", glob))
+    command.extend(("--format", "json"))
+    return command
+
+
+def build_stats_command(binary: str, root: str) -> list[str]:
+    """Build a JSON source-inventory command for one configured root."""
+    return [binary, "stats", root, "--format", "json"]
+
+
+def run_detector(
+    settings: NoseSettings,
+    *,
+    context: DetectorContext,
+) -> list[Finding]:
+    """Run the pinned detector and normalize its report.
+
+    Parameters
+    ----------
+    settings : NoseSettings
+        Detector settings for this repository.
+    context : DetectorContext
+        Explicit repository root, environment, binary discovery and command
+        runner supplied by the CLI composition boundary.
+
+    Returns
+    -------
+    list[Finding]
+        Findings ordered by descending value, then by source location.
+
+    Raises
+    ------
+    GateExecutionError
+        If the detector cannot be run or emits unreadable output. Report
+        schema violations propagate as ``GateConfigError`` from
+        :func:`normalize_findings`.
+    """
+    binary = resolve_binary(settings, context=context)
+    for root in settings.roots:
+        _require_python_sources(binary, root, context=context)
+    output = context.command_runner(
+        build_command(binary, settings), context.repository_root, context.environment
+    )
+    try:
+        report = json.loads(output)
+    except json.JSONDecodeError as error:
+        msg = f"nose report is not valid JSON: {error}"
+        raise GateExecutionError(msg) from error
+    return normalize_findings(report)
+
+
+def _require_python_sources(
+    binary: str,
+    root: str,
+    *,
+    context: DetectorContext,
+) -> None:
+    """Reject one configured root whose effective Nose inventory is empty."""
+    output = context.command_runner(
+        build_stats_command(binary, root), context.repository_root, context.environment
+    )
+    try:
+        report = json.loads(output)
+    except json.JSONDecodeError as error:
+        msg = f"nose stats report for {root} is not valid JSON: {error}"
+        raise GateExecutionError(msg) from error
+    if has_python_source_files(report):
+        return
+    msg = (
+        f"nose selected no Python source files under {root}; check "
+        "tool.nose.exclude, in-root .ignore/.gitignore rules, hidden paths, "
+        ".git/info/exclude, and global Git ignore rules"
+    )
+    raise GateConfigError(msg)
+
+
+def run_command(
+    command: cabc.Sequence[str],
+    repository_root: Path,
+    environment: cabc.Mapping[str, str],
+) -> str:
+    """Run one detector command in its supplied repository and environment."""
+    result = _execute_command(command, repository_root, environment)
+    _raise_for_command_failure(command, result)
+    if len(command) > 1 and command[1] == "query":
+        _reject_empty_source_warnings(result.stderr)
+    return result.stdout
+
+
+def _execute_command(
+    command: cabc.Sequence[str],
+    repository_root: Path,
+    environment: cabc.Mapping[str, str],
+) -> subprocess.CompletedProcess[str]:
+    """Execute the verified detector and translate operating-system failures."""
+    try:
+        return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - executes the fixed repository-owned binary
+            list(command),
+            cwd=repository_root,
+            env=dict(environment),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        msg = f"{command[0]} timed out after {COMMAND_TIMEOUT_SECONDS} seconds"
+        raise GateExecutionError(msg) from error
+    except OSError as error:
+        msg = f"cannot run {command[0]}: {error}: {INSTALL_HINT}"
+        raise GateExecutionError(msg) from error
+
+
+def _raise_for_command_failure(
+    command: cabc.Sequence[str], result: subprocess.CompletedProcess[str]
+) -> None:
+    """Raise an actionable error when the detector exits unsuccessfully."""
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        msg = f"{command[0]} exited with status {result.returncode}: {detail}"
+        raise GateExecutionError(msg)
+
+
+def _reject_empty_source_warnings(stderr: str) -> None:
+    """Reject roots nose reports as empty after applying its discovery rules."""
+    empty_roots = tuple(
+        line.partition(_EMPTY_SOURCE_WARNING)[2].strip()
+        for line in stderr.splitlines()
+        if _EMPTY_SOURCE_WARNING in line
+    )
+    if not empty_roots:
+        return
+    roots = ", ".join(dict.fromkeys(empty_roots))
+    msg = (
+        "nose selected no supported Python source files under "
+        f"{roots}; check tool.nose.exclude, in-root .ignore/.gitignore rules, "
+        "hidden paths, .git/info/exclude, and global Git ignore rules"
+    )
+    raise GateConfigError(msg)

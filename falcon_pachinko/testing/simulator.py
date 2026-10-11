@@ -3,26 +3,35 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import typing as typ
 from contextlib import asynccontextmanager
 
-import falcon
 import msgspec.json as msjson
+
+from falcon_pachinko._disconnect import _PeerDisconnectedError
 
 from ._common import (
     _BINARY_PAYLOAD_REQUIRED_MSG,
+    _CLOSED_SENTINEL,
     _EXPECTED_BYTES_MSG,
     _EXPECTED_TEXT_MSG,
-    _FAILED_JSON_DECODE_MSG,
     _TEXT_PAYLOAD_REQUIRED_MSG,
     _UNSUPPORTED_FRAME_KIND_MSG,
-    DisconnectSentinel,
     FrameKind,
+    _decode_json,
     _LifecycleSocket,
 )
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _DisconnectMarker:
+    """Queue an explicit peer disconnect with its close code."""
+
+    code: int
 
 
 class WebSocketSimulator(_LifecycleSocket):
@@ -34,6 +43,15 @@ class WebSocketSimulator(_LifecycleSocket):
         inbound: asyncio.Queue[object] | None = None,
         outbound: asyncio.Queue[object] | None = None,
     ) -> None:
+        """Create a simulator with optional queues for each frame direction.
+
+        Parameters
+        ----------
+        inbound : asyncio.Queue or None
+            Queue of frames received by the simulated application.
+        outbound : asyncio.Queue or None
+            Queue of frames sent by the simulated application.
+        """
         super().__init__()
         self._inbound = inbound or asyncio.Queue()
         self._outbound = outbound or asyncio.Queue()
@@ -68,25 +86,24 @@ class WebSocketSimulator(_LifecycleSocket):
         self.sent_messages.append(data)
         self._outbound_event.set()
 
-    async def receive_media(self) -> object:
-        """Return the next inbound frame queued via :meth:`push_message`."""
-        if self.closed and self._inbound.empty():
-            raise falcon.WebSocketDisconnected(self.close_code)
-        message = await self._inbound.get()
-        if isinstance(message, DisconnectSentinel):
-            raise falcon.WebSocketDisconnected(message.code)
-        self.received_messages.append(message)
-        return message
-
     async def close(self, code: int = 1000) -> None:
-        """Close once and wake any task blocked in :meth:`receive_media`."""
+        """Close the socket and wake any pending receive operation."""
         if self.closed:
             return
         await super().close(code)
-        # The disconnect is queued after earlier inbound frames so a session
-        # drains messages already accepted by the peer before it observes close.
-        close_code = self.close_code if self.close_code is not None else code
-        await self._inbound.put(DisconnectSentinel(close_code))
+        self._inbound.put_nowait(_CLOSED_SENTINEL)
+
+    async def receive_media(self) -> object:
+        """Return the next inbound frame queued via :meth:`push_message`."""
+        message = await self._inbound.get()
+        if isinstance(message, _DisconnectMarker):
+            await self.close(code=message.code)
+            raise _PeerDisconnectedError(code=message.code)
+        if message is _CLOSED_SENTINEL:
+            self._inbound.put_nowait(_CLOSED_SENTINEL)
+            raise _PeerDisconnectedError(self.close_code)
+        self.received_messages.append(message)
+        return message
 
     async def next_sent(self) -> object:
         """Await the next outbound frame emitted by the simulator."""
@@ -146,26 +163,21 @@ class WebSocketSimulator(_LifecycleSocket):
         object
             The decoded payload, using ``payload_type`` when supplied.
 
-        Raises
-        ------
-        TypeError
-            If the received frame is neither a text nor a binary payload.
+        Unsupported frames raise ``TypeError`` through the shared decoder.
         """
         message = await self.receive_media()
-        match message:
-            case str():
-                data = message.encode("utf-8")
-            case bytes() | bytearray() | memoryview():
-                data = bytes(message)
-            case _:
-                raise TypeError(_FAILED_JSON_DECODE_MSG.format(message=message))
-        decoder = self._decoder_for(payload_type)
-        return decoder.decode(data)
+        return _decode_json(self._decoder_for(payload_type), message, payload_type)
 
     async def push_message(self, payload: object, *, kind: FrameKind = "json") -> None:
         """Queue ``payload`` as if it were received from the peer."""
+        if self.closed:
+            raise _PeerDisconnectedError(self.close_code)
         data = self._prepare_inbound_payload(payload, kind)
         await self._inbound.put(data)
+
+    async def push_disconnect(self, code: int = 1000) -> None:
+        """Queue a peer disconnect after any frames already in the queue."""
+        await self._inbound.put(_DisconnectMarker(code))
 
     def _prepare_inbound_payload(self, payload: object, kind: FrameKind) -> object:
         match kind:

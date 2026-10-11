@@ -79,6 +79,14 @@ composable patterns.
   - [x] Expose `ValidationError` from `falcon_pachinko.utils` as a stable
     identity alias for `msgspec.ValidationError`.
 
+- [x] **Prevent payload values from leaking into diagnostics**
+  ([issue #61](https://github.com/leynos/falcon-pachinko/issues/61)). Framework
+  errors, logs, trace summaries and object representations omit payload values
+  by default. The work follows the payload-omission policy proposed by
+  [PR #143](https://github.com/leynos/falcon-pachinko/pull/143), which treats
+  this protection as a blocker for the completed session runtime and first beta
+  release.
+
 - [ ] **Refine Resource API and State Management.**
 
   - [x] Rename the fallback handler method from `on_message` to `on_unhandled`
@@ -150,11 +158,21 @@ finalizes the connection manager API.
   - [x] Implement `async for` iterators (e.g., `conn_mgr.connections(room=...)`)
     for composable bulk operations.
 
-  - [x] Define the abstract backend interface (ABC) for the connection manager
-    to pave the way for future distributed backends.
+  - [x] Define the abstract backend interface (ABC) for alternative local
+    socket storage and instrumentation.
 
   - [x] Ensure the default `InProcessBackend` correctly implements this new,
     robust interface.
+
+  - [x] Add the serializable `FanoutTransport` contract and `ClusterFanout`
+    coordinator for distributed room membership and message delivery.
+
+  - [x] Add the byte-only in-memory fan-out transport for tests.
+
+  - [x] Validate cross-node room delivery with two live ASGI servers and real
+    WebSocket clients.
+
+  - [ ] Add a production broker adapter implementing `FanoutTransport`.
 
 ## 4. Cross-Cutting Concerns
 
@@ -206,8 +224,9 @@ the library is ready for use.
     `websockets` asyncio client, including context-managed connections and JSON
     helpers.
 
-  - [x] Add trace/log capture to `WebSocketTestClient` sessions so tests can
-    assert on frame ordering and payloads.
+  - [x] Add trace capture to `WebSocketTestClient` sessions so tests can assert
+    on frame ordering and retained original payloads. Trace representations
+    and summaries expose safe metadata only.
 
   - [x] Implement an injectable `WebSocketSimulator` that mimics the
     `WebSocketLike` interface with spyable send/receive queues.
@@ -235,3 +254,19 @@ the library is ready for use.
 
   - [x] Add detailed "how-to" guides for advanced features like DI, state
     management, and custom connection manager backends.
+
+## 6. Live ASGI acceptance and session lifecycle
+
+### 6.1. Live ASGI acceptance and session lifecycle
+
+- [x] 6.1.1. Add `WebSocketRouter.attach()` for supported Falcon ASGI
+      registration, raw-frame media handling, and a persistent receive/dispatch
+      loop that owns session cleanup.
+- [x] 6.1.2. Keep the simulator harness event-driven and aligned with
+      persistent responder sessions, including deterministic disconnect and
+      task-failure propagation.
+- [x] 6.1.3. Add a server-adapter protocol and ephemeral-port live ASGI harness
+      with a lazy Uvicorn default, readiness signalling, tracked clients, and
+      surfaced server failures.
+- [x] 6.1.4. Require live-server pytest-bdd acceptance scenarios for WebSocket
+      lifecycle features while retaining simulator coverage for fast tests.

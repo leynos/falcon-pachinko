@@ -16,6 +16,20 @@ TOOLS = $(MDLINT) $(MDTABLEFIX) $(NIXIE) uv
 VENV_TOOLS = pytest
 UV ?= uv
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
+NOSE_PYTHON_VERSION ?= 3.14
+NOSE_TOOLS_DIR ?= .tools/nose
+NOSE_BIN ?= $(NOSE_TOOLS_DIR)/nose
+NOSE_INSTALL = $(UV_ENV) UV_PYTHON_INSTALL_DIR=.uv-python $(UV) run \
+	--no-project --python $(NOSE_PYTHON_VERSION) scripts/install_nose.py
+DUPLICATION_GATE ?= $(UV_ENV) UV_PYTHON_INSTALL_DIR=.uv-python \
+	NOSE_BIN="$(NOSE_BIN)" $(UV) run --no-project \
+	--python $(NOSE_PYTHON_VERSION) scripts/duplication_gate.py
+DUPLICATION_TEST = $(UV_ENV) UV_PYTHON_INSTALL_DIR=.uv-python $(UV) run \
+	--no-project --python $(NOSE_PYTHON_VERSION) \
+	--with pytest==9.0.2 --with cyclopts==4.25.2 --with tomlkit==0.15.1 \
+	--with hypothesis==6.165.6 --with syrupy==6.1.1 --with pathspec==1.1.1 \
+	python -m pytest \
+	-c scripts/tests/pytest.ini scripts/tests
 # Retain the typos-config-builder gate: the bespoke spelling machinery, and
 # the PATHSPEC_VERSION and TYPOS_VERSION pins that served only it, were
 # retired in favour of this single gate subcommand. The RUFF_VERSION below is
@@ -53,11 +67,12 @@ TY ?= $(UV) tool run --from ty==$(TY_VERSION) ty
 # 4.3.1 once a Pylint release accepts it.
 PYLINT_VERSION ?= 4.0.8
 ASTROID_VERSION ?= 4.0.4
-# List falcon_pachinko/unittests and falcon_pachinko/behaviour explicitly:
-# they carry no __init__.py, so package discovery from falcon_pachinko does
-# not descend into them.
+# List non-package test directories explicitly: package discovery does not
+# descend into them. Script globs also include gate tests without relying on
+# Pylint's recursive directory discovery.
 PYLINT_TARGETS ?= falcon_pachinko falcon_pachinko/unittests \
-	falcon_pachinko/behaviour tests examples tools
+	falcon_pachinko/behaviour tests examples tools scripts/*.py \
+	scripts/tests/*.py
 # Persisted Pylint state lives in one directory per runtime, so the two passes
 # never read each other's statistics.
 PYLINT_CACHE ?= .cache/pylint
@@ -111,7 +126,9 @@ AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(DF12_PYTHON) \
 
 .PHONY: help all clean build build-release lint lint-pylint lint-df12 \
 	pylint-pypy-python fmt check-fmt markdownlint nixie spelling test \
-	test-workflow-contracts check-cv005 typecheck $(TOOLS) $(VENV_TOOLS)
+	test-workflow-contracts check-cv005 typecheck install-nose duplication \
+	duplication-test duplication-allow mutation mutation-results \
+	$(TOOLS) $(VENV_TOOLS)
 
 .DEFAULT_GOAL := all
 
@@ -120,11 +137,18 @@ all: build check-fmt test test-workflow-contracts typecheck spelling
 .venv: pyproject.toml
 	uv venv --clear
 
-build: uv .venv ## Build virtual-env and install deps
-	uv sync --group dev
+# `--locked` refuses to resolve past the committed uv.lock, so a stale or
+# edited lockfile fails here instead of silently installing a different set
+# than the one the repository reviewed. `uv.lock` is named as a prerequisite
+# so the dependency is visible in the build graph; the recipe itself always
+# runs, because `build` is phony.
+build: uv .venv uv.lock ## Build virtual-env and install deps
+	uv sync --group dev --locked
 
+# `uv build` writes both artefacts into `dist/`, which is the directory
+# `make clean` removes and `.gitignore` excludes.
 build-release: ## Build artefacts (sdist & wheel)
-	python -m build --sdist --wheel
+	uv build --out-dir dist
 
 clean: ## Remove build artefacts
 	rm -rf build dist *.egg-info \
@@ -162,10 +186,35 @@ check-fmt: uv $(MDTABLEFIX) ## Verify formatting
 	$(RUFF) format --check
 	$(MDTABLEFIX) --check $(MDTABLEFIX_SELECT) $(MDTABLEFIX_RULES)
 
-lint: uv ## Run linters
-	$(RUFF) check
+lint: uv install-nose ## Run linters
+	$(RUFF) check .
 	$(MAKE) --no-print-directory lint-pylint
 	$(MAKE) --no-print-directory lint-df12
+	$(DUPLICATION_GATE) check
+
+install-nose: ## Install the pinned, checksum-verified nose detector
+	NOSE_BIN="$(NOSE_BIN)" $(NOSE_INSTALL)
+
+duplication: install-nose ## Run the blocking code-duplication gate
+	$(DUPLICATION_GATE) check
+
+duplication-test: install-nose ## Run isolated nose-gate tests on CPython 3.14
+	NOSE_BIN="$(NOSE_BIN)" $(DUPLICATION_TEST)
+
+# Only values explicitly supplied on the Make command line are accepted.
+# They travel through the environment so shell metacharacters in REASON stay
+# data when the quoted CLI argument is expanded.
+cli_value = $(if $(filter command line,$(origin $(1))),$(value $(1)))
+
+duplication-allow: export DUPLICATION_FIRST = $(call cli_value,FIRST)
+duplication-allow: export DUPLICATION_SECOND = $(call cli_value,SECOND)
+duplication-allow: export DUPLICATION_REASON = $(call cli_value,REASON)
+duplication-allow: ## Record one reasoned duplication exception
+	@test -n "$${DUPLICATION_FIRST}" || { printf "Error: FIRST is required (path[::name])\\n" >&2; exit 2; }
+	@test -n "$${DUPLICATION_REASON}" || { printf "Error: REASON is required for a duplication exception\\n" >&2; exit 2; }
+	$(DUPLICATION_GATE) allow --first "$${DUPLICATION_FIRST}" \
+		$(if $(call cli_value,SECOND),--second "$${DUPLICATION_SECOND}",) \
+		--reason "$${DUPLICATION_REASON}"
 
 pylint-pypy-python: uv ## Print the pinned PyPy interpreter, installing it if needed
 	@$(PYPY_PROVISION)
@@ -185,7 +234,7 @@ lint-df12: uv ## Run df12-python-lints and ambrleaks on CPython 3.14
 	$(AMBRLEAKS) tests
 
 typecheck: build uv ## Run typechecking
-	$(TY) check falcon_pachinko tests tools
+	$(TY) check --extra-search-path . falcon_pachinko tests tools scripts/release_assets.py scripts/release_assets_cli.py scripts/release_version.py scripts/release_provenance.py
 
 # Local convenience only. CI lints Markdown through
 # DavidAnson/markdownlint-cli2-action, whose release carries the linter's
@@ -206,6 +255,27 @@ nixie: $(NIXIE) ## Validate Mermaid diagrams
 
 test: build uv pytest ## Run tests
 	uv run pytest -v
+
+# Mutation testing is not a commit gate: it is slow and it is informational.
+# `.github/workflows/mutation.yml` calls the estate's reusable workflow, which
+# in turn runs the same `uv run --with mutmut` below; mutmut then reads
+# `[tool.mutmut]` from pyproject.toml. This target reproduces that command
+# locally at the same mutmut pin and on the same interpreter the workflow
+# uses. The interpreter is named here rather than in pyproject.toml because
+# `[tool.mutmut]` has no key for one.
+MUTMUT_VERSION ?= 3.6.0
+MUTMUT_PYTHON ?= 3.13
+MUTMUT = UV_PYTHON=$(MUTMUT_PYTHON) $(UV_ENV) $(UV) run --with mutmut==$(MUTMUT_VERSION) mutmut
+
+mutation: build uv ## Run mutation testing locally (slow)
+	$(MUTMUT) run
+
+# `mutmut results` hides killed mutants unless `--all` is given, but the
+# docs promise one line per mutant, so name the flag here rather than let the
+# target disagree with its documentation. The reusable workflow's summariser
+# invokes mutmut the same way, so this stays the invocation of record.
+mutation-results: uv ## Show the last mutation run's results
+	$(MUTMUT) results --all true
 
 # The CV-005 CodeScene contracts live in shared-actions and run from a full
 # commit, so a fix to the rules is a pin bump. `.github/cv005.toml` holds this

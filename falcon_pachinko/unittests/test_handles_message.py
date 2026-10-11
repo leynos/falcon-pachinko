@@ -13,6 +13,9 @@ cover various scenarios including:
 
 from __future__ import annotations
 
+import functools
+import typing as typ
+
 import msgspec as ms
 import msgspec.json as msjson
 import pytest
@@ -25,6 +28,12 @@ from falcon_pachinko import (
 from falcon_pachinko.exceptions import (
     DuplicateHandlerRegistrationError,
     HandlerSignatureError,
+    ReservedHandlerRegistrationError,
+)
+from falcon_pachinko.handlers import (
+    LIFECYCLE_CALLBACK_NAMES,
+    get_payload_type,
+    is_lifecycle_callback,
 )
 from falcon_pachinko.unittests.helpers import DummyWS
 
@@ -33,6 +42,18 @@ class PingPayload(ms.Struct):
     """A simple message payload structure for testing ping messages."""
 
     text: str
+
+
+async def _class_payload_handler(
+    self: object, ws: WebSocketLike, payload: PingPayload
+) -> None:
+    """Provide a module-level handler with a class payload annotation."""
+
+
+async def _generic_payload_handler(
+    self: object, ws: WebSocketLike, payload: list[int]
+) -> None:
+    """Provide a module-level handler with a generic payload annotation."""
 
 
 class DecoratedResource(WebSocketResource):
@@ -70,6 +91,13 @@ async def test_decorator_registers_handler() -> None:
     raw = msjson.encode({"type": "ping", "payload": {"text": "hi"}})
     await r.dispatch(DummyWS(), raw)
     assert r.seen == ["hi"], "decorated handler should record the ping payload text"
+
+
+def test_decorator_registers_resolved_payload_type() -> None:
+    """The handler registry retains the resolved payload class."""
+    assert DecoratedResource.handlers["ping"].payload_type is PingPayload, (
+        "the registry should retain the handler's resolved payload type"
+    )
 
 
 def test_duplicate_handler_raises() -> None:
@@ -121,6 +149,365 @@ def test_ambiguous_payload_param_raises() -> None:
                 first: int,
                 second: str,
             ) -> None: ...
+
+
+def test_decorating_lifecycle_callback_is_rejected() -> None:
+    """A decorated lifecycle callback cannot be registered for a tag.
+
+    Registering ``on_disconnect`` would put a lifecycle callback in the
+    peer-reachable registry, which is the hole this guards.
+    """
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_disconnect"):
+
+        class DecoratedDisconnect(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
+            WebSocketResource
+        ):
+            @handles_message("disconnect")
+            async def on_disconnect(
+                self, ws: WebSocketLike, payload: object
+            ) -> None: ...
+
+
+def test_decorating_on_accepted_callback_is_rejected() -> None:
+    """A decorated acceptance hook cannot be registered as a message."""
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_accepted"):
+
+        class DecoratedAccepted(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
+            WebSocketResource
+        ):
+            @handles_message("accepted")
+            async def on_accepted(self, ws: WebSocketLike, payload: object) -> None: ...
+
+
+def test_decorating_lifecycle_name_under_unrelated_tag_is_rejected() -> None:
+    """The reserved name, not the tag, is what rejects the registration.
+
+    The signature is deliberately handler-shaped here so the reserved-name
+    check is the one under test; ``on_connect``'s real lifecycle signature is
+    rejected by the same check at decoration time, which
+    :func:`test_decorating_real_lifecycle_signature_is_rejected` pins.
+    """
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_connect"):
+
+        class DecoratedConnect(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
+            WebSocketResource
+        ):
+            @handles_message("anything")
+            async def on_connect(self, ws: WebSocketLike, payload: object) -> None: ...
+
+
+def test_decorating_real_lifecycle_signature_is_rejected() -> None:
+    """The reserved check precedes signature validation at decoration time.
+
+    ``on_connect(self, req, ws, **params)`` is the base class's own signature.
+    Signature validation would reject it first as ambiguous, because two
+    parameters after ``self`` are annotated, so the decorator must classify
+    the callback before it inspects the signature for the documented
+    ``ReservedHandlerRegistrationError`` to be reachable at decoration time.
+    """
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_connect"):
+
+        class DecoratedRealConnect(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
+            WebSocketResource
+        ):
+            @handles_message(  # ty: ignore[invalid-argument-type]  # the real lifecycle signature returns bool
+                "anything"
+            )
+            async def on_connect(
+                self, req: object, ws: WebSocketLike, **params: object
+            ) -> bool:
+                return True
+
+
+def test_decorating_inherited_lifecycle_callback_is_rejected() -> None:
+    """A subclass cannot register the callback under a new method name.
+
+    The child defines no ``on_disconnect`` of its own, so identity against
+    the parent's implementation is the only thing that can reject this; a
+    name-only check would let the inherited callback into the registry.
+    Registration goes through the child, because that is the path a subclass
+    takes and the path the predicate must resolve against a subclass ``cls``.
+    """
+
+    class InheritingChild(LifecycleParent):
+        """Child that inherits ``on_disconnect`` without redefining it."""
+
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_disconnect"):
+        InheritingChild.add_handler("bye", InheritingChild.on_disconnect, strict=False)
+
+
+def test_decorated_handler_under_reserved_name_is_rejected() -> None:
+    """A ``@handles_message`` descriptor under a reserved name is rejected.
+
+    ``on_disconnect = handles_message("bye")(cleanup)`` registers ``cleanup``,
+    whose name is not reserved, so a name-only check passes it. The descriptor
+    is stored in the class dictionary under a reserved name, so the identity
+    check must unwrap the descriptor before comparing it with ``cleanup``.
+    Without that unwrapping a peer could send a ``"bye"`` envelope to invoke
+    the live connection's disconnect callback.
+    """
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_disconnect"):
+
+        class DescriptorAlias(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
+            WebSocketResource
+        ):
+            async def cleanup(self, ws: WebSocketLike, close_code: int) -> None:
+                """Stand in for a lifecycle callback under a neutral name."""
+
+            on_disconnect = handles_message("bye")(cleanup)
+
+
+def test_add_handler_rejects_partial_lifecycle_callback() -> None:
+    """A ``functools.partial`` wrapper does not launder a lifecycle callback.
+
+    A partial exposes neither the wrapped function's ``__name__`` nor its
+    identity, so without unwrapping it would read as an ordinary handler
+    while still invoking ``on_disconnect`` when a peer frame selected it.
+    """
+
+    class ManualResource(WebSocketResource):
+        """Resource used to exercise manual registration."""
+
+        async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+            """Stand in for the lifecycle callback under test."""
+
+    wrapped = functools.partial(ManualResource.on_disconnect)
+
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_disconnect"):
+        ManualResource.add_handler("disconnect", wrapped, strict=False)
+
+
+def test_add_handler_rejects_lifecycle_callback() -> None:
+    """``add_handler`` refuses a callback that implements a lifecycle method."""
+
+    class ManualResource(WebSocketResource):
+        """Resource used to exercise manual registration."""
+
+        async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+            """Stand in for the lifecycle callback under test."""
+
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_disconnect"):
+        ManualResource.add_handler("disconnect", ManualResource.on_disconnect)
+
+
+def test_add_handler_rejects_bound_classmethod_lifecycle() -> None:
+    """The bound form of a ``classmethod`` lifecycle is refused too.
+
+    Reading ``on_disconnect`` through the class yields a bound method, not
+    the ``classmethod`` object stored in the class dictionary. Its ``__name__``
+    is ``_record_classmethod_close``, so only unwrapping ``__func__``
+    connects it back to the entry the MRO walk holds.
+    """
+
+    class ClassmethodResource(WebSocketResource):
+        """Resource whose lifecycle callback is a ``classmethod``."""
+
+        on_disconnect = classmethod(_record_classmethod_close)
+
+    with pytest.raises(
+        ReservedHandlerRegistrationError, match="_record_classmethod_close"
+    ):
+        ClassmethodResource.add_handler(
+            "bye", ClassmethodResource.on_disconnect, strict=False
+        )
+
+
+def test_add_handler_rejects_neutral_alias_of_descriptor_lifecycle() -> None:
+    """A neutrally named alias of a descriptor's coroutine is refused.
+
+    ``on_bye`` is an ordinary coroutine with an ordinary name, so only
+    identity against the ``__func__`` of the class's ``on_disconnect``
+    descriptor can refuse it. Registering it would put the live connection's
+    disconnect handler in the peer-reachable registry under the tag ``bye``.
+    """
+
+    class ClassmethodResource(WebSocketResource):
+        """Resource aliasing the coroutine behind a ``classmethod`` lifecycle."""
+
+        on_disconnect = classmethod(_record_classmethod_close)
+        on_bye = _record_classmethod_close
+
+    with pytest.raises(
+        ReservedHandlerRegistrationError, match="_record_classmethod_close"
+    ):
+        ClassmethodResource.add_handler("bye", ClassmethodResource.on_bye)
+
+
+def test_add_handler_rejects_inherited_classmethod_lifecycle() -> None:
+    """A child cannot register the descriptor lifecycle it inherited.
+
+    The child stores no ``on_disconnect`` of its own, so the MRO walk has to
+    resolve the parent's descriptor and unwrap it before comparing.
+    """
+
+    class ClassmethodParent(WebSocketResource):
+        """Parent supplying a ``classmethod`` lifecycle callback."""
+
+        on_disconnect = classmethod(_record_classmethod_close)
+        on_bye = _record_classmethod_close
+
+    class ClassmethodChild(ClassmethodParent):
+        """Inherit the parent's descriptor without redefining it."""
+
+    with pytest.raises(
+        ReservedHandlerRegistrationError, match="_record_classmethod_close"
+    ):
+        ClassmethodChild.add_handler("bye", ClassmethodChild.on_bye)
+
+
+async def _record_classmethod_close(
+    cls: type[typ.Any], ws: WebSocketLike, close_code: int
+) -> None:
+    """Stand in for a ``classmethod`` lifecycle under test."""
+
+
+async def _record_staticmethod_close(
+    ws: WebSocketLike, close_code: int, payload: int
+) -> None:
+    """Stand in for a ``staticmethod`` lifecycle, handler-shaped under test."""
+
+
+def test_add_handler_accepts_ordinary_handler() -> None:
+    """An ordinary coroutine remains registrable through ``add_handler``."""
+
+    class ManualResource(WebSocketResource):
+        """Resource used to exercise manual registration."""
+
+        async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+            """Stand in for the lifecycle callback under test."""
+
+    async def handle_note(
+        self: ManualResource, ws: WebSocketLike, payload: object
+    ) -> None:
+        """Stand in for an application message handler."""
+
+    ManualResource.add_handler("disconnect", handle_note, payload_type=None)
+
+    assert ManualResource.handlers["disconnect"].handler is handle_note, (
+        "an ordinary handler stays registrable under a reserved tag string"
+    )
+
+
+class LifecycleParent(WebSocketResource):
+    """Parent resource supplying a lifecycle callback to its children."""
+
+    async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+        """Stand in for the lifecycle callback under test."""
+
+
+def test_lifecycle_callback_names_cover_the_base_class_hooks() -> None:
+    """The reserved set names exactly the base class's lifecycle hooks.
+
+    ``WebSocketResource`` defines four ``on_*`` coroutine callbacks that are
+    not message handlers. If another is added, this test should fail so the
+    set is extended deliberately rather than left behind.
+    """
+    base_hooks = {
+        name
+        for name in dir(WebSocketResource)
+        if name.startswith("on_") and callable(getattr(WebSocketResource, name, None))
+    }
+    assert base_hooks == set(LIFECYCLE_CALLBACK_NAMES), (
+        f"the reserved set must match the base class hooks: {sorted(base_hooks)}"
+    )
+
+
+def test_lifecycle_predicate_recognises_every_rejected_shape() -> None:
+    """The predicate accepts each way a lifecycle callback can be presented.
+
+    Each entry is genuinely a lifecycle callback of its owner: by name, by
+    alias, by inheritance, through a ``functools.partial``, or through a
+    ``classmethod``/``staticmethod`` descriptor. The descriptor shapes matter
+    because the descriptor object is not the coroutine itself: only unwrapping
+    ``__func__`` reveals that the implementation is the same object the
+    neutrally named alias holds. A ``handles_message`` descriptor over a
+    neutrally named function is not listed because it is not a lifecycle
+    callback — it only becomes one when a class stores it under a reserved
+    name, which
+    :func:`test_decorated_handler_under_reserved_name_is_rejected` covers.
+    """
+    partial_disconnect = functools.partial(LifecycleParent.on_disconnect)
+
+    class Aliased(WebSocketResource):
+        async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+            """Stand in for the lifecycle callback under test."""
+
+        on_bye = on_disconnect
+
+    class Child(LifecycleParent):
+        """Inherit the parent's callback without redefining it."""
+
+    class ClassmethodLifecycle(WebSocketResource):
+        """Define the callback as a classmethod, aliased under a neutral name."""
+
+        on_disconnect = classmethod(_record_classmethod_close)
+        on_bye = _record_classmethod_close
+
+    class StaticLifecycle(WebSocketResource):
+        """Define the callback as a staticmethod, aliased under a neutral name."""
+
+        on_disconnect = staticmethod(_record_staticmethod_close)
+        on_bye = _record_staticmethod_close
+
+    async def ordinary(self: object, ws: WebSocketLike, payload: object) -> None:
+        """Stand in for an ordinary message handler."""
+
+    async def cleanup(self: object, ws: WebSocketLike, payload: object) -> None:
+        """Stand in for an ordinary function presented through a descriptor."""
+
+    # Each shape is checked against the owner that actually carries it: the
+    # descriptor aliases only exist on their own classes, and asking
+    # ``LifecycleParent`` to recognise them would test the wrong MRO.
+    rejected = {
+        "direct": (LifecycleParent, LifecycleParent.on_disconnect),
+        "alias": (LifecycleParent, Aliased.__dict__["on_bye"]),
+        "inherited": (LifecycleParent, Child.on_disconnect),
+        "partial": (LifecycleParent, partial_disconnect),
+        "nested partial": (LifecycleParent, functools.partial(partial_disconnect)),
+        "classmethod descriptor": (
+            ClassmethodLifecycle,
+            ClassmethodLifecycle.__dict__["on_disconnect"],
+        ),
+        "classmethod alias": (
+            ClassmethodLifecycle,
+            ClassmethodLifecycle.__dict__["on_bye"],
+        ),
+        "staticmethod descriptor": (
+            StaticLifecycle,
+            StaticLifecycle.__dict__["on_disconnect"],
+        ),
+        "staticmethod alias": (StaticLifecycle, StaticLifecycle.__dict__["on_bye"]),
+    }
+    for label, (owner, callable_) in rejected.items():
+        assert is_lifecycle_callback(owner, callable_), (
+            f"{label} must be recognised as a lifecycle callback"
+        )
+    assert not is_lifecycle_callback(LifecycleParent, ordinary), (
+        "an ordinary coroutine must not be classified as a lifecycle callback"
+    )
+    assert not is_lifecycle_callback(LifecycleParent, 42), (
+        "a non-callable must not be classified as a lifecycle callback"
+    )
+    assert not is_lifecycle_callback(
+        LifecycleParent, handles_message("bye")(cleanup)
+    ), "a descriptor over an ordinary function must not be over-rejected"
+
+
+def test_decorating_a_reserved_function_name_is_refused_at_decoration() -> None:
+    """Decoration refuses a reserved ``__name__`` before any owner exists.
+
+    ``__set_name__`` runs later, at class creation, so the decoration-time
+    check is the only one available while the decorator is applied. It cannot
+    see aliases or inherited copies, which is what the class-creation check
+    adds; it does catch the function's own reserved name.
+    """
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_unhandled"):
+
+        @handles_message("bye")
+        async def on_unhandled(
+            self: object, ws: WebSocketLike, payload: object
+        ) -> None:
+            """Stand in for a reserved callback decorated directly."""
 
 
 class ParentResource(WebSocketResource):
@@ -184,6 +571,49 @@ class ChildResource(ParentResource):
         self.invoked.append("parent")
 
 
+class RedecoratedChild(ParentResource):
+    """Re-register the parent's message type on a child resource."""
+
+    @handles_message("parent")
+    async def parent(self, ws: WebSocketLike, payload: object) -> None:
+        """Handle the parent's message type on the child resource."""
+
+
+def test_child_handler_registry_is_isolated() -> None:
+    """Adding a child handler does not mutate the parent registry."""
+    assert ChildResource.handlers is not ParentResource.handlers, (
+        "a child resource should have its own handler registry"
+    )
+    assert "child" not in ParentResource.handlers, (
+        "the child handler should not appear in the parent registry"
+    )
+    assert "child" in ChildResource.handlers, (
+        "the child registry should include its decorated handler"
+    )
+
+
+def test_none_handlers_mapping_is_replaced_before_registration() -> None:
+    """A class-body None mapping is replaced with a fresh handler registry."""
+
+    class NoneHandlersResource(WebSocketResource):
+        """A resource that asks the descriptor to initialise its registry."""
+
+        handlers = None  # pyright: ignore[reportAssignmentType]  # tests None setup
+
+        @handles_message("fresh")
+        async def handle_fresh(self, ws: WebSocketLike, payload: PingPayload) -> None:
+            """Handle the fresh-registry test message."""
+
+    handlers = NoneHandlersResource.handlers
+    assert isinstance(handlers, dict), (
+        "the descriptor should replace the None class attribute with a mapping"
+    )
+    assert handlers is not ParentResource.handlers, (
+        "the None class attribute should become a fresh child mapping"
+    )
+    assert "fresh" in handlers, "the fresh mapping should contain the decorated handler"
+
+
 class DecoratedOverride(ParentResource):
     """A resource that overrides a parent handler using the decorator.
 
@@ -239,6 +669,35 @@ async def test_decorated_override() -> None:
     assert r.invoked == "decorated", "re-decorated handler should override the parent"
 
 
+def test_get_payload_type_returns_class_annotation() -> None:
+    """Return a handler's resolved class annotation unchanged."""
+    assert get_payload_type(_class_payload_handler) is PingPayload, (
+        "the resolver should return a class payload annotation as-is"
+    )
+
+
+def test_get_payload_type_preserves_non_class_annotation() -> None:
+    """Return a non-class typing object without runtime validation."""
+    assert get_payload_type(_generic_payload_handler) == list[int], (
+        "the resolver should preserve a parameterized generic annotation"
+    )
+
+
+def test_child_handler_registry_contains_inherited_and_child_types() -> None:
+    """The child registry includes both inherited and child message types."""
+    assert {"parent", "child"} <= ChildResource.handlers.keys(), (
+        "the child mapping should include inherited and child handlers"
+    )
+
+
+def test_child_can_redecorate_parent_handler() -> None:
+    """A child can register its own handler for the parent's message type."""
+    assert (
+        RedecoratedChild.handlers["parent"].handler
+        is not ParentResource.handlers["parent"].handler
+    ), "re-decorating the parent's message type should register the child handler"
+
+
 def test_unresolved_annotation_is_ignored() -> None:
     """Test that unresolved type annotations are handled gracefully.
 
@@ -269,4 +728,27 @@ def test_unresolved_annotation_is_ignored() -> None:
 
     assert UnknownAnnoResource.handlers["unknown"].payload_type is None, (
         "unresolved annotations should fall back to a None payload type"
+    )
+
+
+def test_unannotated_payload_type_is_none() -> None:
+    """A handler without a payload annotation registers no payload type."""
+
+    class UnannotatedPayloadResource(WebSocketResource):
+        """A resource whose handler intentionally omits its payload type."""
+
+        def __init__(self) -> None:
+            self.received: object | None = None
+
+        @handles_message("unannotated")
+        async def handle_unannotated(
+            self,
+            ws: WebSocketLike,
+            payload,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]  # ruff: ignore[missing-type-function-argument]  # deliberately unannotated
+        ) -> None:
+            """Handle the unannotated-payload test message."""
+            self.received = payload
+
+    assert UnannotatedPayloadResource.handlers["unannotated"].payload_type is None, (
+        "an unannotated payload should register as None"
     )

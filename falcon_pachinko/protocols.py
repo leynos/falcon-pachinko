@@ -18,4 +18,10 @@ class WebSocketLike(typ.Protocol):
         """Send structured data over the connection."""
 
     async def receive_media(self) -> object:
-        """Receive structured data from the connection."""
+        """Receive a raw ``str``/``bytes`` frame or decoded media.
+
+        On a Falcon socket, peer closure raises
+        ``falcon.WebSocketDisconnected`` with the peer's close code when
+        available. The test simulator uses an internal peer-disconnect signal;
+        the session driver recognizes both forms.
+        """

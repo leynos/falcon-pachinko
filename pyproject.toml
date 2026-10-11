@@ -1,13 +1,13 @@
 [project]
 name = "falcon-pachinko"
-version = "0.1.0-alpha2"
-description = "falcon-pachinko package"
+version = "0.1.0-alpha3"
+description = "Adds WebSocket routing and message handling for Falcon ASGI applications."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "ISC" }
 dependencies = ["msgspec>=0.18,<1", "falcon>=4,<5"]
 authors = [{ name = "Payton McIntosh", email = "pmcintosh@df12.net" }]
-keywords = ["falcon", "websocket", "msgspec", "asyncio", "async", "asgi"]
+keywords = ["falcon", "websocket", "msgspec", "asyncio", "asgi", "websockets"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Framework :: AsyncIO",
@@ -15,9 +15,9 @@ classifiers = [
   "License :: OSI Approved :: ISC License (ISCL)",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
-  "Programming Language :: Python :: 3.14",
   "Topic :: Software Development :: Libraries :: Python Modules",
   "Topic :: Internet :: WWW/HTTP",
 ]
@@ -26,6 +26,7 @@ classifiers = [
 Homepage = "https://github.com/leynos/falcon-pachinko"
 Repository = "https://github.com/leynos/falcon-pachinko"
 Issues = "https://github.com/leynos/falcon-pachinko/issues"
+Documentation = "https://github.com/leynos/falcon-pachinko/tree/main/docs"
 
 [dependency-groups]
 dev = [
@@ -35,6 +36,7 @@ dev = [
     "uvicorn>=0.29",
     "ruff",
     "pyright[nodejs]",
+    "uvicorn>=0.34,<1",
     "websockets>=11,<13",
     "pyyaml>=6.0.3",
     "hypothesis>=6.168.0",
@@ -42,8 +44,8 @@ dev = [
 ]
 
 [project.optional-dependencies]
-examples = ["aiosqlite", "uvicorn", "websocket-client"]
-testing = ["websockets>=11,<13"]
+examples = ["aiosqlite", "uvicorn>=0.34,<1", "websocket-client"]
+testing = ["uvicorn>=0.34,<1", "websockets>=11,<13"]
 
 [tool.pyright]
 pythonVersion = "3.12"
@@ -375,13 +377,152 @@ enable = [
 [tool.pytest.ini_options]
 # Ensure asyncio fixtures create a new event loop for each test
 asyncio_default_fixture_loop_scope = "function"
+testpaths = ["falcon_pachinko", "tests"]
+# `make mutation` writes a second copy of every test module into `mutants/`
+# under its original import name, and mutmut runs the suite from inside that
+# tree. Pytest's default `norecursedirs` does not name `mutants`, so a
+# leftover run is collected as part of the repository's own suite, and the
+# two copies of one module name abort collection with
+# `ImportPathMismatchError` before a single test runs. tests/test_uv_toolchain.py
+# asserts this setting, and the list repeats pytest's defaults because
+# `norecursedirs` replaces them rather than adding to them.
+norecursedirs = [
+    "*.egg",
+    ".*",
+    "_darcs",
+    "build",
+    "CVS",
+    "dist",
+    "node_modules",
+    "venv",
+    "{arch}",
+    "mutants",
+]
 markers = [
     "lint_toolchain: drives the real PyPy and CPython Pylint passes through the Makefile",
+]
+
+[tool.nose]
+version = "0.20.0"
+roots = ["falcon_pachinko"]
+mode = "syntax,semantic,near"
+min-size = 24
+surface = "all"
+top = 30
+exclude = [
+  "testing/**",
+  "unittests/**",
+  "behaviour/**",
+]
+
+[tool.duplication_gate]
+
+[[tool.duplication_gate.allow]]
+members = ["falcon_pachinko/exceptions.py::__init__", "falcon_pachinko/websocket.py::__init__"]
+reason = "These __init__ methods preserve independent public exception contracts: their built-in base classes, arguments, and messages differ across handler dispatch and WebSocket routing. A shared formatter or base class would couple separate error domains without shared validation logic. Nose reports only __init__, so the exact two-file member keys deliberately cover constructors in these files."
+[[tool.duplication_gate.allow]]
+members = ["falcon_pachinko/router.py", "falcon_pachinko/__init__.py"]
+reason = "The router imports these types for its own dispatch implementation; the package initializer independently re-exports selected names through __all__. Centralising the lines would require an import-only module, while importing through the initializer from the router would create a cycle. Nose reports an unnamed import fragment in both files, so both exact path-only keys are necessary. A router-only family, or any family with a location elsewhere, remains blocking."
+[[tool.duplication_gate.allow]]
+members = ["falcon_pachinko/_uri_template.py::compile_uri_template", "falcon_pachinko/_uri_template.py::_compile_prefix_template"]
+reason = "The main-branch URI-template extraction moved these thin wrappers into _uri_template.py. Both still call _compile_template_with_suffix; their suffixes encode different contracts: a full URI with an optional trailing slash versus a prefix ending at a segment boundary. Inlining the suffixes would spread regex details into callers, while sharing one wrapper would erase semantics. This exception names only the two reported units."
+[[tool.duplication_gate.allow]]
+unit = "falcon_pachinko/diagnostics.py"
+reason = "Nose reports the sequence and mapping opening-delimiter emissions as unnamed fragments in diagnostics.py. Their traversal contracts remain distinct: sequences preserve list or tuple shape, while mappings filter and normalize keys and account for omitted entries. A shared renderer would couple those output and budget rules for two one-line delimiters. The path-only key is required because the fragments have no unit names; it also covers future families within this file, which must be inspected rather than treated as blanket approval."
+
+# Mutation testing. `make mutation` prints the local command; CI runs the
+# estate's reusable workflow, which injects the pinned mutmut through
+# `uv run --with` rather than declaring it as a project dependency.
+[tool.mutmut]
+# Only the package is mutated. `tests/`, `tools/` and `examples/` would
+# produce mutants of the suite's own assertions and of lint tooling, and a
+# mutant of a test decides nothing about the package's behaviour.
+source_paths = ["falcon_pachinko/"]
+
+# `source_paths` is a directory, so it also sweeps up the package's own
+# test trees, which live inside it: `falcon_pachinko/unittests/` and
+# `falcon_pachinko/behaviour/`. A mutation there cannot be killed --
+# mutmut matches a mutant to the tests that execute it, and a test module
+# is not executed by the suite it belongs to -- and a run without these
+# patterns spent 1951 of its 4431 mutants, 44% of the total, on the two
+# trees, marking 1909 of them "no tests". The remaining 42 sit in
+# `unittests/helpers.py` (8) and `unittests/resource_factories.py` (34),
+# helper modules the rest of the suite imports, so mutating them measures
+# the suite's scaffolding rather than the package. They are also the one
+# kind of mutant that can break the baseline rather than fail a test:
+# `unittests/test_app_install.py` is loaded as a pytest plugin, so a
+# mutation that raises on import stops collection outright.
+#
+# `falcon_pachinko/testing/` is deliberately *not* excluded. It is shipped
+# code -- the package's public test harness, with its own `__init__.py` --
+# and the suite exercises it: only 13 of its 562 mutants have no test, and
+# 390 are killed outright. That is real signal about the package rather
+# than noise about itself.
+#
+# The patterns name `*.py` because mutmut matches them with `fnmatch` and
+# warns about anything not ending in `.py` or `*`. `fnmatch`'s `*` already
+# crosses `/`, so one pattern covers a tree's nested modules as well.
+do_not_mutate = [
+    "falcon_pachinko/unittests/*.py",
+    "falcon_pachinko/behaviour/*.py",
+]
+
+# mutmut copies only `tests/`, `test/`, `setup.cfg`, `pyproject.toml` and
+# root `test*.py` into `mutants/`, plus whatever this list names. The suite
+# imports `tools/` and `examples/` through `sys.path`, and its executable
+# quick-start test reads `docs/users-guide.md` relative to its copied file.
+# Those supporting trees travel with the run; mutmut copies `tests/` itself.
+also_copy = ["tools/", "examples/", "docs/"]
+
+# The whole suite, not just `tests/`: the package's own unit and behaviour
+# tests live in `falcon_pachinko/unittests` and `falcon_pachinko/behaviour`,
+# and they are what actually exercises the mutated code. They are copied
+# because they sit inside `source_paths`. Naming the directories explicitly
+# keeps a bare `tests/` from silently being the selection, which would run
+# the mutation baseline against the smaller half of the suite.
+#
+# mutmut 3.6.0 has no `runner` key: a configurable `TestRunner` is still a
+# TODO upstream, and the only declared settings are the pytest arguments.
+# mutmut invokes pytest in-process, so the arguments below are the whole
+# lever. `pytest_add_cli_args` applies to every invocation, including the
+# baseline.
+pytest_add_cli_args_test_selection = [
+    "tests/",
+    "falcon_pachinko/unittests/",
+    "falcon_pachinko/behaviour/",
+]
+
+# `--ignore` is the only way to drop a directory that mutmut's own `tests/`
+# copy would otherwise collect: the runner builds its argument list from the
+# selection above, and `-m` cannot express "not this module". Three of
+# `tests/`' modules are repository-tooling contracts that read files mutmut
+# never copies -- `.github/workflows/`, `Makefile`, `uv.lock`,
+# `pylintrc-df12.toml`, `.markdownlint-cli2.jsonc` -- so they fail the
+# baseline inside `mutants/`. Their subject is the repository's tooling, not
+# the package's behaviour, so leaving them out costs the mutation score
+# nothing: they never exercise `falcon_pachinko/`.
+#   - tests/workflow_contracts/  (all of it; every module reads workflows)
+#   - tests/test_toolchain_versions.py
+#   - tests/test_uv_toolchain.py
+#   - tests/test_release_archives.py
+# `-m "not lint_toolchain"` drops the tests that provision a PyPy
+# interpreter and reach the network. `-p no:cacheprovider` keeps the run
+# from writing a cache into the copied tree.
+pytest_add_cli_args = [
+    "--ignore=tests/workflow_contracts",
+    "--ignore=tests/test_toolchain_versions.py",
+    "--ignore=tests/test_uv_toolchain.py",
+    "--ignore=tests/test_release_archives.py",
+    "-m",
+    "not lint_toolchain",
+    "-p",
+    "no:cacheprovider",
 ]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["falcon_pachinko"]
+[tool.setuptools.packages.find]
+include = ["falcon_pachinko*"]
+exclude = ["falcon_pachinko.behaviour*", "falcon_pachinko.unittests*"]

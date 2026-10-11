@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
 import secrets
 import typing as typ
@@ -76,6 +77,18 @@ TaskSchema = AddTask | CompleteTask | AssignTask | ListTasks | BroadcastNote
 
 def _workspace_room(workspace_id: str) -> str:
     return f"workspace:{workspace_id}"
+
+
+_PENDING_AUDIT_RECORDS = "_reference_pending_audit_records"
+
+
+def _remember_connection_audit(
+    resource: WebSocketResource, record: dict[str, object]
+) -> None:
+    """Keep pre-accept hook records until Falcon assigns a connection ID."""
+    pending = resource.state.setdefault(_PENDING_AUDIT_RECORDS, [])
+    if isinstance(pending, list):
+        pending.append(record)
 
 
 class WorkspaceResource(WebSocketResource):
@@ -184,24 +197,35 @@ class TaskStreamResource(WebSocketResource):
         workspace_id: str,
         project_id: str,
     ) -> bool:
-        """Attach the websocket to the workspace-wide room."""
+        """Store request identity after auth and resource hooks have run."""
         user = req.get_header("X-User") or req.get_param("user", default="guest")
+        self.state["workspace_id"] = workspace_id
+        self.state["project_id"] = project_id
+        self.state["user"] = user
+        return True
+
+    async def on_accepted(self, ws: WebSocketLike) -> None:
+        """Register and announce the session after Falcon accepts the socket."""
+        workspace_id: str = self.state["workspace_id"]
+        project_id: str = self.state["project_id"]
+        user: str = self.state.get("user", "guest")
         conn_id = secrets.token_hex(12)
-        await self._conn_mgr.add_connection(conn_id, ws)
         self._conn_id = conn_id
+        registered = False
         try:
+            await self._conn_mgr.add_connection(conn_id, ws)
+            registered = True
             await self._conn_mgr.join_room(conn_id, _workspace_room(workspace_id))
-            self.state.setdefault("workspace_id", workspace_id)
-            self.state["project_id"] = project_id
-            self.state["user"] = user
+            pending_records = self.state.pop(_PENDING_AUDIT_RECORDS, [])
+            if isinstance(pending_records, list):
+                await self._audit.associate_connection(pending_records, conn_id)
             await self._audit.record(
                 "session.open",
                 connection=conn_id,
                 workspace=workspace_id,
                 project=project_id,
-                user=self.state["user"],
+                user=user,
             )
-            await ws.accept()
             await ws.send_media({
                 "type": "session.ready",
                 "payload": {
@@ -209,12 +233,13 @@ class TaskStreamResource(WebSocketResource):
                     "project": project_id,
                 },
             })
-        except BaseException:
-            # Rollback must include cancellation after manager registration.
-            await self._conn_mgr.remove_connection(conn_id)
-            self._conn_id = None
+        except (Exception, asyncio.CancelledError):
+            try:
+                if registered:
+                    await self._conn_mgr.remove_connection(conn_id)
+            finally:
+                self._conn_id = None
             raise
-        return True
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Remove the websocket from the connection manager on disconnect."""
@@ -222,7 +247,6 @@ class TaskStreamResource(WebSocketResource):
             return
         conn_id = self._conn_id
         await self._conn_mgr.remove_connection(conn_id)
-        self._conn_id = None
         await self._audit.record(
             "session.closed",
             connection=conn_id,
@@ -352,7 +376,8 @@ async def _seed_workspace(context: HookContext) -> None:
     workspace = await resource._repo.ensure_workspace(workspace_id)
     resource.state["workspace_id"] = workspace_id
     resource.state["workspace_name"] = workspace.name
-    await resource._audit.record("workspace.loaded", workspace=workspace_id)
+    record = await resource._audit.record("workspace.loaded", workspace=workspace_id)
+    _remember_connection_audit(resource, record)
 
 
 async def _seed_project(context: HookContext) -> None:
@@ -368,12 +393,19 @@ async def _seed_project(context: HookContext) -> None:
     resource.state["workspace_id"] = workspace_id
     resource.state["project_id"] = project_id
     resource.state["project_name"] = project.name
-    await resource._audit.record(
+    record = await resource._audit.record(
         "project.loaded", workspace=workspace_id, project=project_id
     )
+    _remember_connection_audit(resource, record)
 
 
 async def _record_receive(context: HookContext) -> None:
+    """Store received payload content in the trusted application audit trail.
+
+    This explicit raw-payload storage is application policy, not a safe
+    diagnostic. Valid UTF-8 bytes are decoded before storage, but decoding does
+    not sanitize their contents.
+    """
     resource = context.target
     if not isinstance(resource, TaskStreamResource) or context.raw is None:
         return
@@ -383,14 +415,20 @@ async def _record_receive(context: HookContext) -> None:
             payload = payload.decode("utf-8")
         except UnicodeDecodeError:
             payload = "<binary>"
-    await resource._audit.record("message.received", payload=payload)
+    await resource._audit.record(
+        "message.received", connection=resource._conn_id, payload=payload
+    )
 
 
 async def _record_receive_result(context: HookContext) -> None:
     resource = context.target
     if not isinstance(resource, TaskStreamResource):
         return
-    await resource._audit.record("message.processed", result=context.result)
+    await resource._audit.record(
+        "message.processed",
+        connection=resource._conn_id,
+        result=context.result,
+    )
 
 
 _HOOKS_REGISTERED = False

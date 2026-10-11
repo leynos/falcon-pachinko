@@ -12,36 +12,62 @@ See
 for the full design rationale. For practical guidance, start with the
 [User Guide](docs/users-guide.md) and the
 [Migration Guide](docs/migration-guide.md). Maintainer-facing notes live in the
-[Developer Guide](docs/developers-guide.md).
+[Developer Guide](docs/developers-guide.md),
+including the
+[nose code duplication gate](docs/developers-guide.md#nose-code-duplication-gate).
 
 ## Requirements
 
 - Python 3.12 or newer
 - Falcon 4.x with ASGI support
 
+## Installation
+
+Install the `falcon-pachinko` distribution with pip or uv:
+
+```bash
+python -m pip install --pre falcon-pachinko
+uv add --prerelease allow falcon-pachinko
+```
+
+Pre-releases require opting in, as shown by the flags above. The distribution
+provides the `falcon_pachinko` import package.
+
+Optional extras provide the example application's dependencies or the public
+testing utilities:
+
+```bash
+python -m pip install --pre 'falcon-pachinko[examples]'
+python -m pip install --pre 'falcon-pachinko[testing]'
+uv add --prerelease allow 'falcon-pachinko[examples]'
+uv add --prerelease allow 'falcon-pachinko[testing]'
+```
+
 ## Key features
 
-- `app.add_websocket_route()` maps WebSocket paths to `WebSocketResource`
-  classes, mirroring Falcon's HTTP routing. Initialization parameters can be
-  supplied, so one resource class supports multiple configurations.
-- `WebSocketResource` provides `on_connect`, `on_disconnect`, and
-   `on_unhandled` lifecycle hooks.
+- `WebSocketRouter` mounts nested WebSocket routes on Falcon with
+  `router.mount(prefix)` followed by `router.attach(app)`.
+- `WebSocketResource` provides `on_connect`, `on_accepted`, `on_disconnect`,
+  and `on_unhandled` lifecycle hooks. With `receive_loop=True`, the router owns
+  ordered receive and dispatch for raw text and binary frames.
 - Message payloads are parsed into `msgspec.Struct` classes for speed and type
   safety.
 - Define a `schema` union of tagged `msgspec.Struct` types to enable automatic
-  dispatch based on the message tag.
+  dispatch based on the message tag. Every member must use the same kind of
+  tag: all string tags, or all integer tags.
 - Use the canonical `@handles_message("type")` decorator to register message
   handlers.
 - `WebSocketConnectionManager` tracks connections, manages rooms, and lets
   workers broadcast messages.
-- Background tasks run under Falcon's ASGI lifespan via
-  `WorkerController` and the `@app.lifespan` decorator.
+- Background tasks run under Falcon's ASGI lifespan via `WorkerController`
+  and middleware `process_startup` / `process_shutdown` methods.
 
 These concepts are summarized in the design document:
 
 ```python
-# pass route-specific options to the resource
-app.add_websocket_route("/ws/chat/{room_name}", ChatRoomResource, history_size=100)
+router.add_route("/chat/{room_name}", ChatRoomResource, history_size=100)
+router.mount("/ws")
+router.attach(app)
 ```
 
 ```python
@@ -53,38 +79,10 @@ Use ``conn_mgr.connections()`` to iterate over active WebSocket connections.
 The iterator captures a snapshot under a lock and then yields it, so iteration
 occurs over an immutable snapshot.
 
-```python
-import asyncio
-
-from falcon_pachinko import WorkerController, worker
-
-controller = WorkerController()
-
-
-@worker
-async def heartbeat(*, conn_mgr):
-    try:
-        while True:
-            # Snapshot to avoid mutation during iteration
-            conns = [ws async for ws in conn_mgr.connections()]
-            if conns:
-                # Send concurrently; swallow per-connection errors
-                await asyncio.gather(
-                    *(ws.send_media({"type": "ping"}) for ws in conns),
-                    return_exceptions=True,
-                )
-            await asyncio.sleep(30)
-    except asyncio.CancelledError:
-        # Cleanly exit when controller.stop() is called
-        pass
-
-
-@app.lifespan
-async def lifespan(app):
-    await controller.start(heartbeat, conn_mgr=app.ws_connection_manager)
-    yield
-    await controller.stop()
-```
+Use Falcon middleware `process_startup(scope, event)` to call
+`WorkerController.start()` and `process_shutdown(scope, event)` to call
+`stop()`. See the [User Guide](docs/users-guide.md#9-background-workers) for a
+complete example.
 
 ## Roadmap
 
@@ -93,6 +91,21 @@ Implementation tasks are tracked in [docs/roadmap.md](docs/roadmap.md). See the
 for release details.
 
 ## Examples
+
+### Reference application
+
+`examples/reference_app` is the live end-to-end WebSocket example. Start it
+from the repository root with either command:
+
+```bash
+python -m examples.reference_app.server
+# or
+uvicorn --factory examples.reference_app.server:create_app --host 127.0.0.1 --port 8000
+```
+
+Connect to `ws://127.0.0.1:8000/ws/workspaces/atlas/projects/triage/tasks`. The
+tested authentication, messages, and lifecycle are documented in the
+[User Guide's reference example](docs/users-guide.md#11-reference-example).
 
 An end-to-end demonstration lives under `examples/random_status`. It shows how
 to:

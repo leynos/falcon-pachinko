@@ -4,17 +4,45 @@ from __future__ import annotations
 
 import functools
 import inspect
+import types
 import typing as typ
 
 import falcon
 import falcon.asgi
 import pytest
 
-from falcon_pachinko import HookContext, WebSocketResource, WebSocketRouter
+from falcon_pachinko import (
+    HookContext,
+    WebSocketResource,
+    WebSocketRouter,
+)
+from falcon_pachinko.router import _compile_prefix_template, compile_uri_template
 from falcon_pachinko.unittests.helpers import DummyWS, RecordingWS, make_req
 from falcon_pachinko.unittests.resource_factories import resource_factory
 
 pytest_plugins = ["falcon_pachinko.unittests.test_app_install"]
+
+
+def test_template_compilers_keep_complete_and_prefix_match_semantics() -> None:
+    """The wrappers share compilation while keeping their suffixes distinct."""
+    complete = compile_uri_template("/rooms/{room}")
+    prefix = _compile_prefix_template("/rooms/{room}")
+
+    assert complete.fullmatch("/rooms/7") is not None, (
+        "complete templates must match the route itself"
+    )
+    assert complete.fullmatch("/rooms/7/") is not None, (
+        "complete templates must preserve an optional trailing slash"
+    )
+    assert complete.fullmatch("/rooms/7/child") is None, (
+        "complete templates must reject a child path"
+    )
+    match = prefix.match("/rooms/7/child")
+    assert match is not None, "prefix templates must accept a child path"
+    assert match.groupdict() == {"room": "7"}, (
+        "prefix matching must capture the route parameters"
+    )
+
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -70,16 +98,17 @@ async def test_router_global_hooks_wrap_lifecycle() -> None:
             context.params["injected"] = True
         events.append(f"global.{context.event}")
 
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.global_hooks.add("before_connect", global_hook)
     router.global_hooks.add("after_connect", global_hook)
     router.global_hooks.add("before_receive", global_hook)
     router.global_hooks.add("after_receive", global_hook)
+    router.global_hooks.add("before_disconnect", global_hook)
 
     router.add_route("/hooks", GlobalHookResource)
     router.mount("/")
 
-    ws = DummyWS(b'{"type":"noop"}')
+    ws = DummyWS([b'{"type":"noop"}'])
     req = make_req("/hooks")
     await router.on_websocket(req, ws)
 
@@ -94,6 +123,7 @@ async def test_router_global_hooks_wrap_lifecycle() -> None:
         "global.before_receive",
         "handler.dispatch",
         "global.after_receive",
+        "global.before_disconnect",
     ], "router-level hooks should wrap both connect and receive phases"
 
 
@@ -619,6 +649,20 @@ async def test_router_mount_on_app() -> None:
     assert DummyResource.instances[-1].params == {"room": "42"}, (
         "router mounted on a Falcon app should still route correctly"
     )
+
+
+@pytest.mark.asyncio
+async def test_router_uses_falcons_uri_template_for_mounted_route() -> None:
+    """A real Falcon request exposes ``uri_template``, not ``path_template``."""
+    router = WebSocketRouter()
+    router.add_route("/", AcceptingResource)
+    router.mount("/ws")
+    req = types.SimpleNamespace(path="/ws", uri_template="/ws")
+    ws = RecordingWS()
+
+    await router.on_websocket(req, ws)
+
+    assert ws.accepted, "Falcon's mounted route should reach the session setup"
 
 
 @pytest.mark.asyncio

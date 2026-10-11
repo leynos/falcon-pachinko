@@ -161,6 +161,9 @@ def _run_make(target: str, stub_bin: pathlib.Path) -> subprocess.CompletedProces
         The completed process.
     """
     environment = dict(os.environ)
+    # `uv run` exports its executable path as `UV`. Clear it so Make resolves
+    # the recording `uv` stub from PATH instead of running formatters for real.
+    environment.pop("UV", None)
     environment["PATH"] = f"{stub_bin}{os.pathsep}{environment['PATH']}"
     assert MAKE, "make must be installed to run these rules"
     # S603 is about untrusted input reaching a process. The executable is

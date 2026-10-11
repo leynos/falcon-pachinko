@@ -2,42 +2,57 @@
 
 from __future__ import annotations
 
-import collections as cl
+import asyncio
 import dataclasses as dc
+import typing as typ
 from types import SimpleNamespace
 
-import falcon
-
-from .testing._common import _LifecycleSocket
+from .testing._common import _ORIGINAL_WS_RECEIVE_MSG, _LifecycleSocket
 from .testing.simulator import WebSocketSimulator
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 
 class _OriginalWebSocket(_LifecycleSocket):
     """Minimal stub representing the ASGI-provided websocket."""
 
-    def __init__(self, frames: tuple[object, ...] = ()) -> None:
+    def __init__(self) -> None:
         super().__init__()
         self.sent: list[object] = []
-        self._frames: cl.deque[object] = cl.deque(frames)
 
     async def send_media(  # pylint: disable=trivial-attribute-wrapper  # protocol stub
         self, data: object
     ) -> None:
         self.sent.append(data)  # pragma: no cover - unused
 
-    async def receive_media(self) -> object:
-        if self.closed and not self._frames:
-            raise falcon.WebSocketDisconnected(self.close_code)
-        if self._frames:
-            frame = self._frames.popleft()
-            if isinstance(frame, BaseException):
-                raise frame
-            return frame
-        raise falcon.WebSocketDisconnected(1000)
+    async def receive_media(  # ruff: ignore[no-self-use] - protocol needs an instance method
+        self,
+    ) -> object:
+        raise RuntimeError(_ORIGINAL_WS_RECEIVE_MSG)  # pragma: no cover - unused
 
 
 class _HarnessSimulator(WebSocketSimulator):
     """Simulator variant that mirrors lifecycle events to the original stub."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.ready_event = asyncio.Event()
+
+    async def _signal_ready_after(self, operation: cabc.Awaitable[None]) -> None:
+        """Wake readiness waiters after a mirrored lifecycle operation."""
+        try:
+            await operation
+        finally:
+            self.ready_event.set()
+
+    async def accept(self, subprotocol: str | None = None) -> None:
+        """Signal readiness after the simulator mirrors handshake acceptance."""
+        await self._signal_ready_after(super().accept(subprotocol))
+
+    async def close(self, code: int = 1000) -> None:
+        """Signal readiness after the simulator mirrors connection closure."""
+        await self._signal_ready_after(super().close(code))
 
     # pylint: disable-next=trivial-attribute-wrapper  # deliberate seam: testing.harness binds the ASGI stub through this name to keep the intent explicit
     def bind_original(self, original: _OriginalWebSocket) -> None:
@@ -51,4 +66,9 @@ class _TestRequest:
 
     path: str
     path_template: str
+    headers: dict[str, str] = dc.field(default_factory=dict)
     context: SimpleNamespace = dc.field(default_factory=SimpleNamespace)
+
+    def get_header(self, name: str, default: str | None = None) -> str | None:
+        """Return a case-insensitive header value for reference hooks."""
+        return self.headers.get(name.lower(), default)

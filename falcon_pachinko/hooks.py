@@ -15,7 +15,7 @@ import enum
 import inspect
 import typing as typ
 
-import typing_extensions as tpe
+from .diagnostics import _frame_metadata, _identifiers, _safe_scalar, _type_name
 
 if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints only
     import collections.abc as cabc
@@ -58,7 +58,7 @@ class _HookContextKwargs(typ.TypedDict, total=False):
 _SUPPORTED_EVENTS = frozenset(event.value for event in HookEvent)
 
 
-@dc.dataclass(slots=True)
+@dc.dataclass(slots=True, repr=False)
 class HookContext:
     """Context object passed to hook callbacks.
 
@@ -98,6 +98,21 @@ class HookContext:
     result: bool | None = None
     error: BaseException | None = None
     close_code: int | None = None
+
+    def __repr__(self) -> str:
+        """Show bounded lifecycle metadata while preserving trusted raw access."""
+        kind, length = _frame_metadata(self.raw)
+        fields = _identifiers(self.params) if type(self.params) is dict else "<omitted>"
+        return (
+            f"HookContext(event={_safe_scalar(self.event)}, "
+            f"target={_type_name(self.target)}, resource={_type_name(self.resource)}, "
+            f"req={_type_name(self.req)}, ws={_type_name(self.ws)}, "
+            f"params_fields={fields}, "
+            f"raw_kind={kind}, raw_length={length}, "
+            f"result={_safe_scalar(self.result)}, "
+            f"error_type={_type_name(self.error)}, "
+            f"close_code={_safe_scalar(self.close_code)})"
+        )
 
 
 class HookCollection:
@@ -231,7 +246,7 @@ class HookManager:
         self,
         event: EventType,
         target: WebSocketResource,
-        **kwargs: tpe.Unpack[_HookContextKwargs],
+        **kwargs: typ.Unpack[_HookContextKwargs],
     ) -> HookContext:
         """Dispatch before-* lifecycle events."""
         context = HookContext(

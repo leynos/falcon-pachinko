@@ -195,10 +195,24 @@ class AuditTrail:
         """A copy of the recorded events."""
         return list(self._records)
 
-    async def record(self, event: str, **metadata: object) -> None:
-        """Append an audit entry describing ``event``."""
+    async def record(self, event: str, **metadata: object) -> dict[str, object]:
+        """Append and return an audit entry describing ``event``."""
+        record = {"event": event, "metadata": metadata}
         async with self._lock:
-            self._records.append({"event": event, "metadata": metadata})
+            self._records.append(record)
+        return record
+
+    async def associate_connection(
+        self,
+        records: cabc.Iterable[dict[str, object]],
+        connection_id: str,
+    ) -> None:
+        """Add the accepted connection ID to its earlier hook records."""
+        async with self._lock:
+            for record in records:
+                metadata = record.get("metadata")
+                if isinstance(metadata, dict):
+                    metadata["connection"] = connection_id
 
 
 class AnnouncementFeed:

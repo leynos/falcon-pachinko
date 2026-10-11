@@ -46,6 +46,11 @@ RECEIVE_EVENTS = [
     "parent.after_receive",
     "global.after_receive",
 ]
+DISCONNECT_EVENTS = [
+    "global.before_disconnect",
+    "parent.before_disconnect",
+    "child.before_disconnect",
+]
 
 
 class HookChild(WebSocketResource):
@@ -200,11 +205,13 @@ class HookTestEnvironment:
     """Encapsulate router, hooks, and connection state for tests."""
 
     def __init__(self) -> None:
+        """Create a router owning the receive phases observed by layered hooks."""
         self.events: list[str] = []
         HookChild._events = self.events
         HookChild.instances = []
         HookParent.instances = []
-        self.router = WebSocketRouter()
+        self.router = WebSocketRouter(receive_loop=True)
+        self._ws: DummyWS | None = None
         self._register_hooks()
 
     def _register_hooks(self) -> None:
@@ -216,25 +223,28 @@ class HookTestEnvironment:
         self.router.global_hooks.add("after_connect", global_hook)
         self.router.global_hooks.add("before_receive", global_hook)
         self.router.global_hooks.add("after_receive", global_hook)
+        self.router.global_hooks.add("before_disconnect", global_hook)
 
         HookParent.hooks.add("before_connect", parent_hook)
         HookParent.hooks.add("after_connect", parent_hook)
         HookParent.hooks.add("before_receive", parent_hook)
         HookParent.hooks.add("after_receive", parent_hook)
+        HookParent.hooks.add("before_disconnect", parent_hook)
 
         HookChild.hooks.add("before_connect", child_hook)
         HookChild.hooks.add("after_connect", child_hook)
         HookChild.hooks.add("before_receive", child_hook)
         HookChild.hooks.add("after_receive", child_hook)
+        HookChild.hooks.add("before_disconnect", child_hook)
 
         self.router.add_route("/hooks", HookParent)
         self.router.mount("/")
 
-    async def open_connection(self, *frames: object) -> HookChild:
-        """Run the session with seeded frames and return its child resource."""
-        ws = DummyWS(*frames)
+    async def open_connection(self, frames: cabc.Iterable[object] = ()) -> HookChild:
+        """Create a connection and return the instantiated child resource."""
+        self._ws = DummyWS(frames)
         req = make_req("/hooks/child")
-        await self.router.on_websocket(req, ws)
+        await self.router.on_websocket(req, self._ws)
         return HookChild.instances[-1]
 
 
@@ -269,11 +279,11 @@ async def test_hooks_execute_in_layered_order(
     hook_test_environment: HookTestEnvironment,
 ) -> None:
     """Hooks fire in onion order across global, parent, and child scopes."""
-    await hook_test_environment.open_connection(b'{"type":"noop"}')
+    await hook_test_environment.open_connection([b'{"type":"noop"}'])
 
-    assert hook_test_environment.events == CONNECT_EVENTS + RECEIVE_EVENTS, (
-        "hooks should fire in onion order across all three scopes"
-    )
+    assert hook_test_environment.events == (
+        CONNECT_EVENTS + RECEIVE_EVENTS + DISCONNECT_EVENTS
+    ), "hooks should fire in onion order across all three scopes"
 
 
 @pytest.mark.asyncio
@@ -281,7 +291,7 @@ async def test_hook_context_parameter_propagation(
     hook_test_environment: HookTestEnvironment,
 ) -> None:
     """Before-connect hooks may amend params passed to the resource."""
-    child = await hook_test_environment.open_connection(b'{"type":"noop"}')
+    child = await hook_test_environment.open_connection([b'{"type":"noop"}'])
 
     assert child.params["global"] is True, (
         "global before_connect hook should have set the global flag"
@@ -296,11 +306,11 @@ async def test_message_processing_hooks_capture_handler_events(
     hook_test_environment: HookTestEnvironment,
 ) -> None:
     """Receive hooks surround dispatch and observe handler execution."""
-    await hook_test_environment.open_connection(b'{"type":"noop"}')
+    await hook_test_environment.open_connection([b'{"type":"noop"}'])
 
-    assert hook_test_environment.events[len(CONNECT_EVENTS) :] == RECEIVE_EVENTS, (
-        "receive hooks should surround handler dispatch in onion order"
-    )
+    assert hook_test_environment.events[len(CONNECT_EVENTS) :] == (
+        RECEIVE_EVENTS + DISCONNECT_EVENTS
+    ), "receive hooks should surround handler dispatch in onion order"
 
 
 def test_hookcollection_add_unsupported_event() -> None:
@@ -386,7 +396,7 @@ async def test_after_receive_reports_errors() -> None:
     global_hook = create_error_reporting_global_hook(events)
     resource_hook = create_error_reporting_resource_hook(events)
 
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.global_hooks.add("before_receive", global_hook)
     router.global_hooks.add("after_receive", global_hook)
 
@@ -396,7 +406,7 @@ async def test_after_receive_reports_errors() -> None:
     router.add_route("/boom", BoomResource)
     router.mount("/")
 
-    ws = DummyWS(b'{"type":"boom"}')
+    ws = DummyWS([b'{"type":"boom"}'])
     req = make_req("/boom")
     with pytest.raises(RuntimeError):
         await router.on_websocket(req, ws)

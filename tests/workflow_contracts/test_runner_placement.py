@@ -1,7 +1,7 @@
 """Where each job runs, and what happens when it does not finish.
 
 Repository-owned Linux lanes run on Ubicloud. A pull request from a fork
-cannot obtain an Ubicloud runner, so the one lane that serves pull requests
+cannot obtain an Ubicloud runner, so each lane that serves pull requests
 resolves its label from the head repository instead of naming one. Three
 failures follow from that arrangement and none of them shows up in a green
 run:
@@ -24,8 +24,12 @@ Run with:
 from __future__ import annotations
 
 import re
+import typing as typ
 
 import pytest
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 from .runner_labels import (
     collapse_label_whitespace,
@@ -35,17 +39,24 @@ from .runner_labels import (
     runner_expression,
 )
 from .workflow_support import (
-    FORK_FIELD,
+    DEPENDABOT_FIELD,
     GITHUB_HOSTED_LABELS,
     GITHUB_HOSTED_LINUX,
+    HOSTED_GUARD,
     REPOSITORY,
     ROOT,
     UBICLOUD_LINUX_LABEL,
 )
 
-#: The lane that serves pull requests, and so the only one that can be
-#: reached by a fork.
-FORK_FALLBACK_LANE = ("ci.yml", "lint-test")
+#: The lanes that serve pull requests, and so can be reached by a fork.
+FORK_FALLBACK_LANES = (
+    ("ci.yml", "lint-test"),
+    ("ci.yml", "falcon-minimum"),
+    ("ci.yml", "build-dist"),
+)
+# The trigger contract names the shared workflow trigger once; all jobs live
+# in `ci.yml` and inherit the same workflow-level events.
+FORK_FALLBACK_LANE = FORK_FALLBACK_LANES[0]
 #: Each Ubicloud lane's ceiling in minutes, as the developer guide's table
 #: publishes it. The values are restated here rather than derived, because
 #: the contract's job is to hold the guide and the workflow to one another:
@@ -53,24 +64,33 @@ FORK_FALLBACK_LANE = ("ci.yml", "lint-test")
 #: that no longer exists, and the guide is what the next re-sizing reads.
 LANE_CEILINGS = {
     ("ci.yml", "lint-test"): 15,
+    ("ci.yml", "falcon-minimum"): 30,
+    ("ci.yml", "build-dist"): 15,
     ("coverage-main.yml", "coverage-upload"): 15,
-    ("release.yml", "pure-wheel"): 30,
-    ("release.yml", "release"): 30,
+    ("release.yml", "check-version"): 30,
+    ("release.yml", "build-wheels"): 30,
+    ("release.yml", "attest"): 30,
+    ("release.yml", "draft-release"): 30,
+    ("release.yml", "publish-pypi"): 30,
+    ("release.yml", "publish-release"): 30,
 }
 #: Lanes that run on Ubicloud from a push or a tag only. A fork cannot reach
 #: them, so they name their label outright; a guard here would be noise that
 #: reads as protection.
 PUSH_ONLY_UBICLOUD_LANES = (
     ("coverage-main.yml", "coverage-upload"),
-    ("release.yml", "pure-wheel"),
-    ("release.yml", "release"),
+    ("release.yml", "check-version"),
+    ("release.yml", "build-wheels"),
+    ("release.yml", "attest"),
+    ("release.yml", "draft-release"),
+    ("release.yml", "publish-pypi"),
+    ("release.yml", "publish-release"),
 )
 #: Jobs that stay GitHub-hosted, with the reason each one stays. Scheduled,
 #: dispatch and `pull_request_target` work is not what this migration
 #: targets, and public-repository minutes are free there.
 GITHUB_HOSTED_JOBS = {
     ("delayed-pr-comment.yml", "delay_and_comment"): "workflow_dispatch only",
-    ("build-wheels.yml", "build"): "workflow_call, and Windows and macOS legs",
 }
 
 
@@ -134,32 +154,67 @@ def test_no_declared_label_spans_lines() -> None:
     )
 
 
-def test_the_pull_request_lane_falls_back_for_forks() -> None:
-    """Send a fork's pull request to GitHub-hosted Linux, everything else to Ubicloud.
+def _fallback_faults(declared: str) -> list[str]:
+    """Return why a pull-request lane's `runs-on` is not the reviewed fallback."""
+    label = runner_expression(declared)
+    faults = []
+    if label.guard != HOSTED_GUARD:
+        faults.append(f"keyed on {label.guard!r}, not {HOSTED_GUARD!r}")
+    if label.when_true != GITHUB_HOSTED_LINUX:
+        faults.append(f"a fork falls back to {label.when_true!r}")
+    if label.when_false != UBICLOUD_LINUX_LABEL:
+        faults.append(f"every other event reaches {label.when_false!r}")
+    return faults
 
-    The guard is asserted as the whole field path. A sibling field of the same
-    object, such as the head repository's ``private`` flag, reads almost
-    identically and would route every fork pull request to a runner it can
-    never obtain.
-    """
-    workflow_name, job_name = FORK_FALLBACK_LANE
+
+def _lane_declaration(workflow_name: str, job_name: str) -> str:
+    """Return one fork-fallback lane's `runs-on` declaration."""
     declared = _job(workflow_name, job_name).get("runs-on")
     assert isinstance(declared, str), (
         f"{workflow_name}:{job_name} must declare a runs-on label"
     )
-    label = runner_expression(declared)
+    return declared
 
-    assert label.guard == FORK_FIELD, (
-        f"the lane must branch on {FORK_FIELD}, the only field that says a "
-        f"runner cannot be obtained; got {label.guard!r}"
-    )
-    assert label.when_true == GITHUB_HOSTED_LINUX, (
-        f"a fork pull request must fall back to {GITHUB_HOSTED_LINUX}; got "
-        f"{label.when_true!r}"
-    )
-    assert label.when_false == UBICLOUD_LINUX_LABEL, (
-        f"every other event must reach {UBICLOUD_LINUX_LABEL}; got {label.when_false!r}"
-    )
+
+@pytest.mark.parametrize(("workflow_name", "job_name"), FORK_FALLBACK_LANES)
+def test_pull_request_lanes_fall_back_for_forks(
+    workflow_name: str, job_name: str
+) -> None:
+    """Send a fork's or Dependabot's pull request to hosted Linux, the rest to Ubicloud.
+
+    The guard is asserted as the whole field path. A sibling field of the same
+    object, such as the head repository's ``private`` flag, reads almost
+    identically and would route every fork pull request to a runner it can
+    never obtain. The Dependabot test reads the pull request's author, not
+    ``github.actor``, which is whoever triggered the run.
+    """
+    lane = (workflow_name, job_name)
+    faults = _fallback_faults(_lane_declaration(*lane))
+    assert not faults, f"{lane} is not the reviewed fallback: {faults}"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda text: text.replace(f" || {DEPENDABOT_FIELD}", ""),
+        lambda text: text.replace("pull_request.user.login", "actor"),
+    ],
+    ids=["dependabot-arm-removed", "actor-instead-of-author"],
+)
+@pytest.mark.parametrize(("workflow_name", "job_name"), FORK_FALLBACK_LANES)
+def test_the_lane_check_refuses_a_mutated_declaration(
+    mutate: cabc.Callable[[str], str], workflow_name: str, job_name: str
+) -> None:
+    """Drive the same check over the real declaration, mutated.
+
+    The mutations are applied to the workflow's own `runs-on`, so the check is
+    shown to reject exactly the edits it exists to catch, not constructed
+    strings of its own.
+    """
+    real = " ".join(_lane_declaration(workflow_name, job_name).split())
+    mutated = mutate(real)
+    assert mutated != real, "the mutation did not change the declaration"
+    assert _fallback_faults(mutated), f"{mutated!r} was accepted"
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), PUSH_ONLY_UBICLOUD_LANES)
@@ -242,7 +297,7 @@ def test_the_ceiling_contract_sees_the_lanes_it_guards() -> None:
         and UBICLOUD_LINUX_LABEL
         in collapse_label_whitespace(str(job_document.get("runs-on")))
     }
-    expected = {FORK_FALLBACK_LANE, *PUSH_ONLY_UBICLOUD_LANES}
+    expected = {*FORK_FALLBACK_LANES, *PUSH_ONLY_UBICLOUD_LANES}
 
     assert visited == expected, (
         "the ceiling contract must visit exactly the Ubicloud lanes; "
@@ -250,11 +305,8 @@ def test_the_ceiling_contract_sees_the_lanes_it_guards() -> None:
     )
 
 
-#: Every workflow that declares a runner label anywhere. `build-wheels.yml`
-#: is in this set deliberately: it is `workflow_call` and nothing in this
-#: repository calls it today, and it is still asked the registry question.
+#: Every workflow that declares a runner label anywhere.
 LABEL_DECLARING_WORKFLOWS = frozenset({
-    "build-wheels.yml",
     "ci.yml",
     "coverage-main.yml",
     "delayed-pr-comment.yml",
@@ -263,25 +315,12 @@ LABEL_DECLARING_WORKFLOWS = frozenset({
 
 
 def test_the_registry_reads_every_workflow_that_declares_a_label() -> None:
-    """Account for a callerless `workflow_call` file rather than exempting it.
-
-    `build-wheels.yml` declares six labels and nothing calls it. The registry
-    could either account for its labels or exclude callerless
-    `workflow_call` files by rule; this repository accounts for them. A file
-    is one line away from gaining a caller, and "callerless" is not even a
-    local property, since a caller may live in another repository, so a rule
-    that skipped the file would quietly stop asking the registry question for
-    a workflow that could run tomorrow.
-
-    The set is named rather than derived, so dropping a workflow from the
-    traversal fails here instead of silently shrinking what the registry is
-    held to.
-    """
+    """Require the label traversal to cover every declaring workflow."""
     reached = {reference.workflow for reference in declared_labels(REPOSITORY)}
 
     assert reached == LABEL_DECLARING_WORKFLOWS, (
         "the label traversal must reach every workflow that declares one, "
-        "including callerless workflow_call files; reached "
+        "reached "
         f"{sorted(reached)}"
     )
 
@@ -333,7 +372,7 @@ def test_the_ceiling_table_covers_every_ubicloud_lane() -> None:
     the guide. A lane added to the migration and not to the table would
     simply not be checked, so the two sets are compared.
     """
-    assert set(LANE_CEILINGS) == {FORK_FALLBACK_LANE, *PUSH_ONLY_UBICLOUD_LANES}, (
+    assert set(LANE_CEILINGS) == {*FORK_FALLBACK_LANES, *PUSH_ONLY_UBICLOUD_LANES}, (
         "every Ubicloud lane must carry a documented ceiling; the table names "
         f"{sorted(LANE_CEILINGS)}"
     )

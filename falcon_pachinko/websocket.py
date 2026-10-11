@@ -109,11 +109,14 @@ class _WebSocketApp(typ.Protocol):
 
 
 class ConnectionBackend(abc.ABC):
-    """Abstract interface for connection manager backends.
+    """Explicit process-local live-socket registry contract.
+
+    Never serialize, proxy, or share sockets across processes. Use
+    ``ClusterFanout`` for distributed membership and delivery.
 
     Thread-safety expectations:
         Implementations of this interface are not required to be thread-safe
-        by default. Backends intended for multi-threaded or distributed use
+        by default. Backends intended for multi-threaded use
         must provide their own synchronization. Users should consult backend
         documentation before relying on concurrent scenarios.
 
@@ -170,7 +173,10 @@ class ConnectionBackend(abc.ABC):
 
 
 class InProcessBackend(ConnectionBackend):
-    """Task-safe in-memory backend."""
+    """Task-safe process-local socket registry.
+
+    Never serialize, proxy, or share sockets; use ``ClusterFanout`` across nodes.
+    """
 
     def __init__(self) -> None:
         self._websockets: dict[str, WebSocketLike] = {}
@@ -263,9 +269,9 @@ class InProcessBackend(ConnectionBackend):
 class WebSocketConnectionManager:
     """Track active WebSocket connections and group them into rooms.
 
-    WebSocketConnectionManager now delegates storage to a pluggable backend
-    so that deployments may swap in distributed implementations without
-    changing application code.
+    The pluggable backend supports alternative local storage and instrumentation.
+    Never serialize, proxy, or share live sockets across processes. Distributed
+    room delivery uses ``ClusterFanout``; local applications need no broker.
     """
 
     def __init__(self, backend: ConnectionBackend | None = None) -> None:
@@ -387,17 +393,24 @@ class WebSocketConnectionManager:
                 yield ws
 
 
-def install(app: typ.Any) -> None:  # ruff: ignore[any-type] - app duck-typing
+def install(app: typ.Any) -> WebSocketConnectionManager:  # ruff: ignore[any-type] - app duck-typing
     """Attach WebSocket connection management and routing utilities to the app.
 
-    Initializes and binds WebSocket-related attributes and methods to the given app,
-    enabling WebSocket route registration and resource instantiation. This function
-    is idempotent and will raise a RuntimeError if a partial installation is detected.
+    Returns the connection manager for every app. For apps that allow instance
+    attributes, it also binds the manager and deprecated route helpers onto the
+    app. Falcon's slotted ``falcon.asgi.App`` does not allow those attributes,
+    so callers should keep the returned manager and mount a ``WebSocketRouter``.
+    Installation remains idempotent for apps that support instance attributes.
 
     Parameters
     ----------
     app : typ.Any
         The application object to install WebSocket support on
+
+    Returns
+    -------
+    WebSocketConnectionManager
+        The manager installed on ``app`` or returned for a slotted app.
 
     Raises
     ------
@@ -415,19 +428,24 @@ def install(app: typ.Any) -> None:  # ruff: ignore[any-type] - app duck-typing
 
     # Idempotent: if all attributes are present, do nothing.
     if all(hasattr(app, name) for name in wanted):
-        return
+        return app.ws_connection_manager
 
     # If only some attributes are present, raise an error to avoid
     # leaving the app in an inconsistent state.
     if any(hasattr(app, name) for name in wanted):
         raise PartialWebSocketInstallError
 
-    app.ws_connection_manager = WebSocketConnectionManager()
+    conn_mgr = WebSocketConnectionManager()
+    if not hasattr(app, "__dict__"):
+        return conn_mgr
+
+    app.ws_connection_manager = conn_mgr
     routes: dict[str, RouteSpec] = {}
     app._websocket_routes = routes
     app.add_websocket_route = MethodType(_add_websocket_route, app)
     app.create_websocket_resource = MethodType(_create_websocket_resource, app)
     app._websocket_route_lock = ThreadLock()
+    return conn_mgr
 
 
 def _has_whitespace(text: str) -> bool:

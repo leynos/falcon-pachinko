@@ -65,12 +65,30 @@ When implementing changes, adhere to the following testing procedures:
 
 - **Use the Makefile.** The root `Makefile` defines targets for setting up the
   development environment, running linters, formatting, type checking, and
-  tests. Use `make build` to create the local virtual environment with both the
-  `dev` and `examples` dependency groups. Prefer these targets over invoking
+  tests. Use `make build` to create the local virtual environment with the
+  `dev` dependency group, synced from the committed `uv.lock`
+  (`uv sync --group dev --locked`). The `examples` and `testing` extras are
+  optional; install them only when needed. Use the `examples` extra with
+  `uv sync --group dev --extra examples` to run example programs and tests that
+  use example-only dependencies such as `aiosqlite`. Use the `testing` extra
+  with `uv sync --group dev --extra testing`. Prefer Make targets over invoking
   tools directly. When editing `Makefile`, run `mbake validate Makefile` to
-  confirm the syntax is correct. The `dev` dependency group includes all CLI
-  tooling such as linters and markdown checks, so `make build` installs
-  everything required for development and CI.
+  confirm the syntax is correct. `make build` installs the `dev` group's
+  uv-managed dependencies, but that is not the whole local toolchain:
+  `markdownlint-cli2` (installed with `npm`), `mdtablefix` and `nixie` come
+  from outside the project, so provision them separately. `ensure_tool` names
+  any that are missing when a gate needs one.
+
+- **Nose duplication gate:** `make lint` provisions the pinned nose detector
+  and runs the blocking production-source duplication check. Use
+  `make duplication-test` for its isolated CPython 3.14 helper tests; this
+  target also provisions the detector required by its real-binary acceptance
+  tests. Review complete families before adding a reasoned allow rule; do not
+  use broad or automatic suppressions. Add rules with
+  `make duplication-allow FIRST='path[::name]' [SECOND='path[::name]'] REASON='...'`;
+  these values must be Make command-line arguments. See the Developer Guide's
+  [nose code duplication gate](docs/developers-guide.md#nose-code-duplication-gate)
+  section for scope, ranking limits, stale entries, and POSIX/WSL requirements.
 
 - **Atomicity:** Aim for small, focused, atomic changes. Each change (and
   subsequent commit) should represent a single logical unit of work.

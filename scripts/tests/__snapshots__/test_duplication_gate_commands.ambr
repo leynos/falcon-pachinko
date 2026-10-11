@@ -1,0 +1,13 @@
+# serializer version: 1
+# name: TestGateCommands.test_check_reports_blocking_findings
+  tuple(
+    list([
+      'duplicate code: 1 unsuppressed family/families',
+      '  falcon_pachinko/a.py:1-20 ~ falcon_pachinko/b.py:30-49 beta (copy-paste, value 22.1)',
+      'Extract the shared logic at its owning layer, or record a reviewed exception:',
+      "  make duplication-allow FIRST='<path[::name]>' [SECOND='<path[::name]>'] REASON='<why this stays>'",
+      "For families with more members, repeat --second with the gate CLI: uv run --no-project --python 3.14 scripts/duplication_gate.py allow --first '<path[::name]>' --second '<path[::name]>' --second '<path[::name]>' --reason '<why this stays>'",
+    ]),
+    True,
+  )
+# ---

@@ -1,10 +1,45 @@
-"""Utilities for registering and validating message handlers."""
+"""Utilities for registering and validating message handlers.
+
+This module owns the reserved lifecycle-name contract. ``LIFECYCLE_CALLBACK_NAMES``
+is the single source of truth for the callbacks peers must never select, and
+``is_lifecycle_callback`` is the predicate both registration and conventional
+dispatch use. ``dispatcher.py`` and ``resource.py`` import both from here.
+
+Registration rejects a handler that implements a reserved lifecycle callback
+so that a peer-chosen tag can never reach ``on_connect``, ``on_accepted``,
+``on_disconnect`` or ``on_unhandled``. The check recognizes callbacks by name
+or identity against their defining class. Both sides of that comparison are
+reduced to the function they ultimately invoke, so a callback
+cannot hide behind a ``functools.partial``, a ``handles_message`` descriptor,
+a standard-library descriptor family (``functools.partialmethod``,
+``functools.singledispatchmethod``, ``functools.cached_property`` or
+``property``), a ``classmethod``/``staticmethod`` object, or the class-view
+those descriptors generate. A ``functools.wraps`` wrapper is *not* unwrapped:
+it is a distinct function that merely borrows metadata, so refusing it would
+misclassify an independent handler that happens to share a ``__name__``.
+
+A wrapper then, that *calls* a lifecycle method rather than *being* one reads
+as an ordinary handler:
+
+```python
+async def sneaky(self, ws, payload):  # not recognised as a callback
+    await self.on_disconnect(ws, 1000)
+```
+
+Registering such a wrapper from application code is the same act as calling
+the lifecycle method directly, so it confers no capability the application did
+not already have — it cannot be told apart from a legitimate handler that
+happens to consult lifecycle state. What the check does prevent is a
+conventional name or an alias *drifting* into the peer-reachable registry.
+"""
 
 from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
+import functools
 import inspect
+import types
 import typing as typ
 
 if typ.TYPE_CHECKING:
@@ -14,6 +49,7 @@ from .exceptions import (
     DuplicateHandlerRegistrationError,
     HandlerNotAsyncError,
     HandlerSignatureError,
+    ReservedHandlerRegistrationError,
     SignatureInspectionError,
 )
 
@@ -23,6 +59,183 @@ type Handler = cabc.Callable[..., cabc.Awaitable[None]]
 
 # ``self``, the connection, and the payload are the minimum handler parameters.
 _MIN_HANDLER_PARAMS = 3
+
+#: Lifecycle callbacks are driven by the connection lifecycle, never by peer
+#: frames. The conventional dispatcher refuses to resolve these names, and
+#: handler registration rejects callables that implement them. This is the
+#: single source of truth: ``dispatcher.py`` and ``resource.py`` both import it
+#: from here, so no circular import appears.
+LIFECYCLE_CALLBACK_NAMES: frozenset[str] = frozenset({
+    "on_connect",
+    "on_accepted",
+    "on_disconnect",
+    "on_unhandled",
+})
+
+
+def _descriptor_view_owner(view: object) -> object | None:
+    """Return the descriptor whose class-view ``view`` is, or ``None``.
+
+    Reading a ``functools.partialmethod`` or
+    ``functools.singledispatchmethod`` through the class yields a generated
+    wrapper rather than the descriptor stored in the class dictionary, and
+    neither wrapper reveals the reserved implementation on its own: a
+    ``partialmethod`` view is named ``_method``, and a
+    ``singledispatchmethod`` view is a plain function whose identity the
+    class does not hold. Both carry a backlink to their descriptor —
+    ``partialmethod`` through ``__partialmethod__`` (``_partialmethod`` on
+    Python 3.12), ``singledispatchmethod`` through the ``register`` bound
+    method's ``__self__`` — which is what lets the identity comparison reach
+    the wrapped coroutine again.
+
+    Returns
+    -------
+    object | None
+        The owning descriptor, or ``None`` when ``view`` is not such a view.
+    """
+    backlink = getattr(view, "__partialmethod__", None)
+    if backlink is None:
+        backlink = getattr(view, "_partialmethod", None)
+    if isinstance(backlink, functools.partialmethod):
+        return backlink
+    owner = getattr(getattr(view, "register", None), "__self__", None)
+    if isinstance(owner, functools.singledispatchmethod):
+        return owner
+    return None
+
+
+def _unwrap_handler(action: object) -> object:
+    """Peel the wrappers that hide the function a handler ultimately invokes.
+
+    A ``functools.partial`` exposes neither the wrapped function's
+    ``__name__`` nor its identity. A ``_HandlesMessageDescriptor`` is the
+    object ``@handles_message`` returns; it is not callable itself until
+    ``__get__`` binds it, and a class may store it under any name, including
+    a reserved one. The standard-library descriptor families —
+    ``functools.partialmethod``, ``functools.singledispatchmethod`` and
+    ``functools.cached_property``, which hold the function in ``func``, and
+    ``property``, which holds it in ``fget`` — hide the coroutine the same
+    way, and their class-views hide it behind a generated wrapper that
+    :func:`_descriptor_view_owner` unwraps. A ``classmethod`` or
+    ``staticmethod`` object stored in the class dictionary is a descriptor
+    rather than the coroutine, so comparing it directly with a plain alias of
+    the same function always fails; both expose the underlying function as
+    ``__func__``. A bound method — the result of reading a ``classmethod``
+    through its class, or any method through an instance — announces itself
+    through ``__func__`` for the same reason: a caller who registers
+    ``Resource.on_disconnect`` passes the bound form, not the descriptor.
+
+    Returns
+    -------
+    object
+        The innermost callable, or ``action`` unchanged when it is not wrapped.
+    """
+    while True:
+        match action:
+            case functools.partial() | _HandlesMessageDescriptor():
+                action = action.func
+            case (
+                functools.partialmethod()
+                | functools.singledispatchmethod()
+                | functools.cached_property()
+            ):
+                action = action.func
+            case property():
+                action = action.fget
+            case classmethod() | staticmethod() | types.MethodType():
+                action = action.__func__
+            case _:
+                owner = _descriptor_view_owner(action)
+                if owner is None:
+                    return action
+                action = owner
+
+
+def handler_qualname(action: object) -> str:
+    """Return the name a refusal message should use for ``action``.
+
+    The name is read from the unwrapped callable so that the message points
+    at the lifecycle function a user registered, not at the generated wrapper
+    that happened to carry it: a bound ``functools.partialmethod`` view is
+    named ``_method``, and a ``functools.partial`` has no name at all.
+
+    Returns
+    -------
+    str
+        The unwrapped callable's qualified name, falling back to the original
+        action's qualified name and then to its repr.
+    """
+    resolved = _unwrap_handler(action)
+    return (
+        getattr(resolved, "__qualname__", None)
+        or getattr(action, "__qualname__", None)
+        or repr(action)
+    )
+
+
+def _has_reserved_name(action: object) -> bool:
+    """Return whether ``action`` carries a reserved lifecycle ``__name__``.
+
+    This is the half of :func:`is_lifecycle_callback` that needs no owner, so
+    a decorator can refuse a lifecycle callback at decoration time, before the
+    class it will live on exists. Identity against the owner's MRO — which
+    catches aliases and rebinding — still waits for class creation.
+
+    Returns
+    -------
+    bool
+        ``True`` when the unwrapped callable is named for a reserved callback.
+    """
+    return (
+        getattr(_unwrap_handler(action), "__name__", None) in LIFECYCLE_CALLBACK_NAMES
+    )
+
+
+def is_lifecycle_callback(owner: type, action: object) -> bool:
+    """Return whether ``action`` implements a reserved lifecycle callback.
+
+    The callable's own name is checked first, which catches a subclass that
+    rebinds a reserved method to a differently named function. Identity
+    against each reserved name in ``owner``'s MRO is checked second, which
+    catches an alias such as ``on_bye = on_disconnect`` or a function copied
+    onto the class under a new name.
+
+    Both sides of every comparison are unwrapped, because either may be
+    wrapped. ``functools.partial`` hides the wrapped function's ``__name__``
+    and identity. A ``_HandlesMessageDescriptor`` under a reserved name — for
+    example ``on_disconnect = handles_message("bye")(cleanup)`` — hides the
+    function that ``__set_name__`` registers, so comparing the descriptor
+    against a registered function would both miss the reserved name and fail
+    the identity test. The standard-library descriptor families hold the
+    coroutine in ``func`` or ``fget``, and their class-views hold it in a
+    generated wrapper with a backlink to the descriptor, so an alias of that
+    coroutine under a neutral name would escape an identity test that compared
+    the objects as-is. A ``classmethod`` or ``staticmethod`` object stored in
+    the class dictionary hides the coroutine behind ``__func__`` for the same
+    reason.
+
+    Parameters
+    ----------
+    owner : type
+        The class whose MRO supplies the reserved entries to compare against.
+    action : object
+        The candidate callable.
+
+    Returns
+    -------
+    bool
+        ``True`` when the callable is a reserved lifecycle callback.
+    """
+    resolved = _unwrap_handler(action)
+    if not callable(resolved):
+        return False
+    if _has_reserved_name(resolved):
+        return True
+    return any(
+        resolved is _unwrap_handler(base.__dict__.get(name))
+        for base in owner.__mro__
+        for name in LIFECYCLE_CALLBACK_NAMES
+    )
 
 
 class _BindableHandler(typ.Protocol):
@@ -67,7 +280,25 @@ def select_payload_param(
 
 
 def get_payload_type(func: Handler) -> type | None:
-    """Validate ``func``'s signature and return the payload annotation."""
+    """Validate ``func``'s signature and return its resolved annotation unchanged.
+
+    The annotation is returned without class validation.
+    An invalid payload signature raises ``HandlerSignatureError``.
+
+    Returns
+    -------
+    type | None
+        The resolved payload annotation, or ``None`` when it is unavailable.
+
+    Raises
+    ------
+    HandlerNotAsyncError
+        If ``func`` is not a coroutine function.
+    SignatureInspectionError
+        If Python cannot inspect ``func``'s signature.
+    HandlerSignatureError
+        If ``func`` does not identify exactly one payload parameter.
+    """  # ruff: ignore[docstring-extraneous-exception] - propagated
     func_name: str = getattr(func, "__qualname__", repr(func))
     if not inspect.iscoroutinefunction(func):
         raise HandlerNotAsyncError(func_name)
@@ -79,10 +310,13 @@ def get_payload_type(func: Handler) -> type | None:
 
     param = select_payload_param(sig, func_name=func_name)
     try:
-        hints: dict[str, type] = typ.get_type_hints(func)
+        hints: dict[str, object] = typ.get_type_hints(func)
     except (NameError, AttributeError):
         hints = {}
-    return hints.get(param.name)
+    # cast: ``get_type_hints`` may return non-class typing objects, including
+    # unions and parameterized generics. This preserves the ``type | None``
+    # contract expected by ``HandlerInfo.payload_type`` and ``schema.py``.
+    return typ.cast("type | None", hints.get(param.name))
 
 
 class _HandlesMessageDescriptor:
@@ -91,6 +325,13 @@ class _HandlesMessageDescriptor:
     def __init__(
         self, message_type: str, func: Handler, *, strict: bool = True
     ) -> None:
+        # The reserved check runs before ``get_payload_type`` so that a
+        # lifecycle callback is refused for what it is, not for the signature
+        # it happens to have. ``on_connect(self, req, ws, **params)`` has two
+        # annotated parameters after ``self``, which signature validation
+        # would reject as ambiguous before the reserved name was considered.
+        if _has_reserved_name(func):
+            raise ReservedHandlerRegistrationError(message_type, handler_qualname(func))
         self.message_type = message_type
         self.func = func
         self.payload_type = get_payload_type(func)
@@ -107,8 +348,7 @@ class _HandlesMessageDescriptor:
         typed_owner = typ.cast("type[WebSocketResource]", owner)
         current = typed_owner.__dict__.get("handlers")
         if current is None:
-            current = {}
-            typed_owner.handlers = current
+            typed_owner.handlers = current = {}
         if self.message_type in current:
             msg = (
                 f"Duplicate handler for message type {self.message_type!r} "

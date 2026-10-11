@@ -22,8 +22,12 @@ jobs:
     # reach Ubicloud. Keep the continuation at this indent: a deeper one
     # keeps its line break and puts a newline inside the expression, which
     # GitHub evaluates anyway.
+    # Dependabot pull requests run on the hosted pool too (free on a public
+    # repository). The author is tested, not the actor, which changes when
+    # someone else pushes to the branch.
     runs-on: >-
-      ${{ github.event.pull_request.head.repo.fork
+      ${{ (github.event.pull_request.head.repo.fork
+      || github.event.pull_request.user.login == 'dependabot[bot]')
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     # Ubicloud runners register as just-in-time self-hosted runners, so
     # GitHub's six-hour limit does not apply and the lane needs its own
@@ -42,7 +46,7 @@ jobs:
           python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.2.0
+        uses: astral-sh/setup-uv@v10.3.2
 
       - name: Install mdtablefix
         # `make check-fmt` runs `mdtablefix --check` with the Git selection and
@@ -50,29 +54,35 @@ jobs:
         # `--git`. The action
         # installs a prebuilt release through a hardened cargo-binstall rather
         # than building from source.
-        uses: leynos/shared-actions/.github/actions/install-mdtablefix@c17d433f99daa94e53ca5eb566088518a312cb71
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@8e6a325765ba382691d1b1c65fcccf1fc1d1b00c
         with:
           version: "0.6.1"
 
-      # `make lint` runs the classic Pylint checks on PyPy 8.0.0's Python 3.12
-      # build, which it provisions into .uv-python from
-      # tools/pypy-downloads.json. That manifest names the exact build and its
-      # SHA-256, so keying on it means a pin change never restores a stale
-      # interpreter.
+      # Make provisions PyPy 3.12 and the isolated gate's CPython 3.14 into
+      # .uv-python. Keying on the Makefile and PyPy manifest invalidates this
+      # cache when either interpreter pin changes.
       - name: Cache PyPy lint interpreter
         uses: actions/cache@v6
         with:
           path: .uv-python
-          key: pypy-lint-interpreter-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/pypy-downloads.json') }}
+          key: lint-interpreters-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'tools/pypy-downloads.json') }}
 
-      # The Pylint, Astroid, and df12-python-lints tool environments live in
-      # the Makefile's .uv-cache. Their pins are in the Makefile and the df12
-      # rcfile, so the key covers those files as well as the interpreter.
+      # The Pylint, Astroid, df12, nose-gate and isolated helper-test tools live
+      # in .uv-cache. Their pins and PEP 723 metadata are covered by these
+      # source and configuration inputs.
       - name: Cache lint tool environments
         uses: actions/cache@v6
         with:
           path: .uv-cache
-          key: lint-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'pylintrc-df12.toml', 'tools/pypy-downloads.json') }}
+          key: lint-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'pylintrc-df12.toml', 'tools/pypy-downloads.json', 'pyproject.toml', 'scripts/**') }}
+
+      # A cache hit is checked by `make install-nose` before the gate uses it.
+      # The digest manifest and configured version both participate in the key.
+      - name: Cache pinned nose release binary
+        uses: actions/cache@v6
+        with:
+          path: .tools/nose
+          key: nose-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pyproject.toml', 'scripts/install_nose.py', 'tools/nose-release-digests.json') }}
 
       - name: Check spelling
         run: make spelling
@@ -100,6 +110,9 @@ jobs:
       # CPython 3.14. Each Pylint pass verifies its interpreter first.
       - name: Run linters
         run: make lint
+
+      - name: Test nose duplication gate
+        run: make duplication-test
 
       # Drive the real PyPy and CPython Pylint passes through the Makefile. The
       # tests never skip, so an unprovisioned interpreter fails this step
@@ -133,7 +146,7 @@ jobs:
       # the work and the CodeScene upload for the same commit.
       - name: Generate coverage
         if: github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/generate-coverage@c17d433f99daa94e53ca5eb566088518a312cb71
+        uses: leynos/shared-actions/.github/actions/generate-coverage@8e6a325765ba382691d1b1c65fcccf1fc1d1b00c
         with:
           output-path: coverage.xml
           format: cobertura
@@ -151,3 +164,78 @@ jobs:
           # no scanner over this file's steps can see, so declining that
           # archive is the only way the boundary is observable here.
           publish-artefact: 'false'
+
+  falcon-minimum:
+    # This lane follows the same fork and Dependabot runner routing as the
+    # main CI lane. Fork pull requests cannot obtain an Ubicloud runner.
+    runs-on: >-
+      ${{ (github.event.pull_request.head.repo.fork
+      || github.event.pull_request.user.login == 'dependabot[bot]')
+      && 'ubuntu-latest' || 'ubicloud-standard-2' }}
+    # The uncovered full suite needs more headroom than the measured main CI
+    # lane; see the runner placement section of the developer guide.
+    timeout-minutes: 30
+    env:
+      FALCON_MINIMUM_VERSION: "4.0.0"
+      UV_PYTHON: '3.13'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
+
+      - name: Install locked environment
+        run: make build
+
+      - name: Install Falcon minimum version
+        run: uv pip install "falcon==${FALCON_MINIMUM_VERSION}"
+
+      - name: Verify Falcon minimum version
+        run: >-
+          uv run --no-sync python -c
+          "import importlib.metadata, os, sys; actual =
+          importlib.metadata.version('falcon'); expected =
+          os.environ['FALCON_MINIMUM_VERSION']; sys.exit(0 if actual == expected else 1)"
+
+      - name: Run full test suite
+        run: uv run --no-sync pytest -v
+
+  build-dist:
+    runs-on: >-
+      ${{ (github.event.pull_request.head.repo.fork
+      || github.event.pull_request.user.login == 'dependabot[bot]')
+      && 'ubuntu-latest' || 'ubicloud-standard-2' }}
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/pure-python-wheel
+        with:
+          python-version: '3.13'
+      - name: Require exactly one sdist to travel with the wheel
+        shell: bash
+        env:
+          WHEEL_DIR: dist
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          sdists=("${WHEEL_DIR}"/*.tar.gz)
+          wheels=("${WHEEL_DIR}"/*.whl)
+          if [ "${#sdists[@]}" -ne 1 ]; then
+            echo "Expected exactly one source distribution." >&2
+            exit 1
+          fi
+          if [ "${#wheels[@]}" -ne 1 ]; then
+            echo "Expected exactly one wheel." >&2
+            exit 1
+          fi

@@ -1,33 +1,56 @@
-name: Build Pure Python Wheel
-description: Builds a pure Python wheel using UV and uploads it as an artefact.
+name: Build pure Python distributions
+description: Build an sdist and a wheel from it, then upload both.
 inputs:
   python-version:
     description: Python version to set up
     required: true
   out-dir:
-    description: Directory to place built wheel
-    required: false
+    description: Directory for built distributions
     default: dist
   artifact-name:
     description: Name of the uploaded artefact
-    required: true
+    default: wheels-pure
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         fetch-depth: 0
+        persist-credentials: false
     - name: Set up Python
-      uses: actions/setup-python@v7
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
         python-version: ${{ inputs.python-version }}
     - name: Install uv
-      uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
-    - name: Build wheel
+      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+    - name: Build sdist and wheel
       shell: bash
-      run: uv build --wheel --out-dir ${{ inputs.out-dir }}
-    - name: Upload wheel artefact
-      uses: actions/upload-artifact@v7
+      env:
+        OUT_DIR: ${{ inputs.out-dir }}
+      run: |
+        set -euo pipefail
+        uv build --out-dir "$OUT_DIR"
+    - name: Stage distributions
+      shell: bash
+      env:
+        OUT_DIR: ${{ inputs.out-dir }}
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        files=("$OUT_DIR"/*.whl "$OUT_DIR"/*.tar.gz)
+        mkdir -p release-dist
+        if [ "${#files[@]}" -eq 0 ]; then
+          echo "No distributions found." >&2
+          exit 1
+        fi
+        if [ "$(realpath "$OUT_DIR")" != "$(realpath release-dist)" ]; then
+          cp -- "${files[@]}" release-dist/
+        fi
+    - name: Upload sdist and wheel artefact
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.artifact-name }}
-        path: ${{ inputs.out-dir }}/*.whl
+        path: |
+          release-dist/*.whl
+          release-dist/*.tar.gz
+        if-no-files-found: error

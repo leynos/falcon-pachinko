@@ -55,6 +55,15 @@ GITHUB_HOSTED_LINUX: typ.Final[str] = "ubuntu-latest"
 #: because the narrow mutation a contract must refuse swaps it for a sibling
 #: field of the same object.
 FORK_FIELD: typ.Final[str] = "github.event.pull_request.head.repo.fork"
+#: The pull request's author, not ``github.actor``: the actor is whoever
+#: triggered the run, so a person pushing to a Dependabot branch would flip the
+#: runner. Hosted minutes cost nothing on a public repository, so Dependabot's
+#: pull requests take the fork arm too.
+DEPENDABOT_FIELD: typ.Final[str] = (
+    "github.event.pull_request.user.login == 'dependabot[bot]'"
+)
+#: The exact guard the fork-fallback lane branches on.
+HOSTED_GUARD: typ.Final[str] = f"({FORK_FIELD} || {DEPENDABOT_FIELD})"
 
 #: Suffixes GitHub reads as workflow documents.
 WORKFLOW_SUFFIXES: typ.Final[frozenset[str]] = frozenset({".yml", ".yaml"})
