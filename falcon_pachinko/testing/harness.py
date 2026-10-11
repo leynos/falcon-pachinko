@@ -171,6 +171,59 @@ class SimulatorRouterHarness:
             return path
         return path if self._mount_prefix == "/" else f"{self._mount_prefix}{path}"
 
+    async def _start_connection(
+        self,
+        path: str,
+        *,
+        initial_inbound: cabc.Iterable[tuple[object, FrameKind]] | None,
+        headers: cabc.Mapping[str, str] | None,
+    ) -> _ConnectionSession:
+        """Create a simulator session and wait until the router is ready."""
+        simulator = _HarnessSimulator()
+        self._pending_simulator = simulator
+        if initial_inbound is not None:
+            for payload, kind in initial_inbound:
+                await simulator.push_message(payload, kind=kind)
+        request_path = self._compose_path(path)
+        request = _TestRequest(
+            path=request_path,
+            path_template=self._mount_prefix,
+            headers={key.lower(): value for key, value in (headers or {}).items()},
+        )
+        original = _OriginalWebSocket()
+        router_task = asyncio.create_task(self.router.on_websocket(request, original))
+        session = _ConnectionSession(
+            request_path, simulator, request, original, router_task
+        )
+        try:
+            await asyncio.wait_for(
+                self._wait_until_ready(simulator, router_task), timeout=5
+            )
+        except (Exception, asyncio.CancelledError):
+            await self._rollback_startup(session)
+            raise
+        return session
+
+    async def _rollback_startup(self, session: _ConnectionSession) -> None:
+        """Clean up a failed setup while preserving its original exception."""
+        self._pending_simulator = None
+        with suppress(Exception, asyncio.CancelledError):
+            await session.simulator.close()
+        with suppress(Exception, asyncio.CancelledError):
+            if not session.websocket.closed:
+                await session.websocket.close()
+        with suppress(Exception, asyncio.CancelledError):
+            await self._await_router_task(session.router_task)
+
+    async def _finish_connection(self, session: _ConnectionSession) -> None:
+        """Close test sockets and await the router's session task."""
+        self._pending_simulator = None
+        if not session.simulator.closed:
+            await session.simulator.close()
+        if not session.websocket.closed:
+            await session.websocket.close()
+        await self._await_router_task(session.router_task)
+
     @asynccontextmanager
     async def connect(
         self,
@@ -187,60 +240,32 @@ class SimulatorRouterHarness:
             A helper bound to the simulator serving ``path``. Both the
             simulator and the underlying websocket stub are closed on exit.
 
+        Cancellation during setup or session waiting is propagated after
+        cleanup.
+
         Raises
         ------
         RuntimeError
             If the router has not been mounted yet.
-        asyncio.CancelledError
-            If connection setup or the session wait is cancelled.
         """
         if not self._mounted:
             msg = "router must be mounted before establishing connections"
             raise RuntimeError(msg)
 
-        simulator = _HarnessSimulator()
-        self._pending_simulator = simulator
-        if initial_inbound is not None:
-            for payload, kind in initial_inbound:
-                await simulator.push_message(payload, kind=kind)
-        request_path = self._compose_path(path)
-        request = _TestRequest(
-            path=request_path,
-            path_template=self._mount_prefix,
-            headers={key.lower(): value for key, value in (headers or {}).items()},
+        session = await self._start_connection(
+            path, initial_inbound=initial_inbound, headers=headers
         )
-        original = _OriginalWebSocket()
-        router_task = asyncio.create_task(self.router.on_websocket(request, original))
-        try:
-            await asyncio.wait_for(
-                self._wait_until_ready(simulator, router_task), timeout=5
-            )
-        except (Exception, asyncio.CancelledError):
-            self._pending_simulator = None
-            with suppress(Exception, asyncio.CancelledError):
-                await simulator.close()
-            with suppress(Exception, asyncio.CancelledError):
-                if not original.closed:
-                    await original.close()
-            with suppress(Exception, asyncio.CancelledError):
-                await self._await_router_task(router_task)
-            raise
 
         try:
             yield SimulatorConnection(
-                path=request_path,
+                path=session.path,
                 router=self.router,
-                simulator=simulator,
-                request=request,
-                websocket=original,
+                simulator=session.simulator,
+                request=session.request,
+                websocket=session.websocket,
             )
         finally:
-            self._pending_simulator = None
-            if not simulator.closed:
-                await simulator.close()
-            if not original.closed:
-                await original.close()
-            await self._await_router_task(router_task)
+            await self._finish_connection(session)
 
     @staticmethod
     async def _wait_until_ready(
@@ -263,3 +288,14 @@ class SimulatorRouterHarness:
                 await asyncio.wait_for(router_task, timeout=5)
             msg = "router session did not stop after the simulator closed"
             raise TimeoutError(msg) from exc
+
+
+@dc.dataclass(slots=True)
+class _ConnectionSession:
+    """Resources owned while one simulator-backed router session is active."""
+
+    path: str
+    simulator: WebSocketSimulator
+    request: object
+    websocket: _OriginalWebSocket
+    router_task: asyncio.Task[None]

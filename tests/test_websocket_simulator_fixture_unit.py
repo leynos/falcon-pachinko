@@ -186,46 +186,30 @@ class TestWebSocketSimulatorFixture:
             "the underlying websocket must remain accepted"
         )
 
-    async def test_readiness_is_signalled_when_accept_fails(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("operation_name", ["accept", "close"])
+    async def test_readiness_is_signalled_when_operation_fails(
+        self, monkeypatch: pytest.MonkeyPatch, operation_name: str
     ) -> None:
-        """A failed accept wakes harness readiness waiters with its error."""
-        accept_error = RuntimeError()
+        """A failed handshake operation wakes readiness waiters with its error."""
+        operation_error = RuntimeError()
 
-        def fail_accept(self: WebSocketSimulator, *_: object) -> asyncio.Future[None]:
+        def fail_operation(
+            self: WebSocketSimulator, *_: object
+        ) -> asyncio.Future[None]:
             del self
-            return _failed_future(accept_error)
+            return _failed_future(operation_error)
 
-        monkeypatch.setattr(WebSocketSimulator, "accept", fail_accept)
+        monkeypatch.setattr(WebSocketSimulator, operation_name, fail_operation)
         simulator = _HarnessSimulator()
 
         with pytest.raises(RuntimeError) as caught:
-            await simulator.accept()
+            await getattr(simulator, operation_name)()
 
-        assert caught.value is accept_error, "the accept failure must be preserved"
-        assert simulator.ready_event.is_set(), (
-            "accept failures must still wake readiness waiters"
+        assert caught.value is operation_error, (
+            f"the {operation_name} failure must be preserved"
         )
-
-    async def test_readiness_is_signalled_when_close_fails(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A failed close wakes harness readiness waiters with its error."""
-        close_error = RuntimeError()
-
-        def fail_close(self: WebSocketSimulator, *_: object) -> asyncio.Future[None]:
-            del self
-            return _failed_future(close_error)
-
-        monkeypatch.setattr(WebSocketSimulator, "close", fail_close)
-        simulator = _HarnessSimulator()
-
-        with pytest.raises(RuntimeError) as caught:
-            await simulator.close()
-
-        assert caught.value is close_error, "the close failure must be preserved"
         assert simulator.ready_event.is_set(), (
-            "close failures must still wake readiness waiters"
+            f"{operation_name} failures must still wake readiness waiters"
         )
 
     async def test_readiness_failure_survives_router_cleanup_timeout(

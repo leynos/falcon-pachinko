@@ -86,26 +86,40 @@ def _launch_server(
         )
     )
     server_task = event_loop.create_task(server.serve())
+    event_loop.run_until_complete(
+        asyncio.wait_for(
+            _wait_until_started(event_loop, server, server_task), timeout=10
+        )
+    )
+    return server, server_task, _resolve_server_url(server)
 
-    async def wait_until_started() -> None:
-        deadline = event_loop.time() + 10
-        while not server.started:
-            if server_task.done():
-                await server_task
-                msg = "Uvicorn stopped before its live server started"
-                raise RuntimeError(msg)
-            if event_loop.time() >= deadline:
-                msg = "Uvicorn live server did not start within 10 seconds"
-                raise TimeoutError(msg)
-            await asyncio.sleep(0.01)
 
-    event_loop.run_until_complete(asyncio.wait_for(wait_until_started(), timeout=10))
+async def _wait_until_started(
+    event_loop: asyncio.AbstractEventLoop,
+    server: _SignalFreeServer,
+    server_task: asyncio.Task[None],
+) -> None:
+    """Wait for Uvicorn startup while surfacing early server-task failures."""
+    deadline = event_loop.time() + 10
+    while not server.started:
+        if server_task.done():
+            await server_task
+            msg = "Uvicorn stopped before its live server started"
+            raise RuntimeError(msg)
+        if event_loop.time() >= deadline:
+            msg = "Uvicorn live server did not start within 10 seconds"
+            raise TimeoutError(msg)
+        await asyncio.sleep(0.01)
+
+
+def _resolve_server_url(server: _SignalFreeServer) -> str:
+    """Return the WebSocket URL for Uvicorn's first bound socket."""
     bound_servers = server.servers
     if not bound_servers or not bound_servers[0].sockets:
         msg = "Uvicorn started without exposing a bound server socket"
         raise RuntimeError(msg)
     host, port, *_ = bound_servers[0].sockets[0].getsockname()
-    return server, server_task, f"ws://{host}:{port}"
+    return f"ws://{host}:{port}"
 
 
 def _start_live_context(
