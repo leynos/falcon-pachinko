@@ -114,9 +114,9 @@ sequenceDiagram
     WebSocketRouter->>WebSocketResource: on_disconnect(ws, close_code)
 ```
 
-**Figure: Falcon routes a WebSocket connection to the router, which accepts
-the session, dispatches each raw frame, and calls the resource's disconnect
-hook when the session ends.**
+**Figure: Falcon routes a WebSocket connection to the router, which accepts the
+session, dispatches each raw frame, and calls the resource's disconnect hook
+when the session ends.**
 
 This implemented contract supersedes the future-tense responder and receive
 loop descriptions in the original proposal below.
