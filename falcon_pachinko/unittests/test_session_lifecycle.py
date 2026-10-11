@@ -350,11 +350,7 @@ async def test_after_connect_failure_after_approval_runs_cleanup() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expose_state", [True, False])
-async def test_approval_without_acceptance_skips_receive_and_cleans_up(
-    *,
-    expose_state: bool,
-) -> None:
+async def test_approval_without_acceptance_skips_receive_and_cleans_up() -> None:
     """Approval promises cleanup even if a transport never becomes accepted."""
 
     class UnacceptedSocket(_SessionSocket):
@@ -363,9 +359,6 @@ async def test_approval_without_acceptance_skips_receive_and_cleans_up(
 
     router = _router()
     socket = UnacceptedSocket(b'{"type":"unaccepted"}')
-    if not expose_state:
-        del socket.unaccepted
-
     await router.on_websocket(
         typ.cast("typ.Any", _request()), typ.cast("typ.Any", socket)
     )

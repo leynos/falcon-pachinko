@@ -116,6 +116,21 @@ This includes rejection by calling `ws.close()` during `on_connect`. Accepting
 and then closing during `on_connect` still promises cleanup. An approved socket
 that never becomes accepted is cleaned up with `1011` without receiving frames.
 
+Native Falcon sockets are wrapped in a `SessionWebSocket` proxy. Public methods
+and attribute reads are forwarded, but the proxy has its own identity:
+`isinstance(ws, falcon.asgi.WebSocket)` is false, and attributes assigned to
+`ws` are stored on the proxy. Its `unaccepted` property retains acceptance
+history, including after close, rather than mirroring Falcon's post-rejection
+state. Resources and connection managers should use the supplied socket's
+capabilities rather than rely on concrete type or identity checks.
+
+Custom transports keep the existing `WebSocketLike` protocol. Transports with an
+`unaccepted` property retain its authoritative state checks. Transports
+without it receive the same proxy treatment: missing state is initially
+unknown, and successful calls to `accept()` through the supplied socket
+establish the cleanup promise. Resource-owned acceptance is tracked even if
+`on_connect` then returns a falsey result or raises.
+
 | Session ending                                    | `close_code` passed to `on_disconnect`                                                               |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | Client sends a close frame                        | The close code Falcon reports                                                                        |

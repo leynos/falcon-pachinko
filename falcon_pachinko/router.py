@@ -19,7 +19,6 @@ import threading
 import typing as typ
 
 import falcon
-import falcon.asgi
 
 from ._session import (
     ABNORMAL_CLOSURE,
@@ -32,7 +31,7 @@ from ._session_cleanup import (
     raise_session_failures,
     run_shielded_cleanup,
 )
-from ._session_socket import SessionWebSocket, receive_frame
+from ._session_socket import receive_frame, track_session_socket
 from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
 
@@ -574,12 +573,7 @@ class WebSocketRouter:
         """Run setup, receive frames, and finish the accepted session."""
         session = SessionState()
         dispatch.session = session
-        if isinstance(dispatch.ws, falcon.asgi.WebSocket):
-            # Delegated native methods preserve the protocol, but static structural
-            # typing cannot infer their signatures through __getattr__.
-            dispatch.ws = typ.cast(
-                "WebSocketLike", SessionWebSocket(dispatch.ws, session)
-            )
+        dispatch.ws = track_session_socket(dispatch.ws, session)
         hook_manager.bind_session(session)
         context: HookContext | None = None
         primary_error: BaseException | None = None

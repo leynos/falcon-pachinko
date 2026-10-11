@@ -159,13 +159,17 @@ media values are encoded as JSON with `msgspec`; values that cannot be encoded
 fail the session as an unexpected error.
 
 Native Falcon sockets use a forwarding adapter that records acceptance history.
-Falcon's `unaccepted` property also becomes false after rejecting a handshake
-with `close()`, so a post-close probe alone cannot establish whether cleanup
-was promised. The adapter retains acceptance when the resource accepts and
-closes during setup, and leaves a pre-accept rejection outside the cleanup
-promise. Injected simulators retain their identity and expose their own
-acceptance state. An approved socket that never becomes accepted skips receives
-and cleans up with `1011`.
+The same adapter tracks custom transports without an `unaccepted` property:
+initial missing state is not evidence of acceptance, but a completed `accept()`
+call is. This keeps the four-method `WebSocketLike` protocol compatible without
+inventing acceptance for transports whose explicit probe remains true. Falcon's
+`unaccepted` property also becomes false after rejecting a handshake with
+`close()`, so a post-close probe alone cannot establish whether cleanup was
+promised. The adapter retains acceptance when the resource accepts and closes
+during setup, and leaves a pre-accept rejection outside the cleanup promise.
+Injected simulators retain their identity and expose their own acceptance
+state. An approved socket that never becomes accepted skips receives and cleans
+up with `1011`.
 
 The receive loop ends on Falcon's `WebSocketDisconnected`, retaining its close
 code when present and using `1006` when it is absent. An ordinary handler or
