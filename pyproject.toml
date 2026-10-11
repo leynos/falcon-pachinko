@@ -33,7 +33,6 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-bdd",
-    "uvicorn>=0.29",
     "ruff",
     "pyright[nodejs]",
     "uvicorn>=0.34,<1",
