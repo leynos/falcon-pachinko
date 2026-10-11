@@ -165,6 +165,40 @@ async def test_missing_disconnect_code_uses_abnormal_closure() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["on_connect", "handler"])
+async def test_resource_observed_disconnect_retains_transport_code(stage: str) -> None:
+    """A disconnect raised during resource work is a transport ending."""
+
+    class DisconnectedResource(_RecordingResource):
+        async def on_connect(
+            self, req: falcon.Request, ws: object, **params: object
+        ) -> bool:
+            del req, params
+            socket = typ.cast("_SessionSocket", ws)
+            await socket.accept()
+            if stage == "on_connect":
+                await socket.close(4005)
+                raise falcon.WebSocketDisconnected(4005)
+            return True
+
+        async def on_unhandled(self, ws: object, message: str | bytes) -> None:
+            del message
+            await typ.cast("_SessionSocket", ws).close(4005)
+            raise falcon.WebSocketDisconnected(4005)
+
+    router = _router(DisconnectedResource)
+    socket = _SessionSocket(b'{"type":"close"}')
+
+    await router.on_websocket(
+        typ.cast("typ.Any", _request()), typ.cast("typ.Any", socket)
+    )
+
+    assert DisconnectedResource.instances[0].disconnect_codes == [4005], (
+        "resource-observed disconnects must preserve their transport code"
+    )
+
+
+@pytest.mark.asyncio
 async def test_accepted_on_connect_failure_runs_cleanup_and_preserves_failure() -> None:
     """Acceptance inside on_connect establishes cleanup even when it raises."""
     primary = ValueError("setup failed")
@@ -188,6 +222,83 @@ async def test_accepted_on_connect_failure_runs_cleanup_and_preserves_failure() 
     assert error.value is primary, _ASSERTION_FAILURE
     assert AcceptThenFail.instances[0].disconnect_codes == [1011], _ASSERTION_FAILURE
     assert socket.close_codes == [1011], _ASSERTION_FAILURE
+
+
+@pytest.mark.asyncio
+async def test_accepted_on_connect_failure_and_after_hook_failure_are_grouped() -> None:
+    """An after-connect error cannot hide the original accepted setup failure."""
+    primary = ValueError("setup failed")
+    hook_error = RuntimeError("after-connect failed")
+
+    class AcceptThenFail(_RecordingResource):
+        async def on_connect(
+            self, req: falcon.Request, ws: object, **params: object
+        ) -> bool:
+            del req, params
+            await typ.cast("_SessionSocket", ws).accept()
+            raise primary
+
+    def fail_after_connect(context: object) -> None:
+        del context
+        raise hook_error
+
+    router = _router(AcceptThenFail)
+    router.global_hooks.add(HookEvent.AFTER_CONNECT, fail_after_connect)
+    socket = _SessionSocket()
+
+    with pytest.raises(ExceptionGroup, match="session") as raised:
+        await router.on_websocket(
+            typ.cast("typ.Any", _request()), typ.cast("typ.Any", socket)
+        )
+
+    assert raised.value.exceptions == (primary, hook_error), (
+        "setup failures must remain visible before the after-connect failure"
+    )
+    assert AcceptThenFail.instances[0].disconnect_codes == [1011], (
+        "failed setup must still execute the promised cleanup"
+    )
+
+
+@pytest.mark.asyncio
+async def test_after_connect_cancellation_reports_original_setup_failure() -> None:
+    """Cancellation stays bare while the original setup failure is reported."""
+    primary = ValueError("setup failed")
+    cancellation = asyncio.CancelledError("after-connect cancelled")
+
+    class AcceptThenFail(_RecordingResource):
+        async def on_connect(
+            self, req: falcon.Request, ws: object, **params: object
+        ) -> bool:
+            del req, params
+            await typ.cast("_SessionSocket", ws).accept()
+            raise primary
+
+    def cancel_after_connect(context: object) -> None:
+        del context
+        raise cancellation
+
+    router = _router(AcceptThenFail)
+    router.global_hooks.add(HookEvent.AFTER_CONNECT, cancel_after_connect)
+    socket = _SessionSocket()
+    loop = asyncio.get_running_loop()
+    reported: list[object] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(
+        lambda _loop, context: reported.append(context.get("exception"))
+    )
+    try:
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await router.on_websocket(
+                typ.cast("typ.Any", _request()), typ.cast("typ.Any", socket)
+            )
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    assert raised.value is cancellation, "the original cancellation must stay bare"
+    assert reported == [primary], "the original setup failure must stay observable"
+    assert AcceptThenFail.instances[0].disconnect_codes == [1001], (
+        "setup cancellation must still execute the promised cleanup"
+    )
 
 
 @pytest.mark.asyncio
@@ -239,6 +350,33 @@ async def test_after_connect_failure_after_approval_runs_cleanup() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("expose_state", [True, False])
+async def test_approval_without_acceptance_skips_receive_and_cleans_up(
+    *,
+    expose_state: bool,
+) -> None:
+    """Approval promises cleanup even if a transport never becomes accepted."""
+
+    class UnacceptedSocket(_SessionSocket):
+        async def accept(self, subprotocol: str | None = None) -> None:
+            del subprotocol
+
+    router = _router()
+    socket = UnacceptedSocket(b'{"type":"unaccepted"}')
+    if not expose_state:
+        del socket.unaccepted
+
+    await router.on_websocket(
+        typ.cast("typ.Any", _request()), typ.cast("typ.Any", socket)
+    )
+
+    assert not socket.receive_started.is_set(), "unaccepted sockets cannot receive"
+    assert _RecordingResource.instances[0].disconnect_codes == [1011], (
+        "approval must still promise cleanup with the setup-failure code"
+    )
+
+
+@pytest.mark.asyncio
 async def test_resource_acceptance_with_falsey_result_reads_close_code() -> None:
     """Resource-owned acceptance establishes cleanup even when it rejects."""
 
@@ -259,6 +397,34 @@ async def test_resource_acceptance_with_falsey_result_reads_close_code() -> None
 
     assert socket.close_codes == [1000], _ASSERTION_FAILURE
     assert AcceptAndReject.instances[0].disconnect_codes == [1000], _ASSERTION_FAILURE
+
+
+@pytest.mark.asyncio
+async def test_close_before_buffered_frame_skips_overridden_dispatch() -> None:
+    """A closed transport cannot enter even an overridden resource dispatcher."""
+
+    class AcceptAndClose(_RecordingResource):
+        async def on_connect(
+            self, req: falcon.Request, ws: object, **params: object
+        ) -> bool:
+            del req, params
+            socket = typ.cast("_SessionSocket", ws)
+            await socket.accept()
+            await socket.close(4004)
+            return True
+
+    router = _router(AcceptAndClose)
+    socket = _SessionSocket(b'{"type":"buffered"}')
+
+    await router.on_websocket(
+        typ.cast("typ.Any", _request()), typ.cast("typ.Any", socket)
+    )
+
+    resource = AcceptAndClose.instances[0]
+    assert resource.raw_frames == [], "a closed transport must not dispatch frames"
+    assert resource.disconnect_codes == [4004], (
+        "discarding late frames must preserve the reported disconnect code"
+    )
 
 
 @pytest.mark.asyncio
@@ -455,6 +621,36 @@ async def test_repeated_cancellation_waits_for_same_cleanup_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancellation_during_clean_disconnect_preserves_selected_code() -> None:
+    """Late cancellation finishes cleanup without rewriting the close outcome."""
+
+    class WaitingCleanupResource(_RecordingResource):
+        def __init__(self) -> None:
+            super().__init__()
+            self.wait_in_disconnect = True
+
+    router = _router(WaitingCleanupResource)
+    socket = _SessionSocket(falcon.WebSocketDisconnected(4000))
+    task = asyncio.create_task(
+        router.on_websocket(
+            typ.cast("typ.Any", _request()), typ.cast("typ.Any", socket)
+        )
+    )
+    await socket.receive_started.wait()
+    resource = WaitingCleanupResource.instances[0]
+    await resource.disconnect_started.wait()
+    task.cancel()
+    resource.finish_disconnect.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert resource.disconnect_codes == [4000], (
+        "cancellation during cleanup must preserve the selected close code"
+    )
+    assert not socket.close_codes, "a completed client close must not be rewritten"
+
+
+@pytest.mark.asyncio
 async def test_closed_session_does_not_dispatch_or_emit_receive_hooks() -> None:
     """A resource retained after closure cannot start another receive cycle."""
     router = _router()
@@ -501,6 +697,51 @@ async def test_close_during_receive_skips_later_receive_hooks() -> None:
     assert events == ["before"], "a closed socket must not emit after-receive"
     assert _RecordingResource.instances[0].handled_frames == [], (
         "a close from before-receive must suppress message handling"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event", [HookEvent.BEFORE_RECEIVE, HookEvent.AFTER_RECEIVE])
+async def test_close_from_receive_hook_stops_remaining_hook_layers(
+    event: HookEvent,
+) -> None:
+    """Closing in a hook stops the remaining hooks in every receive layer."""
+    events: list[str] = []
+
+    class HookedResource(_RecordingResource):
+        pass
+
+    async def close_socket(context: object) -> None:
+        events.append("close")
+        await typ.cast("typ.Any", context).ws.close(4001)
+
+    def record_late_hook(context: object) -> None:
+        del context
+        events.append("late")
+
+    router = _router(HookedResource)
+    first_layer = (
+        router.global_hooks
+        if event is HookEvent.BEFORE_RECEIVE
+        else HookedResource.hooks
+    )
+    last_layer = (
+        HookedResource.hooks
+        if event is HookEvent.BEFORE_RECEIVE
+        else router.global_hooks
+    )
+    first_layer.add(event, close_socket)
+    first_layer.add(event, record_late_hook)
+    last_layer.add(event, record_late_hook)
+    socket = _SessionSocket(b'{"type":"message"}')
+
+    await router.on_websocket(
+        typ.cast("typ.Any", _request()), typ.cast("typ.Any", socket)
+    )
+
+    assert events == ["close"], "closing must prevent all later receive hooks"
+    assert HookedResource.instances[0].disconnect_codes == [4001], (
+        "hook closure must still run disconnect cleanup"
     )
 
 

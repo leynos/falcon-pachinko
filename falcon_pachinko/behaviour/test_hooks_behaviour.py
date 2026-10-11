@@ -169,16 +169,16 @@ def given_router_global_only(context: dict[str, typ.Any]) -> None:
     context["router"] = router
 
 
-def _connect_client(context: dict[str, typ.Any]) -> tuple[HookedChild, DummyWS]:
-    """Run the connect lifecycle and record the params hooks injected."""
+def _connect_client(context: dict[str, typ.Any], raw: bytes) -> None:
+    """Send a frame during the routed session and record injected params."""
     router: WebSocketRouter = context["router"]
-    ws = DummyWS()
+    ws = DummyWS(raw)
     req = make_req("/hooks/child")
-    asyncio.run(router.on_websocket(req, ws))
-
-    child = HookedChild.instances[-1]
-    context["child_params"] = child.params
-    return child, ws
+    try:
+        asyncio.run(router.on_websocket(req, ws))
+    finally:
+        child = HookedChild.instances[-1]
+        context["child_params"] = child.params
 
 
 def _record_hook_observations(context: dict[str, typ.Any]) -> None:
@@ -189,20 +189,16 @@ def _record_hook_observations(context: dict[str, typ.Any]) -> None:
 
 @when("a client connects and sends a message")
 def when_client_connects(context: dict[str, typ.Any]) -> None:
-    """Simulate a connection followed by a dispatched message."""
-    child, ws = _connect_client(context)
-
-    asyncio.run(child.dispatch(ws, b'{"type":"noop"}'))
+    """Let the router receive and dispatch a message during the session."""
+    _connect_client(context, b'{"type":"noop"}')
     _record_hook_observations(context)
 
 
 @when("a client connects and sends a message that triggers an error")
 def when_client_connects_with_error(context: dict[str, typ.Any]) -> None:
-    """Simulate a connection followed by a dispatched message that raises."""
-    child, ws = _connect_client(context)
-
+    """Let a routed message raise while the accepted session is active."""
     try:
-        asyncio.run(child.dispatch(ws, b'{"type":"error"}'))
+        _connect_client(context, b'{"type":"error"}')
     except ValueError as exc:
         context["error"] = exc
 

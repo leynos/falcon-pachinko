@@ -19,10 +19,12 @@ import threading
 import typing as typ
 
 import falcon
+import falcon.asgi
 import msgspec.json as msjson
 
 from ._session import (
     ABNORMAL_CLOSURE,
+    INTERNAL_ERROR,
     SessionPhase,
     SessionState,
 )
@@ -31,6 +33,7 @@ from ._session_cleanup import (
     _raise_session_failures,
     _run_shielded_cleanup,
 )
+from ._session_socket import _SessionWebSocket
 from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
 
@@ -572,6 +575,8 @@ class WebSocketRouter:
         """Run setup, receive frames, and finish the accepted session."""
         session = SessionState()
         dispatch.session = session
+        if isinstance(dispatch.ws, falcon.asgi.WebSocket):
+            dispatch.ws = _SessionWebSocket(dispatch.ws, session)
         hook_manager.bind_session(session)
         context: HookContext | None = None
         primary_error: BaseException | None = None
@@ -599,8 +604,7 @@ class WebSocketRouter:
             ):
                 session.establish()
             if session.phase is SessionPhase.ESTABLISHED:
-                primary_error = exc
-                session.primary_error = exc
+                primary_error = _record_session_ending(session, exc)
             else:
                 raise
 
@@ -630,6 +634,11 @@ class WebSocketRouter:
         session: SessionState,
     ) -> None:
         """Receive and route frames until Falcon reports a disconnect."""
+        if not _is_websocket_accepted(dispatch.ws):
+            session.close_code = INTERNAL_ERROR
+            with contextlib.suppress(Exception):
+                await dispatch.ws.close(INTERNAL_ERROR)
+            return
         while session.can_receive:
             try:
                 media = await dispatch.ws.receive_media()
@@ -641,6 +650,10 @@ class WebSocketRouter:
             # suspended. Do not dispatch the late frame into receive hooks.
             if not session.can_receive:
                 return
+            # An overridden dispatcher may bypass the resource's guard. Drop
+            # late buffered frames here while retaining the disconnect code.
+            if getattr(dispatch.ws, "closed", False):
+                continue
             raw = media if isinstance(media, str | bytes) else msjson.encode(media)
             await resource.dispatch(dispatch.ws, raw)
 
@@ -678,7 +691,12 @@ class WebSocketRouter:
         except Exception as exc:
             context.error = exc
             context.result = False
-            await hook_manager.notify_after_connect(context)
+            try:
+                await hook_manager.notify_after_connect(context)
+            except BaseException as after_error:
+                if _is_websocket_accepted(dispatch.ws):
+                    _raise_session_failures(exc, (after_error,), ())
+                raise
             raise
 
     @staticmethod
@@ -716,6 +734,17 @@ def _effective_disconnect_code(error: BaseException) -> int:
     """Return the effective close code, using abnormal closure when absent."""
     close_code = getattr(error, "code", None)
     return close_code if isinstance(close_code, int) else ABNORMAL_CLOSURE
+
+
+def _record_session_ending(
+    session: SessionState, error: BaseException
+) -> BaseException | None:
+    """Distinguish a transport ending from an unexpected session failure."""
+    if isinstance(error, falcon.WebSocketDisconnected):
+        session.close_code = _effective_disconnect_code(error)
+        return None
+    session.primary_error = error
+    return error
 
 
 class _RouteRegistrationService:

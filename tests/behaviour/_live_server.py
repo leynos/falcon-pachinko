@@ -60,10 +60,12 @@ class RecordingResource(WebSocketResource):
         *,
         manager: WebSocketConnectionManager,
         recorder: DisconnectRecorder,
+        close_on_connect: bool = False,
     ) -> None:
         self._manager = manager
         self._recorder = recorder
         self._conn_id: str | None = None
+        self._close_on_connect = close_on_connect
 
     async def on_connect(
         self,
@@ -76,6 +78,10 @@ class RecordingResource(WebSocketResource):
         conn_id = self._recorder.register()
         await self._manager.add_connection(conn_id, ws)
         self._conn_id = conn_id
+        if self._close_on_connect:
+            await ws.accept()
+            await ws.close(4003)
+            return False
         return True
 
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
@@ -88,8 +94,10 @@ class RecordingResource(WebSocketResource):
         match payload.get("type"):
             case "echo":
                 await ws.send_media(payload)
-            case "close-me":
+            case "close-me" | "close-and-send":
                 await ws.close(4001)
+                if payload.get("type") == "close-and-send":
+                    await ws.send_media(payload)
             case "boom":
                 error = RuntimeError("live WebSocket handler failed")
                 self._recorder.handler_errors.append(error)
@@ -113,8 +121,11 @@ class RecordingResource(WebSocketResource):
 class RejectingResource(WebSocketResource):
     """Reject before acceptance so no session cleanup can be promised."""
 
-    def __init__(self, *, recorder: DisconnectRecorder) -> None:
+    def __init__(
+        self, *, recorder: DisconnectRecorder, close_on_connect: bool = False
+    ) -> None:
         self._recorder = recorder
+        self._close_on_connect = close_on_connect
 
     async def on_connect(
         self,
@@ -122,7 +133,9 @@ class RejectingResource(WebSocketResource):
         ws: WebSocketLike,
         **params: object,
     ) -> bool:
-        del req, ws, params
+        del req, params
+        if self._close_on_connect:
+            await ws.close()
         return False
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
@@ -153,6 +166,16 @@ def create_live_application() -> LiveApplication:
         recorder=recorder,
     )
     router.add_route("/reject", RejectingResource, recorder=recorder)
+    router.add_route(
+        "/reject-close", RejectingResource, recorder=recorder, close_on_connect=True
+    )
+    router.add_route(
+        "/accept-close",
+        RecordingResource,
+        manager=manager,
+        recorder=recorder,
+        close_on_connect=True,
+    )
     prefix = "/ws"
     router.mount(prefix)
     app.add_route(prefix, router)
@@ -249,5 +272,16 @@ class LiveServer:
             self.serve_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self.serve_task
+            raise
         finally:
-            self.loop.set_exception_handler(self._previous_exception_handler)
+            try:
+                # Uvicorn's graceful timeout cancels ASGI tasks without joining
+                # them. Keep the loop alive until their shielded cleanup ends.
+                session_tasks = tuple(self.server.server_state.tasks)
+                if session_tasks:
+                    await asyncio.wait_for(
+                        asyncio.gather(*session_tasks, return_exceptions=True),
+                        timeout=5,
+                    )
+            finally:
+                self.loop.set_exception_handler(self._previous_exception_handler)

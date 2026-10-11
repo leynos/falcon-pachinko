@@ -77,6 +77,14 @@ def test_handler_close() -> None:  # pragma: no cover - scenario registration
 
 @scenario(
     "session_lifecycle.feature",
+    "A send after handler closure preserves the disconnect code",
+)
+def test_handler_send_after_close() -> None:
+    """Register Falcon's send-side disconnect as a normal transport ending."""
+
+
+@scenario(
+    "session_lifecycle.feature",
     "Messages are handled before a client close removes membership",
 )
 def test_client_messages_then_close() -> None:  # pragma: no cover
@@ -115,19 +123,37 @@ def test_rejected_handshake() -> None:  # pragma: no cover - scenario registrati
     """Register the rejected-handshake acceptance scenario."""
 
 
-async def _connect(context: LiveScenario) -> None:
+@scenario(
+    "session_lifecycle.feature",
+    "Rejecting by close does not run disconnect cleanup",
+)
+def test_rejected_handshake_closed_by_resource() -> None:
+    """Register explicit pre-accept closure as a rejection."""
+
+
+@scenario(
+    "session_lifecycle.feature",
+    "Acceptance followed immediately by close still runs cleanup",
+)
+def test_resource_accepts_then_closes_on_connect() -> None:
+    """Register resource-owned acceptance followed by immediate closure."""
+
+
+async def _connect(context: LiveScenario, path: str = "/ws/session") -> None:
     """Open the production router's mounted session through the test client."""
     if context.client_contexts is None:
         context.client_contexts = AsyncExitStack()
-    manager = context.client.connect("/ws/session")
-    context.session = await context.client_contexts.enter_async_context(manager)
+    manager = context.client.connect(path)
+    context.session = await asyncio.wait_for(
+        context.client_contexts.enter_async_context(manager), timeout=5
+    )
 
 
 async def _close_client_context(context: LiveScenario) -> None:
     """Release the client context after server-side lifecycle work has ended."""
     stack = context.client_contexts
     if stack is not None:
-        await stack.aclose()
+        await asyncio.wait_for(stack.aclose(), timeout=5)
         context.client_contexts = None
         context.session = None
 
@@ -180,7 +206,7 @@ def when_client_closes(context: LiveScenario) -> LiveScenario:
     async def exercise() -> None:
         await _connect(context)
         assert context.session is not None, _ASSERTION_FAILURE
-        await context.session.close(4000)
+        await asyncio.wait_for(context.session.close(4000), timeout=5)
         conn_id = context.recorder.connection_ids[-1]
         await context.recorder.wait_for_disconnect(conn_id)
 
@@ -208,10 +234,10 @@ def when_manager_closes(context: LiveScenario) -> LiveScenario:
         await _connect(context)
         conn_id = context.recorder.connection_ids[-1]
         websocket = context.server.application.manager.websockets[conn_id]
-        await websocket.close(4002)
+        await asyncio.wait_for(websocket.close(4002), timeout=5)
         assert context.session is not None, _ASSERTION_FAILURE
         try:
-            await context.session.receive()
+            await asyncio.wait_for(context.session.receive(), timeout=5)
         except ConnectionClosed as exc:
             context.observed_close_code = _close_code_from_error(exc)
         await context.recorder.wait_for_disconnect(conn_id)
@@ -236,15 +262,19 @@ def then_manager_close_recorded(context: LiveScenario) -> None:
 
 
 @when("the handler closes the session", target_fixture="context")
-def when_handler_closes(context: LiveScenario) -> LiveScenario:
+def when_handler_closes(
+    context: LiveScenario, message_type: str = "close-me"
+) -> LiveScenario:
     """Ask the resource handler to initiate its close frame."""
 
     async def exercise() -> None:
         await _connect(context)
         assert context.session is not None, _ASSERTION_FAILURE
-        await context.session.send_json({"type": "close-me"})
+        await asyncio.wait_for(
+            context.session.send_json({"type": message_type}), timeout=5
+        )
         try:
-            await context.session.receive()
+            await asyncio.wait_for(context.session.receive(), timeout=5)
         except ConnectionClosed as exc:
             context.observed_close_code = _close_code_from_error(exc)
         conn_id = context.recorder.connection_ids[-1]
@@ -252,6 +282,12 @@ def when_handler_closes(context: LiveScenario) -> LiveScenario:
 
     context.event_loop.run_until_complete(exercise())
     return context
+
+
+@when("the handler sends after closing the session", target_fixture="context")
+def when_handler_sends_after_closing(context: LiveScenario) -> LiveScenario:
+    """Exercise the native Falcon exception raised by sending after a close."""
+    return when_handler_closes(context, "close-and-send")
 
 
 @then("the client observes close code 4001")
@@ -280,10 +316,12 @@ def when_client_exchanges_and_closes(context: LiveScenario) -> LiveScenario:
         await _connect(context)
         assert context.session is not None, _ASSERTION_FAILURE
         for index in range(3):
-            await context.session.send_json({"type": "echo", "index": index})
-            reply = await context.session.receive_json()
+            await asyncio.wait_for(
+                context.session.send_json({"type": "echo", "index": index}), timeout=5
+            )
+            reply = await asyncio.wait_for(context.session.receive_json(), timeout=5)
             assert reply == {"type": "echo", "index": index}, _ASSERTION_FAILURE
-        await context.session.close(4000)
+        await asyncio.wait_for(context.session.close(4000), timeout=5)
         conn_id = context.recorder.connection_ids[-1]
         await context.recorder.wait_for_disconnect(conn_id)
 
@@ -307,9 +345,9 @@ def when_handler_raises(context: LiveScenario) -> LiveScenario:
     async def exercise() -> None:
         await _connect(context)
         assert context.session is not None, _ASSERTION_FAILURE
-        await context.session.send_json({"type": "boom"})
+        await asyncio.wait_for(context.session.send_json({"type": "boom"}), timeout=5)
         try:
-            await context.session.receive()
+            await asyncio.wait_for(context.session.receive(), timeout=5)
         except ConnectionClosed as exc:
             context.observed_close_code = _close_code_from_error(exc)
         conn_id = context.recorder.connection_ids[-1]
@@ -335,13 +373,19 @@ def then_handler_error_recorded(context: LiveScenario) -> None:
 
 
 @then("the original handler error is captured and membership is removed")
-def then_original_handler_error(context: LiveScenario) -> None:
-    """Check the resource retained its original server-side exception."""
+def then_original_handler_error(
+    context: LiveScenario, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Check Falcon reported the original server-side exception after cleanup."""
     errors = context.recorder.handler_errors
     assert len(errors) == 1, "the resource must capture one handler exception"
     assert str(errors[0]) == "live WebSocket handler failed", (
         "cleanup must not replace the original handler exception"
     )
+    assert any(
+        record.exc_info is not None and record.exc_info[1] is errors[0]
+        for record in caplog.records
+    ), "Falcon must report the original handler exception"
     assert context.server.application.manager.websockets == {}, (
         "handler failure cleanup must remove the socket"
     )
@@ -358,7 +402,7 @@ def when_server_stops_idle(context: LiveScenario) -> LiveScenario:
         await context.recorder.wait_for_disconnect(conn_id)
         assert context.session is not None, _ASSERTION_FAILURE
         try:
-            await context.session.receive()
+            await asyncio.wait_for(context.session.receive(), timeout=5)
         except ConnectionClosed as exc:
             context.observed_close_code = _close_code_from_error(exc)
 
@@ -384,10 +428,13 @@ def when_server_stops_blocked(context: LiveScenario) -> LiveScenario:
     async def exercise() -> None:
         await _connect(context)
         assert context.session is not None, _ASSERTION_FAILURE
-        await context.session.send_json({"type": "block"})
+        await asyncio.wait_for(context.session.send_json({"type": "block"}), timeout=5)
         await asyncio.wait_for(context.recorder.block_started.wait(), timeout=5)
         conn_id = context.recorder.connection_ids[-1]
         await context.server.stop()
+        assert not context.server.server.server_state.tasks, (
+            "server stop must join every accepted ASGI session task"
+        )
         await context.recorder.wait_for_disconnect(conn_id)
 
     context.event_loop.run_until_complete(exercise())
@@ -412,19 +459,61 @@ def then_cancelled_membership_removed(context: LiveScenario) -> None:
 
 
 @when("the client attempts a rejected handshake", target_fixture="context")
-def when_rejected_handshake(context: LiveScenario) -> LiveScenario:
+def when_rejected_handshake(
+    context: LiveScenario, path: str = "/ws/reject"
+) -> LiveScenario:
     """Attempt a resource handshake that returns false before acceptance."""
 
     async def exercise() -> None:
-        manager = context.client.connect("/ws/reject")
         try:
-            async with manager:
-                pytest.fail("the rejecting resource must fail the handshake")
+            await _connect(context, path)
+            pytest.fail("the rejecting resource must fail the handshake")
         except InvalidStatusCode as exc:
             context.rejected_handshake = exc
 
     context.event_loop.run_until_complete(exercise())
     return context
+
+
+@when("the resource closes the handshake without accepting", target_fixture="context")
+def when_resource_rejects_by_close(context: LiveScenario) -> LiveScenario:
+    """Use native Falcon closure to reject before acceptance."""
+    return when_rejected_handshake(context, "/ws/reject-close")
+
+
+@when(
+    "the resource accepts and closes during connection setup", target_fixture="context"
+)
+def when_resource_accepts_then_closes(context: LiveScenario) -> LiveScenario:
+    """Observe an accepted handshake and close from inside on_connect."""
+
+    async def exercise() -> None:
+        await _connect(context, "/ws/accept-close")
+        assert context.session is not None, _ASSERTION_FAILURE
+        try:
+            await asyncio.wait_for(context.session.receive_json(), timeout=5)
+        except ConnectionClosed as exc:
+            context.observed_close_code = _close_code_from_error(exc)
+        conn_id = context.recorder.connection_ids[-1]
+        await context.recorder.wait_for_disconnect(conn_id)
+
+    context.event_loop.run_until_complete(exercise())
+    return context
+
+
+@then("the client observes close code 4003")
+def then_setup_close_seen(context: LiveScenario) -> None:
+    """Verify the resource's setup close code reached the client."""
+    assert context.observed_close_code == 4003, "client must observe setup closure"
+
+
+@then("disconnect cleanup is recorded once with code 4003")
+def then_setup_close_cleanup(context: LiveScenario) -> None:
+    """Join the session before asserting resource-owned closure cleanup."""
+    context.event_loop.run_until_complete(_stop_server(context))
+    assert [code for _, code in context.recorder.disconnect_records] == [4003], (
+        "acceptance followed by closure must clean up exactly once"
+    )
 
 
 @then("the handshake is rejected without disconnect cleanup")

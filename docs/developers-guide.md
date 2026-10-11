@@ -153,6 +153,15 @@ resource and hook manager. Text and binary frames pass through unchanged; other
 media values are encoded as JSON with `msgspec`. Invalid media that cannot be
 encoded fails the session as an unexpected error.
 
+Native Falcon sockets use a forwarding adapter that records acceptance history.
+Falcon's `unaccepted` property also becomes false after rejecting a handshake
+with `close()`, so a post-close probe alone cannot establish whether cleanup
+was promised. The adapter retains acceptance when the resource accepts and
+closes during setup, and leaves a pre-accept rejection outside the cleanup
+promise. Injected simulators retain their identity and expose their own
+acceptance state. An approved socket that never becomes accepted skips receives
+and cleans up with `1011`.
+
 The receive loop ends on Falcon's `WebSocketDisconnected`, retaining its close
 code when present and using `1006` when it is absent. An ordinary handler or
 post-establishment setup failure triggers a best-effort close with `1011`; a
@@ -161,6 +170,8 @@ receives that effective code for these failures, the reported code for a clean
 client or server close when available, and `1006` for transport loss without a
 reported code. A server-initiated `ws.close(code)` sends that code to the peer;
 cleanup uses the disconnect code Falcon reports to the router.
+`WebSocketDisconnected` from accepted setup or a resource handler is also
+treated as a transport ending, rather than an unexpected handler failure.
 
 Cleanup first changes the phase to `DISCONNECTING`, which guards both receive
 and resource dispatch so no further receive hooks or handlers begin. It then
@@ -171,13 +182,22 @@ membership established during `on_connect`; setup code that registers
 membership and then fails before establishment must roll that registration back
 itself.
 
+Receive guards are checked between individual hooks and layers. Closing from a
+before- or after-receive hook suppresses every remaining receive hook,
+including hooks in the same layer.
+
 Cleanup runs in a separate shielded task and the router keeps awaiting that
 task through repeated cancellation. There is no cleanup timeout, so
 `on_disconnect` must terminate. A single session or cleanup failure is
 re-raised unchanged. Multiple ordinary failures are raised in an
 `ExceptionGroup`, with the session failure first. Cancellation remains a bare
 `CancelledError`; failures that cannot be grouped with it are sent to the
-running loop's exception handler.
+running loop's exception handler. Cancellation during cleanup preserves the
+already selected close code.
+
+The same primary-first policy preserves an accepted `on_connect` failure when an
+`after_connect` hook also fails. Cancellation from that hook remains bare; the
+original setup failure is reported through the loop's exception handler.
 
 ## Lint and Typecheck Toolchain
 

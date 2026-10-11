@@ -112,6 +112,9 @@ owns the session through disconnect cleanup. `on_disconnect(ws, close_code)`
 runs exactly once, including when setup fails after this establishment point.
 This lets a resource roll back registrations made during `on_connect`. A
 rejected connection that was never accepted skips this post-accept cleanup.
+This includes rejection by calling `ws.close()` during `on_connect`. Accepting
+and then closing during `on_connect` still promises cleanup. An approved socket
+that never becomes accepted is cleaned up with `1011` without receiving frames.
 
 | Session ending                                    | `close_code` passed to `on_disconnect`                                                               |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
@@ -120,6 +123,11 @@ rejected connection that was never accepted skips this post-accept cleanup.
 | Transport disappears without a close frame        | `1006` (abnormal closure)                                                                            |
 | Task is cancelled                                 | `1001` (going away); the router attempts to close with this code                                     |
 | Handler or setup fails with an ordinary exception | `1011` (internal error); the router attempts to close with this code                                 |
+
+Falcon's `WebSocketDisconnected` is a transport ending even when a resource
+observes it while sending or during accepted setup; its reported code is
+retained. Cancellation after disconnect cleanup begins does not rewrite the
+close code already selected.
 
 The router runs `before_disconnect` before `on_disconnect`, then marks the
 session closed. Once disconnect begins, receive and dispatch hooks do not run

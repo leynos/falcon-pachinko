@@ -143,10 +143,15 @@ class HookCollection:
 
 
 async def _execute_hook_layer(
-    hooks: tuple[HookCallable, ...], context: HookContext
+    hooks: tuple[HookCallable, ...],
+    context: HookContext,
+    *,
+    may_run: cabc.Callable[[], bool],
 ) -> None:
     """Execute all hooks in a single layer."""
     for hook in hooks:
+        if not may_run():
+            return
         result = hook(context)
         if inspect.isawaitable(result):
             await result
@@ -204,8 +209,19 @@ class HookManager:
 
         for resource, hooks in layers:
             context.resource = resource
-            await _execute_hook_layer(hooks, context)
+            await _execute_hook_layer(
+                hooks, context, may_run=lambda: self._may_run_hook(event_name, context)
+            )
         context.resource = None
+
+    def _may_run_hook(self, event_name: str, context: HookContext) -> bool:
+        """Stop receive hooks when an earlier hook begins closing the session."""
+        if event_name not in {HookEvent.BEFORE_RECEIVE, HookEvent.AFTER_RECEIVE}:
+            return True
+        session = self._session
+        if session is None:
+            return True
+        return session.can_receive and not getattr(context.ws, "closed", False)
 
     async def _notify_before_event(
         self,
