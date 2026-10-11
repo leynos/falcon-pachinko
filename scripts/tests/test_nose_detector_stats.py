@@ -24,6 +24,25 @@ def test_stats_command_selects_one_root_and_requests_json() -> None:
     ], "Each effective-source check must ask Nose for one root's JSON stats."
 
 
+def _command_kind(command: list[str]) -> str:
+    """Return a detector command's subcommand or executable name."""
+    return command[1] if len(command) > 1 else command[0]
+
+
+def _commands_of_kind(commands: list[list[str]], kind: str) -> list[list[str]]:
+    """Select detector commands with the requested subcommand."""
+    return [command for command in commands if len(command) > 1 and command[1] == kind]
+
+
+def _calls_use_context(
+    calls: list[tuple[list[str], Path, cabc.Mapping[str, str]]],
+    repository_root: Path,
+    environment: cabc.Mapping[str, str],
+) -> bool:
+    """Check that every detector invocation uses the injected context."""
+    return all(call[1] == repository_root and call[2] == environment for call in calls)
+
+
 def test_each_root_is_checked_before_one_combined_query(tmp_path: Path) -> None:
     """Each root is inventoried before one combined cross-root query."""
     calls: list[tuple[list[str], Path, cabc.Mapping[str, str]]] = []
@@ -47,22 +66,16 @@ def test_each_root_is_checked_before_one_combined_query(tmp_path: Path) -> None:
     detector.run_detector(settings, context=context)
 
     commands = [call[0] for call in calls]
-    command_kinds = [
-        command[1] if len(command) > 1 else command[0] for command in commands
-    ]
+    command_kinds = [_command_kind(command) for command in commands]
     assert command_kinds == ["--version", "stats", "stats", "query"], (
         "Version and per-root stats must precede exactly one query."
     )
-    stats_commands = [
-        command for command in commands if len(command) > 1 and command[1] == "stats"
-    ]
+    stats_commands = _commands_of_kind(commands, "stats")
     assert [command[2] for command in stats_commands] == [
         "falcon_pachinko",
         "other",
     ], "Each configured root must be inventoried independently."
-    query_commands = [
-        command for command in commands if len(command) > 1 and command[1] == "query"
-    ]
+    query_commands = _commands_of_kind(commands, "query")
     assert len(query_commands) == 1, "Cross-root duplicates require one combined query."
     assert query_commands[0][query_commands[0].index("--root") + 1] == (
         "falcon_pachinko"
@@ -70,11 +83,8 @@ def test_each_root_is_checked_before_one_combined_query(tmp_path: Path) -> None:
     assert query_commands[0][query_commands[0].index("--root", 3) + 1] == "other", (
         "The combined query must retain every configured root."
     )
-    assert all(call[1] == tmp_path for call in calls), (
-        "All commands must use the injected repository root."
-    )
-    assert all(call[2] == context.environment for call in calls), (
-        "All commands must use the injected environment."
+    assert _calls_use_context(calls, tmp_path, context.environment), (
+        "All commands must use the injected repository root and environment."
     )
 
 

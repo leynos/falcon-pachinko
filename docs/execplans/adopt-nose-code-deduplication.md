@@ -400,3 +400,16 @@ approval or merge is claimed.
   its documentation gates; commit, publication, current-head hosted checks and
   review reconciliation remain pending. No proof was introduced or materially
   changed.
+- CodeScene follow-up, on the working tree based on published head
+  `52830243cc455ff235c531d40067d40b03ecc7e2`: hosted CI passed, while CodeScene
+  result `7904413` found complexity 10 (threshold 9) in the new per-root stats
+  test. The finding was verified against current source. The test now extracts
+  command classification/filtering and injected-context assertions into
+  helpers, preserving its checks. The updated working tree passed the
+  sequential local gate set: `make check-fmt`; `make duplication-test` (179
+  passed, 3 snapshots); `make lint` (Ruff, both Pylint passes at 10/10,
+  df12-python-lints and the blocking duplication scan); `make typecheck`;
+  `make test` (655 passed, 2 skipped, 19 warnings); spelling; Markdown;
+  Mermaid; and CV005. These results cover the current working tree. Commit,
+  publication, new-head hosted CI and CodeScene results, and review
+  reconciliation remain pending. No application behaviour or proof changed.
