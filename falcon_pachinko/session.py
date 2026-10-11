@@ -116,6 +116,24 @@ async def _run_disconnect_lifecycle(
         raise resource_error
 
 
+async def _complete_peer_disconnect(
+    session: _SessionContext,
+    close_code: int,
+    on_policy_close: cabc.Callable[[], None],
+) -> None:
+    """Finish peer cleanup, switching to cancellation policy if interrupted."""
+    try:
+        await _run_disconnect_lifecycle(session, close_code, suppress_errors=False)
+    except asyncio.CancelledError:
+        # A peer close can race with server shutdown while lifecycle callbacks
+        # are awaiting. Switch to the cancellation policy and still attempt
+        # resource cleanup if a hook was interrupted.
+        on_policy_close()
+        await _close_after_failure(session.websocket, 1001)
+        await _run_disconnect_lifecycle(session, 1001, suppress_errors=True)
+        raise
+
+
 async def drive_session(
     resource: WebSocketResource,
     ws: WebSocketLike,
@@ -158,13 +176,4 @@ async def drive_session(
         await _run_disconnect_lifecycle(session, 1011, suppress_errors=True)
         raise
 
-    try:
-        await _run_disconnect_lifecycle(session, close_code, suppress_errors=False)
-    except asyncio.CancelledError:
-        # A peer close can race with server shutdown while lifecycle callbacks
-        # are awaiting. Switch to the cancellation policy and still attempt
-        # resource cleanup if a hook was interrupted.
-        on_policy_close()
-        await _close_after_failure(session.websocket, 1001)
-        await _run_disconnect_lifecycle(session, 1001, suppress_errors=True)
-        raise
+    await _complete_peer_disconnect(session, close_code, on_policy_close)
