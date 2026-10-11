@@ -26,6 +26,7 @@ from falcon_pachinko.exceptions import (
     DuplicateHandlerRegistrationError,
     HandlerSignatureError,
 )
+from falcon_pachinko.handlers import get_payload_type
 from falcon_pachinko.unittests.helpers import DummyWS
 
 
@@ -33,6 +34,18 @@ class PingPayload(ms.Struct):
     """A simple message payload structure for testing ping messages."""
 
     text: str
+
+
+async def _class_payload_handler(
+    self: object, ws: WebSocketLike, payload: PingPayload
+) -> None:
+    """Provide a module-level handler with a class payload annotation."""
+
+
+async def _generic_payload_handler(
+    self: object, ws: WebSocketLike, payload: list[int]
+) -> None:
+    """Provide a module-level handler with a generic payload annotation."""
 
 
 class DecoratedResource(WebSocketResource):
@@ -70,6 +83,13 @@ async def test_decorator_registers_handler() -> None:
     raw = msjson.encode({"type": "ping", "payload": {"text": "hi"}})
     await r.dispatch(DummyWS(), raw)
     assert r.seen == ["hi"], "decorated handler should record the ping payload text"
+
+
+def test_decorator_registers_resolved_payload_type() -> None:
+    """The handler registry retains the resolved payload class."""
+    assert DecoratedResource.handlers["ping"].payload_type is PingPayload, (
+        "the registry should retain the handler's resolved payload type"
+    )
 
 
 def test_duplicate_handler_raises() -> None:
@@ -184,6 +204,49 @@ class ChildResource(ParentResource):
         self.invoked.append("parent")
 
 
+class RedecoratedChild(ParentResource):
+    """Re-register the parent's message type on a child resource."""
+
+    @handles_message("parent")
+    async def parent(self, ws: WebSocketLike, payload: object) -> None:
+        """Handle the parent's message type on the child resource."""
+
+
+def test_child_handler_registry_is_isolated() -> None:
+    """Adding a child handler does not mutate the parent registry."""
+    assert ChildResource.handlers is not ParentResource.handlers, (
+        "a child resource should have its own handler registry"
+    )
+    assert "child" not in ParentResource.handlers, (
+        "the child handler should not appear in the parent registry"
+    )
+    assert "child" in ChildResource.handlers, (
+        "the child registry should include its decorated handler"
+    )
+
+
+def test_none_handlers_mapping_is_replaced_before_registration() -> None:
+    """A class-body None mapping is replaced with a fresh handler registry."""
+
+    class NoneHandlersResource(WebSocketResource):
+        """A resource that asks the descriptor to initialise its registry."""
+
+        handlers = None  # pyright: ignore[reportAssignmentType]  # tests None setup
+
+        @handles_message("fresh")
+        async def handle_fresh(self, ws: WebSocketLike, payload: PingPayload) -> None:
+            """Handle the fresh-registry test message."""
+
+    handlers = NoneHandlersResource.handlers
+    assert isinstance(handlers, dict), (
+        "the descriptor should replace the None class attribute with a mapping"
+    )
+    assert handlers is not ParentResource.handlers, (
+        "the None class attribute should become a fresh child mapping"
+    )
+    assert "fresh" in handlers, "the fresh mapping should contain the decorated handler"
+
+
 class DecoratedOverride(ParentResource):
     """A resource that overrides a parent handler using the decorator.
 
@@ -239,6 +302,35 @@ async def test_decorated_override() -> None:
     assert r.invoked == "decorated", "re-decorated handler should override the parent"
 
 
+def test_get_payload_type_returns_class_annotation() -> None:
+    """Return a handler's resolved class annotation unchanged."""
+    assert get_payload_type(_class_payload_handler) is PingPayload, (
+        "the resolver should return a class payload annotation as-is"
+    )
+
+
+def test_get_payload_type_preserves_non_class_annotation() -> None:
+    """Return a non-class typing object without runtime validation."""
+    assert get_payload_type(_generic_payload_handler) == list[int], (
+        "the resolver should preserve a parameterized generic annotation"
+    )
+
+
+def test_child_handler_registry_contains_inherited_and_child_types() -> None:
+    """The child registry includes both inherited and child message types."""
+    assert {"parent", "child"} <= ChildResource.handlers.keys(), (
+        "the child mapping should include inherited and child handlers"
+    )
+
+
+def test_child_can_redecorate_parent_handler() -> None:
+    """A child can register its own handler for the parent's message type."""
+    assert (
+        RedecoratedChild.handlers["parent"].handler
+        is not ParentResource.handlers["parent"].handler
+    ), "re-decorating the parent's message type should register the child handler"
+
+
 def test_unresolved_annotation_is_ignored() -> None:
     """Test that unresolved type annotations are handled gracefully.
 
@@ -269,4 +361,27 @@ def test_unresolved_annotation_is_ignored() -> None:
 
     assert UnknownAnnoResource.handlers["unknown"].payload_type is None, (
         "unresolved annotations should fall back to a None payload type"
+    )
+
+
+def test_unannotated_payload_type_is_none() -> None:
+    """A handler without a payload annotation registers no payload type."""
+
+    class UnannotatedPayloadResource(WebSocketResource):
+        """A resource whose handler intentionally omits its payload type."""
+
+        def __init__(self) -> None:
+            self.received: object | None = None
+
+        @handles_message("unannotated")
+        async def handle_unannotated(
+            self,
+            ws: WebSocketLike,
+            payload,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]  # ruff: ignore[missing-type-function-argument]  # deliberately unannotated
+        ) -> None:
+            """Handle the unannotated-payload test message."""
+            self.received = payload
+
+    assert UnannotatedPayloadResource.handlers["unannotated"].payload_type is None, (
+        "an unannotated payload should register as None"
     )

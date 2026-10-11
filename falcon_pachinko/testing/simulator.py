@@ -13,11 +13,11 @@ from ._common import (
     _BINARY_PAYLOAD_REQUIRED_MSG,
     _EXPECTED_BYTES_MSG,
     _EXPECTED_TEXT_MSG,
-    _FAILED_JSON_DECODE_MSG,
     _TEXT_PAYLOAD_REQUIRED_MSG,
     _UNSUPPORTED_FRAME_KIND_MSG,
     DisconnectSentinel,
     FrameKind,
+    _decode_json,
     _LifecycleSocket,
 )
 
@@ -38,8 +38,8 @@ class WebSocketSimulator(_LifecycleSocket):
         self._inbound = inbound or asyncio.Queue()
         self._outbound = outbound or asyncio.Queue()
         self._json_encoder = msjson.Encoder()
-        self._default_decoder = msjson.Decoder()
-        self._decoders: dict[type[object], msjson.Decoder] = {}
+        self._default_decoder: msjson.Decoder[object] = msjson.Decoder()
+        self._decoders: dict[type[object], msjson.Decoder[object]] = {}
         self.sent_messages: list[object] = []
         self.received_messages: list[object] = []
         self._outbound_event = asyncio.Event()
@@ -54,7 +54,7 @@ class WebSocketSimulator(_LifecycleSocket):
         """Return the number of queued outbound frames."""
         return self._outbound.qsize()
 
-    def _decoder_for(self, payload_type: type[object] | None) -> msjson.Decoder:
+    def _decoder_for(self, payload_type: type[object] | None) -> msjson.Decoder[object]:
         """Return a cached decoder for ``payload_type``."""
         if payload_type is None:
             return self._default_decoder
@@ -146,21 +146,10 @@ class WebSocketSimulator(_LifecycleSocket):
         object
             The decoded payload, using ``payload_type`` when supplied.
 
-        Raises
-        ------
-        TypeError
-            If the received frame is neither a text nor a binary payload.
+        Unsupported frames raise ``TypeError`` through the shared decoder.
         """
         message = await self.receive_media()
-        match message:
-            case str():
-                data = message.encode("utf-8")
-            case bytes() | bytearray() | memoryview():
-                data = bytes(message)
-            case _:
-                raise TypeError(_FAILED_JSON_DECODE_MSG.format(message=message))
-        decoder = self._decoder_for(payload_type)
-        return decoder.decode(data)
+        return _decode_json(self._decoder_for(payload_type), message, payload_type)
 
     async def push_message(self, payload: object, *, kind: FrameKind = "json") -> None:
         """Queue ``payload`` as if it were received from the peer."""

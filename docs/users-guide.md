@@ -89,6 +89,23 @@ def add_route(
   router.add_route("/p", functools.partial(MyResource, name="x"), name="route")
   ```
 
+### Route template syntax
+
+Route templates match their literal text exactly. Regular-expression
+metacharacters such as `.`, `+`, brackets, and parentheses have no special
+meaning in a route. A parameter written as `{name}` captures one or more
+non-`/` characters; parameter names must be valid Python identifiers. A path
+segment may contain one parameter or an adjacent pair at its end. Other
+multiple-parameter layouts are rejected to bound regex matching work.
+
+Braces are reserved for parameters. Empty, unmatched, nested, or doubled
+braces, invalid names, duplicate parameter names, and ambiguous multiple-
+parameter layouts raise `ValueError` during route or subroute registration. A
+conflict between a mount-prefix parameter and a route parameter raises
+`ValueError` when the router is mounted. Full routes and nested subroutes are
+checked in registration order, so the first matching registration selects the
+resource and its hooks.
+
 ## 3. Resource Lifecycle & State
 
 - `on_connect(req, ws, **params) -> bool | None`
@@ -201,8 +218,25 @@ class ChatResource(WebSocketResource):
         await ws.send_media({"type": "joined", "room": payload.room})
 ```
 
-- Messages are decoded with `msgspec`; unknown tags fall back to
-  `on_unhandled(self, ws, raw)` when defined.
+- Messages are decoded with `msgspec`.
+- Registered `@handles_message` handlers match by payload type and take
+  precedence over conventional handlers.
+- Conventional handlers use `on_<snake_case(str(tag))>`:
+  `tag="sendMessage"` maps to `on_send_message`, and `tag=1` maps to `on_1`.
+- Messages without a matching handler fall back to
+  `on_unhandled(self, ws, raw)`.
+- A schema must use one kind of tag throughout: either all string tags or all
+  integer tags. `msgspec` cannot decode a union that mixes them, so the
+  combination is rejected with a `TypeError` when the resource class is
+  defined. Note that `tag=True` asks `msgspec` to use the class name as the
+  tag, which is a string.
+- That check only covers the `schema` declared on the class. Assigning
+  `resource.schema` afterwards bypasses it, so a mixed-tag union installed that
+  way is not rejected until the first message is decoded, where it raises
+  `TypeError` rather than reaching `on_unhandled`. The failure is deliberate:
+  the schema is a configuration error, and routing it to `on_unhandled` would
+  hide it behind a bad-frame fallback while leaving the broken schema in place.
+  Fix the schema instead of handling the exception.
 - The decorator supports `strict=False` to allow extra fields when required.
 
 The stable import path is `from falcon_pachinko.utils import ValidationError`.
@@ -215,6 +249,50 @@ Native text and binary frames reach the dispatcher unchanged. Malformed JSON
 can therefore reach `on_unhandled(self, ws, raw)` without Falcon's media
 decoder ending the connection first. Falcon's public media sending methods
 retain their usual arguments, including `send_media(media=...)`.
+
+### Diagnostic output and raw payloads
+
+Framework-generated validation errors, logs, trace summaries and object
+representations omit payload values by default. They may include bounded
+structural metadata such as field or handler names, expected types, frame kind
+and length, exception class, and lifecycle phase. This keeps a malformed
+authentication frame from placing a token or other payload value in ordinary
+diagnostic output.
+
+The raw values remain available to explicitly registered application hooks and
+handlers. For example, `HookContext.raw` and the `on_unhandled` fallback
+argument retain the original frame. `TraceEvent.payload` retains the value
+recorded by the trace; a JSON receive records the decoded object, not
+necessarily the original frame. Treat raw access as a trusted boundary: the
+framework cannot prevent application hook or handler code from explicitly
+logging raw payloads, which can disclose secrets. Decoding bytes as UTF-8 does
+not sanitize the resulting text.
+
+For trusted local debugging, opt in to a bounded sample formatter:
+
+```python
+from falcon_pachinko import DiagnosticSanitizer
+
+sanitizer = DiagnosticSanitizer(
+    extra_sensitive_keys=frozenset({"session_id", "client_secret"})
+)
+sample = sanitizer.format_sample({"status": "rejected", "access_token": "local-token"})
+```
+
+The sanitizer traverses only exact built-in dictionaries, lists, tuples and
+scalar types. Configure `max_depth`, `max_items`, `max_string_length`, and
+`max_output_length` to bound samples. Integer magnitudes are also bounded. It
+detects cycles and describes bytes without decoding them. Unsupported objects
+are described by safe type name without their value; non-string or unusable
+mapping keys are omitted. If a value cannot be inspected safely, it is omitted.
+`format_sample()` also enforces a total output-length limit, while `sanitize()`
+returns a bounded tree. If its complete JSON-serialized result would exceed
+`max_output_length`, `sanitize()` returns the `<budget>` omission marker.
+Sensitive-key matching normalizes case and common separators, then matches
+configured fragments within the key. `DEFAULT_SENSITIVE_KEYS` provides common
+credential names, and `extra_sensitive_keys` extends that set. Redaction is a
+defence-in-depth aid: applications may use unfamiliar names or positional
+values, so omission remains the default security boundary.
 
 ## 5. Hooks
 
@@ -339,7 +417,8 @@ it. An undecorated async function works in the same way.
 ## 10. Testing Toolkit
 
 - **WebSocketTestClient** – Real websocket client powered by `websockets`,
-  designed for integration tests; captures traces for assertions.
+  designed for integration tests; captures original payloads for assertions,
+  while trace representations and `TraceEvent.summary()` show safe metadata.
 - **WebSocketSimulator** – In-memory fake implementing the WebSocket protocol
   for fast unit tests.
 - **Pytest fixtures** – See `tests/behaviour/*.feature` and

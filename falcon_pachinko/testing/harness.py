@@ -17,7 +17,7 @@ from falcon_pachinko._testing_harness import (
 )
 from falcon_pachinko.router import WebSocketRouter
 
-from ._common import _JSON_FRAME_REQUIRED_MSG, FrameKind
+from ._common import FrameKind, _decode_json
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -81,13 +81,10 @@ class SimulatorConnection:
         object
             The decoded JSON payload, using ``payload_type`` when supplied.
 
-        Raises
-        ------
-        TypeError
-            If the popped frame is neither a text nor a binary payload.
-        """  # ruff: ignore[docstring-extraneous-exception] - frame helper raises TypeError
+        Unsupported frames raise ``TypeError`` through the shared decoder.
+        """
         raw = self.pop_sent()
-        return self._decoder_for(payload_type).decode(_json_frame_bytes(raw))
+        return _decode_json(self._decoder_for(payload_type), raw, payload_type)
 
     def _decoder_for(self, payload_type: type[object] | None) -> msjson.Decoder[object]:
         """Return a cached decoder for ``payload_type``."""
@@ -120,7 +117,7 @@ class SimulatorConnection:
     async def next_sent_json(self, payload_type: type[object] | None = None) -> object:
         """Wait for and decode the next JSON response."""
         raw = await self.next_sent()
-        return self._decoder_for(payload_type).decode(_json_frame_bytes(raw))
+        return _decode_json(self._decoder_for(payload_type), raw, payload_type)
 
 
 class SimulatorRouterHarness:
@@ -260,16 +257,3 @@ async def _join_router_task(router_task: asyncio.Task[None]) -> None:
         router_task.cancel()
         with suppress(asyncio.CancelledError):
             await router_task
-
-
-def _json_frame_bytes(raw: object) -> bytes:
-    """Normalize JSON frames using the buffer protocol, not their item type."""
-    match raw:
-        case str():
-            return raw.encode("utf-8")
-        case bytes() | bytearray() | memoryview():
-            # A memoryview's item type varies; JSON decoding only needs bytes
-            # from its buffer, which every member of this branch provides.
-            return bytes(typ.cast("cabc.Buffer", raw))
-        case _:
-            raise TypeError(_JSON_FRAME_REQUIRED_MSG)

@@ -53,10 +53,50 @@ are tracked separately from this support policy.
 ## Validation error import boundary
 
 Use `from falcon_pachinko.utils import ValidationError` as the stable import
-path for validation exceptions. It is currently the same class as
-`msgspec.ValidationError`, preserving existing exception handlers. The
-dispatcher routes validation failures to `on_unhandled`; a `ValidationError`
-raised inside a handler still propagates.
+path for validation exceptions. New package code must raise through
+`falcon_pachinko.utils.ValidationError`, keeping raise sites behind the
+package's stable path. It is the same class as `msgspec.ValidationError`,
+preserving existing exception handlers. The dispatcher routes validation
+failures to `on_unhandled`; a `ValidationError` raised inside a handler still
+propagates.
+
+The typed alias is a direct assignment to preserve the original class object.
+Ruff bans `from msgspec import ...`; PEP 695 syntax would not preserve class
+identity. The line-local Pylint `prefer-type-statement` and Ruff
+`non-pep695-type-alias` suppressions document those constraints.
+
+A malformed `schema` declared on a `WebSocketResource` subclass is a different
+kind of failure, and raises `TypeError` at class creation through
+`validate_schema_types`. That check runs from `__init_subclass__`, so it only
+sees a schema present at class creation. A `schema` assigned afterwards
+bypasses it: `msgspec` reports a union mixing integer and string tags when it
+first derives that union at decode time, and that configuration `TypeError`
+propagates instead of becoming an `on_unhandled` fallback. Reject the
+temptation to catch it at the decode site: widening the handler would leave the
+invalid schema in place and disguise a schema bug as a malformed message.
+
+## Safe diagnostics
+
+Framework diagnostics must not call `repr()` or `str()` on raw payloads,
+decoded caller values, or other caller-controlled objects. Use the shared
+bounded metadata helpers in `falcon_pachinko.diagnostics` for identifiers,
+types, frame kind and length, and safe scalar fields. Payload values stay
+available to runtime code; their default representations, errors, logs and
+trace summaries omit them.
+
+When translating a vendor decode failure, capture only its exception class in
+the `except` suite and raise the framework error after leaving that suite.
+`raise ... from None` suppresses traceback display of the preceding exception,
+but it does not remove the implicit `__context__` reference. Raising afterwards
+avoids retaining the vendor exception and its message in either chain
+attribute. Preserve application exceptions when they are propagated; diagnostic
+display suppression does not sanitize an exception object retained or logged by
+application code.
+
+Application hooks and handlers that read `HookContext.raw`, fallback raw
+arguments, or `TraceEvent.payload` cross a trusted boundary. Do not use payload
+`repr()` or `str()` for diagnostics there; UTF-8 decoding changes
+representation but does not remove secrets.
 
 ## Spelling policy
 
@@ -109,6 +149,23 @@ attributes.
 Test request doubles should expose both `path` and `path_template`. Use an empty
 `path_template` for root-mounted router tests, matching the runtime default
 used by Falcon-style request objects that do not provide a template.
+
+### URI-template compiler boundary
+
+`falcon_pachinko/_uri_template.py` is the private shared compiler for full-path
+and prefix matchers. The router uses both forms for top-level routes, while
+nested subroutes use the prefix form. The compiler escapes every literal run
+before building the regular expression, and validates placeholder braces,
+unique Python-identifier names, and parameter layouts first. Placeholders
+capture non-empty path segments; a segment may contain one placeholder or a
+terminal adjacent pair, while other multi-placeholder layouts are ambiguous.
+Compilation happens before router registration state is mutated, so invalid
+templates fail at registration or mount time with `ValueError` rather than
+being deferred to connection dispatch.
+
+`uvicorn>=0.30,<1` is in the development dependency group for
+`tests/test_live_routing.py`, which exercises the router through a live Falcon
+ASGI server and real WebSocket connections.
 
 ### `_RouteMatch` and `_Dispatch`
 

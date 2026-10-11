@@ -14,6 +14,58 @@ workflow to the composable `WebSocketRouter` architecture.
 - **Pluggable connection manager backends** enable distributed storage.
 - **Lifespan-managed workers** supersede `add_websocket_worker`.
 
+## Diagnostic compatibility
+
+Framework-generated diagnostics now omit payload values by default. Strict
+unknown-field errors report bounded field names and expected schema metadata;
+they no longer include a truncated payload prefix. Setting
+`include_payload=True` routes the sample through `DiagnosticSanitizer`; pass a
+custom `sanitizer` to supply application-specific sensitive keys or bounds.
+Redacted samples are bounded and intended for trusted local debugging.
+Conventional-handler DEBUG messages retain their lazy format but now include
+only a bounded handler name and exception class.
+
+`HookContext`, `HandlerInvocationContext`, and `TraceEvent` keep their fields,
+constructors, slots, equality behaviour and operational payload values, but
+their representations now show safe metadata instead of raw or decoded values.
+`TraceEvent.summary()` is new and returns the same kind of metadata. Code that
+relied on payload values appearing in `repr()` must read the explicit payload
+field at a trusted boundary.
+
+Client session `receive_json()` continues to raise `RuntimeError` with the
+`Failed to decode JSON payload` prefix. Its message now reports frame kind and
+length, optional expected type, and decoder exception class. The exception has
+no vendor cause or context. Simulator and harness JSON decoding continue to
+raise `msgspec.ValidationError` for validation failures and
+`msgspec.DecodeError` for other decode failures, using fresh errors without
+vendor text or chains. Unsupported frame types raise `TypeError` with only the
+safe type name. A text frame that cannot be encoded as UTF-8 raises a fresh
+`UnicodeError` without frame contents or original exception text; binary-frame
+failures and `msgspec` JSON decode failures retain the behaviour described
+above.
+
+Close failures still propagate the original close exception. Their trace entry
+now records the exception class name instead of its message; caller-supplied
+close `code` and `reason` fields retain their values.
+
+## Schema tag kinds
+
+A `schema` must now use one kind of tag throughout: either all string tags or
+all integer tags. `msgspec` cannot decode a union that mixes them, so a
+resource whose class-defined `schema` mixes the two now fails at class
+definition with a `TypeError` instead of failing on the first message. This is
+the only new rejection; single-kind schemas are unaffected.
+
+`tag=True` asks `msgspec` to use the class name as the tag, so it contributes a
+*string* tag and cannot be combined with integer-tagged members. Mixed-tag
+schemas raised a defensive error before this release, so they were never
+functional: correct the tags rather than expecting the previous behaviour.
+
+A `schema` assigned after class creation still bypasses the class-creation
+check. There the configuration `TypeError` propagates during dispatch instead
+of reaching `on_unhandled`; it is deliberately not converted into a bad-frame
+fallback, which would disguise a broken schema as a malformed message.
+
 ## Step-by-Step Migration
 
 1) **Install websocket support** (unchanged):
@@ -86,6 +138,25 @@ app.ws_connection_manager = WebSocketConnectionManager(backend=MyBackend(...))
 - Replace `add_websocket_worker` with `WorkerController` and `@app.lifespan`
   hooks to start/stop workers.
 
+### Route Template Compatibility
+
+Before an upgrade, applications should audit configured templates whose literal
+path text contains regular-expression metacharacters such as `.`, `+`, `?`,
+`*`, brackets, parentheses, `^`, `$`, or `|`. Route matching now treats text
+outside placeholders as literal, so a route containing `child.v1` matches that
+exact text rather than regex alternatives such as `child/v1`. Applications that
+relied on regex expansion should update their configuration; arbitrary
+regex-shaped templates were not a supported route syntax.
+
+Placeholders use the form `{name}`, where `name` is a unique Python identifier.
+Each captures one or more non-slash characters. A path segment can contain one
+placeholder or a terminal adjacent pair such as `{left}{right}`; other
+multi-placeholder layouts in one segment are rejected as ambiguous. Braces are
+reserved for placeholders, so unmatched or nested braces are invalid. Invalid
+names, repeated names, ambiguous layouts, and a placeholder name repeated
+between a mount prefix and its route raise `ValueError` during route
+registration or mounting, before the route can handle a connection.
+
 ## Testing Checklist
 
 - **Unit tests:** cover resource constructors, state handling, and any custom
@@ -104,6 +175,9 @@ app.ws_connection_manager = WebSocketConnectionManager(backend=MyBackend(...))
   `snapshot` or documenting alternative semantics.
 - When migrating message handlers, ensure schema tags match incoming payloads;
   extra fields are rejected unless `strict=False` is used on `@handles_message`.
+- Keep every member of a `schema` on the same tag kind. Mixing string and
+  integer tags now raises `TypeError` at class definition rather than failing
+  on the first frame; see *Schema tag kinds* above.
 - Import `ValidationError` from `falcon_pachinko.utils` when handling payload
   validation failures. It is the same class as `msgspec.ValidationError`, so
   existing handlers remain compatible. Decode failures still reach

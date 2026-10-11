@@ -67,7 +67,25 @@ def select_payload_param(
 
 
 def get_payload_type(func: Handler) -> type | None:
-    """Validate ``func``'s signature and return the payload annotation."""
+    """Validate ``func``'s signature and return its resolved annotation unchanged.
+
+    The annotation is returned without class validation.
+    An invalid payload signature raises ``HandlerSignatureError``.
+
+    Returns
+    -------
+    type | None
+        The resolved payload annotation, or ``None`` when it is unavailable.
+
+    Raises
+    ------
+    HandlerNotAsyncError
+        If ``func`` is not a coroutine function.
+    SignatureInspectionError
+        If Python cannot inspect ``func``'s signature.
+    HandlerSignatureError
+        If ``func`` does not identify exactly one payload parameter.
+    """  # ruff: ignore[docstring-extraneous-exception] - propagated
     func_name: str = getattr(func, "__qualname__", repr(func))
     if not inspect.iscoroutinefunction(func):
         raise HandlerNotAsyncError(func_name)
@@ -79,10 +97,13 @@ def get_payload_type(func: Handler) -> type | None:
 
     param = select_payload_param(sig, func_name=func_name)
     try:
-        hints: dict[str, type] = typ.get_type_hints(func)
+        hints: dict[str, object] = typ.get_type_hints(func)
     except (NameError, AttributeError):
         hints = {}
-    return hints.get(param.name)
+    # cast: ``get_type_hints`` may return non-class typing objects, including
+    # unions and parameterized generics. This preserves the ``type | None``
+    # contract expected by ``HandlerInfo.payload_type`` and ``schema.py``.
+    return typ.cast("type | None", hints.get(param.name))
 
 
 class _HandlesMessageDescriptor:
@@ -107,8 +128,7 @@ class _HandlesMessageDescriptor:
         typed_owner = typ.cast("type[WebSocketResource]", owner)
         current = typed_owner.__dict__.get("handlers")
         if current is None:
-            current = {}
-            typed_owner.handlers = current
+            typed_owner.handlers = current = {}
         if self.message_type in current:
             msg = (
                 f"Duplicate handler for message type {self.message_type!r} "

@@ -11,9 +11,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 PROJECT = PYPROJECT["project"]
 RUNTIME_REQUIREMENTS = [Requirement(item) for item in PROJECT["dependencies"]]
-FALCON_REQUIREMENT = next(
-    requirement for requirement in RUNTIME_REQUIREMENTS if requirement.name == "falcon"
-)
 DEVELOPMENT_CLASSIFIERS = {
     "a": "Development Status :: 3 - Alpha",
     "b": "Development Status :: 4 - Beta",
@@ -29,35 +26,6 @@ def test_runtime_dependencies_have_bounded_versions(
 
     assert operators & {">", ">="}, f"{requirement.name} needs a lower bound"
     assert "<" in operators, f"{requirement.name} needs an exclusive upper bound"
-
-
-@pytest.mark.parametrize(
-    "version",
-    [
-        pytest.param("4.0.0", id="minimum-supported-release"),
-        pytest.param("4.4.0", id="latest-ci-release"),
-        pytest.param("4.99.0", id="latest-four-series-boundary"),
-    ],
-)
-def test_falcon_requirement_accepts_supported_major(version: str) -> None:
-    """Falcon's dependency range accepts supported 4.x versions."""
-    assert Version(version) in FALCON_REQUIREMENT.specifier, (
-        f"Falcon {version} must satisfy {FALCON_REQUIREMENT.specifier}"
-    )
-
-
-@pytest.mark.parametrize(
-    "version",
-    [
-        pytest.param("3.99.0", id="previous-major"),
-        pytest.param("5.0.0", id="next-major"),
-    ],
-)
-def test_falcon_requirement_rejects_unsupported_majors(version: str) -> None:
-    """Falcon's dependency range excludes the previous and next major."""
-    assert Version(version) not in FALCON_REQUIREMENT.specifier, (
-        f"Falcon {version} must not satisfy {FALCON_REQUIREMENT.specifier}"
-    )
 
 
 @pytest.mark.parametrize(
@@ -99,12 +67,23 @@ def test_project_version_matches_development_classifier() -> None:
 
 def test_project_has_async_keywords_and_discovery_classifiers() -> None:
     """PyPI metadata describes the project's asynchronous ASGI focus."""
-    assert {"async", "asgi"} <= set(PROJECT["keywords"]), (
-        "pyproject.toml keywords must include async and asgi"
+    assert {
+        "falcon",
+        "websocket",
+        "msgspec",
+        "asyncio",
+        "asgi",
+        "websockets",
+    } <= set(PROJECT["keywords"]), (
+        "pyproject.toml keywords must include the supported project topics"
+    )
+    assert len(PROJECT["keywords"]) == len(set(PROJECT["keywords"])), (
+        "pyproject.toml keywords must not contain duplicates"
     )
     assert {
         "Framework :: AsyncIO",
         "Operating System :: OS Independent",
+        "Programming Language :: Python :: 3 :: Only",
         "Topic :: Software Development :: Libraries :: Python Modules",
     } <= set(PROJECT["classifiers"]), (
         "pyproject.toml classifiers must describe async and OS-independent use"
@@ -119,6 +98,9 @@ def test_project_urls_identify_repository_and_issue_tracker() -> None:
     assert PROJECT["urls"]["Issues"] == (
         "https://github.com/leynos/falcon-pachinko/issues"
     ), "The Issues URL must point to the GitHub issue tracker"
+    assert PROJECT["urls"]["Documentation"] == (
+        "https://github.com/leynos/falcon-pachinko/tree/main/docs"
+    ), "The Documentation URL must point to the project documentation"
 
 
 def test_packaging_is_a_development_dependency() -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import msgspec as ms
 import pytest
 
-from falcon_pachinko import utils
+from falcon_pachinko import DiagnosticSanitizer, utils
 
 
 def test_validation_error_is_msgspec_validation_error() -> None:
@@ -18,7 +18,41 @@ def test_validation_error_is_msgspec_validation_error() -> None:
 def test_validation_error_is_decode_error() -> None:
     """The public alias retains msgspec's decode error hierarchy."""
     assert issubclass(utils.ValidationError, ms.DecodeError), (
-        "the public alias must preserve the decode error hierarchy"
+        "The public alias must preserve the decode error hierarchy."
+    )
+
+
+def test_validation_error_remains_a_decode_error() -> None:
+    """The raised error remains catchable as a msgspec DecodeError."""
+    with pytest.raises(ms.DecodeError) as error:
+        utils.raise_unknown_fields({"a"})
+
+    assert isinstance(error.value, utils.ValidationError), (
+        "The DecodeError must also be the re-exported ValidationError."
+    )
+
+
+def test_raise_unknown_fields_uses_validation_error_export(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The helper resolves the stable public exception name when raising."""
+
+    class SentinelValidationError(Exception):
+        """Distinguish the public export from msgspec's direct exception."""
+
+    monkeypatch.setattr(utils, "ValidationError", SentinelValidationError)
+
+    with pytest.raises(
+        SentinelValidationError,
+        match=r"^Unknown fields in payload: \['a'\]$",
+    ):
+        utils.raise_unknown_fields({"a"})
+
+
+def test_validation_error_is_listed_in_public_exports() -> None:
+    """ValidationError is part of the utility module's explicit API."""
+    assert "ValidationError" in utils.__all__, (
+        "ValidationError must be listed in utils.__all__."
     )
 
 
@@ -34,12 +68,59 @@ def test_validation_error_is_usable_in_type_annotations() -> None:
 
 
 def test_raise_unknown_fields_uses_sorted_names() -> None:
-    """Unknown field names are sorted in the raised error message."""
-    with pytest.raises(
-        utils.ValidationError,
-        match=r"Unknown fields in payload: \['a', 'b'\]",
-    ):
+    """Unknown field names stay sorted in the raised error message."""
+    with pytest.raises(utils.ValidationError) as error:
         utils.raise_unknown_fields({"b", "a"})
+
+    assert str(error.value) == "Unknown fields in payload: ['a', 'b']", (
+        "Unknown field names must be sorted in the existing message."
+    )
+
+
+def test_raise_unknown_fields_omits_payload_by_default() -> None:
+    """Payload data stays out of validation errors unless requested."""
+    with pytest.raises(ms.ValidationError) as error:
+        utils.raise_unknown_fields({"a"}, payload={"secret": "value"})
+
+    assert " -> " not in str(error.value), (
+        "The payload separator must be absent unless payload inclusion is enabled."
+    )
+    assert "secret" not in str(error.value), (
+        "Payload contents must be omitted by default."
+    )
+
+
+def test_raise_unknown_fields_uses_bounded_sanitized_sample() -> None:
+    """Opt-in samples use the configured sanitizer and omit canary values."""
+    sanitizer = DiagnosticSanitizer(max_string_length=16, max_output_length=128)
+    payload = {"password": "canary-secret", "value": "x" * 260}
+    with pytest.raises(ms.ValidationError) as error:
+        utils.raise_unknown_fields(
+            {"a"}, payload=payload, include_payload=True, sanitizer=sanitizer
+        )
+
+    _, separator, snippet = str(error.value).partition(" -> ")
+    assert separator == " -> ", (
+        "Included payload text must follow the documented separator."
+    )
+    assert snippet == sanitizer.format_sample(payload), (
+        "Included payload text must come from the configured sanitizer."
+    )
+    assert len(snippet) <= sanitizer.max_output_length, (
+        "The sanitized payload sample must respect its output budget."
+    )
+    assert "canary-secret" not in snippet, "Sensitive sample values must be redacted."
+    assert "<redacted>" in snippet, "Sensitive sample keys must remain recognizable."
+
+
+def test_raise_unknown_fields_escapes_identifier_quotes_and_backslashes() -> None:
+    """Bounded names preserve the established single-quoted representation."""
+    with pytest.raises(utils.ValidationError) as raised:
+        utils.raise_unknown_fields({"quote'\\name"})
+
+    assert str(raised.value) == "Unknown fields in payload: ['quote\\'\\\\name']", (
+        "field identifiers must remain escaped within the compatible format"
+    )
 
 
 def test_msgspec_validation_error_catches_unknown_fields() -> None:
