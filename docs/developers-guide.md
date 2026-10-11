@@ -193,12 +193,17 @@ threaded positionally through each helper.
 ## WebSocket session lifecycle
 
 `WebSocketRouter.on_websocket()` owns each session through disconnect and
-completed cleanup. The session moves through `CONNECTING`, `ESTABLISHED`,
-`DISCONNECTING`, and `CLOSED`. The router establishes the session when
-`on_connect` returns a truthy result or when the resource has already accepted
-the socket. A rejection before either event does not promise post-accept
-cleanup. If `on_connect` or a later setup step fails after resource-owned
-acceptance, the router still runs cleanup.
+completed cleanup. After resource selection, it awaits
+`falcon_pachinko._session_driver.run_session()` for setup, receive dispatch,
+and disconnect cleanup. The driver consumes the mutable routing descriptor
+through `SessionDispatch` and `SessionRouteMatch` protocols; route resolution
+and pre-establishment factory error handling stay in the router.
+
+The session moves through `CONNECTING`, `ESTABLISHED`, `DISCONNECTING`, and
+`CLOSED`. The router establishes the session when `on_connect` returns a truthy
+result or when the resource has already accepted the socket. A rejection before
+either event does not promise post-accept cleanup. If `on_connect` or a later
+setup step fails after resource-owned acceptance, the router still runs cleanup.
 
 Setup ordering remains `before_connect`, resource `on_connect`,
 `after_connect`, then router acceptance when the resource has not accepted the
