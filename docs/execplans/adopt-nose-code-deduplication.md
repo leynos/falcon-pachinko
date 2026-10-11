@@ -436,3 +436,16 @@ approval or merge is claimed.
   2 skipped, 19 warnings); spelling; `make markdownlint`; `make nixie`; and
   `make check-cv005`. The source fix is still uncommitted and unpublished;
   hosted checks, a current-head review, and disposition remain pending.
+- Follow-up after committing and publishing the timeout fix as
+  `58ab7f21693f2461d11264fdf1a6dad5b3d5b022`: the remote head matched. All
+  sequential local source gates passed, including 179 duplication helper tests
+  and 655 application tests, along with the other gates recorded above; the
+  follow-up documentation gates also passed. CI run `38174178399`, CodeScene
+  result `7905177` and formal approval `5484916641`, and Gecko Security Review
+  passed. Kody/Sourcery and automerge were skipped. CodeRabbit inline reply
+  `4243202137` confirmed the fix and thread `4243160334` was resolved. However,
+  automatic CodeRabbit review remains paused, no fresh formal review is
+  available, and GitHub's review decision remains `CHANGES_REQUESTED`. Managed
+  request `0795f870` is queued for one fresh review, with an estimated wait of
+  about 2 hours 46 minutes at 2026-10-11 21:06 UTC. The current-head formal
+  review and final review disposition remain pending.
