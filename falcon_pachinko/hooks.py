@@ -158,10 +158,15 @@ class HookCollection:
 
 
 async def _execute_hook_layer(
-    hooks: tuple[HookCallable, ...], context: HookContext
+    hooks: tuple[HookCallable, ...],
+    context: HookContext,
+    *,
+    may_run: cabc.Callable[[], bool],
 ) -> None:
     """Execute all hooks in a single layer."""
     for hook in hooks:
+        if not may_run():
+            return
         result = hook(context)
         if inspect.isawaitable(result):
             await result
@@ -219,8 +224,24 @@ class HookManager:
 
         for resource, hooks in layers:
             context.resource = resource
-            await _execute_hook_layer(hooks, context)
+            await _execute_hook_layer(
+                hooks, context, may_run=lambda: self._may_run_hook(event_name, context)
+            )
         context.resource = None
+
+    def _may_run_hook(self, event_name: str, context: HookContext) -> bool:
+        """Stop receive hooks when an earlier hook begins closing the session."""
+        if event_name not in {HookEvent.BEFORE_RECEIVE, HookEvent.AFTER_RECEIVE}:
+            return True
+        return self.can_receive(context.ws)
+
+    def can_receive(self, ws: WebSocketLike | None) -> bool:
+        """Apply one receive policy to router dispatch, resources, and hooks."""
+        session = self._session
+        if session is None:
+            return True
+        is_closed = getattr(ws, "is_closed", getattr(ws, "closed", False))
+        return session.can_receive and not is_closed
 
     async def _notify_before_event(
         self,
