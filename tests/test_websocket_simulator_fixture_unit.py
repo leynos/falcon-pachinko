@@ -178,10 +178,10 @@ class TestWebSocketSimulatorFixture:
                 "the underlying websocket must be accepted"
             )
             assert connection.closed is True, "the connection must be closed"
-            assert ChattyResource.disconnect_codes == [1001], (
-                "on_disconnect must receive the resource's close code"
-            )
 
+        assert ChattyResource.disconnect_codes == [1001], (
+            "joined cleanup must receive the resource's close code exactly once"
+        )
         assert connection.subprotocol == "chat", "the subprotocol must persist"
         assert connection.close_code == 1001, "the close code must persist"
         assert connection.websocket.subprotocol == "chat", (
