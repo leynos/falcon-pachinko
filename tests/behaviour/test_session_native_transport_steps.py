@@ -1,4 +1,9 @@
-"""Focused live session native_transport support."""
+"""Bind native Falcon transport regressions to the live lifecycle feature.
+
+Scenarios preserve plain text, formatted JSON text, and JSON binary frames,
+then verify rejected close arguments leave the session usable. Native
+``send_media(media=...)`` keyword calls must also survive the socket adapter.
+"""
 
 from __future__ import annotations
 

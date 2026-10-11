@@ -1,4 +1,9 @@
-"""Focused live session failure support."""
+"""Exercise handler failure and server shutdown through real Falcon sessions.
+
+The feature bindings assert cleanup with 1011 for unexpected handler failures,
+the Uvicorn-reported code for idle shutdown, and 1001 for cancellation during
+blocked handlers. Each scenario verifies cleanup through recorded effects.
+"""
 
 from __future__ import annotations
 
