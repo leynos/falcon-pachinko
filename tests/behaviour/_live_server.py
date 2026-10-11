@@ -100,7 +100,8 @@ class RecordingResource(WebSocketResource):
             msg = "live test messages must be JSON objects"
             raise TypeError(msg)
 
-        await self._respond_to_payload(ws, payload)
+        # JSON object keys are strings; decoded values can be any JSON value.
+        await self._respond_to_payload(ws, typ.cast("dict[str, object]", payload))
 
     async def _respond_to_payload(
         self, ws: WebSocketLike, payload: dict[str, object]
@@ -120,6 +121,8 @@ class RecordingResource(WebSocketResource):
             case "block":
                 self._recorder.block_started.set()
                 await asyncio.Event().wait()
+            case _:
+                pass
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Remove the accepted socket and publish the final close code."""
@@ -162,7 +165,7 @@ class RejectingResource(WebSocketResource):
 class LiveApplication:
     """Application pieces shared by the live server and BDD assertions."""
 
-    app: falcon.asgi.App
+    app: falcon.asgi.App[falcon.asgi.Request, falcon.asgi.Response]
     router: WebSocketRouter
     manager: WebSocketConnectionManager
     recorder: DisconnectRecorder
@@ -170,7 +173,7 @@ class LiveApplication:
 
 def create_live_application() -> LiveApplication:
     """Build Falcon with a router mounted on the exact and catch-all paths."""
-    app = falcon.asgi.App()
+    app: falcon.asgi.App[falcon.asgi.Request, falcon.asgi.Response] = falcon.asgi.App()
     manager = WebSocketConnectionManager()
     recorder = DisconnectRecorder()
     router = WebSocketRouter()
@@ -212,7 +215,18 @@ class LiveServer:
     _stopped: bool = False
 
     @classmethod
-    async def start(cls, loop: asyncio.AbstractEventLoop) -> LiveServer:
+    async def start(
+        cls,
+        loop: asyncio.AbstractEventLoop,
+        *,
+        server_factory: cabc.Callable[
+            [uvicorn.Config], uvicorn.Server
+        ] = uvicorn.Server,
+        wait_ready: cabc.Callable[
+            [cabc.Coroutine[object, object, None]], cabc.Awaitable[None]
+        ]
+        | None = None,
+    ) -> LiveServer:
         """Start one ephemeral Uvicorn listener and wait for readiness."""
         application = create_live_application()
         config = uvicorn.Config(
@@ -225,7 +239,7 @@ class LiveServer:
             access_log=False,
             log_level="critical",
         )
-        server = uvicorn.Server(config)
+        server = server_factory(config)
         loop_errors: list[dict[str, object]] = []
         previous_handler = typ.cast(
             "_LoopExceptionHandler | None", loop.get_exception_handler()
@@ -246,7 +260,10 @@ class LiveServer:
                 await asyncio.sleep(0.01)
 
         try:
-            await asyncio.wait_for(wait_until_started(), timeout=5)
+            if wait_ready is None:
+                await asyncio.wait_for(wait_until_started(), timeout=5)
+            else:
+                await wait_ready(wait_until_started())
         except (Exception, asyncio.CancelledError):
             serve_task.cancel()
             try:
