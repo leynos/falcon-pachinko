@@ -168,6 +168,18 @@ class ChatResource(WebSocketResource):
   `tag="sendMessage"` maps to `on_send_message`, and `tag=1` maps to `on_1`.
 - Messages without a matching handler fall back to
   `on_unhandled(self, ws, raw)`.
+- A schema must use one kind of tag throughout: either all string tags or all
+  integer tags. `msgspec` cannot decode a union that mixes them, so the
+  combination is rejected with a `TypeError` when the resource class is
+  defined. Note that `tag=True` asks `msgspec` to use the class name as the
+  tag, which is a string.
+- That check only covers the `schema` declared on the class. Assigning
+  `resource.schema` afterwards bypasses it, so a mixed-tag union installed that
+  way is not rejected until the first message is decoded, where it raises
+  `TypeError` rather than reaching `on_unhandled`. The failure is deliberate:
+  the schema is a configuration error, and routing it to `on_unhandled` would
+  hide it behind a bad-frame fallback while leaving the broken schema in place.
+  Fix the schema instead of handling the exception.
 - The decorator supports `strict=False` to allow extra fields when required.
 
 The stable import path is `from falcon_pachinko.utils import ValidationError`.

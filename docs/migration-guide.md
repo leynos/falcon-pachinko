@@ -48,6 +48,24 @@ Close failures still propagate the original close exception. Their trace entry
 now records the exception class name instead of its message; caller-supplied
 close `code` and `reason` fields retain their values.
 
+## Schema tag kinds
+
+A `schema` must now use one kind of tag throughout: either all string tags or
+all integer tags. `msgspec` cannot decode a union that mixes them, so a
+resource whose class-defined `schema` mixes the two now fails at class
+definition with a `TypeError` instead of failing on the first message. This is
+the only new rejection; single-kind schemas are unaffected.
+
+`tag=True` asks `msgspec` to use the class name as the tag, so it contributes a
+*string* tag and cannot be combined with integer-tagged members. Mixed-tag
+schemas raised a defensive error before this release, so they were never
+functional: correct the tags rather than expecting the previous behaviour.
+
+A `schema` assigned after class creation still bypasses the class-creation
+check. There the configuration `TypeError` propagates during dispatch instead
+of reaching `on_unhandled`; it is deliberately not converted into a bad-frame
+fallback, which would disguise a broken schema as a malformed message.
+
 ## Step-by-Step Migration
 
 1) **Install websocket support** (unchanged):
@@ -157,6 +175,9 @@ registration or mounting, before the route can handle a connection.
   `snapshot` or documenting alternative semantics.
 - When migrating message handlers, ensure schema tags match incoming payloads;
   extra fields are rejected unless `strict=False` is used on `@handles_message`.
+- Keep every member of a `schema` on the same tag kind. Mixing string and
+  integer tags now raises `TypeError` at class definition rather than failing
+  on the first frame; see *Schema tag kinds* above.
 - Import `ValidationError` from `falcon_pachinko.utils` when handling payload
   validation failures. It is the same class as `msgspec.ValidationError`, so
   existing handlers remain compatible. Decode failures still reach

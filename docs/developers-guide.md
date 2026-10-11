@@ -65,6 +65,16 @@ Ruff bans `from msgspec import ...`; PEP 695 syntax would not preserve class
 identity. The line-local Pylint `prefer-type-statement` and Ruff
 `non-pep695-type-alias` suppressions document those constraints.
 
+A malformed `schema` declared on a `WebSocketResource` subclass is a different
+kind of failure, and raises `TypeError` at class creation through
+`validate_schema_types`. That check runs from `__init_subclass__`, so it only
+sees a schema present at class creation. A `schema` assigned afterwards
+bypasses it: `msgspec` reports a union mixing integer and string tags when it
+first derives that union at decode time, and that configuration `TypeError`
+propagates instead of becoming an `on_unhandled` fallback. Reject the
+temptation to catch it at the decode site: widening the handler would leave the
+invalid schema in place and disguise a schema bug as a malformed message.
+
 ## Safe diagnostics
 
 Framework diagnostics must not call `repr()` or `str()` on raw payloads,
