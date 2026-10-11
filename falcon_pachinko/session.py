@@ -120,6 +120,8 @@ async def drive_session(
     resource: WebSocketResource,
     ws: WebSocketLike,
     hook_manager: HookManager,
+    *,
+    on_policy_close: cabc.Callable[[], None],
 ) -> None:
     """Receive and dispatch frames inline until the WebSocket session ends.
 
@@ -145,14 +147,13 @@ async def drive_session(
                 close_code = exc.code if exc.code is not None else 1000
                 break
     except asyncio.CancelledError:
-        # CancelledError bypasses the outer Exception-only wrapper, avoiding a
-        # second close after this cancellation policy.
+        on_policy_close()
         await _close_after_failure(session.websocket, 1001)
         await _run_disconnect_lifecycle(session, 1001, suppress_errors=True)
         raise
-    except Exception as exc:
-        # The outer wrapper must not close the socket after this policy close.
-        typ.cast("typ.Any", exc)._pachinko_factory_closed = True
+    except Exception:
+        # Record the attempt first so the router wrapper never closes twice.
+        on_policy_close()
         await _close_after_failure(session.websocket, 1011)
         await _run_disconnect_lifecycle(session, 1011, suppress_errors=True)
         raise

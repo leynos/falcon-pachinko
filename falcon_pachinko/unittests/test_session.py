@@ -42,6 +42,17 @@ class Fail(ms.Struct, tag="fail"):
 MessageSchema = Ping | Fail
 
 
+class MarkerRejectingError(RuntimeError):
+    """Handler failure that refuses router-owned attributes."""
+
+    def __setattr__(self, name: str, value: object) -> None:
+        """Reject the legacy exception marker used by the outer wrapper."""
+        if name == "_pachinko_factory_closed":
+            msg = "session errors do not accept router markers"
+            raise AttributeError(msg)
+        super().__setattr__(name, value)
+
+
 class SessionResource(WebSocketResource):
     """Record dispatch, fallback, reply, and disconnect activity."""
 
@@ -66,7 +77,7 @@ class SessionResource(WebSocketResource):
     async def handle_fail(self, ws: WebSocketLike, payload: Fail) -> None:
         """Raise a stable exception instance for close-policy assertions."""
         del ws, payload
-        failure = RuntimeError("handler failed")
+        failure = MarkerRejectingError("handler failed")
         self.failures.append(failure)
         raise failure
 

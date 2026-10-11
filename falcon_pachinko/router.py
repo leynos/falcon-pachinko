@@ -99,6 +99,11 @@ class _Dispatch:
     req: falcon.Request
     ws: WebSocketLike
     match: _RouteMatch
+    session_close_attempted: bool = False
+
+    def mark_session_close_attempted(self) -> None:
+        """Record when the session driver owns the policy close."""
+        self.session_close_attempted = True
 
 
 class WebSocketRouter:
@@ -351,7 +356,8 @@ class WebSocketRouter:
             ws_for_cleanup = dispatch.ws
             return await self._process_route_resolution(dispatch)
         except Exception as exc:
-            if not getattr(exc, "_pachinko_factory_closed", False):
+            factory_closed = getattr(exc, "_pachinko_factory_closed", False)
+            if not dispatch.session_close_attempted and not factory_closed:
                 with contextlib.suppress(Exception):
                     await ws_for_cleanup.close()
             raise
@@ -553,7 +559,12 @@ class WebSocketRouter:
             hook_manager=hook_manager,
         )
         if should_accept:
-            await drive_session(resource, dispatch.ws, hook_manager)
+            await drive_session(
+                resource,
+                dispatch.ws,
+                hook_manager,
+                on_policy_close=dispatch.mark_session_close_attempted,
+            )
         return True
 
     @staticmethod
