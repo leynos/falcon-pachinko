@@ -1408,9 +1408,9 @@ class ChatResource(WebSocketResource):
 #### 5.3.2. Automated Dispatch Logic
 
 For each accepted connection, `WebSocketRouter` owns the receive loop. Its
-session driver calls `receive_media()` and awaits
-`WebSocketResource.dispatch()` for each frame before receiving the next one.
-The resource's dispatch method performs these steps:
+session driver calls `receive_media()` and passes each raw frame to
+`WebSocketResource.dispatch()` before receiving the next one. The resource's
+dispatch method performs these steps:
 
 1. Decode the received raw message using
    `msgspec.json.decode(message, type=self.schema)`. `msgspec`'s tagged union

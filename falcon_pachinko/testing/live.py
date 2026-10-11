@@ -1,4 +1,17 @@
-"""Real-socket Falcon ASGI server support for WebSocket tests."""
+"""Real-socket Falcon ASGI server support for WebSocket tests.
+
+``LiveWebSocketServer`` serves a Falcon ASGI app on an ephemeral loopback
+port, waits for adapter readiness, and tracks client sessions. Unacknowledged
+server failures raise ``LiveServerError`` when the server context exits; tests
+can acknowledge asserted failures with ``pop_errors()``.
+
+Examples
+--------
+>>> async with LiveWebSocketServer(app) as server:  # doctest: +SKIP
+...     async with server.connect("/ws/socket") as session:
+...         await session.send_json({"type": "ping"})
+...     server.pop_errors()
+"""
 
 from __future__ import annotations
 
