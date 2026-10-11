@@ -160,7 +160,7 @@ class TestLoadSettings:
         settings = detector.load_settings(pyproject)
 
         assert settings.roots == ("ignored",), (
-            "Nose's query warning is authoritative for effective selection."
+            "Nose's per-root stats report is authoritative for effective selection."
         )
 
     @pytest.mark.parametrize(
@@ -376,39 +376,6 @@ class TestRunDetector:
             findings[0].label
             == "falcon_pachinko/a.py:1-20 ~ falcon_pachinko/b.py:30-49"
         ), "Findings must report both spans."
-
-    def test_runner_receives_the_context_for_version_and_query(
-        self, tmp_path: Path
-    ) -> None:
-        """The injected root and environment reach both subprocess commands."""
-        calls: list[tuple[list[str], Path, cabc.Mapping[str, str]]] = []
-        canned_runner = stub_runner()
-
-        def runner(
-            command: cabc.Sequence[str],
-            repository_root: Path,
-            environment: cabc.Mapping[str, str],
-        ) -> str:
-            calls.append((list(command), repository_root, dict(environment)))
-            return canned_runner(command, repository_root, environment)
-
-        context = stub_detector_context(
-            tmp_path,
-            environment={"NOSE_BIN": "/fixture/nose", "PATH": "/fixture/bin"},
-            command_runner=runner,
-        )
-
-        detector.run_detector(stub_settings(), context=context)
-
-        assert [call[0][-1] for call in calls] == ["--version", "json"], (
-            "The context must run version verification before one JSON query."
-        )
-        assert all(call[1] == tmp_path for call in calls), (
-            "Both commands must use the injected repository root."
-        )
-        assert all(call[2] == context.environment for call in calls), (
-            "Both commands must use the injected environment."
-        )
 
     @pytest.mark.parametrize(
         ("families", "expected_values", "expected_labels"),

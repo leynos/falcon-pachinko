@@ -37,6 +37,12 @@ STUB_REPORT: dict[str, object] = {
     ],
 }
 
+#: Report emitted by the stub detector for one root with Python sources.
+STUB_STATS_REPORT: dict[str, object] = {
+    "files": 1,
+    "per_lang": [{"lang": "python", "files": 1}],
+}
+
 
 def copied_gate_workspace(tmp_path: Path) -> tuple[Path, Path]:
     """Create a mutable workspace containing the gate and its helper modules."""
@@ -68,9 +74,9 @@ def write_stub_nose(
 ) -> Path:
     """Write an executable stub standing in for the pinned nose binary.
 
-    The stub answers ``--version`` and otherwise prints one canned JSON
-    report, so gate tests exercise the real subprocess boundary without
-    depending on a downloaded detector.
+    The stub answers ``--version``, reports Python source for ``stats``, and
+    prints one canned JSON report for ``query``. Gate tests exercise the real
+    subprocess boundary without depending on a downloaded detector.
 
     Returns
     -------
@@ -84,6 +90,9 @@ def write_stub_nose(
         "import json, sys\n"
         "if '--version' in sys.argv:\n"
         f"    print({version!r})\n"
+        "    raise SystemExit(0)\n"
+        "if len(sys.argv) > 1 and sys.argv[1] == 'stats':\n"
+        f"    print(json.dumps({STUB_STATS_REPORT!r}))\n"
         "    raise SystemExit(0)\n"
         f"print(json.dumps({payload!r}))\n",
         encoding="utf-8",
@@ -154,6 +163,8 @@ def stub_runner(
     ) -> str:
         if "--version" in command:
             return f"{version}\n"
+        if len(command) > 1 and command[1] == "stats":
+            return json.dumps(STUB_STATS_REPORT)
         return json.dumps(payload)
 
     return run
@@ -194,6 +205,7 @@ def repository_detector_context(
 __all__ = [
     "REPOSITORY_ROOT",
     "STUB_REPORT",
+    "STUB_STATS_REPORT",
     "allowlist",
     "copied_gate_workspace",
     "detector",

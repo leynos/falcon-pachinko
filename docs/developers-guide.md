@@ -355,13 +355,14 @@ upstream attribution and is used under this repository's ISC licence. This
 repository downloads only official release archives and verifies their
 platform-specific SHA-256 digests; it does not use cargo-binstall. The wrapper
 validates that configured roots exist and contain Python candidates after the
-explicit exclusions. Nose's own warning from the single JSON query is the final
-check for effective source selection: an empty root fails with status 2. This
-uses the pinned detector's actual handling of `.ignore`, `.gitignore`, hidden
-paths, `.git/info/exclude`, and global Git ignore rules without trying to
-duplicate its ignore precedence in Python. Stale allow-rule diagnostics say
-“unmatched in this capped scan” because absence from a ranked report does not
-prove that duplication has disappeared.
+explicit exclusions. Before its single combined JSON query, the wrapper asks
+Nose for JSON stats on each root and fails with status 2 if any root has no
+effective Python sources. This uses the pinned detector's actual handling of
+`.ignore`, `.gitignore`, hidden paths, `.git/info/exclude`, and global Git
+ignore rules without trying to duplicate its ignore precedence in Python. The
+query's own warning remains a final check for a wholly empty scan. Stale
+allow-rule diagnostics say “unmatched in this capped scan” because absence from
+a ranked report does not prove that duplication has disappeared.
 
 The scan covers shipped direct modules under `falcon_pachinko/`. Its explicit
 setuptools package list omits `testing/`, `unittests/`, and `behaviour/`, so

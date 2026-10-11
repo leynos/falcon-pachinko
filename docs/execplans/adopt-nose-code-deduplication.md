@@ -84,9 +84,9 @@ compilation fallback. Missing platform assets or digests fail with an
 actionable error. A pinned `pathspec==1.1.1` tool dependency validates
 configured exclusion globs; the helper-test environment uses the same pin,
 enforced by a toolchain contract test. The wrapper does not reimplement nose's
-ignore precedence: its successful-query warning is checked to reject roots
-emptied by `.ignore`, `.gitignore`, hidden paths, `.git/info/exclude`, or
-global Git ignore rules.
+ignore precedence: per-root stats reject roots emptied by `.ignore`,
+`.gitignore`, hidden paths, `.git/info/exclude`, or global Git ignore rules,
+while one combined query preserves cross-root family detection.
 
 The application package list, Python floor, runtime dependencies, supported
 platforms and public behaviour are outside the change. No PyChase, pyscn,
@@ -386,3 +386,17 @@ approval or merge is claimed.
   cover the staged tree, not the published PR head. Commit, publication, hosted
   checks and a candidate-bound follow-up assessment remain pending. No proof
   was introduced or materially changed.
+- Mixed-root empty-source follow-up, on the working tree based on published
+  head `996b0f0d42c1f17493c9d39abcf2d5a69c074763`: per-root JSON stats now
+  reject a configured root with no effective Python files before the single
+  combined query, preserving cross-root family detection. A real-detector
+  regression covers an ignored Python file beside a visible JavaScript file
+  when another configured root has Python. The sequential local checks passed:
+  `make check-fmt`; `make duplication-test` (179 passed, 3 snapshots);
+  `make lint` (Ruff, both Pylint passes at 10/10, df12-python-lints, and the
+  blocking duplication scan); `make typecheck`; `make test` (655 passed, 2
+  skipped, 19 warnings); spelling; Markdown; Mermaid; and CV005. These results
+  cover the current uncommitted tree only. The ExecPlan update still requires
+  its documentation gates; commit, publication, current-head hosted checks and
+  review reconciliation remain pending. No proof was introduced or materially
+  changed.

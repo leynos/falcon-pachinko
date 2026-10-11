@@ -1,7 +1,8 @@
 """Shared schema helpers and findings for the nose duplication gate.
 
 This module owns the gate's error vocabulary, the gate-neutral finding
-types, and the validation of the ``nose query --format json`` report.
+types, and the validation of the ``nose query`` and ``nose stats`` JSON
+reports.
 ``scripts/nose_detector.py`` drives the binary itself, and
 ``scripts/duplication_gate.py`` owns the reasoned allowlist and CLI.
 
@@ -204,6 +205,41 @@ def _is_integer(value: object) -> typ.TypeIs[int]:
 def is_positive_integer(value: object) -> typ.TypeIs[int]:
     """Report whether ``value`` is a positive integer rather than a boolean."""
     return _is_integer(value) and value > 0
+
+
+def is_non_negative_integer(value: object) -> typ.TypeIs[int]:
+    """Report whether ``value`` is a non-negative integer rather than a boolean."""
+    return _is_integer(value) and value >= 0
+
+
+def has_python_source_files(report: object) -> bool:
+    """Report whether a validated nose stats report includes Python files."""
+    stats = require_table(report, context="nose stats report")
+    languages = stats.get("per_lang")
+    if not isinstance(languages, cabc.Sequence) or isinstance(languages, (str, bytes)):
+        msg = "nose stats report.per_lang must be an array"
+        raise GateConfigError(msg)
+    for index, language_stats in enumerate(languages):
+        entry = require_table(
+            language_stats,
+            context=f"nose stats report.per_lang[{index}]",
+        )
+        language = require_value(
+            entry.get("lang"),
+            validator=is_non_empty_string,
+            expected="a non-empty string",
+            context=f"nose stats report.per_lang[{index}].lang",
+        )
+        if language != "python":
+            continue
+        count = require_value(
+            entry.get("files"),
+            validator=is_non_negative_integer,
+            expected="a non-negative integer",
+            context=f"nose stats report.per_lang[{index}].files",
+        )
+        return count > 0
+    return False
 
 
 def normalize_findings(report: object) -> list[Finding]:

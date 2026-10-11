@@ -114,10 +114,62 @@ def test_ignored_only_root_is_rejected_by_real_detector_gate(
         "An ignored-only root must fail configuration.\n"
         f"{gate_result.stdout}{gate_result.stderr}"
     )
-    assert "nose selected no supported Python source files under planted" in (
+    assert "nose selected no Python source files under planted" in (
         gate_result.stderr
     ), "The diagnostic must explain that the configured root is empty."
     assert "global Git ignore rules" in gate_result.stderr, (
         "The diagnostic must identify ignore sources that affect selection."
     )
+    assert "Traceback" not in gate_result.stderr, "The gate must fail cleanly."
+
+
+def test_root_without_effective_python_sources_fails_with_another_root_visible(
+    tmp_path: Path,
+) -> None:
+    """A visible root cannot hide a second root whose Python is ignored."""
+    workspace, _gate_script = copied_gate_workspace(tmp_path)
+    visible_root = workspace / "visible"
+    ignored_root = workspace / "ignored"
+    visible_root.mkdir()
+    ignored_root.mkdir()
+    (visible_root / "visible.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (ignored_root / "ignored.py").write_text("VALUE = 2\n", encoding="utf-8")
+    (ignored_root / "visible.js").write_text("const value = 3;\n", encoding="utf-8")
+    (ignored_root / ".ignore").write_text("*.py\n", encoding="utf-8")
+    (workspace / "pyproject.toml").write_text(
+        textwrap.dedent(
+            """\
+            [project]
+            name = "gate-test"
+            version = "0"
+
+            [tool.nose]
+            version = "0.20.0"
+            roots = ["visible", "ignored"]
+            mode = "syntax,semantic,near"
+            min-size = 24
+            surface = "all"
+            top = 30
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    repository_settings = detector.load_settings(REPOSITORY_ROOT / "pyproject.toml")
+    binary = detector.resolve_binary(
+        repository_settings, context=repository_detector_context()
+    )
+    gate_result = run_gate_command(
+        workspace / "scripts" / "duplication_gate.py",
+        "check",
+        environment=_isolated_nose_environment(tmp_path, binary),
+    )
+
+    assert gate_result.returncode == 2, (
+        "A root with no effective Python source must fail configuration.\n"
+        f"{gate_result.stdout}{gate_result.stderr}"
+    )
+    assert "nose selected no Python source files under ignored" in (
+        gate_result.stderr
+    ), "The diagnostic must identify the empty configured root."
     assert "Traceback" not in gate_result.stderr, "The gate must fail cleanly."

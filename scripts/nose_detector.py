@@ -2,8 +2,8 @@
 
 This module owns everything that touches the external detector: reading the
 repository's ``[tool.nose]`` settings, locating the pinned binary, verifying
-its version, and running one ``nose query``. The report schema lives in
-``scripts/nose_schema.py``.
+its version, checking effective sources per root, and running one combined
+``nose query``. The report schema lives in ``scripts/nose_schema.py``.
 
 Adapted from ``leynos/episodic`` PR #276 at commit
 ``d9e5ac0d254f375e2986f52d91a3b88c117c833b``.
@@ -25,6 +25,7 @@ from nose_schema import (
     GateConfigError,
     GateExecutionError,
     Location,
+    has_python_source_files,
     is_non_empty_string,
     is_positive_integer,
     is_safe_relative_posix_path,
@@ -66,6 +67,7 @@ __all__ = [
     "Location",
     "NoseSettings",
     "build_command",
+    "build_stats_command",
     "discover_binary",
     "load_settings",
     "normalize_findings",
@@ -84,7 +86,8 @@ class NoseSettings:
     version : str
         Version string the installed binary must report.
     roots : tuple[str, ...]
-        Repository-relative paths handed to ``nose query``.
+        Repository-relative paths inventoried independently and handed together
+        to ``nose query``.
     mode : str
         Comma-separated detection channels, pinned so a change to nose's
         defaults cannot silently widen or narrow the gate.
@@ -254,9 +257,9 @@ def _validate_root_sources(
 ) -> None:
     """Require a source candidate after the gate's explicit exclusions.
 
-    Nose owns filesystem discovery and its ignore precedence. The detector's
-    successful-query warning is checked separately so this preflight does not
-    approximate `.ignore`, hidden-path, or Git-level ignore behavior.
+    Nose owns filesystem discovery and its ignore precedence. Its per-root
+    stats report checks `.ignore`, hidden-path, and Git-level ignore behavior;
+    this preflight only checks the gate's explicit exclusions.
 
     Raises
     ------
@@ -449,6 +452,11 @@ def build_command(binary: str, settings: NoseSettings) -> list[str]:
     return command
 
 
+def build_stats_command(binary: str, root: str) -> list[str]:
+    """Build a JSON source-inventory command for one configured root."""
+    return [binary, "stats", root, "--format", "json"]
+
+
 def run_detector(
     settings: NoseSettings,
     *,
@@ -477,6 +485,8 @@ def run_detector(
         :func:`normalize_findings`.
     """
     binary = resolve_binary(settings, context=context)
+    for root in settings.roots:
+        _require_python_sources(binary, root, context=context)
     output = context.command_runner(
         build_command(binary, settings), context.repository_root, context.environment
     )
@@ -488,14 +498,52 @@ def run_detector(
     return normalize_findings(report)
 
 
+def _require_python_sources(
+    binary: str,
+    root: str,
+    *,
+    context: DetectorContext,
+) -> None:
+    """Reject one configured root whose effective Nose inventory is empty."""
+    output = context.command_runner(
+        build_stats_command(binary, root), context.repository_root, context.environment
+    )
+    try:
+        report = json.loads(output)
+    except json.JSONDecodeError as error:
+        msg = f"nose stats report for {root} is not valid JSON: {error}"
+        raise GateExecutionError(msg) from error
+    if has_python_source_files(report):
+        return
+    msg = (
+        f"nose selected no Python source files under {root}; check "
+        "tool.nose.exclude, in-root .ignore/.gitignore rules, hidden paths, "
+        ".git/info/exclude, and global Git ignore rules"
+    )
+    raise GateConfigError(msg)
+
+
 def run_command(
     command: cabc.Sequence[str],
     repository_root: Path,
     environment: cabc.Mapping[str, str],
 ) -> str:
     """Run one detector command in its supplied repository and environment."""
+    result = _execute_command(command, repository_root, environment)
+    _raise_for_command_failure(command, result)
+    if len(command) > 1 and command[1] == "query":
+        _reject_empty_source_warnings(result.stderr)
+    return result.stdout
+
+
+def _execute_command(
+    command: cabc.Sequence[str],
+    repository_root: Path,
+    environment: cabc.Mapping[str, str],
+) -> subprocess.CompletedProcess[str]:
+    """Execute the verified detector and translate operating-system failures."""
     try:
-        result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - executes the fixed repository-owned binary
+        return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - executes the fixed repository-owned binary
             list(command),
             cwd=repository_root,
             env=dict(environment),
@@ -510,13 +558,16 @@ def run_command(
     except OSError as error:
         msg = f"cannot run {command[0]}: {error}: {INSTALL_HINT}"
         raise GateExecutionError(msg) from error
+
+
+def _raise_for_command_failure(
+    command: cabc.Sequence[str], result: subprocess.CompletedProcess[str]
+) -> None:
+    """Raise an actionable error when the detector exits unsuccessfully."""
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip()
         msg = f"{command[0]} exited with status {result.returncode}: {detail}"
         raise GateExecutionError(msg)
-    if len(command) > 1 and command[1] == "query":
-        _reject_empty_source_warnings(result.stderr)
-    return result.stdout
 
 
 def _reject_empty_source_warnings(stderr: str) -> None:
