@@ -278,6 +278,74 @@ def test_add_handler_rejects_lifecycle_callback() -> None:
         ManualResource.add_handler("disconnect", ManualResource.on_disconnect)
 
 
+def test_add_handler_rejects_bound_classmethod_lifecycle() -> None:
+    """The bound form of a ``classmethod`` lifecycle is refused too.
+
+    Reading ``on_disconnect`` through the class yields a bound method, not
+    the ``classmethod`` object stored in the class dictionary. Its ``__name__``
+    is ``cleanup``, so only unwrapping ``__func__`` connects it back to the
+    entry the MRO walk holds.
+    """
+
+    class ClassmethodResource(WebSocketResource):
+        """Resource whose lifecycle callback is a ``classmethod``."""
+
+        async def cleanup(cls, ws: WebSocketLike, close_code: int) -> None:
+            """Stand in for the lifecycle callback under test."""
+
+        on_disconnect = classmethod(cleanup)
+
+    with pytest.raises(ReservedHandlerRegistrationError, match="cleanup"):
+        ClassmethodResource.add_handler(
+            "bye", ClassmethodResource.on_disconnect, strict=False
+        )
+
+
+def test_add_handler_rejects_neutral_alias_of_descriptor_lifecycle() -> None:
+    """A neutrally named alias of a descriptor's coroutine is refused.
+
+    ``on_bye = cleanup`` is an ordinary coroutine with an ordinary name, so
+    only identity against the ``__func__`` of the class's ``on_disconnect``
+    descriptor can refuse it. Registering it would put the live connection's
+    disconnect handler in the peer-reachable registry under the tag ``bye``.
+    """
+
+    class ClassmethodResource(WebSocketResource):
+        """Resource aliasing the coroutine behind a ``classmethod`` lifecycle."""
+
+        async def cleanup(cls, ws: WebSocketLike, close_code: int) -> None:
+            """Stand in for the lifecycle callback under test."""
+
+        on_disconnect = classmethod(cleanup)
+        on_bye = cleanup
+
+    with pytest.raises(ReservedHandlerRegistrationError, match="cleanup"):
+        ClassmethodResource.add_handler("bye", ClassmethodResource.on_bye)
+
+
+def test_add_handler_rejects_inherited_classmethod_lifecycle() -> None:
+    """A child cannot register the descriptor lifecycle it inherited.
+
+    The child stores no ``on_disconnect`` of its own, so the MRO walk has to
+    resolve the parent's descriptor and unwrap it before comparing.
+    """
+
+    class ClassmethodParent(WebSocketResource):
+        """Parent supplying a ``classmethod`` lifecycle callback."""
+
+        async def cleanup(cls, ws: WebSocketLike, close_code: int) -> None:
+            """Stand in for the lifecycle callback under test."""
+
+        on_disconnect = classmethod(cleanup)
+        on_bye = cleanup
+
+    class ClassmethodChild(ClassmethodParent):
+        """Inherit the parent's descriptor without redefining it."""
+
+    with pytest.raises(ReservedHandlerRegistrationError, match="cleanup"):
+        ClassmethodChild.add_handler("bye", ClassmethodChild.on_bye)
+
+
 def test_add_handler_accepts_ordinary_handler() -> None:
     """An ordinary coroutine remains registrable through ``add_handler``."""
 
@@ -326,11 +394,15 @@ def test_lifecycle_callback_names_cover_the_base_class_hooks() -> None:
 def test_lifecycle_predicate_recognises_every_rejected_shape() -> None:
     """The predicate accepts each way a lifecycle callback can be presented.
 
-    Each entry is genuinely a lifecycle callback of ``LifecycleParent``: by
-    name, by alias, by inheritance, or through a wrapper. A descriptor is not
-    listed here because a descriptor over a neutrally named function is not a
-    lifecycle callback — it only becomes one when a class stores it under a
-    reserved name, which
+    Each entry is genuinely a lifecycle callback of its owner: by name, by
+    alias, by inheritance, through a ``functools.partial``, or through a
+    ``classmethod``/``staticmethod`` descriptor. The descriptor shapes matter
+    because the descriptor object is not the coroutine itself: only unwrapping
+    ``__func__`` reveals that the implementation is the same object the
+    neutrally named alias holds. A ``handles_message`` descriptor over a
+    neutrally named function is not listed because it is not a lifecycle
+    callback — it only becomes one when a class stores it under a reserved
+    name, which
     :func:`test_decorated_handler_under_reserved_name_is_rejected` covers.
     """
     partial_disconnect = functools.partial(LifecycleParent.on_disconnect)
@@ -344,21 +416,55 @@ def test_lifecycle_predicate_recognises_every_rejected_shape() -> None:
     class Child(LifecycleParent):
         """Inherit the parent's callback without redefining it."""
 
+    class ClassmethodLifecycle(WebSocketResource):
+        """Define the callback as a classmethod, aliased under a neutral name."""
+
+        async def cleanup(owner: object, ws: WebSocketLike, close_code: int) -> None:
+            """Stand in for the callback behind the ``classmethod`` wrapper."""
+
+        on_disconnect = classmethod(cleanup)
+        on_bye = cleanup
+
+    class StaticLifecycle(WebSocketResource):
+        """Define the callback as a staticmethod, aliased under a neutral name."""
+
+        async def cleanup(ws: WebSocketLike, close_code: int) -> None:
+            """Stand in for the callback behind the ``staticmethod`` wrapper."""
+
+        on_disconnect = staticmethod(cleanup)
+        on_bye = cleanup
+
     async def ordinary(self: object, ws: WebSocketLike, payload: object) -> None:
         """Stand in for an ordinary message handler."""
 
     async def cleanup(self: object, ws: WebSocketLike, payload: object) -> None:
         """Stand in for an ordinary function presented through a descriptor."""
 
+    # Each shape is checked against the owner that actually carries it: the
+    # descriptor aliases only exist on their own classes, and asking
+    # ``LifecycleParent`` to recognise them would test the wrong MRO.
     rejected = {
-        "direct": LifecycleParent.on_disconnect,
-        "alias": Aliased.__dict__["on_bye"],
-        "inherited": Child.on_disconnect,
-        "partial": partial_disconnect,
-        "nested partial": functools.partial(partial_disconnect),
+        "direct": (LifecycleParent, LifecycleParent.on_disconnect),
+        "alias": (LifecycleParent, Aliased.__dict__["on_bye"]),
+        "inherited": (LifecycleParent, Child.on_disconnect),
+        "partial": (LifecycleParent, partial_disconnect),
+        "nested partial": (LifecycleParent, functools.partial(partial_disconnect)),
+        "classmethod descriptor": (
+            ClassmethodLifecycle,
+            ClassmethodLifecycle.__dict__["on_disconnect"],
+        ),
+        "classmethod alias": (
+            ClassmethodLifecycle,
+            ClassmethodLifecycle.__dict__["on_bye"],
+        ),
+        "staticmethod descriptor": (
+            StaticLifecycle,
+            StaticLifecycle.__dict__["on_disconnect"],
+        ),
+        "staticmethod alias": (StaticLifecycle, StaticLifecycle.__dict__["on_bye"]),
     }
-    for label, callable_ in rejected.items():
-        assert is_lifecycle_callback(LifecycleParent, callable_), (
+    for label, (owner, callable_) in rejected.items():
+        assert is_lifecycle_callback(owner, callable_), (
             f"{label} must be recognised as a lifecycle callback"
         )
     assert not is_lifecycle_callback(LifecycleParent, ordinary), (

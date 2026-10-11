@@ -32,6 +32,7 @@ import collections.abc as cabc
 import dataclasses as dc
 import functools
 import inspect
+import types
 import typing as typ
 
 if typ.TYPE_CHECKING:
@@ -67,20 +68,32 @@ LIFECYCLE_CALLBACK_NAMES: frozenset[str] = frozenset({
 def _unwrap_handler(action: object) -> object:
     """Peel the wrappers that hide the function a handler ultimately invokes.
 
-    Two wrappers matter. A ``functools.partial`` exposes neither the wrapped
-    function's ``__name__`` nor its identity. A ``_HandlesMessageDescriptor``
-    is the object ``@handles_message`` returns; it is not callable itself
-    until ``__get__`` binds it, and a class may store it under any name,
-    including a reserved one.
+    Four wrapper families matter. A ``functools.partial`` exposes neither the
+    wrapped function's ``__name__`` nor its identity. A
+    ``_HandlesMessageDescriptor`` is the object ``@handles_message`` returns;
+    it is not callable itself until ``__get__`` binds it, and a class may
+    store it under any name, including a reserved one. A ``classmethod`` or
+    ``staticmethod`` object stored in the class dictionary is a descriptor
+    rather than the coroutine, so comparing it directly with a plain alias of
+    the same function always fails; both expose the underlying function as
+    ``__func__``. A bound method — the result of reading a ``classmethod``
+    through its class, or any method through an instance — announces itself
+    through ``__func__`` for the same reason: a caller who registers
+    ``Resource.on_disconnect`` passes the bound form, not the descriptor.
 
     Returns
     -------
     object
         The innermost callable, or ``action`` unchanged when it is not wrapped.
     """
-    while isinstance(action, (functools.partial, _HandlesMessageDescriptor)):
-        action = action.func
-    return action
+    while True:
+        if isinstance(action, (functools.partial, _HandlesMessageDescriptor)):
+            action = action.func
+            continue
+        if isinstance(action, (classmethod, staticmethod, types.MethodType)):
+            action = action.__func__
+            continue
+        return action
 
 
 def _has_reserved_name(action: object) -> bool:
@@ -116,7 +129,10 @@ def is_lifecycle_callback(owner: type, action: object) -> bool:
     example ``on_disconnect = handles_message("bye")(cleanup)`` — hides the
     function that ``__set_name__`` registers, so comparing the descriptor
     against a registered function would both miss the reserved name and fail
-    the identity test.
+    the identity test. A ``classmethod`` or ``staticmethod`` object stored in
+    the class dictionary hides the coroutine behind ``__func__``, so an alias
+    of that coroutine under a neutral name would escape an identity test that
+    compared the two as-is.
 
     Parameters
     ----------
@@ -130,7 +146,9 @@ def is_lifecycle_callback(owner: type, action: object) -> bool:
     bool
         ``True`` when the callable is a reserved lifecycle callback.
     """
-    if not callable(action) and not isinstance(action, _HandlesMessageDescriptor):
+    if not callable(action) and not isinstance(
+        action, (_HandlesMessageDescriptor, classmethod, staticmethod)
+    ):
         return False
     resolved = _unwrap_handler(action)
     if not callable(resolved):

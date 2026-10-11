@@ -262,6 +262,70 @@ class InheritedAliasLifecycleResource(AliasedLifecycleResource):
     """Child resource inheriting an alias of a lifecycle callback."""
 
 
+class ClassmethodLifecycleResource(WebSocketResource):
+    """Alias a ``classmethod`` lifecycle callback under a neutral name.
+
+    ``cleanup`` is the coroutine behind the ``on_disconnect`` classmethod and
+    is *also* stored under the neutral alias ``on_bye``. Its neutral name
+    passes both the coroutine test and the reserved-name check, so only the
+    identity comparison between the two entries can refuse it. A
+    ``classmethod`` receives the class in place of ``self``, so it records
+    into a class attribute; the test clears that attribute between cases.
+    """
+
+    calls: list[int] = []
+
+    def __init__(self) -> None:
+        self.fallback: list[str | bytes] = []
+
+    async def cleanup(cls, ws: WebSocketLike, close_code: int) -> None:
+        """Record the close code the lifecycle supplied."""
+        cls.calls.append(close_code)
+
+    on_disconnect = classmethod(cleanup)
+    on_bye = cleanup
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record the original frame handed to the fallback."""
+        self.fallback.append(message)
+
+
+class StaticLifecycleResource(WebSocketResource):
+    """Alias a ``staticmethod`` lifecycle callback under a neutral name.
+
+    ``on_bye = cleanup`` is deliberately handler-shaped — three parameters,
+    the last annotated — so nothing but the identity comparison can refuse
+    it. A two-parameter ``cleanup`` would be rejected downstream by ordinary
+    signature validation, which would mask whether the reserved-callback
+    check works at all.
+    """
+
+    calls: list[int] = []
+
+    def __init__(self) -> None:
+        self.fallback: list[str | bytes] = []
+
+    async def cleanup(ws: WebSocketLike, close_code: int, payload: int) -> None:
+        """Record the close code the lifecycle supplied."""
+        StaticLifecycleResource.calls.append(close_code)
+
+    on_disconnect = staticmethod(cleanup)
+    on_bye = cleanup
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record the original frame handed to the fallback."""
+        self.fallback.append(message)
+
+
+class InheritedClassmethodLifecycleResource(ClassmethodLifecycleResource):
+    """Child inheriting a ``classmethod`` lifecycle and its neutral alias.
+
+    The child defines neither entry, so the MRO walk has to resolve the
+    parent's descriptor and unwrap it before the identity comparison can
+    connect the neutral alias to the lifecycle implementation.
+    """
+
+
 class DecoratedReservedTagResource(WebSocketResource):
     """Resource that reuses a reserved tag on an ordinary method."""
 
@@ -518,6 +582,58 @@ async def test_inherited_lifecycle_alias_is_not_peer_selectable() -> None:
         f"the inherited on_bye alias must not run on_disconnect: {r.lifecycle}"
     )
     assert r.fallback == [raw], "an inherited alias must fall back"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tag", ["bye", "Bye", "bYe"])
+async def test_classmethod_lifecycle_alias_is_not_peer_selectable(tag: str) -> None:
+    """A ``classmethod`` lifecycle stays unreachable through its plain alias.
+
+    ``on_bye`` is the plain coroutine ``cleanup``, while the reserved entry is
+    a ``classmethod`` descriptor; comparing them directly misses that the
+    descriptor's ``__func__`` *is* ``on_bye``.
+    """
+    ClassmethodLifecycleResource.calls.clear()
+    r = ClassmethodLifecycleResource()
+    r.bind_default_hook_manager()
+    raw = msjson.encode({"type": tag, "payload": 1000})
+    await r.dispatch(DummyWS(), raw)
+    assert not ClassmethodLifecycleResource.calls, (
+        f"the classmethod alias must not run on_disconnect for {tag!r}: "
+        f"{ClassmethodLifecycleResource.calls}"
+    )
+    assert r.fallback == [raw], "a classmethod lifecycle alias must fall back"
+
+
+@pytest.mark.asyncio
+async def test_inherited_classmethod_lifecycle_alias_is_not_peer_selectable() -> None:
+    """A child inherits the classmethod lifecycle and its alias unexposed."""
+    ClassmethodLifecycleResource.calls.clear()
+    r = InheritedClassmethodLifecycleResource()
+    r.bind_default_hook_manager()
+    raw = msjson.encode({"type": "bye", "payload": 1000})
+    await r.dispatch(DummyWS(), raw)
+    assert not ClassmethodLifecycleResource.calls, (
+        "the inherited classmethod alias must not run on_disconnect: "
+        f"{ClassmethodLifecycleResource.calls}"
+    )
+    assert r.fallback == [raw], "an inherited classmethod alias must fall back"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tag", ["bye", "Bye", "bYe"])
+async def test_staticmethod_lifecycle_alias_is_not_peer_selectable(tag: str) -> None:
+    """A ``staticmethod`` lifecycle stays unreachable through its plain alias."""
+    StaticLifecycleResource.calls.clear()
+    r = StaticLifecycleResource()
+    r.bind_default_hook_manager()
+    raw = msjson.encode({"type": tag, "payload": 1000})
+    await r.dispatch(DummyWS(), raw)
+    assert not StaticLifecycleResource.calls, (
+        f"the staticmethod alias must not run on_disconnect for {tag!r}: "
+        f"{StaticLifecycleResource.calls}"
+    )
+    assert r.fallback == [raw], "a staticmethod lifecycle alias must fall back"
 
 
 @pytest.mark.asyncio
