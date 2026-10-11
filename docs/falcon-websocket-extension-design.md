@@ -54,6 +54,70 @@ cancellation closes with `1001` and passes that code to the cleanup hook
 before cancellation is re-raised. The
 router does not send a close frame to a socket Falcon has already closed.
 
+### WebSocket session lifecycle
+
+```mermaid
+stateDiagram-v2
+    accTitle: WebSocket session state transitions
+    accDescr {
+        The session starts while the router runs on_connect. A false result
+        closes the session; a true result leads to acceptance and a persistent
+        receive and dispatch loop. A clean disconnect, dispatch failure or
+        cancellation each invokes on_disconnect once with its corresponding
+        close code, then ends in the disconnected state.
+    }
+
+    [*] --> Connecting
+    Connecting --> Accepted: on_connect returns true
+    Connecting --> Closed: on_connect returns false
+    Accepted --> Receiving: accept()
+    Receiving --> Receiving: receive_media() and dispatch(ws, raw)
+    Receiving --> CleanDisconnect: WebSocketDisconnected
+    Receiving --> Failed: dispatch exception
+    Receiving --> Cancelled: task cancellation
+    CleanDisconnect --> Disconnected: on_disconnect(ws, 1000 or peer code)
+    Failed --> Disconnected: close(1011), on_disconnect(ws, 1011)
+    Cancelled --> Disconnected: on_disconnect(ws, 1006)
+    Closed --> [*]
+    Disconnected --> [*]
+```
+
+**Figure: WebSocket session states from connection through acceptance, frame
+dispatch and exactly-once disconnect cleanup.**
+
+```mermaid
+sequenceDiagram
+    accTitle: Falcon WebSocket responder lifecycle
+    accDescr {
+        Falcon routes the connection to WebSocketRouter, which calls the
+        resource's on_connect hook before accepting. The router then receives
+        raw frames and dispatches each one until disconnect, followed by the
+        resource's on_disconnect hook with the final close code.
+    }
+
+    participant Client
+    participant FalconApp
+    participant WebSocketRouter
+    participant WebSocketResource
+    participant WebSocket
+
+    Client->>FalconApp: WebSocket connection
+    FalconApp->>WebSocketRouter: on_websocket(req, ws)
+    WebSocketRouter->>WebSocketResource: on_connect(req, ws, params)
+    WebSocketResource-->>WebSocketRouter: continue session
+    WebSocketRouter->>WebSocket: accept()
+    loop Until disconnect
+        WebSocketRouter->>WebSocket: receive_media()
+        WebSocket-->>WebSocketRouter: raw str or bytes frame
+        WebSocketRouter->>WebSocketResource: dispatch(ws, raw)
+    end
+    WebSocketRouter->>WebSocketResource: on_disconnect(ws, close_code)
+```
+
+**Figure: Falcon routes a WebSocket connection to the router, which accepts
+the session, dispatches each raw frame, and calls the resource's disconnect
+hook when the session ends.**
+
 This implemented contract supersedes the future-tense responder and receive
 loop descriptions in the original proposal below.
 
@@ -1756,6 +1820,49 @@ helpers—`WebSocketTestClient` and `WebSocketSimulator`—plus a pytest fixture
 that encapsulates common setup. Together they support both end-to-end exercises
 against a running ASGI server and hermetic unit tests that spy on the framework
 internals.
+
+The live server harness owns an ephemeral listener, waits for explicit server
+readiness, tracks client sessions, and reports unacknowledged server failures
+during teardown. Its default Uvicorn adapter is replaceable through the
+server-adapter protocol.
+
+```mermaid
+sequenceDiagram
+    accTitle: Live WebSocket server harness lifecycle
+    accDescr {
+        The BDD test starts the harness, which asks the server adapter to serve
+        Falcon on a prebound socket. After readiness, the test connects a real
+        WebSocketTestClient. During teardown the harness closes tracked client
+        sessions, stops the adapter gracefully, and surfaces errors that the
+        test has not acknowledged.
+    }
+
+    participant Test as BDD test
+    participant Harness as LiveWebSocketServer
+    participant Adapter as Uvicorn adapter
+    participant Falcon as Falcon ASGI app
+    participant Client as WebSocketTestClient
+
+    Test->>Harness: start(app)
+    Harness->>Adapter: start(_asgi_app(), socket)
+    Adapter->>Falcon: serve with lifespan
+    Adapter-->>Harness: readiness
+    Harness-->>Test: base_url available
+    Test->>Harness: connect(path)
+    Harness->>Client: connect(path)
+    Client->>Falcon: WebSocket handshake and frames
+    Falcon-->>Client: responses and close
+    Test->>Harness: pop_errors()
+    Test->>Harness: stop server
+    Harness->>Client: close tracked sessions
+    Harness->>Adapter: stop()
+    Adapter-->>Harness: graceful shutdown
+    Harness-->>Test: surface unacknowledged errors
+```
+
+**Figure: The BDD test starts a ready live server, exchanges WebSocket frames,
+then closes tracked clients and observes any unacknowledged errors during
+graceful shutdown.**
 
 #### 6.5.1. `WebSocketTestClient`
 
