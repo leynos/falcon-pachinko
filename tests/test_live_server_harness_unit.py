@@ -13,6 +13,8 @@ from tests.behaviour import _live_server
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from uvicorn import Server
+
 
 class _UnreadyServer:
     """Keep an owned serving task alive without announcing readiness."""
@@ -42,29 +44,27 @@ class _UnreadyServer:
     ],
 )
 async def test_startup_failure_joins_owned_serving_task(
-    monkeypatch: pytest.MonkeyPatch,
     startup_error: TimeoutError | asyncio.CancelledError,
 ) -> None:
     """Failed readiness preserves the error and leaves no serving task alive."""
     server = _UnreadyServer()
-    real_wait_for = asyncio.wait_for
 
     async def fail_readiness(
         pending: cabc.Coroutine[object, object, None],
-        timeout: float,  # ruff: ignore[async-function-with-timeout] - match patched wait_for
     ) -> None:
-        del timeout
-        await real_wait_for(server.serving.wait(), timeout=1)
+        await asyncio.wait_for(server.serving.wait(), timeout=1)
         pending.close()
         raise startup_error
 
-    monkeypatch.setattr(_live_server.uvicorn, "Server", lambda _config: server)
-    monkeypatch.setattr(_live_server.asyncio, "wait_for", fail_readiness)
     loop = asyncio.get_running_loop()
     previous_handler = loop.get_exception_handler()
     try:
         with pytest.raises(type(startup_error), match="startup") as raised:
-            await _live_server.LiveServer.start(loop)
+            await _live_server.LiveServer.start(
+                loop,
+                server_factory=lambda _config: typ.cast("Server", server),
+                wait_ready=fail_readiness,
+            )
         assert raised.value is startup_error, "startup must preserve the original error"
         assert server.stopped.is_set(), "startup failure must join its serving task"
         assert loop.get_exception_handler() is previous_handler, (
