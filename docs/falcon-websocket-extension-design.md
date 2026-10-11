@@ -370,17 +370,22 @@ avoids a monolithic receive loop with extensive conditional logic.
      reserved and are never admitted to the allowlist, along with any alias or
      inherited copy of them. They are lifecycle-driven, so a peer-chosen tag
      that names one would let a remote client drive cleanup for a live socket.
-     A reserved tag is instead treated as unhandled: the explicit registry is
-     consulted first by exact tag string, and only when it holds no handler for
-     that string does the frame reach `on_unhandled(self, ws, raw)`. Registration
-     is refused on the same terms: `WebSocketResource.add_handler` and
-     `@handles_message` raise `ReservedHandlerRegistrationError` for a callable
-     implementing a reserved callback, while the reserved tag string stays legal
-     on a distinct method. The decorator classifies the callback before it
-     validates the handler signature, so a decorated lifecycle method is refused
-     for being reserved rather than for the shape its lifecycle signature has;
-     aliases and inherited copies, which cannot be judged until the class exists,
-     are refused at class creation.
+     Wrapper families are unwrapped before identity is compared: a
+     `functools.partial`, a `@handles_message` descriptor, a `classmethod` or
+     `staticmethod` object, and a bound method are all reduced to the function
+     they wrap. An alias under a neutral name therefore cannot drift into the
+     peer-reachable registry. A reserved tag is instead treated as unhandled:
+     the explicit registry is consulted first by exact tag string, and only
+     when it holds no handler for that string does the frame reach
+     `on_unhandled(self, ws, raw)`. Registration is refused on the same terms:
+     `WebSocketResource.add_handler` and `@handles_message` raise
+     `ReservedHandlerRegistrationError` for a callable implementing a reserved
+     callback, while the reserved tag string stays legal on a distinct method.
+     The decorator classifies the callback before it validates the handler
+     signature, so a decorated lifecycle method is refused for being reserved
+     rather than for the shape its lifecycle signature has; aliases and
+     inherited copies, which cannot be judged until the class exists, are
+     refused at class creation.
 
   ```python
   from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message

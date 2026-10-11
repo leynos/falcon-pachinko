@@ -14,6 +14,7 @@ cover various scenarios including:
 from __future__ import annotations
 
 import functools
+import typing as typ
 
 import msgspec as ms
 import msgspec.json as msjson
@@ -283,19 +284,18 @@ def test_add_handler_rejects_bound_classmethod_lifecycle() -> None:
 
     Reading ``on_disconnect`` through the class yields a bound method, not
     the ``classmethod`` object stored in the class dictionary. Its ``__name__``
-    is ``cleanup``, so only unwrapping ``__func__`` connects it back to the
-    entry the MRO walk holds.
+    is ``_record_classmethod_close``, so only unwrapping ``__func__``
+    connects it back to the entry the MRO walk holds.
     """
 
     class ClassmethodResource(WebSocketResource):
         """Resource whose lifecycle callback is a ``classmethod``."""
 
-        async def cleanup(cls, ws: WebSocketLike, close_code: int) -> None:
-            """Stand in for the lifecycle callback under test."""
+        on_disconnect = classmethod(_record_classmethod_close)
 
-        on_disconnect = classmethod(cleanup)
-
-    with pytest.raises(ReservedHandlerRegistrationError, match="cleanup"):
+    with pytest.raises(
+        ReservedHandlerRegistrationError, match="_record_classmethod_close"
+    ):
         ClassmethodResource.add_handler(
             "bye", ClassmethodResource.on_disconnect, strict=False
         )
@@ -304,8 +304,8 @@ def test_add_handler_rejects_bound_classmethod_lifecycle() -> None:
 def test_add_handler_rejects_neutral_alias_of_descriptor_lifecycle() -> None:
     """A neutrally named alias of a descriptor's coroutine is refused.
 
-    ``on_bye = cleanup`` is an ordinary coroutine with an ordinary name, so
-    only identity against the ``__func__`` of the class's ``on_disconnect``
+    ``on_bye`` is an ordinary coroutine with an ordinary name, so only
+    identity against the ``__func__`` of the class's ``on_disconnect``
     descriptor can refuse it. Registering it would put the live connection's
     disconnect handler in the peer-reachable registry under the tag ``bye``.
     """
@@ -313,13 +313,12 @@ def test_add_handler_rejects_neutral_alias_of_descriptor_lifecycle() -> None:
     class ClassmethodResource(WebSocketResource):
         """Resource aliasing the coroutine behind a ``classmethod`` lifecycle."""
 
-        async def cleanup(cls, ws: WebSocketLike, close_code: int) -> None:
-            """Stand in for the lifecycle callback under test."""
+        on_disconnect = classmethod(_record_classmethod_close)
+        on_bye = _record_classmethod_close
 
-        on_disconnect = classmethod(cleanup)
-        on_bye = cleanup
-
-    with pytest.raises(ReservedHandlerRegistrationError, match="cleanup"):
+    with pytest.raises(
+        ReservedHandlerRegistrationError, match="_record_classmethod_close"
+    ):
         ClassmethodResource.add_handler("bye", ClassmethodResource.on_bye)
 
 
@@ -333,17 +332,28 @@ def test_add_handler_rejects_inherited_classmethod_lifecycle() -> None:
     class ClassmethodParent(WebSocketResource):
         """Parent supplying a ``classmethod`` lifecycle callback."""
 
-        async def cleanup(cls, ws: WebSocketLike, close_code: int) -> None:
-            """Stand in for the lifecycle callback under test."""
-
-        on_disconnect = classmethod(cleanup)
-        on_bye = cleanup
+        on_disconnect = classmethod(_record_classmethod_close)
+        on_bye = _record_classmethod_close
 
     class ClassmethodChild(ClassmethodParent):
         """Inherit the parent's descriptor without redefining it."""
 
-    with pytest.raises(ReservedHandlerRegistrationError, match="cleanup"):
+    with pytest.raises(
+        ReservedHandlerRegistrationError, match="_record_classmethod_close"
+    ):
         ClassmethodChild.add_handler("bye", ClassmethodChild.on_bye)
+
+
+async def _record_classmethod_close(
+    cls: type[typ.Any], ws: WebSocketLike, close_code: int
+) -> None:
+    """Stand in for a ``classmethod`` lifecycle under test."""
+
+
+async def _record_staticmethod_close(
+    ws: WebSocketLike, close_code: int, payload: int
+) -> None:
+    """Stand in for a ``staticmethod`` lifecycle, handler-shaped under test."""
 
 
 def test_add_handler_accepts_ordinary_handler() -> None:
@@ -419,20 +429,14 @@ def test_lifecycle_predicate_recognises_every_rejected_shape() -> None:
     class ClassmethodLifecycle(WebSocketResource):
         """Define the callback as a classmethod, aliased under a neutral name."""
 
-        async def cleanup(owner: object, ws: WebSocketLike, close_code: int) -> None:
-            """Stand in for the callback behind the ``classmethod`` wrapper."""
-
-        on_disconnect = classmethod(cleanup)
-        on_bye = cleanup
+        on_disconnect = classmethod(_record_classmethod_close)
+        on_bye = _record_classmethod_close
 
     class StaticLifecycle(WebSocketResource):
         """Define the callback as a staticmethod, aliased under a neutral name."""
 
-        async def cleanup(ws: WebSocketLike, close_code: int) -> None:
-            """Stand in for the callback behind the ``staticmethod`` wrapper."""
-
-        on_disconnect = staticmethod(cleanup)
-        on_bye = cleanup
+        on_disconnect = staticmethod(_record_staticmethod_close)
+        on_bye = _record_staticmethod_close
 
     async def ordinary(self: object, ws: WebSocketLike, payload: object) -> None:
         """Stand in for an ordinary message handler."""
