@@ -87,13 +87,13 @@ def _unwrap_handler(action: object) -> object:
         The innermost callable, or ``action`` unchanged when it is not wrapped.
     """
     while True:
-        if isinstance(action, (functools.partial, _HandlesMessageDescriptor)):
-            action = action.func
-            continue
-        if isinstance(action, (classmethod, staticmethod, types.MethodType)):
-            action = action.__func__
-            continue
-        return action
+        match action:
+            case functools.partial() | _HandlesMessageDescriptor():
+                action = action.func
+            case classmethod() | staticmethod() | types.MethodType():
+                action = action.__func__
+            case _:
+                return action
 
 
 def _has_reserved_name(action: object) -> bool:
