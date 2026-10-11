@@ -413,3 +413,15 @@ approval or merge is claimed.
   Mermaid; and CV005. These results cover the current working tree. Commit,
   publication, new-head hosted CI and CodeScene results, and review
   reconciliation remain pending. No application behaviour or proof changed.
+- Follow-up recorded after publishing `ea16452459a3e13023d6619866edb8e77a00991a`
+  (base `f6e637e48a1f862e8dfabb26ea5cda4cbec3279a`): all required sequential
+  local gates passed on the final source tree: `make check-fmt`,
+  `make duplication-test` (179 passed, 3 snapshots), `make duplication` (four
+  exceptions), `make lint`, `make typecheck`, `make test` (655 passed, 2
+  skipped, 19 warnings), spelling, Markdown, Mermaid, and CV005. The commit was
+  pushed and remote parity checked. Hosted CI run `38167374903`, job
+  `114552629892`, passed; CodeScene result `7904479` passed and formal
+  CodeScene review `5484591797` approved this head; Gecko Security Review
+  passed. CodeRabbit's aggregate decision remains `CHANGES_REQUESTED` due to
+  its older review. Managed full review request `acb832fa` is queued, with no
+  current-head CodeRabbit review yet. PR #225 remains open and unmerged.
