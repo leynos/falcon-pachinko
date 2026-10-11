@@ -1,4 +1,12 @@
-"""Focused live session _session_context.py support."""
+"""Share live connection state and bounded operations between BDD step modules.
+
+LiveScenario holds the server, client, recorder, and client context stack.
+Steps open a connection with ``await connect(context)``, end it with
+``await finish_client_session(context)``, and join server cleanup with
+``await stop_server(context)`` before asserting exactly-once records.
+``close_client_context`` releases client contexts, while
+``close_code_from_error`` extracts the peer's effective close code.
+"""
 
 from __future__ import annotations
 
