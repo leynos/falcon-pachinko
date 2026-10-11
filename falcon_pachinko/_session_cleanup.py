@@ -43,7 +43,7 @@ async def run_shielded_cleanup(
     context: CleanupContext,
 ) -> tuple[tuple[BaseException, ...], tuple[asyncio.CancelledError, ...]]:
     """Finish one cleanup task even if its caller receives more cancellation."""
-    cleanup_task = asyncio.create_task(_cleanup_session(context))
+    cleanup_task = asyncio.create_task(_collect_cleanup_failures(context))
     interruptions: list[asyncio.CancelledError] = []
     while True:
         try:
@@ -64,6 +64,18 @@ async def run_shielded_cleanup(
         except asyncio.CancelledError as exc:
             failures = (exc,)
     return failures, tuple(interruptions)
+
+
+async def _collect_cleanup_failures(
+    context: CleanupContext,
+) -> tuple[BaseException, ...]:
+    """Keep unexpected housekeeping errors within the session failure policy."""
+    # A cancelled shield may independently report an inner task's exception.
+    # Return errors as values so our precedence policy owns their single report.
+    try:
+        return await _cleanup_session(context)
+    except BaseException as exc:  # ruff: ignore[blind-except] - retain cleanup task failures
+        return (exc,)
 
 
 async def _cleanup_session(context: CleanupContext) -> tuple[BaseException, ...]:
