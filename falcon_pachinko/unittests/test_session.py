@@ -288,6 +288,40 @@ async def test_cancellation_closes_with_1001_and_skips_after_receive() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancellation_during_disconnect_hook_runs_remaining_cleanup() -> None:
+    """Cancellation during normal cleanup switches to best-effort 1001 cleanup."""
+    resource = SessionResource()
+    hook_codes: list[int | None] = []
+    hook_entered = asyncio.Event()
+    release_hook = asyncio.Event()
+
+    async def pause_for_peer_close(context: HookContext) -> None:
+        hook_codes.append(context.close_code)
+        if context.close_code == 4008:
+            hook_entered.set()
+            await release_hook.wait()
+
+    router = _router_for(resource)
+    router.global_hooks.add("before_disconnect", pause_for_peer_close)
+    ws = RecordingWS(disconnect_code=4008)
+    task = asyncio.create_task(router.on_websocket(make_req("/session"), ws))
+
+    try:
+        await asyncio.wait_for(hook_entered.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        release_hook.set()
+
+    assert ws.closed == [1001], "cleanup cancellation must close with 1001"
+    assert hook_codes == [4008, 1001], "cancellation cleanup must use code 1001"
+    assert resource.disconnects == [1001], (
+        "resource cleanup must still run after the hook is cancelled"
+    )
+
+
+@pytest.mark.asyncio
 async def test_application_close_code_is_used_for_disconnect_cleanup() -> None:
     """An application close ends the receive loop with its chosen code."""
 
