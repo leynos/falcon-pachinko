@@ -16,8 +16,8 @@ from ._common import (
     _FAILED_JSON_DECODE_MSG,
     _TEXT_PAYLOAD_REQUIRED_MSG,
     _UNSUPPORTED_FRAME_KIND_MSG,
+    DisconnectSentinel,
     FrameKind,
-    _DisconnectSentinel,
     _LifecycleSocket,
 )
 
@@ -73,7 +73,7 @@ class WebSocketSimulator(_LifecycleSocket):
         if self.closed and self._inbound.empty():
             raise falcon.WebSocketDisconnected(self.close_code)
         message = await self._inbound.get()
-        if isinstance(message, _DisconnectSentinel):
+        if isinstance(message, DisconnectSentinel):
             raise falcon.WebSocketDisconnected(message.code)
         self.received_messages.append(message)
         return message
@@ -86,7 +86,7 @@ class WebSocketSimulator(_LifecycleSocket):
         # The disconnect is queued after earlier inbound frames so a session
         # drains messages already accepted by the peer before it observes close.
         close_code = self.close_code if self.close_code is not None else code
-        await self._inbound.put(_DisconnectSentinel(close_code))
+        await self._inbound.put(DisconnectSentinel(close_code))
 
     async def next_sent(self) -> object:
         """Await the next outbound frame emitted by the simulator."""

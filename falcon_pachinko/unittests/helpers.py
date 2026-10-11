@@ -8,7 +8,14 @@ import typing as typ
 import falcon
 
 
-def make_req(path: str, path_template: str = "") -> types.SimpleNamespace:
+class DummyRequest(types.SimpleNamespace):
+    """Retain flexible test attributes while declaring the router's path fields."""
+
+    path: str
+    path_template: str
+
+
+def make_req(path: str, path_template: str = "") -> DummyRequest:
     """Build a minimal request stand-in for router tests.
 
     Parameters
@@ -20,10 +27,10 @@ def make_req(path: str, path_template: str = "") -> types.SimpleNamespace:
 
     Returns
     -------
-    types.SimpleNamespace
+    DummyRequest
         An object exposing ``path`` and ``path_template`` attributes
     """
-    return types.SimpleNamespace(path=path, path_template=path_template)
+    return DummyRequest(path=path, path_template=path_template)
 
 
 class DummyWS:

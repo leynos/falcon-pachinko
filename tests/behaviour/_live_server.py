@@ -10,6 +10,7 @@ import typing as typ
 from contextlib import suppress
 
 import falcon.asgi
+import msgspec as ms
 import msgspec.json as msjson
 import uvicorn
 
@@ -36,6 +37,7 @@ class DisconnectRecorder:
         self.disconnect_records: list[tuple[str, int]] = []
         self.disconnect_events: dict[str, asyncio.Event] = {}
         self.handler_errors: list[Exception] = []
+        self.received_frames: list[str | bytes] = []
         self.rejected_disconnects = 0
         self.block_started = asyncio.Event()
         self._ids = itertools.count(1)
@@ -86,11 +88,24 @@ class RecordingResource(WebSocketResource):
 
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Implement the small message protocol used by live scenarios."""
-        payload = msjson.decode(message)
+        self._recorder.received_frames.append(message)
+        try:
+            payload = msjson.decode(message)
+        except ms.DecodeError:
+            if not isinstance(message, str):
+                raise
+            await ws.send_media({"type": "raw", "message": message})
+            return
         if not isinstance(payload, dict):
             msg = "live test messages must be JSON objects"
             raise TypeError(msg)
 
+        await self._respond_to_payload(ws, payload)
+
+    async def _respond_to_payload(
+        self, ws: WebSocketLike, payload: dict[str, object]
+    ) -> None:
+        """Exercise handler exits independently of raw frame decoding."""
         match payload.get("type"):
             case "echo":
                 await ws.send_media(payload)
@@ -233,7 +248,11 @@ class LiveServer:
         try:
             await asyncio.wait_for(wait_until_started(), timeout=5)
         except (Exception, asyncio.CancelledError):
-            loop.set_exception_handler(previous_handler)
+            serve_task.cancel()
+            try:
+                await asyncio.gather(serve_task, return_exceptions=True)
+            finally:
+                loop.set_exception_handler(previous_handler)
             raise
 
         sockets = server.servers

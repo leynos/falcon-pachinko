@@ -279,7 +279,7 @@ class WebSocketResource:
     async def dispatch(self, ws: WebSocketLike, raw: str | bytes) -> None:
         """Decode ``raw`` and route it to the appropriate handler."""
         manager = self._require_hook_manager()
-        if not _can_receive(manager, ws):
+        if not manager.can_receive(ws):
             return
         async with _receive_hooks(manager, self, ws=ws, raw=raw) as should_dispatch:
             if not should_dispatch:
@@ -297,24 +297,16 @@ async def _receive_hooks(
 ) -> cabc.AsyncGenerator[bool, None]:
     """Balance before/after receive hooks while guarding original errors."""
     context = await manager.notify_before_receive(target, ws=ws, raw=raw)
-    should_dispatch = _can_receive(manager, ws)
+    should_dispatch = manager.can_receive(ws)
     try:
         yield should_dispatch
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         context.error = exc
-        if _can_receive(manager, ws):
+        if manager.can_receive(ws):
             with suppress(Exception):
                 await manager.notify_after_receive(context)
         raise
-    if _can_receive(manager, ws):
+    if manager.can_receive(ws):
         await manager.notify_after_receive(context)
-
-
-def _can_receive(manager: HookManager, ws: WebSocketLike) -> bool:
-    """Guard bound sessions after cleanup or a transport close has begun."""
-    session = manager.session
-    if session is None:
-        return True
-    return session.can_receive and not getattr(ws, "closed", False)

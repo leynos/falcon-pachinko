@@ -149,9 +149,14 @@ socket. A resource that needs to send data before router acceptance can accept
 itself during `on_connect`; the router detects this and avoids duplicate
 acceptance. After setup, the router receives raw frames on the final resource
 in the resolved child chain and dispatches each frame through the existing
-resource and hook manager. Text and binary frames pass through unchanged; other
-media values are encoded as JSON with `msgspec`. Invalid media that cannot be
-encoded fails the session as an unexpected error.
+resource and hook manager. Native text and binary frames pass through
+unchanged, without Falcon's JSON or MessagePack media decoding. The native
+adapter isolates Falcon's low-level receiver because its public receivers
+either decode media or require a single frame type. This preserves disconnect
+state and allows malformed JSON to reach the resource's `on_unhandled`
+fallback. Injected transports retain `receive_media()` compatibility: other
+media values are encoded as JSON with `msgspec`; values that cannot be encoded
+fail the session as an unexpected error.
 
 Native Falcon sockets use a forwarding adapter that records acceptance history.
 Falcon's `unaccepted` property also becomes false after rejecting a handshake

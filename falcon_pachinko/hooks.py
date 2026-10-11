@@ -218,10 +218,14 @@ class HookManager:
         """Stop receive hooks when an earlier hook begins closing the session."""
         if event_name not in {HookEvent.BEFORE_RECEIVE, HookEvent.AFTER_RECEIVE}:
             return True
+        return self.can_receive(context.ws)
+
+    def can_receive(self, ws: WebSocketLike | None) -> bool:
+        """Apply one receive policy to router dispatch, resources, and hooks."""
         session = self._session
         if session is None:
             return True
-        return session.can_receive and not getattr(context.ws, "closed", False)
+        return session.can_receive and not getattr(ws, "closed", False)
 
     async def _notify_before_event(
         self,

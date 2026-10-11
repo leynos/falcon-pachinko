@@ -20,7 +20,6 @@ import typing as typ
 
 import falcon
 import falcon.asgi
-import msgspec.json as msjson
 
 from ._session import (
     ABNORMAL_CLOSURE,
@@ -29,11 +28,11 @@ from ._session import (
     SessionState,
 )
 from ._session_cleanup import (
-    _CleanupContext,
-    _raise_session_failures,
-    _run_shielded_cleanup,
+    CleanupContext,
+    raise_session_failures,
+    run_shielded_cleanup,
 )
-from ._session_socket import _SessionWebSocket
+from ._session_socket import SessionWebSocket, receive_frame
 from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
 
@@ -576,7 +575,11 @@ class WebSocketRouter:
         session = SessionState()
         dispatch.session = session
         if isinstance(dispatch.ws, falcon.asgi.WebSocket):
-            dispatch.ws = _SessionWebSocket(dispatch.ws, session)
+            # Delegated native methods preserve the protocol, but static structural
+            # typing cannot infer their signatures through __getattr__.
+            dispatch.ws = typ.cast(
+                "WebSocketLike", SessionWebSocket(dispatch.ws, session)
+            )
         hook_manager.bind_session(session)
         context: HookContext | None = None
         primary_error: BaseException | None = None
@@ -597,7 +600,7 @@ class WebSocketRouter:
                 hook_manager=hook_manager,
             )
             if session.can_receive:
-                await self._receive_session(resource, dispatch, session)
+                await self._receive_session(resource, dispatch, session, hook_manager)
         except BaseException as exc:
             if session.phase is SessionPhase.CONNECTING and _is_websocket_accepted(
                 dispatch.ws
@@ -614,7 +617,7 @@ class WebSocketRouter:
                 if context is not None and context.params is not None
                 else dict(dispatch.match.params)
             )
-            cleanup_context = _CleanupContext(
+            cleanup_context = CleanupContext(
                 resource=resource,
                 dispatch=dispatch,
                 hook_manager=hook_manager,
@@ -622,8 +625,8 @@ class WebSocketRouter:
                 params=dict(params),
                 primary_error=primary_error,
             )
-            cleanup_failures, interrupted = await _run_shielded_cleanup(cleanup_context)
-            _raise_session_failures(primary_error, cleanup_failures, interrupted)
+            cleanup_failures, interrupted = await run_shielded_cleanup(cleanup_context)
+            raise_session_failures(primary_error, cleanup_failures, interrupted)
 
         return True
 
@@ -632,6 +635,7 @@ class WebSocketRouter:
         resource: WebSocketResource,
         dispatch: _Dispatch,
         session: SessionState,
+        hook_manager: HookManager,
     ) -> None:
         """Receive and route frames until Falcon reports a disconnect."""
         if not _is_websocket_accepted(dispatch.ws):
@@ -641,7 +645,7 @@ class WebSocketRouter:
             return
         while session.can_receive:
             try:
-                media = await dispatch.ws.receive_media()
+                raw = await receive_frame(dispatch.ws)
             except falcon.WebSocketDisconnected as exc:
                 session.close_code = _effective_disconnect_code(exc)
                 return
@@ -652,9 +656,8 @@ class WebSocketRouter:
                 return
             # An overridden dispatcher may bypass the resource's guard. Drop
             # late buffered frames here while retaining the disconnect code.
-            if getattr(dispatch.ws, "closed", False):
+            if not hook_manager.can_receive(dispatch.ws):
                 continue
-            raw = media if isinstance(media, str | bytes) else msjson.encode(media)
             await resource.dispatch(dispatch.ws, raw)
 
     @staticmethod
@@ -695,7 +698,7 @@ class WebSocketRouter:
                 await hook_manager.notify_after_connect(context)
             except BaseException as after_error:
                 if _is_websocket_accepted(dispatch.ws):
-                    _raise_session_failures(exc, (after_error,), ())
+                    raise_session_failures(exc, (after_error,), ())
                 raise
             raise
 

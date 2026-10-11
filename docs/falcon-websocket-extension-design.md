@@ -1279,7 +1279,10 @@ class ChatResource(WebSocketResource):
 
 After setup, `WebSocketRouter` owns the long-lived receive loop and dispatches
 raw frames to the final `WebSocketResource` in the resolved child chain. The
-resource dispatcher performs the following steps for each frame:
+native adapter preserves text and binary payloads before any media decoding;
+`on_unhandled` therefore receives the original payload even for malformed JSON.
+Injected transports retain the `receive_media()` adapter, encoding non-string,
+non-bytes results as JSON. The resource dispatcher performs these steps:
 
 1. Receive a raw message from the WebSocket.
 

@@ -65,3 +65,30 @@ Feature: WebSocket session disconnect lifecycle
     Then the client observes close code 4003
     And disconnect cleanup is recorded once with code 4003
     And the manager has no connection
+
+  Scenario: Non-JSON text reaches the unhandled fallback unchanged
+    Given a live Falcon ASGI WebSocket server
+    When the client sends text outside a JSON envelope
+    Then disconnect cleanup is recorded once with code 4000
+    And the manager has no connection
+
+  Scenario: Native text frames retain their original JSON formatting
+    Given a live Falcon ASGI WebSocket server
+    When the client sends JSON text with its original formatting
+    Then disconnect cleanup is recorded once with code 4000
+
+  Scenario: JSON binary frames reach the resource unchanged
+    Given a live Falcon ASGI WebSocket server
+    When the client sends a JSON binary frame
+    Then disconnect cleanup is recorded once with code 4000
+
+  Scenario: Failed close validation leaves the accepted connection usable
+    Given a live Falcon ASGI WebSocket server
+    When the manager attempts a reserved close code and then exchanges a message
+    Then disconnect cleanup is recorded once with code 4000
+    And the manager has no connection
+
+  Scenario: Native Falcon media keyword arguments remain usable
+    Given a live Falcon ASGI WebSocket server
+    When the manager sends media using Falcon keyword arguments
+    Then disconnect cleanup is recorded once with code 4000

@@ -161,8 +161,12 @@ def when_send_task_add(
     payload = AddTask(task_id="T-42", title="Investigate event loop")
     raw = msjson.encode(payload)
     event_loop.run_until_complete(context.simulator.push_bytes(raw))
-    event_loop.run_until_complete(context.simulator.wait_for_sent_count(2))
-    context.last_event = event_loop.run_until_complete(context.feed.next_event())
+    event_loop.run_until_complete(
+        asyncio.wait_for(context.simulator.wait_for_sent_count(2), timeout=5)
+    )
+    context.last_event = event_loop.run_until_complete(
+        asyncio.wait_for(context.feed.next_event(), timeout=5)
+    )
     return context
 
 

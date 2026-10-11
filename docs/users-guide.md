@@ -196,6 +196,11 @@ It is the same class as `msgspec.ValidationError`, so existing
 routes validation failures to `on_unhandled`; a `ValidationError` raised inside
 a handler propagates.
 
+Native text and binary frames reach the dispatcher unchanged. Malformed JSON
+can therefore reach `on_unhandled(self, ws, raw)` without Falcon's media
+decoder ending the connection first. Falcon's public media sending methods
+retain their usual arguments, including `send_media(media=...)`.
+
 ## 5. Hooks
 
 - Register global hooks on the router or per-resource hooks (`before_connect`,

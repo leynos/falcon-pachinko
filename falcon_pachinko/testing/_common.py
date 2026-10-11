@@ -32,7 +32,7 @@ class MissingDependencyError(RuntimeError):
 
 
 @dc.dataclass(frozen=True, slots=True)
-class _DisconnectSentinel:
+class DisconnectSentinel:
     """Wake a simulator receive call with the transport's first close code."""
 
     code: int
