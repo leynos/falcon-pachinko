@@ -153,8 +153,8 @@ def test_router_attach_does_not_warn_for_falcon_default_media_handlers() -> None
         WebSocketRouter().attach(app, "/ws")
 
 
-def test_root_router_attach_registers_path_converter() -> None:
-    """A root-mounted router uses a path converter for descendant paths."""
+def test_root_router_attach_registers_exact_and_descendant_routes() -> None:
+    """Register the root route and a path converter for descendants."""
 
     class RouteRecordingApp(falcon.asgi.App):
         def __init__(self) -> None:
@@ -172,8 +172,8 @@ def test_root_router_attach_registers_path_converter() -> None:
     router = WebSocketRouter()
     router.add_route("/rooms/{room}", PathResource)
     router.attach(app, "/")
-    assert app.registered_routes == ["/{pachinko_path:path}"], (
-        "a root-mounted router must register its descendant path converter"
+    assert app.registered_routes == ["/", "/{pachinko_path:path}"], (
+        "a root-mounted router must register its exact and descendant routes"
     )
 
 

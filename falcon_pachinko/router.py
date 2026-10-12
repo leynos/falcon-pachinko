@@ -190,6 +190,7 @@ class WebSocketRouter:
 
         canonical = self._mount_prefix
         if canonical == "/":
+            app.add_route("/", self)
             app.add_route("/{pachinko_path:path}", self)
             return
 
