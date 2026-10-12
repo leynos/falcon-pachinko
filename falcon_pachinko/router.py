@@ -10,20 +10,26 @@ Falcon app and used to generate URLs for registered routes.
 from __future__ import annotations
 
 import collections.abc as cabc
-import contextlib
 import dataclasses as dc
 import functools
-import inspect
 import re
 import threading
 import typing as typ
 
 import falcon
 
-from ._session import SessionPhase
-from ._session_driver import run_session
+from ._router_lifecycle import (
+    _ConnectionPreparation,
+    _Dispatch,
+    execute_route_with_error_handling,
+)
+from ._router_registration import _RouteRegistrationService
+from ._router_resolution import _RouterResolutionMixin
 from ._uri_template import _compile_prefix_template, compile_uri_template
 from .hooks import HookCollection, HookManager
+
+# Keep this public return annotation available to runtime introspection.
+from .lifecycle import WebSocketSession  # ruff: ignore[typing-only-first-party-import]
 from .protocols import WebSocketLike
 
 # Imported at runtime, not under TYPE_CHECKING: ``ResourceFactory`` below is a
@@ -61,7 +67,9 @@ def _request_path_template(req: _RequestLike) -> str:
     """Return the mounted path template, defaulting like Falcon does."""
     template = getattr(req, "path_template", None)
     if template is None:
-        template = getattr(req, "uri_template", "")
+        template = getattr(req, "uri_template", None)
+    if template is None:
+        template = ""
 
     # Falcon does not treat a `{name:path}` route as a mount prefix. The
     # descendant route therefore has to be reduced to the mounted identity.
@@ -72,40 +80,17 @@ def _request_path_template(req: _RequestLike) -> str:
 
 
 def _normalize_path(path: str) -> str:
-    """Ensure the path has a leading slash."""
-    if not path.startswith("/"):
-        path = f"/{path}"
-    return path
+    """Ensure ``path`` has a leading slash."""
+    return path if path.startswith("/") else f"/{path}"
 
 
 def _canonical_path(path: str) -> str:
     """Return the normalized path without a trailing slash."""
-    path = _normalize_path(path)
-    if path != "/":
-        path = path.rstrip("/")
-    return path
+    normalized = _normalize_path(path)
+    return normalized.rstrip("/") if normalized != "/" else normalized
 
 
-@dc.dataclass(slots=True)
-class _RouteMatch:
-    """Captured route parameters plus the path segment still to be consumed."""
-
-    params: dict[str, str]
-    remaining: str
-
-
-@dc.dataclass(slots=True)
-class _Dispatch:
-    """Mutable per-request state threaded through the routing pipeline."""
-
-    route: WebSocketRouter._CompiledRoute
-    req: falcon.Request
-    ws: WebSocketLike
-    match: _RouteMatch
-    session: SessionState | None = None
-
-
-class WebSocketRouter:
+class WebSocketRouter(_RouterResolutionMixin):
     """Route WebSocket connections to resources.
 
     Routes are evaluated in the order they were added. If multiple patterns
@@ -233,7 +218,8 @@ class WebSocketRouter:
             )
         """
         self._validate_resource_type(resource)
-        path, canonical = self._registration.normalize_path(path)
+        path = _normalize_path(path)
+        canonical = _canonical_path(path)
 
         # Compile once to validate the template. The prefix is applied lazily
         # upon the first request since it may not yet be known at this point.
@@ -282,21 +268,43 @@ class WebSocketRouter:
     async def on_websocket(
         self, req: _RequestLike, ws: WebSocketLike, **_params: object
     ) -> None:
-        """Own the routed session through disconnect and completed cleanup.
+        """Negotiate a connection, then own its session through disconnect."""
+        session = await self.negotiate(req, ws)
+        if session is not None:
+            await session.run()
 
-        ``req.path_template`` is assumed to be a prefix of ``req.path``. If the
-        assumption fails, :class:`falcon.HTTPNotFound` is raised to signal that
-        the requested path does not map to this router's mount point. Falcon
-        may pass route parameters for a mounted ``{name:path}`` descendant; the
-        router matches against ``req.path`` and does not need those values.
+    async def negotiate(
+        self, req: _RequestLike, ws: WebSocketLike, **_params: object
+    ) -> WebSocketSession | None:
+        """Run route and pre-accept callbacks, returning an accepted session.
+
+        ``on_connect`` and ``after_connect`` run before router acceptance.
+        Returning a falsey value rejects the HTTP upgrade. Returning ``True``
+        accepts with defaults; ``AcceptOptions`` supplies the subprotocol and
+        headers. A returned session is already accepted but has not run
+        ``on_session_start``; call :meth:`WebSocketSession.run` to own its
+        receive loop, or dispatch manually through ``session.resource``.
+
+        Returns
+        -------
+        WebSocketSession or None
+            The accepted session handle, or ``None`` when negotiation rejects.
 
         Raises
         ------
         falcon.HTTPNotFound
-            If ``req.path_template`` does not match this router's mount point,
-            or if no registered route matches ``req.path``.
+            If the request does not match this router's mount point or routes.
         """
-        # Handle missing or empty path_template by defaulting to root "/"
+        self._validate_mount(req)
+        preparation = _ConnectionPreparation()
+        for route in self._routes:
+            matched, session = await self._negotiate_route(route, req, ws, preparation)
+            if matched:
+                return session
+        raise falcon.HTTPNotFound
+
+    def _validate_mount(self, req: _RequestLike) -> None:
+        """Raise ``HTTPNotFound`` when the mounted request path is unrelated."""
         prefix = _request_path_template(req).rstrip("/") or "/"
         if prefix != self._mount_prefix:
             msg = (
@@ -304,14 +312,6 @@ class WebSocketRouter:
                 f"'{self._mount_prefix}'"
             )
             raise falcon.HTTPNotFound(description=msg)
-
-        # Routes are tested in the order they were added. Register more
-        # specific paths before general ones to control precedence.
-        for route in self._routes:
-            if await self._try_route(route, req, ws):
-                return
-
-        raise falcon.HTTPNotFound
 
     async def _try_route(
         self, route: _CompiledRoute, req: _RequestLike, ws: WebSocketLike
@@ -327,9 +327,8 @@ class WebSocketRouter:
         3. :meth:`_resolve_resource_and_path` walks any nested subroutes on the
            base resource using the remaining path, merging parameters at each
            level.
-        4. If a final resource and empty path are resolved, control is passed to
-           the internal session driver which accepts or closes the
-           connection via the resource's ``on_connect`` method.
+        4. If a final resource and empty path are resolved, the router runs
+           pre-accept negotiation and returns an accepted session handle.
 
         Returns
         -------
@@ -337,256 +336,43 @@ class WebSocketRouter:
             ``True`` if the request was handled by this route, ``False``
             otherwise.
         """
+        matched, session = await self._negotiate_route(
+            route, req, ws, _ConnectionPreparation()
+        )
+        if session is not None:
+            await session.run()
+        return matched
+
+    async def _negotiate_route(
+        self,
+        route: _CompiledRoute,
+        req: _RequestLike,
+        ws: WebSocketLike,
+        preparation: _ConnectionPreparation,
+    ) -> tuple[bool, WebSocketSession | None]:
+        """Resolve one candidate route and negotiate its WebSocket session."""
         match = self._validate_and_normalize_path(route, req)
         if match is None:
-            return False
+            return False, None
         # cast: downstream hooks and ``on_connect`` are typed against
         # ``falcon.Request``; the router accepts any ``_RequestLike`` so tests
         # can supply structural stand-ins.
-        return await self._execute_route_with_error_handling(
-            _Dispatch(
-                route=route, req=typ.cast("falcon.Request", req), ws=ws, match=match
-            )
+        dispatch = _Dispatch(
+            route=route,
+            req=typ.cast("falcon.Request", req),
+            ws=(ws if preparation.websocket is None else preparation.websocket),
+            match=match,
+            session=preparation.session,
         )
+        session = await execute_route_with_error_handling(self, dispatch, preparation)
+        return dispatch.matched, session
 
-    async def _execute_route_with_error_handling(self, dispatch: _Dispatch) -> bool:
-        """Run the routing pipeline and close the socket on unexpected errors."""
-        ws_for_cleanup: WebSocketLike = dispatch.ws
-        try:
-            dispatch.ws = await self._prepare_websocket(dispatch.req, dispatch.ws)
-            ws_for_cleanup = dispatch.ws
-            return await self._process_route_resolution(dispatch)
-        except Exception as exc:
-            session_is_established = (
-                dispatch.session is not None
-                and dispatch.session.phase is not SessionPhase.CONNECTING
-            )
-            if not session_is_established and not getattr(
-                exc, "_pachinko_factory_closed", False
-            ):
-                with contextlib.suppress(Exception):
-                    await ws_for_cleanup.close()
-            raise
-
-    async def _prepare_websocket(
-        self, req: falcon.Request, ws: WebSocketLike
-    ) -> WebSocketLike:
-        """Return the WebSocket to use for ``req``.
-
-        Returns
-        -------
-        WebSocketLike
-            The original socket, or the object produced by a configured
-            ``simulator_factory``.
-
-        Raises
-        ------
-        TypeError
-            If a configured ``simulator_factory`` returns an object that does
-            not expose the :class:`WebSocketLike` surface.
-        """
-        # When :attr:`_simulator_factory` is configured the factory may wrap or
-        # replace ``ws`` with an injectable simulator. The returned object is
-        # validated to expose the :class:`WebSocketLike` surface used by the
-        # router.
-        if self._simulator_factory is None:
-            return ws
-
-        candidate = self._simulator_factory(req, ws)
-        if inspect.isawaitable(candidate):
-            candidate = await candidate
-
-        for attr in ("accept", "close", "send_media", "receive_media"):
-            if not self._is_valid_websocket_method(candidate, attr):
-                msg = (
-                    "simulator_factory must return a WebSocketLike object; "
-                    f"missing attribute {attr!r}"
-                )
-                raise TypeError(msg)
-
-        # cast: the duck-type checks above establish the ``WebSocketLike``
-        # surface, which the checker cannot infer from getattr-based checks.
-        return typ.cast("WebSocketLike", candidate)
-
-    @staticmethod
-    def _is_valid_websocket_method(obj: object, attr_name: str) -> bool:
-        """Return ``True`` when ``obj`` exposes coroutine ``attr_name``."""
-        func = getattr(obj, attr_name, None)
-        if func is None or not callable(func):
-            return False
-        return inspect.iscoroutinefunction(func)
-
-    async def _process_route_resolution(self, dispatch: _Dispatch) -> bool:
-        """Resolve the final resource and dispatch the connection."""
-        base_resource = await self._instantiate_resource(
-            dispatch.route.factory, dispatch.ws
-        )
-        chain = [base_resource]
-        resource = await self._resolve_resource_and_path(
-            base_resource, dispatch.match, chain, dispatch.ws
-        )
-        if resource is None:
-            return False
-        if not self._validate_final_resource(
-            resource, base_resource, dispatch.route, dispatch.req
-        ):
-            return False
-        manager = self._setup_hook_management(chain)
-        return await run_session(resource, dispatch, hook_manager=manager)
-
-    @staticmethod
-    def _validate_final_resource(
-        resource: WebSocketResource,
-        base_resource: WebSocketResource,
-        route: _CompiledRoute,
-        req: falcon.Request,
-    ) -> bool:
-        """Return ``True`` if ``resource`` is usable for ``req``."""
-        return not (resource is base_resource and not route.pattern.fullmatch(req.path))
-
-    def _setup_hook_management(self, chain: list[WebSocketResource]) -> HookManager:
+    def _setup_hook_management(
+        self, chain: list[WebSocketResource], session: SessionState
+    ) -> HookManager:
         """Attach a :class:`HookManager` to every resource in ``chain``."""
         manager = HookManager(global_hooks=self.global_hooks, resources=chain)
+        manager.bind_session(session)
         for item in chain:
             item.bind_hook_manager(manager)
         return manager
-
-    @staticmethod
-    def _normalize_path_remaining(remaining: str, match: re.Match[str]) -> str | None:
-        """Normalize ``remaining`` or return ``None`` if invalid."""
-        if not remaining or remaining.startswith("/"):
-            return remaining
-        return f"/{remaining}" if match.group(0).endswith("/") else None
-
-    async def _try_subroute_match(
-        self, resource: WebSocketResource, path: str, ws: WebSocketLike
-    ) -> tuple[WebSocketResource, str, dict[str, str]] | None:
-        """Return matched subroute components or ``None``."""
-        for pattern, factory in getattr(resource, "_subroutes", []):
-            if match := pattern.match(path):
-                remaining = path[match.end() :]
-                if (
-                    remaining := self._normalize_path_remaining(remaining, match)
-                ) is None:
-                    return None
-                context = resource.get_child_context()
-                child_kwargs = {k: v for k, v in context.items() if k != "state"}
-                child_factory = functools.partial(factory, **child_kwargs)
-                new_resource = await self._instantiate_resource(child_factory, ws)
-                state_mapping = context.get("state", resource.state)
-                # cast: the context value is typed ``object``; the ``state``
-                # setter validates the mapping surface at runtime.
-                new_resource.state = typ.cast(
-                    "cabc.MutableMapping[str, typ.Any]",
-                    state_mapping,
-                )
-                params = match.groupdict()
-                return new_resource, remaining, params
-        return None
-
-    async def _resolve_subroutes(
-        self,
-        resource: WebSocketResource,
-        match: _RouteMatch,
-        chain: list[WebSocketResource],
-        ws: WebSocketLike,
-    ) -> WebSocketResource:
-        """Traverse ``resource`` subroutes, consuming ``match`` in place."""
-        while match.remaining not in {"", "/"}:
-            result = await self._try_subroute_match(resource, match.remaining, ws)
-            if result is None:
-                break
-            resource, match.remaining, new_params = result
-            match.params |= new_params
-            chain.append(resource)
-
-        return resource
-
-    def _validate_and_normalize_path(
-        self, route: _CompiledRoute, req: _RequestLike
-    ) -> _RouteMatch | None:
-        """Return the path match for ``req`` or ``None`` if invalid."""
-        if not (prefix_match := route.prefix.match(req.path)):
-            return None
-        remaining = req.path[prefix_match.end() :]
-        if remaining and not remaining.startswith("/"):
-            normalized = self._normalize_path_remaining(remaining, prefix_match)
-            if normalized is None:
-                return None
-            remaining = normalized
-        return _RouteMatch(params=prefix_match.groupdict(), remaining=remaining)
-
-    async def _resolve_resource_and_path(
-        self,
-        resource: WebSocketResource,
-        match: _RouteMatch,
-        chain: list[WebSocketResource],
-        ws: WebSocketLike,
-    ) -> WebSocketResource | None:
-        """Return the resolved resource, or ``None`` if the path is unconsumed."""
-        resolved = await self._resolve_subroutes(resource, match, chain, ws)
-        return resolved if match.remaining in {"", "/"} else None
-
-    async def _instantiate_resource(
-        self,
-        route_factory: cabc.Callable[..., WebSocketResource],
-        ws: WebSocketLike,
-    ) -> WebSocketResource:
-        """Instantiate a resource using ``route_factory`` with error handling."""
-        try:
-            return self._resource_factory(route_factory)
-        except Exception as exc:  # pragma: no cover - exercise via tests
-            await ws.close()
-            # cast: the checker cannot see the dynamic marker attribute used
-            # to signal that the socket was already closed for this failure.
-            typ.cast("typ.Any", exc)._pachinko_factory_closed = True
-            raise
-
-
-class _RouteRegistrationService:
-    """Manage route normalization and conflict detection for a router."""
-
-    def __init__(
-        self,
-        *,
-        lock: threading.Lock,
-        raw_routes: list[WebSocketRouter._RawRoute],
-        names: dict[str, str],
-    ) -> None:
-        self._lock = lock
-        self._raw_routes = raw_routes
-        self._names = names
-
-    @staticmethod
-    def normalize_path(path: str) -> tuple[str, str]:
-        """Return normalized and canonical variants of ``path``."""
-        normalized = _normalize_path(path)
-        canonical = _canonical_path(normalized)
-        return normalized, canonical
-
-    def check_conflicts(
-        self, canonical: str, name: str | None, *, path: str | None = None
-    ) -> None:
-        """Raise if ``canonical`` or ``name`` already exists under ``lock``.
-
-        Raises
-        ------
-        RuntimeError
-            If the mount lock is not held by the caller.
-        ValueError
-            If the canonical path or the route name is already registered.
-        """
-        if not self._lock.locked():
-            msg = (
-                "_RouteRegistrationService.check_conflicts requires "
-                "_mount_lock to be held"
-            )
-            raise RuntimeError(msg)
-
-        display_path = path if path is not None else canonical
-        if any(route.canonical == canonical for route in self._raw_routes):
-            msg = f"route path {display_path!r} already registered"
-            raise ValueError(msg)
-        if name and name in self._names:
-            msg = f"route name {name!r} already registered"
-            raise ValueError(msg)

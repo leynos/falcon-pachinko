@@ -7,7 +7,11 @@ import typing as typ
 import falcon
 import pytest
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 from falcon_pachinko.hooks import HookEvent
+from falcon_pachinko.lifecycle import LifecycleError
 from falcon_pachinko.unittests._session_fixtures import (
     RecordingResource,
     SessionSocket,
@@ -131,8 +135,14 @@ async def test_accept_failure_after_approval_runs_disconnect_cleanup() -> None:
     """An accept error after approval still closes the promised session."""
 
     class AcceptFailureSocket(SessionSocket):
-        async def accept(self, subprotocol: str | None = None) -> None:
-            await super().accept(subprotocol)
+        async def accept(
+            self,
+            subprotocol: str | None = None,
+            headers: cabc.Mapping[str, str]
+            | cabc.Iterable[tuple[str, str]]
+            | None = None,
+        ) -> None:
+            await super().accept(subprotocol, headers)
             raise OSError("failed")
 
     router = make_session_router()
@@ -148,8 +158,8 @@ async def test_accept_failure_after_approval_runs_disconnect_cleanup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_after_connect_failure_after_approval_runs_cleanup() -> None:
-    """Approval establishes cleanup before after-connect hooks run."""
+async def test_after_connect_failure_after_approval_rejects_before_acceptance() -> None:
+    """A failing post-connect hook still runs before router acceptance."""
     error = RuntimeError("after-connect failed")
     router = make_session_router()
 
@@ -166,28 +176,37 @@ async def test_after_connect_failure_after_approval_runs_cleanup() -> None:
         )
 
     assert raised.value is error, _ASSERTION_FAILURE
-    assert RecordingResource.instances[0].disconnect_codes == [1011], _ASSERTION_FAILURE
-    assert socket.close_codes == [1011], _ASSERTION_FAILURE
+    assert socket.unaccepted, _ASSERTION_FAILURE
+    assert RecordingResource.instances[0].disconnect_codes == [], _ASSERTION_FAILURE
+    assert socket.close_codes == [1000], _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio
-async def test_approval_without_acceptance_skips_receive_and_cleans_up() -> None:
-    """Approval promises cleanup even if a transport never becomes accepted."""
+async def test_noop_transport_acceptance_never_starts_a_session() -> None:
+    """Reject transports whose accept call returns without accepting."""
 
     class UnacceptedSocket(SessionSocket):
-        async def accept(self, subprotocol: str | None = None) -> None:
-            del subprotocol
+        async def accept(
+            self,
+            subprotocol: str | None = None,
+            headers: cabc.Mapping[str, str]
+            | cabc.Iterable[tuple[str, str]]
+            | None = None,
+        ) -> None:
+            del subprotocol, headers
 
     router = make_session_router()
     socket = UnacceptedSocket(b'{"type":"unaccepted"}')
-    await router.on_websocket(
-        typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
-    )
+    with pytest.raises(LifecycleError, match="without accepting"):
+        await router.on_websocket(
+            typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
+        )
 
     assert not socket.receive_started.is_set(), "unaccepted sockets cannot receive"
-    assert RecordingResource.instances[0].disconnect_codes == [1011], (
-        "approval must still promise cleanup with the setup-failure code"
+    assert RecordingResource.instances[0].disconnect_codes == [], (
+        "a failed acceptance cannot start disconnect cleanup"
     )
+    assert socket.close_codes == [1000], "failed acceptance must close the transport"
 
 
 @pytest.mark.asyncio

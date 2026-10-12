@@ -33,9 +33,13 @@ class RecordingWebSocket:
         self.lifecycle_event = asyncio.Event()
         self._frames: cl.deque[object] = cl.deque(frames)
 
-    async def accept(self, subprotocol: str | None = None) -> None:
+    async def accept(
+        self,
+        subprotocol: str | None = None,
+        headers: cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None = None,
+    ) -> None:
         """Record that the handshake was accepted."""
-        del subprotocol
+        del subprotocol, headers
         if self.accepted:
             return
         self.accepted = True
@@ -43,16 +47,22 @@ class RecordingWebSocket:
         self.lifecycle_event.set()
 
     # pylint: disable-next=trivial-attribute-wrapper  # protocol stub: WebSocketLike fixes send_media's shape and recording the payload is this stub's entire purpose
-    async def send_media(self, data: object) -> None:
+    async def send_media(self, media: object) -> None:
         """Record data sent through the stub."""
-        self.messages.append(data)
+        self.messages.append(media)
 
-    async def close(self, code: int = 1000) -> None:
+    # pylint: disable-next=trivial-attribute-wrapper  # protocol stub: this method records text frames for WebSocketLike callers
+    async def send_text(self, message: str) -> None:
+        """Record one text frame."""
+        self.messages.append(message)
+
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Record closure metadata."""
+        del reason
         if self.closed:
             return
         self.closed = True
-        self.close_code = code
+        self.close_code = 1000 if code is None else code
         self.lifecycle_event.set()
 
     async def receive_media(self) -> object:
@@ -64,6 +74,14 @@ class RecordingWebSocket:
                 raise frame
             return frame
         raise falcon.WebSocketDisconnected(self.close_code or 1000)
+
+    async def receive_text(self) -> str:
+        """Receive a seeded text frame."""
+        message = await self.receive_media()
+        if not isinstance(message, str):
+            msg = "expected a text WebSocket frame"
+            raise TypeError(msg)
+        return message
 
 
 class RequestStub:

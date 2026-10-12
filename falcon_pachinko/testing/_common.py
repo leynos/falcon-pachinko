@@ -108,6 +108,7 @@ class _LifecycleSocket:
         self._accepted = False
         self._closed = False
         self._close_code: int | None = None
+        self._close_reason: str | None = None
         self._subprotocol: str | None = None
         self._peer: _LifecycleSocket | None = None
         self._lifecycle_event = asyncio.Event()
@@ -137,6 +138,11 @@ class _LifecycleSocket:
         return self._close_code
 
     @property
+    def close_reason(self) -> str | None:
+        """Close reason provided to :meth:`close`, if any."""
+        return self._close_reason
+
+    @property
     def subprotocol(self) -> str | None:
         """Negotiated subprotocol, if any."""
         return self._subprotocol
@@ -146,8 +152,13 @@ class _LifecycleSocket:
         """Signal the first accept or close for harness readiness checks."""
         return self._lifecycle_event
 
-    async def accept(self, subprotocol: str | None = None) -> None:
+    async def accept(
+        self,
+        subprotocol: str | None = None,
+        headers: cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None = None,
+    ) -> None:
         """Record handshake acceptance and mirror to any bound peer."""
+        del headers
         if self._accepted:
             return
         self._accepted = True
@@ -157,13 +168,28 @@ class _LifecycleSocket:
         if peer is not None and not peer.accepted:
             await peer.accept(subprotocol=subprotocol)
 
-    async def close(self, code: int = 1000) -> None:
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Record connection closure and mirror to any bound peer."""
         if self._closed:
             return
         self._closed = True
-        self._close_code = code
+        self._close_code = 1000 if code is None else code
+        self._close_reason = reason
         self._lifecycle_event.set()
         peer = self._peer
         if peer is not None and not peer.closed:
-            await peer.close(code)
+            await peer.close(code, reason)
+
+    async def receive_text(self) -> str:
+        """Receive one text frame through the concrete socket's media API."""
+        receive_media = getattr(self, "receive_media", None)
+        if not callable(receive_media):
+            msg = "the lifecycle socket does not provide receive_media()"
+            raise NotImplementedError(msg)
+        media = await typ.cast(
+            "cabc.Callable[[], cabc.Awaitable[object]]", receive_media
+        )()
+        if not isinstance(media, str):
+            msg = "Expected text frame but received bytes"
+            raise TypeError(msg)
+        return media

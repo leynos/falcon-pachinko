@@ -12,6 +12,7 @@ from .di import ServiceContainer, ServiceNotFoundError
 from .diagnostics import DEFAULT_SENSITIVE_KEYS, DiagnosticSanitizer
 from .handlers import handles_message
 from .hooks import HookCollection, HookContext, HookManager
+from .lifecycle import AcceptOptions, LifecycleError, WebSocketSession
 from .protocols import WebSocketLike
 from .resource import WebSocketResource
 from .router import ResourceFactory, WebSocketRouter
@@ -33,12 +34,14 @@ from .workers import WorkerController, worker
 
 __all__ = (
     "DEFAULT_SENSITIVE_KEYS",
+    "AcceptOptions",
     "ConnectionBackend",
     "DiagnosticSanitizer",
     "HookCollection",
     "HookContext",
     "HookManager",
     "InProcessBackend",
+    "LifecycleError",
     "MissingDependencyError",
     "ResourceFactory",
     "ServiceContainer",
@@ -50,6 +53,7 @@ __all__ = (
     "WebSocketLike",
     "WebSocketResource",
     "WebSocketRouter",
+    "WebSocketSession",
     "WebSocketSimulator",
     "WebSocketTestClient",
     "WorkerController",

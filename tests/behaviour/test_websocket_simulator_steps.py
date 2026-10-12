@@ -16,6 +16,8 @@ from falcon_pachinko.testing import SimulatorRouterHarness
 if typ.TYPE_CHECKING:  # pragma: no cover - typing only
     import collections.abc as cabc
 
+    from falcon_pachinko.protocols import WebSocketLike
+
 
 class EchoResource(WebSocketResource):
     """Resource that records the injected simulator instance."""
@@ -23,23 +25,20 @@ class EchoResource(WebSocketResource):
     instances: typ.ClassVar[list[EchoResource]] = []
 
     def __init__(self) -> None:
-        self.websocket: WebSocketSimulator | None = None
+        self.websocket: object | None = None
         self.received: list[object] = []
         EchoResource.instances.append(self)
 
-    async def on_connect(self, req: object, ws: object, **_: object) -> bool:
+    async def on_connect(self, req: object, ws: WebSocketLike, **_: object) -> bool:
         """Capture the simulator; the router owns all later receives."""
-        assert isinstance(ws, WebSocketSimulator), (
-            "the router must inject the simulator instance"
-        )
         self.websocket = ws
         return True
 
-    async def on_unhandled(self, ws: object, message: str | bytes) -> None:
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Echo one decoded simulator frame as an acknowledgement."""
         payload = msjson.decode(message)
         self.received.append(payload)
-        await typ.cast("WebSocketSimulator", ws).send_media({"type": "ack"})
+        await ws.send_media({"type": "ack"})
 
 
 @dc.dataclass(slots=True)
@@ -115,12 +114,16 @@ def when_connection(
     return context
 
 
-@then("the resource receives the simulator instance")
+@then("the resource receives the guarded session socket")
 def then_resource(context: SimulatorScenario) -> None:
     """Assert that the resource saw the injected simulator."""
     assert context.resource is not None, "the echo resource must have been constructed"
-    assert context.resource.websocket is context.simulator, (
-        "the resource must receive the injected simulator"
+    assert context.connection is not None, "the simulator must retain the connection"
+    assert context.connection.session is not None, (
+        "the connection must expose its session"
+    )
+    assert context.resource.websocket is context.connection.session.ws, (
+        "the resource must receive the guarded session socket"
     )
     assert context.resource.received == [{"type": "ping"}], (
         "the resource must have decoded the queued message"

@@ -175,7 +175,13 @@ def _connect_client(context: dict[str, typ.Any], raw: bytes) -> None:
     ws = DummyWS(raw)
     req = make_req("/hooks/child")
     try:
-        asyncio.run(router.on_websocket(req, ws))
+
+        async def negotiate_and_run() -> None:
+            session = await router.negotiate(req, ws)
+            assert session is not None, "the hooked child should accept"
+            await session.run()
+
+        asyncio.run(negotiate_and_run())
     finally:
         child = HookedChild.instances[-1]
         context["child_params"] = child.params

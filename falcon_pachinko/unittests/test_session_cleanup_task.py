@@ -84,15 +84,21 @@ async def test_unexpected_cleanup_task_failure_preserves_precedence(
     failures, interruptions = await run_shielded_cleanup(context)
     assert failures == (failure,), "unexpected cleanup errors must remain available"
     assert not interruptions, "ordinary cleanup has no cancellation"
-    expected_type = RuntimeError if primary_error is None else ExceptionGroup
-    with pytest.raises(expected_type) as raised:
-        raise_session_failures(primary_error, failures, interruptions)
-    if primary_error is None:
-        assert raised.value is failure, "a lone cleanup failure must be unchanged"
-    else:
-        assert isinstance(raised.value, ExceptionGroup), "both failures must be grouped"
-        assert raised.value.exceptions == (primary_error, failure), (
-            "the primary failure must precede cleanup"
+    reported: list[dict[str, object]] = []
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, details: reported.append(details))
+    try:
+        expected_error = primary_error or failure
+        with pytest.raises(type(expected_error)) as raised:
+            raise_session_failures(primary_error, failures, interruptions)
+    finally:
+        loop.set_exception_handler(previous_handler)
+    assert raised.value is expected_error, "the selected failure must be preserved"
+    if primary_error is not None:
+        assert [details["exception"] for details in reported] == [failure], (
+            "finalization failure must remain observable without replacing "
+            "the session error"
         )
     resource = typ.cast("RecordingResource", context.resource)
     assert len(resource.disconnect_codes) == 1, "hooks must finish before task failure"

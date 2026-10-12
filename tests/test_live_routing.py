@@ -58,11 +58,15 @@ class _RecordingResource(WebSocketResource):
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
-        """Record the selected live resource and accept the connection."""
+        """Record which live route was selected before acceptance."""
+        del req, ws, params
         self.observations.selected.append(self.identity)
-        await ws.accept()
-        await ws.send_media(self.identity)
+
         return True
+
+    async def on_session_start(self, ws: WebSocketLike) -> None:
+        """Send the route identity after the router accepts the connection."""
+        await ws.send_media(self.identity)
 
 
 _RecordingResource.hooks = HookCollection()

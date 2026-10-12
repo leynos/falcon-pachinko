@@ -23,6 +23,7 @@ if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints
 
     import falcon
 
+    from .lifecycle import AcceptOptions
     from .protocols import WebSocketLike
 
 from .dispatcher import dispatch
@@ -203,14 +204,16 @@ class WebSocketResource:
 
     async def on_connect(  # ruff: ignore[no-self-use] - overridable hook; subclasses use ``self``
         self, req: falcon.Request, ws: WebSocketLike, **params: object
-    ) -> bool:
-        """Approve or reject a connection before router acceptance.
+    ) -> bool | AcceptOptions:
+        """Approve or reject a connection before the router accepts it.
 
-        The router calls this hook after resolving the final resource and
-        before it accepts the WebSocket. A truthy result approves the session;
-        the router accepts the socket unless this hook already did so. A
-        falsey result rejects a socket that remains unaccepted. A resource may
-        accept itself during this hook when setup must send data first.
+        Use request metadata here to reject an upgrade or select acceptance
+        headers and a subprotocol. Do not accept the socket or send or receive
+        frames in this hook. The router owns acceptance and calls
+        :meth:`on_session_start` after the handshake has succeeded.
+
+        Calling ``ws.accept()`` here remains temporarily supported and emits a
+        deprecation warning. Migrate by returning :class:`AcceptOptions`.
 
         Parameters
         ----------
@@ -223,22 +226,30 @@ class WebSocketResource:
 
         Returns
         -------
-        bool
-            A truthy value to approve the session, or a falsey value to reject
-            it while the socket remains unaccepted
+        bool | AcceptOptions
+            ``False`` or another falsey value to reject. ``True`` accepts with
+            defaults; :class:`AcceptOptions` supplies subprotocol and headers.
         """
         return True
+
+    async def on_session_start(self, ws: WebSocketLike) -> None:
+        """Run after the router accepts the WebSocket and before frame reads.
+
+        Send a hello frame or perform deadline-bound authentication here when
+        the protocol requires an initial post-upgrade exchange. The receive
+        loop starts after this hook returns. An exception closes the accepted
+        session with code 1011 and still runs disconnect cleanup.
+        """
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Clean up an established session after disconnect begins.
 
-        The router invokes this hook exactly once after ``on_connect`` approves
-        the session or the resource accepts the socket, including when setup
-        fails after resource-owned acceptance. A rejected, never-accepted
-        socket does not receive post-accept cleanup. Use this hook to remove
-        session registrations, such as connection-manager membership. Cleanup
-        is shielded from task cancellation but has no timeout, so this hook
-        must terminate.
+        The router invokes this hook exactly once for every accepted session,
+        including when ``on_session_start`` or message handling fails. A
+        rejected, never-accepted socket does not receive disconnect cleanup.
+        Use this hook to remove session registrations, such as
+        connection-manager membership. Cleanup is shielded from task
+        cancellation but has no timeout, so this hook must terminate.
 
         Parameters
         ----------

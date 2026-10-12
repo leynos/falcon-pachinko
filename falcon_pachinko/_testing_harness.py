@@ -35,6 +35,18 @@ class _OriginalWebSocket(_LifecycleSocket):
             return frame
         raise falcon.WebSocketDisconnected(1000)
 
+    async def send_text(self, message: str) -> None:
+        """Send a text frame through the original stub."""
+        await self.send_media(message)
+
+    async def receive_text(self) -> str:
+        """Receive a text frame from the original stub."""
+        message = await self.receive_media()
+        if not isinstance(message, str):
+            msg = "expected a text WebSocket frame"
+            raise TypeError(msg)
+        return message
+
 
 class _HarnessSimulator(WebSocketSimulator):
     """Simulator variant that mirrors lifecycle events to the original stub."""

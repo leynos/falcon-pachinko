@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses as dc
 import typing as typ
 
-from ._session import ABNORMAL_CLOSURE, GOING_AWAY, INTERNAL_ERROR, SessionState
+from ._session import (
+    SessionState,
+    _report_session_failure,
+    _wait_for_shielded_task,
+    effective_close_code,
+)
 from .hooks import HookContext, HookEvent
 
 if typ.TYPE_CHECKING:
@@ -44,15 +48,7 @@ async def run_shielded_cleanup(
 ) -> tuple[tuple[BaseException, ...], tuple[asyncio.CancelledError, ...]]:
     """Finish one cleanup task even if its caller receives more cancellation."""
     cleanup_task = asyncio.create_task(_collect_cleanup_failures(context))
-    interruptions: list[asyncio.CancelledError] = []
-    while True:
-        try:
-            await asyncio.shield(cleanup_task)
-            break
-        except asyncio.CancelledError as exc:
-            interruptions.append(exc)
-            if cleanup_task.done():
-                break
+    interruptions = await _wait_for_shielded_task(cleanup_task)
 
     if cleanup_task.cancelled():
         failures = (asyncio.CancelledError(),)
@@ -99,24 +95,16 @@ async def _close_failed_session(
 ) -> int:
     """Choose the effective close code and close a failed session best-effort."""
     primary_error = context.primary_error
-    if primary_error is None:
-        close_code = context.session.close_code
-        if close_code is None:
-            close_code = ABNORMAL_CLOSURE
-        context.session.close_code = close_code
-        return close_code
-
-    close_code = (
-        GOING_AWAY
-        if isinstance(primary_error, asyncio.CancelledError)
-        else INTERNAL_ERROR
-    )
+    recorded_code = getattr(context.dispatch.ws, "close_code", None)
+    close_code = effective_close_code(recorded_code, context.session, primary_error)
     context.session.close_code = close_code
-    try:
-        with contextlib.suppress(Exception):
+    if primary_error is not None and not bool(
+        getattr(context.dispatch.ws, "closed", False)
+    ):
+        try:
             await context.dispatch.ws.close(close_code)
-    except BaseException as exc:  # ruff: ignore[blind-except] - cleanup must continue
-        failures.append(exc)
+        except BaseException as exc:  # ruff: ignore[blind-except] - cleanup must continue
+            failures.append(exc)
     return close_code
 
 
@@ -163,16 +151,44 @@ def raise_session_failures(
     interruptions: tuple[asyncio.CancelledError, ...],
 ) -> None:
     """Apply primary-first exception precedence after cleanup has completed."""
+    if primary_error is not None:
+        _raise_primary_session_error(primary_error, cleanup_failures, interruptions)
+
     cancellation = _session_cancellation(primary_error, cleanup_failures, interruptions)
     if cancellation is not None:
-        _report_cancelled_session_failures(
-            primary_error, cleanup_failures, cancellation
-        )
+        _report_cancelled_session_failures(None, cleanup_failures, cancellation)
         raise cancellation
 
-    failures = ([primary_error] if primary_error is not None else []) + list(
-        cleanup_failures
-    )
+    _raise_cleanup_failures(cleanup_failures)
+
+
+def _raise_primary_session_error(
+    primary_error: BaseException,
+    cleanup_failures: tuple[BaseException, ...],
+    interruptions: tuple[asyncio.CancelledError, ...],
+) -> typ.NoReturn:
+    """Keep the original session error ahead of every finalization failure."""
+    if isinstance(primary_error, asyncio.CancelledError):
+        _report_cancelled_session_failures(None, cleanup_failures, primary_error)
+        raise primary_error
+    for failure in cleanup_failures:
+        _report_session_failure(
+            failure,
+            "WebSocket finalization failed after a session error",
+            suppress_handler_errors=True,
+        )
+    for interruption in interruptions:
+        _report_session_failure(
+            interruption,
+            "WebSocket finalization was cancelled after a session error",
+            suppress_handler_errors=True,
+        )
+    raise primary_error
+
+
+def _raise_cleanup_failures(cleanup_failures: tuple[BaseException, ...]) -> None:
+    """Propagate one cleanup error directly or group multiple failures."""
+    failures = list(cleanup_failures)
     if not failures:
         return
     if len(failures) == 1:
@@ -180,13 +196,6 @@ def raise_session_failures(
     if all(isinstance(failure, Exception) for failure in failures):
         exceptions = [typ.cast("Exception", failure) for failure in failures]
         raise ExceptionGroup("session", exceptions)
-    if primary_error is not None and not isinstance(primary_error, Exception):
-        for failure in cleanup_failures:
-            _report_cleanup_failure(
-                failure,
-                "WebSocket disconnect cleanup failed after a base exception",
-            )
-        raise primary_error
     raise BaseExceptionGroup("session", failures)
 
 
@@ -211,22 +220,15 @@ def _report_cancelled_session_failures(
 ) -> None:
     """Report failures hidden by cancellation through the running loop."""
     if primary_error is not None and primary_error is not cancellation:
-        _report_cleanup_failure(
+        _report_session_failure(
             primary_error,
             "A WebSocket session failure was superseded by cancellation",
+            suppress_handler_errors=True,
         )
     for failure in cleanup_failures:
         if not isinstance(failure, asyncio.CancelledError):
-            _report_cleanup_failure(
+            _report_session_failure(
                 failure,
                 "WebSocket disconnect cleanup failed during cancellation",
+                suppress_handler_errors=True,
             )
-
-
-def _report_cleanup_failure(error: BaseException, message: str) -> None:
-    """Report failures that cannot be grouped with a bare cancellation."""
-    with contextlib.suppress(Exception):
-        asyncio.get_running_loop().call_exception_handler({
-            "message": message,
-            "exception": error,
-        })

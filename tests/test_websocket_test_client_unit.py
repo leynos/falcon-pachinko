@@ -11,10 +11,22 @@ import pytest_asyncio
 import websockets.server as ws_server
 from websockets.typing import Subprotocol
 
-from falcon_pachinko.testing import TraceEvent, WebSocketTestClient
+from falcon_pachinko.testing import (
+    TraceEvent,
+    WebSocketTestClient,
+    WebSocketTestSession,
+)
+from falcon_pachinko.testing.client import WebSocketSession as LegacyTestSession
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+
+def test_test_client_session_has_unambiguous_name() -> None:
+    """The old module import remains an alias for the test-client facade."""
+    assert LegacyTestSession is WebSocketTestSession, (
+        "direct client imports should resolve to the distinctly named facade"
+    )
 
 
 @dc.dataclass(slots=True)

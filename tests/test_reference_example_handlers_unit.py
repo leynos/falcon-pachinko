@@ -90,16 +90,18 @@ async def _dispatch(
 
 
 @pytest.mark.asyncio
-async def test_on_connect_cleans_up_and_reraises_when_join_room_fails() -> None:
-    """A failed room join removes the connection and re-raises the error."""
+async def test_session_start_cleans_up_and_reraises_when_join_room_fails() -> None:
+    """A failed post-accept room join removes the connection and re-raises."""
     conn_mgr = WebSocketConnectionManager(backend=FailingJoinBackend())
     resource, _repo, _audit, _feed = _build_resource(conn_mgr)
     ws = RecordingWebSocket()
 
+    await resource.on_connect(
+        _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
+    )
+    await ws.accept()
     with pytest.raises(RuntimeError, match="cannot join"):
-        await resource.on_connect(
-            _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
-        )
+        await resource.on_session_start(ws)
 
     remaining = conn_mgr.websockets
     assert remaining == {}, f"the failed connection must be removed: {remaining}"
@@ -125,6 +127,8 @@ async def test_on_disconnect_removes_connection_and_audits_closure() -> None:
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
+    await ws.accept()
+    await resource.on_session_start(ws)
     assert ws.accepted is True, "the resource must accept before its ready frame"
 
     await resource.on_disconnect(ws, close_code=1001)

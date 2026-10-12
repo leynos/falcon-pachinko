@@ -159,6 +159,9 @@ class TaskStreamResource(WebSocketResource):
         self._feed = announcement_feed
         self._conn_mgr = conn_mgr
         self._conn_id: str | None = None
+        self._workspace_id: str | None = None
+        self._project_id: str | None = None
+        self._user: str | None = None
         self._complete_config = TaskOperationConfig(
             repo_operation=self._repo.complete_task,
             response_type="task.completed",
@@ -184,8 +187,21 @@ class TaskStreamResource(WebSocketResource):
         workspace_id: str,
         project_id: str,
     ) -> bool:
-        """Attach the websocket to the workspace-wide room."""
-        user = req.get_header("X-User") or req.get_param("user", default="guest")
+        """Retain authenticated request metadata before acceptance."""
+        del ws
+        self._workspace_id = workspace_id
+        self._project_id = project_id
+        self._user = req.get_header("X-User") or req.get_param("user", default="guest")
+        return True
+
+    async def on_session_start(self, ws: WebSocketLike) -> None:
+        """Register the accepted session and send its initial ready frame."""
+        workspace_id = self._workspace_id
+        project_id = self._project_id
+        user = self._user or "guest"
+        if workspace_id is None or project_id is None:
+            msg = "workspace and project metadata must be set before session start"
+            raise RuntimeError(msg)
         conn_id = secrets.token_hex(12)
         await self._conn_mgr.add_connection(conn_id, ws)
         self._conn_id = conn_id
@@ -201,7 +217,6 @@ class TaskStreamResource(WebSocketResource):
                 project=project_id,
                 user=self.state["user"],
             )
-            await ws.accept()
             await ws.send_media({
                 "type": "session.ready",
                 "payload": {
@@ -211,18 +226,17 @@ class TaskStreamResource(WebSocketResource):
             })
         except BaseException:
             # Rollback must include cancellation after manager registration.
-            await self._conn_mgr.remove_connection(conn_id)
             self._conn_id = None
+            await self._conn_mgr.remove_connection(conn_id)
             raise
-        return True
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Remove the websocket from the connection manager on disconnect."""
-        if self._conn_id is None:
-            return
         conn_id = self._conn_id
-        await self._conn_mgr.remove_connection(conn_id)
         self._conn_id = None
+        if conn_id is None:
+            return
+        await self._conn_mgr.remove_connection(conn_id)
         await self._audit.record(
             "session.closed",
             connection=conn_id,

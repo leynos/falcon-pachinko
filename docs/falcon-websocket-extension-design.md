@@ -276,21 +276,24 @@ logic.
 
 - **Lifecycle Methods**:
 
-  - `async def on_connect(self, req, ws, **params) -> bool`: Called before the
-    router accepts the WebSocket. `req` is the Falcon `Request` associated
-    with the upgrade request, and `ws` is a `WebSocketLike` connection.
-    Returning a truthy result approves the session and lets the router accept
-    unless the resource has already done so. A falsey result rejects a socket
-    that is still unaccepted. Resources may accept during `on_connect` when
-    setup needs to send data before router acceptance; the router detects this
-    and skips duplicate acceptance.
+  - `async def on_connect(self, req, ws, **params) -> bool | AcceptOptions`:
+    Runs before acceptance. Inspect request metadata and return `False` to
+    reject, `True` to accept with defaults, or `AcceptOptions` to select a
+    subprotocol and headers. On the supported path, this hook does not accept,
+    send, or receive. `ws.accept()` remains temporarily available as a
+    deprecated compatibility path; it accepts immediately, warns, and the
+    lifecycle guard prevents a second acceptance.
+
+  - `async def on_session_start(self, ws: WebSocketLike)`: Runs after the
+    router has accepted the connection. Use it for session work such as a
+    hello frame or authentication that waits for an initial frame with a
+    deadline. Frame sends and receives from `on_connect` raise `LifecycleError`
+    with guidance to use this hook.
 
   - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: Runs
-    exactly once after `on_connect` approves the session or the resource
-    accepts the socket. It also runs if setup fails after resource-owned
-    acceptance. Rejected, never-accepted sockets do not run post-accept
-    cleanup. Use this hook to release connection-scoped state such as
-    connection-manager membership.
+    exactly once for an accepted session, after `before_disconnect` hooks.
+    Rejected pre-accept sockets do not run disconnect hooks. Use this hook to
+    release connection-scoped state such as connection-manager membership.
 
   - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str,
     bytes])`
@@ -693,11 +696,15 @@ class ChatRoomResource(WebSocketResource):
 
         self.room_name = room_name
 
-        await self.join_room(self.room_name)
+        return True
 
+    async def on_session_start(self, ws: WebSocketLike) -> None:
+        await self.join_room(self.room_name)
         await ws.send_media({
             "type": "serverSystemMessage",
-            "payload": {"text": f"Welcome {self.user.name} to room '{room_name}'!"},
+            "payload": {
+                "text": f"Welcome {self.user.name} to room '{self.room_name}'!"
+            },
         })
 
         await self.broadcast_to_room(
@@ -705,7 +712,6 @@ class ChatRoomResource(WebSocketResource):
             {"type": "serverUserJoined", "payload": {"user": self.user.name}},
             exclude_self=True,
         )
-        return True
 
     @handles_message("clientSendMessage")
     async def handle_send_message(self, ws: WebSocketLike, payload: dict):
@@ -1000,28 +1006,74 @@ sequenceDiagram
 
     Client->>FalconApp: Initiate WebSocket connection (URL)
     FalconApp->>WebSocketRouter: on_websocket(req, ws)
-    WebSocketRouter->>WebSocketRouter: Validate mount prefix
-    WebSocketRouter->>WebSocketRouter: Match path against a route's prefix
-    WebSocketRouter->>WebSocketResource: Instantiate resource from factory
-    WebSocketRouter->>WebSocketResource: Resolve subroutes (consume remaining path)
-    WebSocketRouter->>WebSocketRouter: Run before_connect hooks
+    WebSocketRouter->>WebSocketRouter: Validate mount and match request path
+    WebSocketRouter->>WebSocketRouter: Run simulator_factory, then lifecycle guard
+    WebSocketRouter->>WebSocketResource: Construct and resolve resource chain
+    WebSocketRouter->>WebSocketRouter: Bind hooks and route parameters
+    WebSocketRouter->>WebSocketRouter: before_connect hooks (global, parent, child)
     WebSocketRouter->>WebSocketResource: on_connect(req, ws, **params)
-    WebSocketRouter->>WebSocketRouter: Run after_connect hooks
-    alt Approved or accepted by resource
-        opt Resource has not accepted
-            WebSocketRouter->>Client: Accept WebSocket
+    WebSocketRouter->>WebSocketRouter: after_connect hooks (child, parent, global)
+    alt Rejected before acceptance
+        WebSocketRouter->>Client: Reject upgrade (HTTP 403)
+    else Accepted
+        WebSocketRouter->>Client: Accept exactly once
+        WebSocketRouter->>WebSocketResource: on_session_start(ws)
+        loop Until close or peer disconnect
+            Client-->>WebSocketRouter: Text frame
+            WebSocketRouter->>WebSocketRouter: before_receive hooks (global, parent, child)
+            WebSocketRouter->>WebSocketResource: Dispatch frame
+            WebSocketRouter->>WebSocketRouter: after_receive hooks (child, parent, global)
         end
-        loop Until Falcon reports disconnect
-            Client-->>WebSocketRouter: Raw text or binary frame
-            WebSocketRouter->>WebSocketResource: Dispatch frame and hooks
-        end
-        WebSocketRouter->>WebSocketRouter: Begin disconnect once
-        WebSocketRouter->>WebSocketRouter: before_disconnect hook
+        WebSocketRouter->>Client: Close transport with selected code
+        WebSocketRouter->>WebSocketRouter: before_disconnect hooks (global, parent, child)
         WebSocketRouter->>WebSocketResource: on_disconnect(ws, close_code)
-    else Rejected and never accepted
-        WebSocketRouter->>Client: Close or reject WebSocket
     end
 ```
+
+The connection lifecycle has these fourteen steps:
+
+1. Falcon receives the WebSocket upgrade request and calls `on_websocket`.
+2. The router validates the mount prefix.
+3. The router matches the request path.
+4. The router applies `simulator_factory`, then wraps the socket in its
+   lifecycle guard.
+5. The router constructs the base resource and resolves nested routes.
+6. The router binds the hook manager to the resource chain, guarded socket and
+   route parameters.
+7. `before_connect` hooks run from global to parent to child.
+8. The innermost resource's `on_connect` runs at the pre-accept decision point.
+   Its boolean or `AcceptOptions` decision is captured; the deprecated
+   explicit-accept call is the documented compatibility exception.
+9. On the supported boolean/`AcceptOptions` path, `after_connect` hooks run
+   from child to parent to global before acceptance. Mutating
+   `HookContext.result` here does not change the captured decision. The
+   deprecated `ws.accept()` compatibility path is the exception: it accepts
+   immediately inside `on_connect`, before `after_connect`.
+10. A falsey decision closes/rejects an unaccepted transport; no session or
+    disconnect callbacks run and the ASGI handshake is rejected with HTTP 403.
+    If deprecated `ws.accept()` already accepted it, a falsey decision closes
+    the accepted session and finalizes its disconnect lifecycle.
+11. For an accepted supported-path decision, the router performs exactly one
+    real accept. The deprecated resource-owned `ws.accept()` path has already
+    accepted inside `on_connect`; the guard warns and prevents the router from
+    accepting a second time.
+12. The router runs `on_session_start`; sends and receives are now available.
+13. The router receives text frames, runs `before_receive` hooks from global
+    to child, dispatches the frame, then runs `after_receive` hooks from child
+    to global until the socket closes or the peer disconnects. A peer close
+    uses Falcon's reported code when available
+    (`1006` otherwise); session failures close with `1011`, and cancellation
+    closes with `1001`.
+14. The router closes the transport if still open, runs
+    `before_disconnect` hooks from global to parent to child, then invokes the
+    innermost `on_disconnect(ws, close_code)` exactly once.
+
+`router.negotiate(req, ws, **kwargs)` performs negotiation through step 11 and
+returns an accepted `WebSocketSession` handle without running step 12. Manual
+dispatch can use `session.resource`; `on_websocket` negotiates and runs the
+session automatically. A pre-accept failure closes the transport and propagates
+the exception without session or disconnect callbacks unless the deprecated
+explicit accept path already established the session.
 
 The router owns an established session through cleanup. Falcon's reported
 disconnect code is passed to `on_disconnect`; absent a code, the effective code
@@ -1033,12 +1085,15 @@ An unexpected ordinary failure triggers a best-effort `1011` close and reports
 must terminate. The router invokes `before_disconnect` before `on_disconnect`
 and prevents new receive or dispatch hooks once disconnect begins.
 
-A lone session or cleanup failure is re-raised unchanged. Multiple ordinary
-failures are grouped in an `ExceptionGroup`, with the primary session failure
-first. Cancellation remains a bare `CancelledError`; cleanup failures that
-cannot be grouped with cancellation are reported through the running loop's
-exception handler. This cleanup guarantee is what makes membership added during
-approved connection setup reliably removable by `on_disconnect`.
+Session failures are re-raised after finalization; any finalization failures
+are reported through the running loop's exception handler so they do not
+replace the session error. Without a session failure, one cleanup failure is
+re-raised unchanged and multiple ordinary cleanup failures are grouped in an
+`ExceptionGroup`. Cancellation remains a bare `CancelledError`; cleanup
+failures that cannot be grouped with cancellation are reported through the
+running loop's exception handler. This cleanup guarantee is what makes
+membership added during accepted-session setup reliably removable by
+`on_disconnect`.
 
 ```mermaid
 erDiagram
@@ -1578,12 +1633,9 @@ flexibility.
 
 ### 6.1. Advanced Subprotocol Handling
 
-The current design focuses on basic subprotocol acceptance via the
-`falcon.asgi.WebSocket.accept(subprotocol=...)` method, which could be exposed
-in `on_connect`. Future versions could explore more structured ways to handle
-different subprotocols, perhaps allowing `WebSocketResource` subclasses to
-specialize in particular subprotocols or offering mechanisms to select a
-handler based on the negotiated subprotocol.
+Subprotocol acceptance is selected in pre-accept `on_connect` by returning
+`AcceptOptions(subprotocol=...)`. The router owns the one real acceptance call;
+resources do not need direct access to Falcon's accept method.
 
 ### 6.2. Compression Extensions
 

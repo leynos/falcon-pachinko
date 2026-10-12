@@ -234,7 +234,9 @@ class HookTestEnvironment:
         """Run the session with seeded frames and return its child resource."""
         ws = DummyWS(*frames)
         req = make_req("/hooks/child")
-        await self.router.on_websocket(req, ws)
+        session = await self.router.negotiate(req, ws)
+        assert session is not None, "the hook resource should accept the connection"
+        await session.run()
         return HookChild.instances[-1]
 
 
@@ -398,8 +400,10 @@ async def test_after_receive_reports_errors() -> None:
 
     ws = DummyWS(b'{"type":"boom"}')
     req = make_req("/boom")
+    session = await router.negotiate(req, ws)
+    assert session is not None, "the error resource should accept the connection"
     with pytest.raises(RuntimeError):
-        await router.on_websocket(req, ws)
+        await session.run()
 
     expected_events = [
         ("global", "before_receive"),

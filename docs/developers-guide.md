@@ -31,13 +31,17 @@ the lifespan owner.
 
 ## Dependency bounds
 
-The package supports Falcon 4.x through `falcon>=4,<5`. Falcon follows
+The package supports Falcon `>=4,<4.5`. The session receive loop uses Falcon's
+private `falcon.asgi.WebSocket._receive()` seam because the public receivers
+decode or consume only one frame type. The dependency cap keeps that seam
+within the versions verified by the live-server and unit tests. Falcon follows
 [semantic versioning](https://falcon.readthedocs.io/en/stable/community/releases.html#semantic-versioning),
 so an incompatible API change can arrive with a new major release. This
 package uses Falcon's ASGI application and WebSocket APIs in
 `falcon_pachinko/router.py`, `falcon_pachinko/websocket.py`, and
-`falcon_pachinko/testing/harness.py`; the exclusive upper bound keeps a future
-major release out until compatibility is verified.
+`falcon_pachinko/testing/harness.py`. The receive loop calls the private seam in
+`falcon_pachinko/_session_socket.py`; the exclusive upper bound keeps versions
+outside the tested range until compatibility is verified.
 
 The lower bound was checked on 2026-10-08 UTC (2026-10-09 in Europe/Berlin) by
 installing Falcon 4.0.0 with `uv pip install falcon==4.0.0` and running
@@ -192,83 +196,74 @@ threaded positionally through each helper.
 
 ## WebSocket session lifecycle
 
-`WebSocketRouter.on_websocket()` owns each session through disconnect and
-completed cleanup. After resource selection, it awaits
-`falcon_pachinko._session_driver.run_session()` for setup, receive dispatch,
-and disconnect cleanup. The driver consumes the mutable routing descriptor
-through `SessionDispatch` and `SessionRouteMatch` protocols; route resolution
-and pre-establishment factory error handling stay in the router.
+`WebSocketRouter.negotiate()` owns route selection and pre-accept negotiation;
+`WebSocketRouter.on_websocket()` calls it and then awaits the returned session's
+`run()`. The driver in `falcon_pachinko/_session_driver.py` owns
+`on_session_start`, text receive/dispatch and accepted-session finalization.
+The driver consumes the mutable routing descriptor through `SessionDispatch` and
+`SessionRouteMatch` protocols; route resolution and pre-accept factory error
+handling stay in the router.
 
-The session moves through `CONNECTING`, `ESTABLISHED`, `DISCONNECTING`, and
-`CLOSED`. The router establishes the session when `on_connect` returns a truthy
-result or when the resource has already accepted the socket. A rejection before
-either event does not promise post-accept cleanup. If `on_connect` or a later
-setup step fails after resource-owned acceptance, the router still runs cleanup.
+`on_connect` is the pre-accept decision point. On the supported boolean or
+`AcceptOptions` path, the router normalizes the decision, runs `after_connect`
+while still pre-accept, then performs exactly one real `accept()`. The boolean
+`HookContext.result` is a snapshot; mutations by an `after_connect` hook do not
+alter the captured decision. The deprecated resource-owned `ws.accept()` path
+is the compatibility exception: it accepts immediately inside `on_connect`, so
+`after_connect` runs after acceptance for that resource. The lifecycle guard
+warns on that call and prevents a second real accept. A false decision after
+legacy acceptance closes and finalizes the accepted session. Migration removes
+this ordering exception. Data operations before acceptance raise
+`LifecycleError` and direct the caller to `on_session_start`.
 
-Setup ordering remains `before_connect`, resource `on_connect`,
-`after_connect`, then router acceptance when the resource has not accepted the
-socket. A resource that needs to send data before router acceptance can accept
-itself during `on_connect`; the router detects this and avoids duplicate
-acceptance. After setup, the router receives raw frames on the final resource
-in the resolved child chain and dispatches each frame through the existing
-resource and hook manager. Native text and binary frames pass through
-unchanged, without Falcon's JSON or MessagePack media decoding. The native
-adapter isolates Falcon's low-level receiver because its public receivers
-either decode media or require a single frame type. This preserves disconnect
-state and allows malformed JSON to reach the resource's `on_unhandled`
-fallback. Injected transports retain `receive_media()` compatibility: other
-media values are encoded as JSON with `msgspec`; values that cannot be encoded
-fail the session as an unexpected error.
+`router.negotiate(req, ws, **kwargs)` returns `None` for rejection, otherwise
+an accepted `WebSocketSession` whose session loop has not started. This
+supports manual dispatch through `session.resource`; callers that need the
+normal receive loop use `await session.run()`. The supplied socket is a
+forwarding guard with read-only `phase` and `close_code`, not the underlying
+Falcon socket identity. `isinstance(ws, falcon.asgi.WebSocket)` therefore
+returns false.
 
-Native Falcon sockets use a forwarding adapter that records acceptance history.
-The same adapter tracks custom transports without an `unaccepted` property:
-initial missing state is not evidence of acceptance, but a completed `accept()`
-call is. This keeps the four-method `WebSocketLike` protocol compatible without
-inventing acceptance for transports whose explicit probe remains true. Falcon's
-`unaccepted` property also becomes false after rejecting a handshake with
-`close()`, so a post-close probe alone cannot establish whether cleanup was
-promised. The adapter retains acceptance when the resource accepts and closes
-during setup, and leaves a pre-accept rejection outside the cleanup promise.
-Injected simulators retain their identity and expose their own acceptance
-state. An approved socket that never becomes accepted skips receives and cleans
-up with `1011`.
+The accepted session runs the innermost `on_session_start(ws)` before the first
+frame read. This hook supports a hello frame or deadline-bound authentication
+frame exchange. The receive loop uses text frames and dispatches them through
+the selected child resource and hook manager. A peer disconnect uses Falcon's
+reported code when available, or `1006`; an ordinary session failure attempts
+`1011`, and cancellation attempts `1001`. Cleanup closes the transport if it is
+still open, runs `before_disconnect` from global to parent to child, then calls
+the innermost `on_disconnect(ws, close_code)` exactly once. Rejections and
+failures that leave the socket unaccepted do not invoke session or disconnect
+callbacks; the legacy explicit-accept path has already established the session
+and therefore receives accepted-session cleanup.
 
-The receive loop ends on Falcon's `WebSocketDisconnected`, retaining its close
-code when present and using `1006` when it is absent. An ordinary handler or
-post-establishment setup failure triggers a best-effort close with `1011`; a
-task cancellation triggers a best-effort close with `1001`. `on_disconnect`
-receives that effective code for these failures, the reported code for a clean
-client or server close when available, and `1006` for transport loss without a
-reported code. A server-initiated `ws.close(code)` sends that code to the peer;
-cleanup uses the disconnect code Falcon reports to the router.
-`WebSocketDisconnected` from accepted setup or a resource handler is also
-treated as a transport ending, rather than an unexpected handler failure.
+Raw frame dispatch currently uses Falcon's private
+`falcon.asgi.WebSocket._receive()` seam because the public receivers decode or
+consume only one frame type. The Falcon dependency is capped below `4.5` until
+that seam is revalidated; `test_supported_falcon_receive_seam_is_callable`
+guards its presence. Revisit the cap and test together when upgrading Falcon.
 
-Cleanup first changes the phase to `DISCONNECTING`, which guards both receive
-and resource dispatch so no further receive hooks or handlers begin. It then
-runs `before_disconnect` with the request, socket, route parameters, effective
-close code, and primary error, followed by `on_disconnect(ws, close_code)` even
-if the hook fails. The latter is the place to remove connection-manager
-membership established during `on_connect`; setup code that registers
-membership and then fails before establishment must roll that registration back
-itself.
+Disconnect cleanup runs in a separate shielded task and has no timeout, so
+`on_disconnect` must terminate. A session error takes precedence over
+finalization errors; with no session error, a finalization error propagates.
+Cancellation remains a bare `CancelledError`, and cleanup failures that cannot
+be grouped with it are reported to the running loop's exception handler.
 
-Receive guards are checked between individual hooks and layers. Closing from a
-before- or after-receive hook suppresses every remaining receive hook,
-including hooks in the same layer.
+### Live Falcon WebSocket behaviour tests
 
-Cleanup runs in a separate shielded task and the router keeps awaiting that
-task through repeated cancellation. There is no cleanup timeout, so
-`on_disconnect` must terminate. A single session or cleanup failure is
-re-raised unchanged. Multiple ordinary failures are raised in an
-`ExceptionGroup`, with the session failure first. Cancellation remains a bare
-`CancelledError`; failures that cannot be grouped with it are sent to the
-running loop's exception handler. Cancellation during cleanup preserves the
-already selected close code.
+The required lifecycle acceptance scenarios run through the Falcon ASGI test
+server, not only through `WebSocketSimulator`. The pytest-bdd fixture binds a
+real socket on `127.0.0.1` with port `0`, serves a Falcon `App` with Uvicorn,
+and drives HTTP upgrades with `WebSocketTestClient`. A simulator factory wraps
+the real Falcon WebSocket to count actual `accept()` calls while forwarding
+operations. Scenario teardown closes clients and awaits Uvicorn shutdown.
 
-The same primary-first policy preserves an accepted `on_connect` failure when an
-`after_connect` hook also fails. Cancellation from that hook remains bare; the
-original setup failure is reported through the loop's exception handler.
+These scenarios prove that a pre-accept rejection creates no accepted client
+session, negotiation accepts once, `on_session_start` can exchange frames, an
+accepted failure closes and finalizes with the documented code and hook order,
+and nested hooks run in global-to-child order. Disconnect assertions wait for
+the resource's event recorder so they observe completed asynchronous cleanup.
+Install the harness dependency with `uv sync --group dev`; `uvicorn` is in the
+development dependency group.
 
 ## Lint and Typecheck Toolchain
 

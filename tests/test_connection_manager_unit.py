@@ -17,7 +17,7 @@ from tests._stubs import RecordingBackend, RecordingWebSocket
 class ErrorWebSocket(RecordingWebSocket):
     """WebSocket stub whose send raises an error."""
 
-    async def send_media(self, data: object) -> None:
+    async def send_media(self, media: object) -> None:
         """Raise to simulate a broken connection."""
         raise RuntimeError("boom")
 

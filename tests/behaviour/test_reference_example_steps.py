@@ -21,7 +21,12 @@ from tests._stubs import RequestStub
 if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers, string-only annotations
     import collections.abc as cabc
 
-    from falcon_pachinko import ServiceContainer, WebSocketResource, WebSocketRouter
+    from falcon_pachinko import (
+        ServiceContainer,
+        WebSocketResource,
+        WebSocketRouter,
+        WebSocketSession,
+    )
 
 
 @dc.dataclass(slots=True)
@@ -36,6 +41,7 @@ class ReferenceScenario:
     resource: TaskStreamResource | None = None
     last_event: tuple[str, dict[str, object]] | None = None
     router_task: asyncio.Task[None] | None = None
+    session: WebSocketSession | None = None
 
 
 _MISSING_TASK_RESOURCE_MSG = "TaskStreamResource was not instantiated"
@@ -100,8 +106,8 @@ def given_reference_router(
             return
 
         async def close() -> None:
-            if not context.simulator.closed:
-                await context.simulator.close(1000)
+            if context.session is not None:
+                await context.session.aclose()
             try:
                 await asyncio.wait_for(asyncio.shield(router_task), timeout=5)
             except TimeoutError:
@@ -137,9 +143,10 @@ def when_client_connects(
     )
 
     async def connect() -> None:
-        router_task = asyncio.create_task(
-            context.router.on_websocket(req, context.simulator)
-        )
+        session = await context.router.negotiate(req, context.simulator)
+        assert session is not None, "valid credentials should negotiate a session"
+        context.session = session
+        router_task = asyncio.create_task(session.run())
         context.router_task = router_task
         await asyncio.wait_for(context.simulator.lifecycle_event.wait(), timeout=5)
         if router_task.done():

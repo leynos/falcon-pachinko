@@ -10,8 +10,8 @@ workers, and testing utilities.
 
 - **WebSocketRouter** – Mountable Falcon resource that owns route definitions
   and orchestrates instantiation.
-- **WebSocketResource** – Per-connection handler exposing lifecycle hooks
-  (`on_connect`, `on_disconnect`) and message handlers.
+- **WebSocketResource** – Per-connection handler exposing negotiation,
+  accepted-session and disconnect hooks, plus message handlers.
 - **Composable hierarchy** – Resources can register child routes with
   `add_subroute`, passing context and shared state down the chain.
 - **Schema-driven dispatch** – Define a `msgspec` tagged union `schema` and
@@ -34,6 +34,9 @@ class ChatResource(WebSocketResource):
         self.state["room"] = room
         return True  # continue to message handling
 
+    async def on_session_start(self, ws):
+        await ws.send_media({"type": "chat.ready", "room": self.state["room"]})
+
     @handles_message("chat.message")
     async def handle_message(self, ws, payload):
         await ws.send_media({"type": "echo", "text": payload.text})
@@ -51,12 +54,28 @@ app.add_route("/ws/{pachinko_path:path}", router)
   both at the exact prefix and at one descendant route ending in
   `/{pachinko_path:path}` so it receives descendant paths. The router matches
   using the concrete request path.
-- `on_connect` runs before router acceptance. Return `True` to ask the router
-  to accept; do not also call `ws.accept()` in this pattern. A resource may
-  instead call `ws.accept()` itself and return `True`; the router detects that
-  acceptance and will not accept twice.
+- `on_connect` is the pre-accept decision point. Use it to inspect request
+  metadata and reject an upgrade, or return `True` to accept with defaults.
+  Return `AcceptOptions` to choose a subprotocol or response headers. On this
+  supported path, the router owns exactly one real `accept()` call.
+- `on_session_start` runs after acceptance and is the supported place to send
+  or receive frames, including a hello frame or deadline-bound authentication
+  exchange. Calling `ws.accept()` remains a deprecated compatibility path; it
+  emits `DeprecationWarning`, and the lifecycle guard rejects a second accept.
+- The deprecated call accepts immediately inside `on_connect`, so
+  `after_connect` hooks run after acceptance for that compatibility path.
+  Migration to a boolean or `AcceptOptions` return restores
+  `after_connect`-before-accept order.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
+
+The supported hook order is `before_connect` global → parent → child,
+`on_connect`, then `after_connect` child → parent → global, followed by the
+router's one acceptance and `on_session_start`. Receive hooks run
+`before_receive` global → parent → child, dispatch, then `after_receive` child
+→ parent → global. On disconnect, `before_disconnect` runs global → parent →
+child before the innermost `on_disconnect` runs exactly once. The deprecated
+`ws.accept()` path accepts inside `on_connect`, before `after_connect`.
 
 ### The `add_route` signature
 
@@ -108,15 +127,22 @@ resource and its hooks.
 
 ## 3. Resource Lifecycle & State
 
-- `on_connect(req, ws, **params) -> bool | None`
-  - Runs before router acceptance. Inspect headers, seed `self.state`, and
-    return a truthy value to approve the session. Returning a falsey value
-    rejects it. A resource may accept the socket itself when acceptance must
-    precede resource setup; the router then owns its subsequent session loop.
+- `on_connect(req, ws, **params) -> bool | AcceptOptions`
+  - Makes the pre-accept decision. Inspect request metadata and return `False`
+    to reject, `True` to accept with defaults, or `AcceptOptions` to select a
+    subprotocol and headers. On the supported path, it cannot send, receive or
+    accept. Changes to `HookContext.result` made by `after_connect` do not
+    alter this decision.
+- `on_session_start(ws) -> None`
+  - Runs after the router accepts. Use this hook for session setup that needs
+    an active socket, such as sending a hello frame or receiving an
+    authentication frame under a deadline.
 - `on_disconnect(ws, close_code) -> None`
-  - Called exactly once after approval or resource-owned acceptance. Use it to
-    release per-session resources, including connection-manager membership.
-    Rejected, never-accepted connections do not run post-accept cleanup.
+  - Called exactly once for an accepted session, after
+    `before_disconnect` hooks. Use it to release per-session resources,
+    including connection-manager membership. A rejected unaccepted socket does
+    not run disconnect hooks. If deprecated `ws.accept()` already accepted the
+    socket, a later rejection still closes and finalizes that accepted session.
 - `self.state`
   - Dict-like proxy shared across all resources in the same connection chain.
   - Override via `get_child_context()` to supply a custom state store (e.g.,
@@ -124,29 +150,30 @@ resource and its hooks.
 
 ### Disconnect and cleanup contract
 
-Once `on_connect` approves the connection or a resource accepts it, the router
-owns the session through disconnect cleanup. `on_disconnect(ws, close_code)`
-runs exactly once, including when setup fails after this establishment point.
-This lets a resource roll back registrations made during `on_connect`. A
-rejected connection that was never accepted skips this post-accept cleanup.
-This includes rejection by calling `ws.close()` during `on_connect`. Accepting
-and then closing during `on_connect` still promises cleanup. An approved socket
-that never becomes accepted is cleaned up with `1011` without receiving frames.
+`router.negotiate(req, ws, **kwargs)` returns an accepted `WebSocketSession`
+without starting it, or `None` when pre-accept negotiation rejects the
+connection. Check for `None` before manual dispatch; for an accepted session,
+call `session.resource.dispatch(...)` and later `await session.aclose()`.
+`on_websocket()` performs negotiation and then runs the session automatically.
+When `session.run()` runs in a separate task, `aclose()` closes the transport
+and waits for that task without a timeout. Closing the socket does not
+interrupt unrelated work in `on_session_start()`; cancel and await the run task
+before or concurrently with `aclose()` when shutdown must be bounded. Before
+acceptance, `send_media()`, `receive_media()` and `receive_text()` raise
+`LifecycleError` with guidance to move send and receive operations to
+`on_session_start`; a pre-accept `close()` rejects the upgrade. Calling
+`accept()` after acceptance also raises `LifecycleError`.
 
-Native Falcon sockets are wrapped in a `SessionWebSocket` proxy. Public methods
-and attribute reads are forwarded, but the proxy has its own identity:
-`isinstance(ws, falcon.asgi.WebSocket)` is false, and attributes assigned to
-`ws` are stored on the proxy. Its `unaccepted` property retains acceptance
-history, including after close, rather than mirroring Falcon's post-rejection
-state. Resources and connection managers should use the supplied socket's
-capabilities rather than rely on concrete type or identity checks.
+Here `WebSocketSession` means the server-side handle returned by router
+negotiation. `WebSocketTestClient.connect()` yields the separate
+`WebSocketTestSession` client facade from `falcon_pachinko.testing`.
 
-Custom transports keep the existing `WebSocketLike` protocol. Transports with an
-`unaccepted` property retain its authoritative state checks. Transports
-without it receive the same proxy treatment: missing state is initially
-unknown, and successful calls to `accept()` through the supplied socket
-establish the cleanup promise. Resource-owned acceptance is tracked even if
-`on_connect` then returns a falsey result or raises.
+The supplied `ws` is a lifecycle-guarded forwarding wrapper. Its `phase` is
+read-only and reports `PRE_ACCEPT`, `ACCEPTED` or `CLOSED`; its `close_code`
+records the first close code. It forwards other attributes, but it does not
+preserve the underlying socket's identity:
+`isinstance(ws, falcon.asgi.WebSocket)` is false. Code should use the supplied
+socket's public capabilities rather than concrete-type or identity checks.
 
 | Session ending                                    | `close_code` passed to `on_disconnect`                                                               |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
@@ -161,14 +188,16 @@ observes it while sending or during accepted setup; its reported code is
 retained. Cancellation after disconnect cleanup begins does not rewrite the
 close code already selected.
 
-The router runs `before_disconnect` before `on_disconnect`, then marks the
-session closed. Once disconnect begins, receive and dispatch hooks do not run
-for later frames. Cleanup runs in a shielded task and has no timeout, so
-`on_disconnect` must terminate. A cleanup exception does not replace a lone
-session exception; when both are ordinary exceptions, they are raised in an
-`ExceptionGroup` with the session exception first. A single failure is raised
-unchanged. Cancellation remains a bare `CancelledError`; cleanup failures that
-cannot be grouped with it are reported to the event loop's exception handler.
+The router runs `before_disconnect` hooks in global, parent, then child order,
+then invokes the innermost resource's `on_disconnect` exactly once. Once
+disconnect begins, receive and dispatch hooks do not run for later frames.
+Cleanup runs in a shielded task and has no timeout, so `on_disconnect` must
+terminate. If session code raises, that exception is re-raised unchanged and
+cleanup failures are reported to the event loop's exception handler. When
+session code completes normally, one cleanup failure is raised unchanged and
+multiple ordinary cleanup failures are grouped in an `ExceptionGroup`.
+Cancellation remains a bare `CancelledError`; cleanup failures that cannot be
+grouped with it are reported to the event loop's exception handler.
 
 ### Nested resources
 

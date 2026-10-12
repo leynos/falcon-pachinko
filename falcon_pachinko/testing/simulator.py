@@ -62,10 +62,10 @@ class WebSocketSimulator(_LifecycleSocket):
             decoder = self._decoders[payload_type] = msjson.Decoder(payload_type)
         return decoder
 
-    async def send_media(self, data: object) -> None:
-        """Record ``data`` as an outbound frame."""
-        await self._outbound.put(data)
-        self.sent_messages.append(data)
+    async def send_media(self, media: object) -> None:
+        """Record ``media`` as an outbound frame."""
+        await self._outbound.put(media)
+        self.sent_messages.append(media)
         self._outbound_event.set()
 
     async def receive_media(self) -> object:
@@ -78,14 +78,14 @@ class WebSocketSimulator(_LifecycleSocket):
         self.received_messages.append(message)
         return message
 
-    async def close(self, code: int = 1000) -> None:
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Close once and wake any task blocked in :meth:`receive_media`."""
         if self.closed:
             return
-        await super().close(code)
+        await super().close(code, reason)
         # The disconnect is queued after earlier inbound frames so a session
         # drains messages already accepted by the peer before it observes close.
-        close_code = self.close_code if self.close_code is not None else code
+        close_code = self.close_code if self.close_code is not None else code or 1000
         await self._inbound.put(DisconnectSentinel(close_code))
 
     async def next_sent(self) -> object:
@@ -126,10 +126,10 @@ class WebSocketSimulator(_LifecycleSocket):
 
     async def receive_text(self) -> str:
         """Receive the next frame ensuring it is textual."""
-        message = await self.receive_media()
-        if not isinstance(message, str):
-            raise TypeError(_EXPECTED_TEXT_MSG)
-        return message
+        try:
+            return await super().receive_text()
+        except TypeError as exc:
+            raise TypeError(_EXPECTED_TEXT_MSG) from exc
 
     async def receive_bytes(self) -> bytes:
         """Receive the next frame ensuring it is binary."""

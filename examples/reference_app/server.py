@@ -20,7 +20,6 @@ import falcon.asgi as falcon_asgi
 from falcon_pachinko import (
     ServiceContainer,
     WebSocketConnectionManager,
-    WebSocketLike,
     WebSocketResource,
     WebSocketRouter,
     WorkerController,
@@ -87,20 +86,6 @@ if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
             *args: object,
             **kwargs: object,
         ) -> None: ...
-
-
-class RouterEndpoint(WebSocketResource):
-    """Adapter that wires a :class:`WebSocketRouter` into the app."""
-
-    def __init__(self, *, router: WebSocketRouter) -> None:
-        self._router = router
-
-    async def on_connect(
-        self, req: falcon.Request, ws: WebSocketLike, **params: object
-    ) -> bool:
-        """Delegate the connection lifecycle to the router."""
-        await self._router.on_websocket(req, ws)
-        return False
 
 
 def _require_token_hook(
@@ -206,7 +191,8 @@ def create_app() -> LifespanApp:
     container = build_container(conn_mgr)
     router = build_router(container)
 
-    ws_app.add_websocket_route("/ws", RouterEndpoint, router=router)
+    app.add_route("/ws", router)
+    app.add_route("/ws/{pachinko_path:path}", router)
 
     controller = WorkerController()
     feed = _resolve_as(container, "announcement_feed", AnnouncementFeed)
