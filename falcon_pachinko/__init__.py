@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from .di import ServiceContainer, ServiceNotFoundError
 from .diagnostics import DEFAULT_SENSITIVE_KEYS, DiagnosticSanitizer
+from .fanout import ClusterFanout, FanoutMessage, FanoutTransport
 from .handlers import handles_message
 from .hooks import HookCollection, HookContext, HookManager
 from .media import configure_raw_frame_media
@@ -34,8 +35,11 @@ from .workers import WorkerController, worker
 
 __all__ = (
     "DEFAULT_SENSITIVE_KEYS",
+    "ClusterFanout",
     "ConnectionBackend",
     "DiagnosticSanitizer",
+    "FanoutMessage",
+    "FanoutTransport",
     "HookCollection",
     "HookContext",
     "HookManager",

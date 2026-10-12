@@ -109,11 +109,14 @@ class _WebSocketApp(typ.Protocol):
 
 
 class ConnectionBackend(abc.ABC):
-    """Abstract interface for connection manager backends.
+    """Explicit process-local live-socket registry contract.
+
+    Never serialize, proxy, or share sockets across processes. Use
+    ``ClusterFanout`` for distributed membership and delivery.
 
     Thread-safety expectations:
         Implementations of this interface are not required to be thread-safe
-        by default. Backends intended for multi-threaded or distributed use
+        by default. Backends intended for multi-threaded use
         must provide their own synchronization. Users should consult backend
         documentation before relying on concurrent scenarios.
 
@@ -170,7 +173,10 @@ class ConnectionBackend(abc.ABC):
 
 
 class InProcessBackend(ConnectionBackend):
-    """Task-safe in-memory backend."""
+    """Task-safe process-local socket registry.
+
+    Never serialize, proxy, or share sockets; use ``ClusterFanout`` across nodes.
+    """
 
     def __init__(self) -> None:
         self._websockets: dict[str, WebSocketLike] = {}
@@ -263,9 +269,9 @@ class InProcessBackend(ConnectionBackend):
 class WebSocketConnectionManager:
     """Track active WebSocket connections and group them into rooms.
 
-    WebSocketConnectionManager now delegates storage to a pluggable backend
-    so that deployments may swap in distributed implementations without
-    changing application code.
+    The pluggable backend supports alternative local storage and instrumentation.
+    Never serialize, proxy, or share live sockets across processes. Distributed
+    room delivery uses ``ClusterFanout``; local applications need no broker.
     """
 
     def __init__(self, backend: ConnectionBackend | None = None) -> None:
