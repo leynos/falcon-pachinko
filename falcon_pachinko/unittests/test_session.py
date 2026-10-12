@@ -203,6 +203,36 @@ async def test_handler_failure_closes_once_with_1011_and_reraises_original() -> 
 
 
 @pytest.mark.asyncio
+async def test_receive_failure_closes_once_with_1011_and_reraises_original(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Receive failures close with 1011 and preserve disconnect cleanup."""
+    resource = SessionResource()
+    ws = RecordingWS()
+    failure = RuntimeError("receive failed")
+    hook_codes: list[int | None] = []
+    router = _router_for(resource)
+    router.global_hooks.add(
+        "before_disconnect", lambda context: hook_codes.append(context.close_code)
+    )
+
+    async def fail_receive() -> object:
+        """Raise the configured failure after yielding to the receive loop."""
+        await asyncio.sleep(0)
+        raise failure
+
+    monkeypatch.setattr(ws, "receive_media", fail_receive)
+
+    with pytest.raises(RuntimeError, match="receive failed") as caught:
+        await router.on_websocket(make_req("/session"), ws)
+
+    assert caught.value is failure, "the original receive exception must propagate"
+    assert ws.closed == [1011], "the failed session must close exactly once with 1011"
+    assert hook_codes == [1011], "before_disconnect must receive code 1011"
+    assert resource.disconnects == [1011], "failure cleanup must report code 1011"
+
+
+@pytest.mark.asyncio
 async def test_failure_cleanup_errors_do_not_replace_handler_error(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
