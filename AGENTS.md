@@ -71,13 +71,13 @@ When implementing changes, adhere to the following testing procedures:
   optional; install them only when needed. Use the `examples` extra with
   `uv sync --group dev --extra examples` to run example programs and tests that
   use example-only dependencies such as `aiosqlite`. Use the `testing` extra
-  with `uv sync --group dev --extra testing`. Prefer Make targets over
-  invoking tools directly. When editing `Makefile`, run `mbake validate
-  Makefile` to confirm the syntax is correct. `make build` installs the `dev`
-  group's uv-managed dependencies, but that is not the whole local toolchain:
-  `markdownlint-cli2` (installed with `npm`), `mdtablefix` and `nixie` come from
-  outside the project, so provision them separately. `ensure_tool` names any
-  that are missing when a gate needs one.
+  with `uv sync --group dev --extra testing`. Prefer Make targets over invoking
+  tools directly. When editing `Makefile`, run `mbake validate Makefile` to
+  confirm the syntax is correct. `make build` installs the `dev` group's
+  uv-managed dependencies, but that is not the whole local toolchain:
+  `markdownlint-cli2` (installed with `npm`), `mdtablefix` and `nixie` come
+  from outside the project, so provision them separately. `ensure_tool` names
+  any that are missing when a gate needs one.
 
 - **Nose duplication gate:** `make lint` provisions the pinned nose detector
   and runs the blocking production-source duplication check. Use
