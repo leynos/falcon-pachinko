@@ -230,6 +230,15 @@ def test_dependabot_python_entry_keeps_its_rollout_settings() -> None:
     )
 
 
+#: The test module both trees carry. Its two copies claim one import name,
+#: which is the collision the ``norecursedirs`` entry prevents.
+_COLLIDING_MODULE = "test_shared_name.py"
+
+#: That module's body. One test is enough: collection, not execution, is what
+#: raises the import-path mismatch.
+_COLLIDING_TEST = "def test_placeholder() -> None:\n    assert True\n"
+
+
 def test_pytest_does_not_collect_the_generated_mutants_tree(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -246,23 +255,124 @@ def test_pytest_does_not_collect_the_generated_mutants_tree(
 
     Pytest runs in a temporary project carrying this repository's own pytest
     configuration, so the committed setting is exercised rather than a copy
-    that could drift out of step with it.
+    that could drift out of step with it. The collector is handed an explicit
+    ``.`` because ``testpaths`` would otherwise keep the sibling ``mutants/``
+    directory out of collection on its own, leaving this test green with the
+    setting deleted. Whether the entry is load-bearing is settled separately,
+    by :func:`test_the_mutants_exclusion_is_what_prevents_the_collision`.
     """
-    for tree in ("tests", "mutants/tests"):
-        (tmp_path / tree).mkdir(parents=True)
-        (tmp_path / tree / "test_shared_name.py").write_text(
-            "def test_placeholder() -> None:\n    assert True\n",
-            encoding="utf-8",
-        )
-    (tmp_path / "pyproject.toml").write_text(_pytest_configuration(), encoding="utf-8")
+    project = _duplicate_module_tree(tmp_path, _pytest_configuration())
 
-    collected = _run_collection(tmp_path)
+    collected = _run_collection(project, ".")
 
     assert collected.returncode == 0, (
         "pytest must not recurse into the generated `mutants/` tree: a "
         "leftover run must not break `make test`. Collection said:\n"
         f"{collected.stdout}{collected.stderr}"
     )
+    assert f"tests/{_COLLIDING_MODULE}::test_placeholder" in collected.stdout, (
+        "the original test must still be collected, so that a green run is "
+        "evidence about the exclusion rather than a run that collected "
+        f"nothing:\n{collected.stdout}"
+    )
+    assert f"mutants/tests/{_COLLIDING_MODULE}" not in collected.stdout, (
+        "the generated copy must not be collected; collecting it is what "
+        f"raises the import-path mismatch:\n{collected.stdout}"
+    )
+
+
+def test_the_mutants_exclusion_is_what_prevents_the_collision(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Negative control: the collision must return without the exclusion.
+
+    A setting that is present in both a passing and a failing run has not been
+    shown to do anything. This test runs the same tree as
+    :func:`test_pytest_does_not_collect_the_generated_mutants_tree` with one
+    difference — ``mutants`` removed from ``norecursedirs`` — and requires
+    collection to fail with the mismatch. That failure is what makes the
+    passing run evidence the entry is load-bearing rather than incidental.
+    Every other committed entry, pytest's own defaults included, stays put.
+    """
+    settings = _without_norecursedir(_pytest_configuration(), "mutants")
+    project = _duplicate_module_tree(tmp_path, settings)
+
+    collected = _run_collection(project, ".")
+
+    assert collected.returncode != 0, (
+        "removing `mutants` from `norecursedirs` must reproduce the "
+        "collision, or the setting is not what keeps the generated tree out "
+        f"of collection:\n{collected.stdout}{collected.stderr}"
+    )
+    assert f"mutants/tests/{_COLLIDING_MODULE}" in collected.stdout, (
+        "the generated copy must be the module that collides, so that the "
+        f"failure is the one under test:\n{collected.stdout}"
+    )
+    assert "mismatch" in collected.stdout, (
+        "collection must fail with an import-path mismatch rather than for "
+        f"some unrelated reason:\n{collected.stdout}"
+    )
+
+
+def _duplicate_module_tree(root: pathlib.Path, settings: str) -> pathlib.Path:
+    """Lay out the two trees that leave one module name claimed twice.
+
+    Both copies are needed. A tree holding only ``tests/`` cannot reproduce
+    the collision, because the defect is two files claiming a single import
+    name; ``mutants/tests/`` is the path ``make mutation`` leaves behind when
+    it copies the suite to run it in place.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        The directory to populate, which pytest is then run from.
+    settings : str
+        The ``[tool.pytest.ini_options]`` document to write as the project's
+        ``pyproject.toml``.
+
+    Returns
+    -------
+    pathlib.Path
+        *root*, so the caller can pass it straight to the collector.
+    """
+    for tree in ("tests", "mutants/tests"):
+        (root / tree).mkdir(parents=True)
+        (root / tree / _COLLIDING_MODULE).write_text(_COLLIDING_TEST, encoding="utf-8")
+    (root / "pyproject.toml").write_text(settings, encoding="utf-8")
+    return root
+
+
+def _without_norecursedir(settings: str, directory: str) -> str:
+    """Return *settings* with one ``norecursedirs`` entry removed.
+
+    The removal is the point: every other committed setting is left intact, so
+    the two runs differ only in the entry under test. The list is rebuilt
+    through :func:`_toml_value` rather than edited as text, so entry order and
+    quoting cannot decide whether the control works. An entry that is absent
+    is asserted rather than tolerated, so a renamed entry fails the control
+    loudly instead of quietly producing a second copy of the positive run.
+
+    Parameters
+    ----------
+    settings : str
+        A rendered ``[tool.pytest.ini_options]`` document.
+    directory : str
+        The ``norecursedirs`` entry to drop.
+
+    Returns
+    -------
+    str
+        The same document without that entry.
+    """
+    options = tomllib.loads(settings)["tool"]["pytest"]["ini_options"]
+    entries = options["norecursedirs"]
+    assert isinstance(entries, list), f"norecursedirs must be a list; got {entries!r}"
+    assert directory in entries, (
+        f"{directory!r} is not a norecursedirs entry, so removing it cannot "
+        f"show what it prevents: {entries}"
+    )
+    options["norecursedirs"] = [entry for entry in entries if entry != directory]
+    return _render_ini_options(options)
 
 
 def _pytest_configuration() -> str:
@@ -281,6 +391,22 @@ def _pytest_configuration() -> str:
     options = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"]["pytest"][
         "ini_options"
     ]
+    return _render_ini_options(options)
+
+
+def _render_ini_options(options: dict[str, object]) -> str:
+    """Render pytest ini options as a ``pyproject.toml`` document.
+
+    Parameters
+    ----------
+    options : dict of str to object
+        The ini options, as ``tomllib`` reads them.
+
+    Returns
+    -------
+    str
+        A document whose only table is ``[tool.pytest.ini_options]``.
+    """
     lines = ["[tool.pytest.ini_options]"]
     lines.extend(f"{key} = {_toml_value(value)}" for key, value in options.items())
     return "\n".join(lines) + "\n"
@@ -318,14 +444,42 @@ def _toml_value(value: object) -> str:
             raise TypeError(msg)
 
 
-def _run_collection(project: pathlib.Path) -> CompletedRun:
-    """Run pytest's collector in ``project`` and capture its exit status."""
+def _run_collection(project: pathlib.Path, *targets: str) -> CompletedRun:
+    """Run pytest's collector in ``project`` and capture its exit status.
+
+    Parameters
+    ----------
+    project : pathlib.Path
+        The directory to collect from.
+    *targets : str
+        Collection paths, passed through to pytest.
+
+    Returns
+    -------
+    CompletedRun
+        The finished process with its captured standard output and error.
+
+    Notes
+    -----
+    ``--color=no`` is not cosmetic. The developer environment exports
+    ``FORCE_COLOR``, under which pytest wraps its summary in ANSI escapes and
+    the caller's substring assertions, written against plain text, would fail
+    against a run that in fact collected exactly the expected modules.
+    """
     environment = tool_environment()
     executable = shutil.which("pytest", path=environment.get("PATH"))
     if executable is None:
         pytest.fail("pytest must be on PATH to run the collector")
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - argv is repo tooling, never outside input
-        [executable, "--collect-only", "-q", "-p", "no:cacheprovider"],
+        [
+            executable,
+            "--collect-only",
+            "-q",
+            "--color=no",
+            "-p",
+            "no:cacheprovider",
+            *targets,
+        ],
         cwd=project,
         env=environment,
         capture_output=True,
