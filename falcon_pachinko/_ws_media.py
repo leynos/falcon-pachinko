@@ -20,6 +20,7 @@ class _RawWebSocketMediaHandler:
     """Preserve inbound frames while retaining Falcon's outbound serializer."""
 
     def __init__(self, wrapped: object) -> None:
+        """Retain Falcon's serializer while replacing inbound decoding."""
         serialize = getattr(wrapped, "serialize", None)
         if not callable(serialize):
             msg = "Falcon WebSocket media handler must provide serialize()"

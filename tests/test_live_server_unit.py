@@ -60,26 +60,34 @@ class _FakeAdapter:
         *,
         start_error: Exception | None = None,
         hang_on_stop: bool = False,
+        close_socket_after_start: bool = False,
     ) -> None:
+        """Select startup, shutdown, and socket-ownership behaviours."""
         self._finished = asyncio.Event()
         self.task = asyncio.create_task(self._serve())
         self.start_error = start_error
         self.hang_on_stop = hang_on_stop
+        self.close_socket_after_start = close_socket_after_start
         self.started = asyncio.Event()
         self.socket: socket.socket | None = None
         self.app: ASGIApplication | None = None
 
     async def _serve(self) -> None:
+        """Wait until adapter shutdown releases its test task."""
         await self._finished.wait()
 
     async def start(self, app: ASGIApplication, sock: socket.socket) -> None:
+        """Record startup inputs and signal readiness or close the socket."""
         self.socket = sock
         self.app = app
         if self.start_error is not None:
             raise self.start_error
+        if self.close_socket_after_start:
+            sock.close()
         self.started.set()
 
     async def stop(self) -> None:
+        """Finish the serve task unless configured to miss its deadline."""
         if self.hang_on_stop:
             await asyncio.Future()
         self._finished.set()
@@ -124,6 +132,17 @@ async def test_base_url_uses_ephemeral_loopback_port() -> None:
         assert adapter.socket is not None, "the adapter must receive the bound socket"
         assert adapter.socket.getsockname()[1] == int(port), (
             "the published URL port must match the prebound listener"
+        )
+
+
+@pytest.mark.asyncio
+async def test_base_url_survives_adapter_taking_socket_ownership() -> None:
+    """Read the bound URL after the adapter closes its owned socket."""
+    adapter = _FakeAdapter(close_socket_after_start=True)
+
+    async with LiveWebSocketServer(_make_app(), adapter=adapter) as server:
+        assert server.base_url.startswith("ws://127.0.0.1:"), (
+            "the base URL must be captured before adapter ownership transfer"
         )
 
 

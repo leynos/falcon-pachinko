@@ -527,15 +527,23 @@ query's own warning remains a final check for a wholly empty scan. Stale
 allow-rule diagnostics say “unmatched in this capped scan” because absence from
 a ranked report does not prove that duplication has disappeared.
 
-The scan covers shipped direct modules under `falcon_pachinko/`. Its explicit
-setuptools package list omits `testing/`, `unittests/`, and `behaviour/`, so
-those directories are excluded with root-relative globs. The gate also omits
-`examples/`, top-level `tests/`, `tools/`, and maintenance `scripts/`: these
-are examples, tests, tooling, and the gate itself, rather than shipped
-production modules. The configured roots are passed together in one detector
-invocation so cross-root families remain visible. The initial report selected
-only `__init__.py`, `exceptions.py`, `router.py`, and `websocket.py`, with no
-excluded paths.
+The scan covers production modules under `falcon_pachinko/`. Setuptools uses
+package discovery with the `falcon_pachinko*` include pattern and excludes
+`falcon_pachinko.behaviour*` and `falcon_pachinko.unittests*`. The installed
+distribution therefore includes `falcon_pachinko.testing`, but omits the
+behaviour and unit-test support packages. These package-discovery rules are
+separate from the duplication gate's source exclusions for `testing/`,
+`unittests/`, and `behaviour/`. The gate also omits `examples/`, top-level
+`tests/`, `tools/`, and maintenance `scripts/`: these are examples, tests,
+tooling, and the gate itself, rather than shipped production modules. The
+configured roots are passed together in one detector invocation so cross-root
+families remain visible. The initial report selected only `__init__.py`,
+`exceptions.py`, `router.py`, and `websocket.py`, with no excluded paths.
+
+`make build` installs the `dev` dependency group with `uv sync --group dev`; it
+does not install the optional `examples` extra. Run
+`uv sync --group dev --extra examples` before running example programs or tests
+that require example-only dependencies such as `aiosqlite`.
 
 The detector runs `syntax,semantic,near`, with a minimum of 24 intermediate-
 language tokens, `surface = "all"`, and a top-30 ranked-family limit. `all`

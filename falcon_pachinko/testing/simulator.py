@@ -42,6 +42,15 @@ class WebSocketSimulator(_LifecycleSocket):
         inbound: asyncio.Queue[object] | None = None,
         outbound: asyncio.Queue[object] | None = None,
     ) -> None:
+        """Create a simulator with optional queues for each frame direction.
+
+        Parameters
+        ----------
+        inbound : asyncio.Queue or None
+            Queue of frames received by the simulated application.
+        outbound : asyncio.Queue or None
+            Queue of frames sent by the simulated application.
+        """
         super().__init__()
         self._inbound = inbound or asyncio.Queue()
         self._outbound = outbound or asyncio.Queue()

@@ -11,6 +11,8 @@ import falcon.asgi
 import falcon.media
 import falcon.testing
 import pytest
+from hypothesis import example, given
+from hypothesis import strategies as st
 
 from falcon_pachinko import WebSocketResource, WebSocketRouter
 from falcon_pachinko.unittests.helpers import DummyWS, RecordingWS, make_req
@@ -302,9 +304,54 @@ async def test_on_websocket_dispatches_multiple_frames_and_cleans_once() -> None
     assert resource.disconnect_codes == [1001], "disconnect cleanup runs once"
 
 
+@given(
+    frames=st.lists(st.one_of(st.text(), st.binary()), max_size=10),
+    close_code=st.sampled_from((
+        1000,
+        1001,
+        1002,
+        1003,
+        1007,
+        1008,
+        1009,
+        1010,
+        1011,
+        1012,
+        1013,
+        1014,
+    )),
+)
+@example(frames=[], close_code=1000)
+@example(frames=["first", b"second"], close_code=1001)
+def test_generated_session_frames_preserve_order_and_disconnect_code(
+    frames: list[str | bytes], close_code: int
+) -> None:
+    """Preserve arbitrary raw frame order through a clean peer disconnect."""
+
+    async def exercise_session() -> tuple[list[str | bytes], list[int]]:
+        """Run one isolated session and return its observed lifecycle data."""
+        SessionResource.instances.clear()
+        router = WebSocketRouter()
+        router.add_route("/session", SessionResource)
+        router.mount("/")
+        ws = _QueuedWebSocket(frames, close_code=close_code)
+
+        await router.on_websocket(make_req("/session"), ws)
+
+        resource = SessionResource.instances[-1]
+        return resource.frames, resource.disconnect_codes
+
+    received_frames, disconnect_codes = asyncio.run(exercise_session())
+
+    assert received_frames == frames, "all generated frames must keep their order"
+    assert disconnect_codes == [close_code], (
+        "a peer disconnect must notify cleanup exactly once with its close code"
+    )
+
+
 @pytest.mark.asyncio
 async def test_cancelled_session_runs_cleanup_then_reraises() -> None:
-    """Cancellation reports 1006 to cleanup and remains visible to the caller."""
+    """Cancellation reports 1001 to cleanup and remains visible to the caller."""
     SessionResource.instances.clear()
 
     class BlockingWebSocket(RecordingWS):
@@ -328,8 +375,8 @@ async def test_cancelled_session_runs_cleanup_then_reraises() -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert SessionResource.instances[-1].disconnect_codes == [1006], (
-        "cancellation must reach disconnect cleanup as abnormal closure"
+    assert SessionResource.instances[-1].disconnect_codes == [1001], (
+        "server cancellation must reach disconnect cleanup as going away"
     )
 
 

@@ -83,6 +83,7 @@ class _RouteRegistrationService:
         raw_routes: list[_RawRoute],
         names: dict[str, str],
     ) -> None:
+        """Retain the router registries and lock used for registration."""
         self._lock = lock
         self._raw_routes = raw_routes
         self._names = names
@@ -103,6 +104,7 @@ class _RouteRegistrationService:
         self._ensure_name_available(name)
 
     def _ensure_lock_held(self) -> None:
+        """Reject conflict checks that run outside the router lock."""
         if not self._lock.locked():
             msg = (
                 "_RouteRegistrationService.check_conflicts requires "
@@ -111,11 +113,13 @@ class _RouteRegistrationService:
             raise RuntimeError(msg)
 
     def _ensure_path_available(self, canonical: str, display_path: str) -> None:
+        """Reject a canonical path already present in the route registry."""
         if any(route.canonical == canonical for route in self._raw_routes):
             msg = f"route path {display_path!r} already registered"
             raise ValueError(msg)
 
     def _ensure_name_available(self, name: str | None) -> None:
+        """Reject a route name already present in the name registry."""
         if name and name in self._names:
             msg = f"route name {name!r} already registered"
             raise ValueError(msg)

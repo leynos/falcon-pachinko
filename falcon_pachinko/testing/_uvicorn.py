@@ -34,6 +34,7 @@ class _UvicornAdapter:
     """Serve one ASGI application on a socket bound by the harness."""
 
     def __init__(self, *, shutdown_timeout: float) -> None:
+        """Prepare the Uvicorn task and its graceful-shutdown deadline."""
         loop = asyncio.get_running_loop()
         self._start_request: asyncio.Future[tuple[object, socket.socket]] = (
             loop.create_future()
@@ -120,6 +121,7 @@ class _UvicornAdapter:
 
             @typ.override
             async def startup(self, sockets: list[socket.socket] | None = None) -> None:
+                """Signal readiness after Uvicorn installs its listener."""
                 await super().startup(sockets=sockets)
                 if not self.should_exit:
                     ready.set()

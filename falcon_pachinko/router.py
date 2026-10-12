@@ -90,6 +90,17 @@ class WebSocketRouter:
         resource_factory: ResourceFactory | None = None,
         simulator_factory: SimulatorFactory | None = None,
     ) -> None:
+        """Initialize route state and optional factories.
+
+        Parameters
+        ----------
+        name : str or None
+            Optional name used to scope route names registered by this router.
+        resource_factory : ResourceFactory or None
+            Factory used to create resources for matched routes.
+        simulator_factory : SimulatorFactory or None
+            Optional factory used to provide a WebSocket implementation.
+        """
         self._raw: list[_RawRoute] = []
         self._routes: list[_CompiledRoute] = []
         self._mount_prefix: str = ""

@@ -58,6 +58,7 @@ class _LiveServerRunner:
     """Drive live servers on one fresh event loop for a pytest test."""
 
     def __init__(self) -> None:
+        """Create the event loop and server registry for one pytest test."""
         self._loop = asyncio.new_event_loop()
         self._servers: list[LiveWebSocketServer] = []
         self._closed = False

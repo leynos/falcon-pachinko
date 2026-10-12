@@ -81,6 +81,7 @@ class LiveServerError(ExceptionGroup):
         return super().__new__(cls, "Live WebSocket server failures", list(errors))
 
     def __init__(self, errors: cabc.Sequence[Exception]) -> None:
+        """Initialize the group with its captured server failures."""
         super().__init__("Live WebSocket server failures", list(errors))
 
     @typ.override
@@ -110,6 +111,21 @@ class LiveWebSocketServer:
         shutdown_timeout: float = 5.0,
         capture_errors: bool = True,
     ) -> None:
+        """Configure the app, adapter, and server lifecycle deadlines.
+
+        Parameters
+        ----------
+        app : falcon.asgi.App
+            Falcon application to serve on the bound loopback socket.
+        adapter : ServerAdapter or None
+            Optional server implementation; Uvicorn is loaded when omitted.
+        startup_timeout : float
+            Maximum time to wait for application and listener readiness.
+        shutdown_timeout : float
+            Maximum time allowed for client and server shutdown.
+        capture_errors : bool
+            Whether to record exceptions escaping the ASGI application.
+        """
         self._app = app
         self._adapter = adapter
         self._startup_timeout = startup_timeout
@@ -118,17 +134,17 @@ class LiveWebSocketServer:
         self._errors: list[Exception] = []
         self._sessions: set[WebSocketSession] = set()
         self._socket: socket.socket | None = None
+        self._base_url: str | None = None
         self._entered = False
 
     @property
     def base_url(self) -> str:
-        """The WebSocket origin assigned to this server instance."""
-        sock = self._socket
-        if sock is None:
+        """The origin captured before the adapter takes socket ownership."""
+        base_url = self._base_url
+        if base_url is None:
             msg = "base_url is available after the live server starts"
             raise RuntimeError(msg)
-        port = sock.getsockname()[1]
-        return f"ws://127.0.0.1:{port}"
+        return base_url
 
     @property
     def errors(self) -> tuple[Exception, ...]:
@@ -238,15 +254,18 @@ class LiveWebSocketServer:
             sock.bind(("127.0.0.1", 0))
             sock.listen()
             sock.setblocking(False)  # ruff: ignore[boolean-positional-value-in-call] -- socket API
+            port = sock.getsockname()[1]
         except Exception:
             sock.close()
             raise
         self._socket = sock
+        self._base_url = f"ws://127.0.0.1:{port}"
 
     def _close_socket(self) -> None:
         """Release the prebound listener after adapter shutdown."""
         sock = self._socket
         self._socket = None
+        self._base_url = None
         if sock is not None:
             sock.close()
 
@@ -259,6 +278,7 @@ class LiveWebSocketServer:
         async def capture_escaped_errors(
             scope: object, receive: object, send: object
         ) -> None:
+            """Record exceptions escaping the ASGI app, then re-raise them."""
             try:
                 await app(scope, receive, send)
             except Exception as exc:
