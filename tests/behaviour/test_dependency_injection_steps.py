@@ -111,7 +111,8 @@ def when_dispatch(
         {"path": "/rooms/alpha/child/beta", "path_template": ""},
     )()
     ws = RecordingWebSocket()
-    event_loop.run_until_complete(context.router.on_websocket(req, ws))
+    session = event_loop.run_until_complete(context.router.negotiate(req, ws))
+    assert session is None, "the selected resource rejects before acceptance"
     context.websocket = ws
     context.parent = InjectedParent.instances[-1]
     context.child = InjectedChild.instances[-1]

@@ -242,6 +242,69 @@ returns the default manager; Falcon's slotted ASGI app does not expose it as
   `process_startup(scope, event)` / `process_shutdown(scope, event)` methods to
   start and stop workers.
 
+1) **Move WebSocket work into the supported lifecycle:**
+
+- Keep request-metadata checks and rejection in `on_connect`. Return `False`
+  to reject, `True` for default acceptance, or `AcceptOptions` to choose a
+  subprotocol and response headers. The router performs the one real accept.
+- Remove calls to `ws.accept()`. They remain temporarily supported with a
+  `DeprecationWarning`, but router acceptance is the supported path and a
+  second accept raises `LifecycleError`.
+- The compatibility call performs acceptance immediately inside `on_connect`,
+  so `after_connect` hooks run after acceptance for that resource. A false
+  decision after this call closes and finalizes the accepted session. Moving to
+  a boolean or `AcceptOptions` return removes this ordering exception and
+  restores `after_connect` before acceptance.
+- Move sends and receives out of `on_connect` and into `on_session_start`,
+  which runs after the handshake. This is the supported place for a hello frame
+  or a deadline-bound authentication exchange. Before acceptance,
+  `send_media()`, `receive_media()` and `receive_text()` raise `LifecycleError`
+  with a pointer to `on_session_start`.
+- For manual dispatch, call `await router.negotiate(req, ws)`. It returns
+  `None` for a rejected connection or an accepted `WebSocketSession` that has
+  not started; dispatch through `session.resource` and close it with
+  `await session.aclose()` when finished. `on_websocket()` performs both
+  negotiation and session execution for normal Falcon routing.
+- Router negotiation's `WebSocketSession` is the server-side handle.
+  `WebSocketTestClient.connect()` yields a `WebSocketTestSession` client
+  facade. Direct imports of the older
+  `falcon_pachinko.testing.client.WebSocketSession` name remain as a
+  compatibility alias; prefer the distinct `WebSocketTestSession` name.
+- Update code that depends on raw socket identity or
+  `isinstance(ws, falcon.asgi.WebSocket)`. The supplied socket is a guarded
+  forwarding wrapper with read-only `phase` and `close_code`; other public
+  attributes are forwarded, but wrapper identity differs from Falcon's
+  transport.
+- On the supported boolean/`AcceptOptions` path, `after_connect` runs
+  child → parent → global before acceptance. Its `HookContext.result` is a
+  boolean view of the decision; changing it does not change the already-made
+  `on_connect` decision. A rejected unaccepted socket receives no disconnect
+  hooks. For accepted sessions, `before_disconnect` runs global to parent to
+  child, followed exactly once by the innermost `on_disconnect`.
+- Manual `HookManager` callers must pass one `HookContext` to
+  `notify_before_disconnect()`, rather than separate `target`, `ws` and
+  `close_code` arguments. Preserve the final error when constructing it:
+
+  ```python
+  from falcon_pachinko import HookContext, HookEvent
+
+  await hook_manager.notify_before_disconnect(
+      HookContext(
+          event=HookEvent.BEFORE_DISCONNECT,
+          target=resource,
+          resource=None,
+          ws=ws,
+          close_code=close_code,
+          error=error,
+      )
+  )
+  ```
+
+- Custom transports returned by `simulator_factory`, and other
+  `WebSocketLike` implementations, must provide `send_text(message)` and
+  `receive_text()`. Their `send_media` implementation must accept its media
+  argument positionally (`send_media(media, /)`) to match the updated protocol.
+
 ### Route Template Compatibility
 
 Before an upgrade, applications should audit configured templates whose literal

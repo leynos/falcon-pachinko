@@ -107,20 +107,6 @@ class StatusPayload(typ.TypedDict):
     text: str
 
 
-class RouterEndpoint(WebSocketResource):
-    """Adapt a router for registration via ``app.add_websocket_route``."""
-
-    def __init__(self, *, router: WebSocketRouter) -> None:
-        self._router = router
-
-    async def on_connect(
-        self, req: falcon.Request, ws: WebSocketLike, **params: object
-    ) -> bool:
-        """Delegate connection handling to the mounted router."""
-        await self._router.on_websocket(req, ws)
-        return False
-
-
 @worker
 async def random_worker(*, conn_mgr: WebSocketConnectionManager) -> None:
     """Periodically broadcast random numbers to all connections."""
@@ -150,20 +136,26 @@ class StatusResource(WebSocketResource):
         self._db = db
         self._conn_id: str | None = None
 
+    @typ.override
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **_: object
     ) -> bool:
-        """Accept the connection and register it with the manager."""
-        await ws.accept()
+        """Approve the request; the router performs the handshake."""
+        del req, ws
+        return True
+
+    async def on_session_start(self, ws: WebSocketLike) -> None:
+        """Register the accepted session for status broadcasts."""
         conn_id = secrets.token_hex(16)
         await self._conn_mgr.add_connection(conn_id, ws)
         self._conn_id = conn_id
-        return True
 
     async def on_disconnect(self, _: WebSocketLike, _close_code: int) -> None:
         """Unregister the connection on disconnect."""
-        if self._conn_id:
-            await self._conn_mgr.remove_connection(self._conn_id)
+        conn_id = self._conn_id
+        self._conn_id = None
+        if conn_id is not None:
+            await self._conn_mgr.remove_connection(conn_id)
 
     @handles_message("status")
     async def update_status(self, ws: WebSocketLike, payload: StatusPayload) -> None:
@@ -222,7 +214,8 @@ def create_app() -> falcon_asgi.App:
     )
     router.add_route("/", StatusResource)
     router.mount("/ws")
-    ws_app.add_websocket_route("/ws", RouterEndpoint, router=router)
+    app.add_route("/ws", router)
+    app.add_route("/ws/{pachinko_path:path}", router)
     app.add_route("/status", StatusEndpoint(container))
     return app
 

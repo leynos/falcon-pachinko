@@ -19,7 +19,7 @@ including the
 ## Requirements
 
 - Python 3.12 or newer
-- Falcon 4.x with ASGI support
+- Falcon `>=4,<4.5` with ASGI support
 
 ## Installation
 

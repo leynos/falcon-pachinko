@@ -103,8 +103,9 @@ async def test_on_connect_cleans_up_and_reraises_when_join_room_fails() -> None:
     assert conn_mgr.websockets == {}, "on_connect must not register before acceptance"
     assert not ws.messages, "on_connect must not send before acceptance"
 
+    await ws.accept()
     with pytest.raises(RuntimeError, match="cannot join"):
-        await resource.on_accepted(ws)
+        await resource.on_session_start(ws)
 
     remaining = conn_mgr.websockets
     assert remaining == {}, f"the failed connection must be removed: {remaining}"
@@ -134,7 +135,8 @@ async def test_on_disconnect_removes_connection_and_audits_closure() -> None:
     assert conn_mgr.websockets == {}, "on_connect must defer registration"
     assert not ws.messages, "on_connect must defer session.ready"
 
-    await resource.on_accepted(ws)
+    await ws.accept()
+    await resource.on_session_start(ws)
     conn_id = resource._conn_id
     assert conn_id is not None, "acceptance must assign a connection ID"
     assert conn_mgr.websockets == {conn_id: ws}, (
@@ -207,7 +209,8 @@ async def test_reserved_envelope_tag_leaves_live_membership_intact(tag: str) -> 
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
-    await resource.on_accepted(ws)
+    await ws.accept()
+    await resource.on_session_start(ws)
 
     await _dispatch(resource, ws, {"type": tag, "payload": 1000})
 
@@ -240,7 +243,8 @@ async def test_reserved_envelope_cannot_evict_through_real_lifecycle() -> None:
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
-    await resource.on_accepted(ws)
+    await ws.accept()
+    await resource.on_session_start(ws)
     conn_id = resource._conn_id
 
     await _dispatch(resource, ws, {"type": "disconnect", "payload": 1000})
@@ -277,7 +281,8 @@ async def test_connect_envelope_tag_does_not_reconnect() -> None:
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
-    await resource.on_accepted(ws)
+    await ws.accept()
+    await resource.on_session_start(ws)
     ready_count = len(ws.messages)
 
     await _dispatch(resource, ws, {"type": "connect", "payload": True})

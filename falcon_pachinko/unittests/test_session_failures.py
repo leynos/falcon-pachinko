@@ -97,8 +97,8 @@ async def test_after_connect_cancellation_reports_original_setup_failure() -> No
 
 
 @pytest.mark.asyncio
-async def test_session_and_disconnect_failures_are_grouped_primary_first() -> None:
-    """Disconnect failures are visible after the original handler failure."""
+async def test_session_failure_keeps_precedence_over_disconnect_failure() -> None:
+    """Disconnect errors stay visible without replacing a handler failure."""
     primary = RuntimeError("handler failed")
     cleanup = LookupError("disconnect failed")
 
@@ -113,13 +113,23 @@ async def test_session_and_disconnect_failures_are_grouped_primary_first() -> No
 
     router = make_session_router(FailingResource)
     socket = SessionSocket(b'{"type":"boom"}')
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, object]] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, details: reported.append(details))
 
-    with pytest.raises(ExceptionGroup) as error:
-        await router.on_websocket(
-            typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
-        )
+    try:
+        with pytest.raises(RuntimeError) as error:
+            await router.on_websocket(
+                typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
+            )
+    finally:
+        loop.set_exception_handler(previous_handler)
 
-    assert error.value.exceptions == (primary, cleanup), _ASSERTION_FAILURE
+    assert error.value is primary, _ASSERTION_FAILURE
+    assert [details["exception"] for details in reported] == [cleanup], (
+        "disconnect failure must be reported after preserving the handler failure"
+    )
     assert FailingResource.instances[0].disconnect_codes == [1011], _ASSERTION_FAILURE
     assert socket.close_codes == [1011], _ASSERTION_FAILURE
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections as cl
+import collections.abc as cabc
 import types
 import typing as typ
 
@@ -30,23 +31,32 @@ class SessionSocket:
         self._release_receive = asyncio.Event()
         self.close_codes: list[int] = []
 
-    async def accept(self, subprotocol: str | None = None) -> None:
+    async def accept(
+        self,
+        subprotocol: str | None = None,
+        headers: cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None = None,
+    ) -> None:
         """Record acceptance and wake setup observers."""
-        del subprotocol
+        del subprotocol, headers
         self.unaccepted = False
         self.accepted.set()
 
-    async def close(self, code: int = 1000) -> None:
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Keep the first close code for deterministic disconnects."""
+        del reason
         if self.closed:
             return
         self.closed = True
-        self.close_codes.append(code)
+        self.close_codes.append(1000 if code is None else code)
 
     @staticmethod
-    async def send_media(data: object) -> None:
+    async def send_media(media: object) -> None:
         """Permit protocol sends without recording irrelevant replies."""
-        del data
+        del media
+
+    async def send_text(self, message: str) -> None:
+        """Permit text sends through the guarded test transport."""
+        await self.send_media(message)
 
     async def receive_media(self) -> object:
         """Yield seeded frames or the configured transport failure."""
@@ -59,6 +69,14 @@ class SessionSocket:
                 raise frame
             return frame
         raise falcon.WebSocketDisconnected(self.close_codes[0] if self.closed else 1000)
+
+    async def receive_text(self) -> str:
+        """Return one queued text frame or preserve the peer disconnect."""
+        message = await self.receive_media()
+        if not isinstance(message, str):
+            msg = "expected a text WebSocket frame"
+            raise TypeError(msg)
+        return message
 
 
 def make_session_request(path: str = "/session", path_template: str = "/") -> object:
