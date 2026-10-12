@@ -21,6 +21,7 @@ from falcon_pachinko.testing import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from falcon_pachinko.testing.client import WebSocketSession
     from falcon_pachinko.testing.live import ASGIApplication
 
 
@@ -42,6 +43,13 @@ class _FailingStartupMiddleware:
         """Fail Falcon's ASGI lifespan startup handshake."""
         msg = "Falcon lifespan startup failed"
         raise RuntimeError(msg)
+
+
+class _StalledSession:
+    """Represent a client close handshake that never completes."""
+
+    async def close(self) -> None:
+        await asyncio.Future()
 
 
 class _FakeAdapter:
@@ -215,6 +223,25 @@ async def test_shutdown_timeout_cancels_serve_task_and_records_failure() -> None
         isinstance(error, LiveServerShutdownError) for error in caught.value.exceptions
     ), "timeout fallback must be reported as a shutdown error"
     assert adapter.task.cancelled(), "a timed-out server task must be cancelled"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_timeout_bounds_session_close() -> None:
+    """Bound client close handshakes by the configured shutdown timeout."""
+    server = LiveWebSocketServer(_make_app(), shutdown_timeout=0.01)
+    session = typ.cast("WebSocketSession", _StalledSession())
+    server._sessions.add(session)
+
+    with pytest.raises(LiveServerError) as caught:
+        async with asyncio.timeout(0.1):
+            await server.__aexit__(None, None, None)
+
+    assert any(
+        isinstance(error, LiveServerShutdownError)
+        and str(error) == "WebSocket session shutdown timed out"
+        for error in caught.value.exceptions
+    ), "a stalled client close must be reported as a shutdown timeout"
+    assert not server._sessions, "timed-out sessions must be removed from tracking"
 
 
 @pytest.mark.asyncio

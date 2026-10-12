@@ -372,7 +372,12 @@ class LiveWebSocketServer:
         """Close sessions, stop the adapter and collect serve-task failures."""
         for session in tuple(self._sessions):
             try:
-                await session.close()
+                async with asyncio.timeout(self._shutdown_timeout):
+                    await session.close()
+            except TimeoutError:
+                self.record_error(
+                    LiveServerShutdownError("WebSocket session shutdown timed out")
+                )
             except Exception as exc:  # ruff: ignore[blind-except] -- retain session cleanup failures
                 self.record_error(exc)
             finally:
