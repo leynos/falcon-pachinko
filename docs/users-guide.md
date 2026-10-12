@@ -466,6 +466,33 @@ it. An undecorated async function works in the same way.
 - **Pytest fixtures** – See `tests/behaviour/*.feature` and
   `falcon_pachinko/unittests` helpers for factory utilities.
 
+An async test can use the server directly:
+
+```python
+import pytest
+
+from falcon_pachinko.testing import LiveWebSocketServer
+
+
+@pytest.mark.asyncio
+async def test_ping_reply() -> None:
+    app = build_app()
+
+    async with LiveWebSocketServer(app) as server:
+        async with server.connect("/ws/chat") as session:
+            await session.send_json({"type": "ping"})
+            assert await session.receive_json() == {"type": "pong"}
+
+        assert server.pop_errors() == ()
+```
+
+Entering the server waits for ASGI lifespan startup and listener readiness.
+`server.connect()` tracks each client, and server teardown closes any clients
+the test leaves open. Captured application or server-task errors fail teardown
+until the test has asserted them and acknowledged them with
+`server.pop_errors()`. For synchronous tests, use the `live_websocket_server`
+fixture's `start(app)` and `run(awaitable, timeout=...)` methods instead.
+
 The `websocket_simulator` pytest fixture (from `falcon_pachinko.testing`) takes
 no parameters and yields a `SimulatorRouterHarness`: a pre-mounted router and
 app wired to inject a `WebSocketSimulator` into each connection. Register
