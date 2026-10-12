@@ -14,6 +14,7 @@ import contextlib
 import dataclasses as dc
 import functools
 import inspect
+import logging
 import threading
 import typing as typ
 
@@ -31,6 +32,8 @@ from ._route_support import (
 )
 from ._uri_template import _compile_prefix_template, compile_uri_template
 from ._ws_media import install_raw_websocket_media_handlers
+from .diagnostics import _type_name
+from .dispatcher import msjson
 from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
 
@@ -45,6 +48,8 @@ if typ.TYPE_CHECKING:
     import re
 
 __all__ = ["ResourceFactory", "SimulatorFactory", "WebSocketRouter"]
+
+logger = logging.getLogger(__name__)
 
 
 type ResourceFactory = cabc.Callable[
@@ -67,6 +72,8 @@ class _Dispatch:
     ws: WebSocketLike
     match: _RouteMatch
     session_close_attempted: bool = False
+    close_code: int = 1006
+    has_disconnected: bool = False
 
     def mark_session_close_attempted(self) -> None:
         """Record when the session driver owns the policy close."""
@@ -89,6 +96,7 @@ class WebSocketRouter:
         name: str | None = None,
         resource_factory: ResourceFactory | None = None,
         simulator_factory: SimulatorFactory | None = None,
+        receive_loop: bool = False,
     ) -> None:
         """Initialize route state and optional factories.
 
@@ -116,6 +124,7 @@ class WebSocketRouter:
         self._resource_factory: ResourceFactory
         self._resource_factory = resource_factory or (lambda factory: factory())
         self._simulator_factory = simulator_factory
+        self._receive_loop = receive_loop
 
     @staticmethod
     def _compile_route(
@@ -588,20 +597,77 @@ class WebSocketRouter:
         should_accept = await self._execute_resource_handler(
             resource, dispatch, context, hook_manager
         )
-        await self._finalize_connection(
+        if self._receive_loop and should_accept:
+            return await self._run_connection_session(
+                resource, dispatch, context, hook_manager
+            )
+        return await self._finalize_connection(
             dispatch.ws,
             should_accept=should_accept,
             context=context,
             hook_manager=hook_manager,
         )
-        if should_accept:
-            await drive_session(
-                resource,
+
+    async def _run_connection_session(
+        self,
+        resource: WebSocketResource,
+        dispatch: _Dispatch,
+        context: HookContext,
+        hook_manager: HookManager,
+    ) -> bool:
+        """Own post-connect cleanup even if hooks or acceptance fail."""
+        error: BaseException | None = None
+        try:
+            await self._finalize_connection(
                 dispatch.ws,
-                hook_manager,
-                on_policy_close=dispatch.mark_session_close_attempted,
+                should_accept=True,
+                context=context,
+                hook_manager=hook_manager,
             )
+            dispatch.close_code = await self._receive_frames(resource, dispatch.ws)
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            try:
+                await self._disconnect_once(resource, dispatch, hook_manager)
+            except (
+                Exception
+            ) as exc:  # preserve the primary failure, especially cancellation
+                if error is None:
+                    raise
+                error.add_note(f"Disconnect cleanup failed ({_type_name(exc)})")
         return True
+
+    @staticmethod
+    async def _disconnect_once(
+        resource: WebSocketResource, dispatch: _Dispatch, hook_manager: HookManager
+    ) -> None:
+        """Invoke cleanup at most once, including if the callback itself fails."""
+        if not dispatch.has_disconnected:
+            dispatch.has_disconnected = True
+            try:
+                await hook_manager.notify_before_disconnect(
+                    resource, ws=dispatch.ws, close_code=dispatch.close_code
+                )
+            finally:
+                await resource.on_disconnect(dispatch.ws, dispatch.close_code)
+
+    @staticmethod
+    async def _receive_frames(resource: WebSocketResource, ws: WebSocketLike) -> int:
+        """Dispatch sequential frames until disconnection or an ordinary error."""
+        while True:
+            try:
+                frame = await ws.receive_media()
+                raw = frame if isinstance(frame, (str, bytes)) else msjson.encode(frame)
+                await resource.dispatch(ws, raw)
+            except falcon.WebSocketDisconnected as exc:
+                return getattr(exc, "code", None) or 1006
+            except Exception as exc:  # ruff: ignore[blind-except] - session errors close locally without preventing disconnect cleanup
+                logger.warning("WebSocket session failed (%s)", _type_name(exc))
+                with contextlib.suppress(Exception):
+                    await ws.close()
+                return 1000
 
     @staticmethod
     async def _prepare_connection_context(

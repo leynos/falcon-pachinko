@@ -305,6 +305,15 @@ class WebSocketResource:
         1011 when receive or handler execution fails. A rejected connection
         never starts a session and does not call this method.
 
+        With ``WebSocketRouter(receive_loop=True)``, the router calls this once
+        after a successful accepting ``on_connect``: on peer disconnect, dispatch
+        failure, cancellation, or failure in ``after_connect`` or ``accept``.
+        ``before_disconnect`` hooks run before this callback; hook failure never
+        skips the callback. Cleanup errors cannot replace an existing failure or
+        cancellation. Without the opt-in loop, applications retain lifecycle ownership.
+        Cancellation and incomplete handshakes use close code 1006; peer
+        disconnects retain their code, and the default router close uses 1000.
+
         Parameters
         ----------
         ws : WebSocketLike
