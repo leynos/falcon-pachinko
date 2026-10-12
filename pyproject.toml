@@ -377,6 +377,26 @@ enable = [
 # Ensure asyncio fixtures create a new event loop for each test
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["falcon_pachinko", "tests"]
+# `make mutation` writes a second copy of every test module into `mutants/`
+# under its original import name, and mutmut runs the suite from inside that
+# tree. Pytest's default `norecursedirs` does not name `mutants`, so a
+# leftover run is collected as part of the repository's own suite, and the
+# two copies of one module name abort collection with
+# `ImportPathMismatchError` before a single test runs. tests/test_uv_toolchain.py
+# asserts this setting, and the list repeats pytest's defaults because
+# `norecursedirs` replaces them rather than adding to them.
+norecursedirs = [
+    "*.egg",
+    ".*",
+    "_darcs",
+    "build",
+    "CVS",
+    "dist",
+    "node_modules",
+    "venv",
+    "{arch}",
+    "mutants",
+]
 markers = [
     "lint_toolchain: drives the real PyPy and CPython Pylint passes through the Makefile",
 ]

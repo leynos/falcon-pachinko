@@ -71,9 +71,11 @@ When implementing changes, adhere to the following testing procedures:
   extras, not dependency groups; they are installed only via
   `uv sync --extra examples` or `--extra testing`. Prefer these targets over
   invoking tools directly. When editing `Makefile`, run
-  `mbake validate Makefile` to confirm the syntax is correct. The `dev`
-  dependency group includes all CLI tooling such as linters and markdown
-  checks, so `make build` installs everything required for development and CI.
+  `mbake validate Makefile` to confirm the syntax is correct. `make build`
+  installs the `dev` group's uv-managed dependencies, but that is not the whole
+  local toolchain: `markdownlint-cli2` (installed with `npm`), `mdtablefix` and
+  `nixie` come from outside the project, so provision them separately.
+  `ensure_tool` names any that are missing when a gate needs one.
 
 - **Nose duplication gate:** `make lint` provisions the pinned nose detector
   and runs the blocking production-source duplication check. Use

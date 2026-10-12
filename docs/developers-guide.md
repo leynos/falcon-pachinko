@@ -550,6 +550,14 @@ what a surviving mutant actually changed, ask mutmut directly:
 UV_PYTHON=3.13 uv run --with mutmut==3.6.0 mutmut show <mutant-name>
 ```
 
+A run leaves a generated `mutants/` tree in the working directory. It is
+untracked and ignored, and pytest is configured to skip it: mutmut runs the
+suite from inside that tree, so the copy holds a second file for every test
+module under the same import name, and collecting both aborts the repository's
+own `make test` with an `ImportPathMismatchError`. The `norecursedirs` entry in
+`[tool.pytest.ini_options]` is what prevents that; deleting `mutants/` is safe
+whenever its results are no longer needed.
+
 The `[tool.mutmut]` section in `pyproject.toml` is the whole configuration:
 
 - **`source_paths`** is `falcon_pachinko/`, so the CLI, the harness in

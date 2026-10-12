@@ -18,8 +18,12 @@ Makefile's tool pins and the CI pins name the same versions.
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - runs trusted repo tooling, never outside input
 import tomllib
+import typing as typ
 
 import pytest
 import yaml
@@ -32,6 +36,9 @@ from tests._makefile import (
     run_command,
     tool_environment,
 )
+
+if typ.TYPE_CHECKING:
+    import pathlib
 
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 UV_LOCK = REPO_ROOT / "uv.lock"
@@ -220,6 +227,110 @@ def test_dependabot_python_entry_keeps_its_rollout_settings() -> None:
     )
     assert entry["cooldown"] == {"default-days": 7, "semver-major-days": 14}, (
         "the default and major-update cooldowns are part of the rollout"
+    )
+
+
+def test_pytest_does_not_collect_the_generated_mutants_tree(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The mutation tree must stay out of the repository's own collection.
+
+    ``make mutation`` copies every test module into ``mutants/`` under its
+    original module name — mutmut runs the suite inside that tree — so a
+    leftover run leaves two files claiming one import name. Pytest's default
+    ``norecursedirs`` does not name ``mutants``, so it collects both, and the
+    second import raises the ``ImportPathMismatchError`` that aborts
+    ``make test`` before a single test runs. The collision belongs to the
+    leftover, not to the code under test, so the setting that prevents it is
+    asserted here.
+
+    Pytest runs in a temporary project carrying this repository's own pytest
+    configuration, so the committed setting is exercised rather than a copy
+    that could drift out of step with it.
+    """
+    for tree in ("tests", "mutants/tests"):
+        (tmp_path / tree).mkdir(parents=True)
+        (tmp_path / tree / "test_shared_name.py").write_text(
+            "def test_placeholder() -> None:\n    assert True\n",
+            encoding="utf-8",
+        )
+    (tmp_path / "pyproject.toml").write_text(_pytest_configuration(), encoding="utf-8")
+
+    collected = _run_collection(tmp_path)
+
+    assert collected.returncode == 0, (
+        "pytest must not recurse into the generated `mutants/` tree: a "
+        "leftover run must not break `make test`. Collection said:\n"
+        f"{collected.stdout}{collected.stderr}"
+    )
+
+
+def _pytest_configuration() -> str:
+    """Return this repository's pytest settings as a standalone TOML document.
+
+    Only ``[tool.pytest.ini_options]`` is carried: the temporary project has
+    no packaging, so a copied ``[project]`` table would ask for a build
+    backend that is not installed.
+
+    Returns
+    -------
+    str
+        The ini options, re-rendered as a TOML table that pytest reads from
+        the temporary project's ``pyproject.toml``.
+    """
+    options = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"]["pytest"][
+        "ini_options"
+    ]
+    lines = ["[tool.pytest.ini_options]"]
+    lines.extend(f"{key} = {_toml_value(value)}" for key, value in options.items())
+    return "\n".join(lines) + "\n"
+
+
+def _toml_value(value: object) -> str:
+    """Render one ini value the way ``pyproject.toml`` would spell it.
+
+    Only the value kinds this repository's pytest options actually use are
+    handled, so a settings change that introduces another kind fails loudly
+    here rather than silently rendering something pytest misreads. Dispatch is
+    on the exact type, matching ``_safe_scalar`` in ``falcon_pachinko``:
+    ``tomllib`` hands back only builtins, and ``bool`` must be matched before
+    anything that would treat it as an ``int``.
+
+    Returns
+    -------
+    str
+        The TOML spelling of *value*.
+
+    Raises
+    ------
+    TypeError
+        If *value* is not a kind this renderer knows.
+    """
+    match value:
+        case _ if type(value) is bool:
+            return "true" if value else "false"
+        case _ if type(value) is str:
+            return json.dumps(value)
+        case _ if type(value) is list:
+            return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+        case _:
+            msg = f"unsupported pytest ini value: {value!r}"
+            raise TypeError(msg)
+
+
+def _run_collection(project: pathlib.Path) -> CompletedRun:
+    """Run pytest's collector in ``project`` and capture its exit status."""
+    environment = tool_environment()
+    executable = shutil.which("pytest", path=environment.get("PATH"))
+    if executable is None:
+        pytest.fail("pytest must be on PATH to run the collector")
+    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - argv is repo tooling, never outside input
+        [executable, "--collect-only", "-q", "-p", "no:cacheprovider"],
+        cwd=project,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
 

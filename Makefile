@@ -270,8 +270,12 @@ MUTMUT = UV_PYTHON=$(MUTMUT_PYTHON) $(UV_ENV) $(UV) run --with mutmut==$(MUTMUT_
 mutation: build uv ## Run mutation testing locally (slow)
 	$(MUTMUT) run
 
+# `mutmut results` hides killed mutants unless `--all` is given, but the
+# docs promise one line per mutant, so name the flag here rather than let the
+# target disagree with its documentation. The reusable workflow's summariser
+# invokes mutmut the same way, so this stays the invocation of record.
 mutation-results: uv ## Show the last mutation run's results
-	$(MUTMUT) results
+	$(MUTMUT) results --all true
 
 # The CV-005 CodeScene contracts live in shared-actions and run from a full
 # commit, so a fix to the rules is a pin bump. `.github/cv005.toml` holds this
