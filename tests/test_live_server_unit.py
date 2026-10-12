@@ -120,6 +120,21 @@ async def test_base_url_uses_ephemeral_loopback_port() -> None:
 
 
 @pytest.mark.asyncio
+async def test_root_mount_accepts_a_websocket_connection() -> None:
+    """Serve the exact root route as well as descendants of a root mount."""
+    app = falcon.asgi.App()
+    router = WebSocketRouter()
+    router.add_route("/", _AcceptingResource)
+    router.attach(app, "/")
+
+    async with (
+        LiveWebSocketServer(app) as server,
+        server.connect("/") as session,
+    ):
+        assert not session.closed, "the root WebSocket route must accept clients"
+
+
+@pytest.mark.asyncio
 async def test_concurrent_servers_receive_distinct_ephemeral_ports() -> None:
     """Allocate independent ephemeral listeners for concurrent servers."""
 
