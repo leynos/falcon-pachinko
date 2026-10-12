@@ -488,10 +488,26 @@ async def test_ping_reply() -> None:
 
 Entering the server waits for ASGI lifespan startup and listener readiness.
 `server.connect()` tracks each client, and server teardown closes any clients
-the test leaves open. Captured application or server-task errors fail teardown
-until the test has asserted them and acknowledged them with
-`server.pop_errors()`. For synchronous tests, use the `live_websocket_server`
-fixture's `start(app)` and `run(awaitable, timeout=...)` methods instead.
+the test leaves open. `server.errors` returns a read-only snapshot of captured
+failures; `server.pop_errors()` returns and acknowledges them. The harness
+captures exceptions handled by Falcon, exceptions escaping the ASGI callable,
+and server-task failures. Unacknowledged failures are grouped in
+`LiveServerError` when the test body completed without an exception. If the
+test body is already raising, the harness adds captured failures as notes to
+that exception so the original failure stays primary.
+
+A startup timeout or ordinary startup exception raises
+`LiveServerStartupError`. A shutdown deadline is recorded as
+`LiveServerShutdownError` and reported during teardown using the same error
+handling. The harness installs its Falcon `Exception` capture handler when the
+server starts, replacing a handler registered earlier. If the application needs
+a custom handler, register it after startup and have it call
+`server.record_error(ex)`; otherwise Falcon may consume the exception before
+the harness can report it. For synchronous tests, use the
+`live_websocket_server` fixture's `start(app)` and
+`run(awaitable, timeout=...)` methods instead. See the
+[developer guide's WebSocket lifecycle guidance](developers-guide.md#websocket-lifecycle-acceptance-tests)
+for the fixture and custom-handler details.
 
 The `websocket_simulator` pytest fixture (from `falcon_pachinko.testing`) takes
 no parameters and yields a `SimulatorRouterHarness`: a pre-mounted router and
