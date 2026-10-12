@@ -54,25 +54,31 @@ jobs:
         with:
           version: "0.6.1"
 
-      # `make lint` runs the classic Pylint checks on PyPy 8.0.0's Python 3.12
-      # build, which it provisions into .uv-python from
-      # tools/pypy-downloads.json. That manifest names the exact build and its
-      # SHA-256, so keying on it means a pin change never restores a stale
-      # interpreter.
+      # Make provisions PyPy 3.12 and the isolated gate's CPython 3.14 into
+      # .uv-python. Keying on the Makefile and PyPy manifest invalidates this
+      # cache when either interpreter pin changes.
       - name: Cache PyPy lint interpreter
         uses: actions/cache@v6
         with:
           path: .uv-python
-          key: pypy-lint-interpreter-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/pypy-downloads.json') }}
+          key: lint-interpreters-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'tools/pypy-downloads.json') }}
 
-      # The Pylint, Astroid, and df12-python-lints tool environments live in
-      # the Makefile's .uv-cache. Their pins are in the Makefile and the df12
-      # rcfile, so the key covers those files as well as the interpreter.
+      # The Pylint, Astroid, df12, nose-gate and isolated helper-test tools live
+      # in .uv-cache. Their pins and PEP 723 metadata are covered by these
+      # source and configuration inputs.
       - name: Cache lint tool environments
         uses: actions/cache@v6
         with:
           path: .uv-cache
-          key: lint-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'pylintrc-df12.toml', 'tools/pypy-downloads.json') }}
+          key: lint-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'pylintrc-df12.toml', 'tools/pypy-downloads.json', 'pyproject.toml', 'scripts/**') }}
+
+      # A cache hit is checked by `make install-nose` before the gate uses it.
+      # The digest manifest and configured version both participate in the key.
+      - name: Cache pinned nose release binary
+        uses: actions/cache@v6
+        with:
+          path: .tools/nose
+          key: nose-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pyproject.toml', 'scripts/install_nose.py', 'tools/nose-release-digests.json') }}
 
       - name: Check spelling
         run: make spelling
@@ -100,6 +106,9 @@ jobs:
       # CPython 3.14. Each Pylint pass verifies its interpreter first.
       - name: Run linters
         run: make lint
+
+      - name: Test nose duplication gate
+        run: make duplication-test
 
       # Drive the real PyPy and CPython Pylint passes through the Makefile. The
       # tests never skip, so an unprovisioned interpreter fails this step
