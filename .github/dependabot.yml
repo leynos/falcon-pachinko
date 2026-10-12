@@ -24,8 +24,8 @@ updates:
     cooldown:
       default-days: 7
 
-  # Enable version updates for Python (pip / requirements*.txt)
-  - package-ecosystem: "pip"
+  # Enable version updates for Python (uv-managed pyproject.toml)
+  - package-ecosystem: "uv"
     directory: "/"
     groups:
       minor-and-patch:

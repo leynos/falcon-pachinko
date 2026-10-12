@@ -127,7 +127,8 @@ AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(DF12_PYTHON) \
 .PHONY: help all clean build build-release lint lint-pylint lint-df12 \
 	pylint-pypy-python fmt check-fmt markdownlint nixie spelling test \
 	test-workflow-contracts check-cv005 typecheck install-nose duplication \
-	duplication-test duplication-allow $(TOOLS) $(VENV_TOOLS)
+	duplication-test duplication-allow mutation mutation-results \
+	$(TOOLS) $(VENV_TOOLS)
 
 .DEFAULT_GOAL := all
 
@@ -136,11 +137,18 @@ all: build check-fmt test test-workflow-contracts typecheck spelling
 .venv: pyproject.toml
 	uv venv --clear
 
-build: uv .venv ## Build virtual-env and install deps
-	uv sync --group dev
+# `--locked` refuses to resolve past the committed uv.lock, so a stale or
+# edited lockfile fails here instead of silently installing a different set
+# than the one the repository reviewed. `uv.lock` is named as a prerequisite
+# so the dependency is visible in the build graph; the recipe itself always
+# runs, because `build` is phony.
+build: uv .venv uv.lock ## Build virtual-env and install deps
+	uv sync --group dev --locked
 
+# `uv build` writes both artefacts into `dist/`, which is the directory
+# `make clean` removes and `.gitignore` excludes.
 build-release: ## Build artefacts (sdist & wheel)
-	python -m build --sdist --wheel
+	uv build --sdist --wheel
 
 clean: ## Remove build artefacts
 	rm -rf build dist *.egg-info \
@@ -247,6 +255,27 @@ nixie: $(NIXIE) ## Validate Mermaid diagrams
 
 test: build uv pytest ## Run tests
 	uv run pytest -v
+
+# Mutation testing is not a commit gate: it is slow and it is informational.
+# `.github/workflows/mutation.yml` calls the estate's reusable workflow, which
+# in turn runs the same `uv run --with mutmut` below; mutmut then reads
+# `[tool.mutmut]` from pyproject.toml. This target reproduces that command
+# locally at the same mutmut pin and on the same interpreter the workflow
+# uses. The interpreter is named here rather than in pyproject.toml because
+# `[tool.mutmut]` has no key for one.
+MUTMUT_VERSION ?= 3.6.0
+MUTMUT_PYTHON ?= 3.13
+MUTMUT = UV_PYTHON=$(MUTMUT_PYTHON) $(UV_ENV) $(UV) run --with mutmut==$(MUTMUT_VERSION) mutmut
+
+mutation: build uv ## Run mutation testing locally (slow)
+	$(MUTMUT) run
+
+# `mutmut results` hides killed mutants unless `--all` is given, but the
+# docs promise one line per mutant, so name the flag here rather than let the
+# target disagree with its documentation. The reusable workflow's summariser
+# invokes mutmut the same way, so this stays the invocation of record.
+mutation-results: uv ## Show the last mutation run's results
+	$(MUTMUT) results --all true
 
 # The CV-005 CodeScene contracts live in shared-actions and run from a full
 # commit, so a fix to the rules is a pin bump. `.github/cv005.toml` holds this
