@@ -13,6 +13,8 @@ from falcon_pachinko.router import WebSocketRouter
 from falcon_pachinko.unittests.helpers import make_req
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from falcon_pachinko.protocols import WebSocketLike
 
 
@@ -26,27 +28,45 @@ class ProtocolSocket:
         self.accept_calls = 0
         self.sent_media: list[object] = []
 
-    async def accept(self, subprotocol: str | None = None) -> None:
+    async def accept(
+        self,
+        subprotocol: str | None = None,
+        headers: cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None = None,
+    ) -> None:
         """Record a successful handshake without a public acceptance flag."""
-        del subprotocol
+        del subprotocol, headers
         self.accept_calls += 1
 
-    async def close(self, code: int = 1000) -> None:
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Preserve the first transport close code."""
+        del reason
         if not self.closed:
             self.closed = True
-            self.close_code = code
+            self.close_code = 1000 if code is None else code
 
     # pylint: disable-next=trivial-attribute-wrapper  # the public protocol method must record sends without depending on Falcon state
-    async def send_media(self, data: object) -> None:
+    async def send_media(self, media: object) -> None:
         """Record replies sent through the protocol facade."""
-        self.sent_media.append(data)
+        self.sent_media.append(media)
 
     async def receive_media(self) -> object:
         """Yield seeded media or the effective disconnect signal."""
         if not self.closed and self.frames:
             return self.frames.popleft()
         raise falcon.WebSocketDisconnected(self.close_code)
+
+    # pylint: disable-next=trivial-attribute-wrapper  # protocol stub: this method records text frames for WebSocketLike callers
+    async def send_text(self, message: str) -> None:
+        """Record text frames using the media observation list."""
+        self.sent_media.append(message)
+
+    async def receive_text(self) -> str:
+        """Receive and validate a text frame."""
+        message = await self.receive_media()
+        if not isinstance(message, str):
+            msg = "expected a text WebSocket frame"
+            raise TypeError(msg)
+        return message
 
 
 class ProtocolResource(WebSocketResource):

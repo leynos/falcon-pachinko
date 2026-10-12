@@ -5,7 +5,7 @@ description = "Adds WebSocket routing and message handling for Falcon ASGI appli
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "ISC" }
-dependencies = ["msgspec>=0.18,<1", "falcon>=4,<5"]
+dependencies = ["msgspec>=0.18,<1", "falcon>=4,<4.5"]
 authors = [{ name = "Payton McIntosh", email = "pmcintosh@df12.net" }]
 keywords = ["falcon", "websocket", "msgspec", "asyncio", "asgi", "websockets"]
 classifiers = [

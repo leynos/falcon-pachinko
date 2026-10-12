@@ -51,7 +51,7 @@ def test_falcon_dependency_has_lower_and_upper_bounds(
     [
         pytest.param("4.0.0", id="minimum-supported-release"),
         pytest.param("4.4.0", id="latest-ci-release"),
-        pytest.param("4.99.0", id="latest-four-series-boundary"),
+        pytest.param("4.4.99", id="latest-supported-minor-boundary"),
     ],
 )
 def test_falcon_dependency_accepts_four_series(
@@ -67,6 +67,7 @@ def test_falcon_dependency_accepts_four_series(
     "version",
     [
         pytest.param("3.99.0", id="previous-major"),
+        pytest.param("4.5.0", id="first-unsupported-minor"),
         pytest.param("5.0.0", id="next-major"),
         pytest.param("5.1.0", id="representative-next-major-release"),
         pytest.param("5.99.0", id="latest-next-major-boundary"),

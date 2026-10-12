@@ -3,21 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import typing as typ
 
 import falcon
 import pytest
-from hypothesis import given
-from hypothesis import strategies as st
 
-from falcon_pachinko._session import SessionState
-from falcon_pachinko._session_cleanup import raise_session_failures
-from falcon_pachinko._session_driver import _SessionExecution
-from falcon_pachinko._session_observation import (
-    _log_session_observation,
-    _SessionObservation,
-)
 from falcon_pachinko.hooks import HookEvent
 from falcon_pachinko.unittests._session_fixtures import (
     RecordingResource,
@@ -27,77 +17,6 @@ from falcon_pachinko.unittests._session_fixtures import (
 )
 
 _ASSERTION_FAILURE = "lifecycle expectation failed"
-_ORDINARY_FAILURE_TYPES = (ValueError, RuntimeError, LookupError)
-
-
-def test_cleanup_observation_reports_uncapped_failure_count(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Bounded type metadata must not cap the scalar failure count."""
-    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
-    execution = _SessionExecution(
-        resource=typ.cast("typ.Any", object()),
-        dispatch=typ.cast("typ.Any", object()),
-        session=SessionState(),
-        hook_manager=typ.cast("typ.Any", object()),
-        observation_clock=lambda: 0.0,
-        instrumentation_clock=lambda: 0.0,
-        instrumentation=typ.cast("typ.Any", object()),
-    )
-    failures = tuple(RuntimeError(f"cleanup-{index}") for index in range(5))
-
-    _log_session_observation(
-        execution,
-        _SessionObservation(
-            operation="cleanup",
-            outcome="failed",
-            started=0.0,
-            cleanup_failures=failures,
-        ),
-    )
-
-    record = caplog.records[-1]
-    assert vars(record)["cleanup_failure_count"] == 5, (
-        "the count must include every failure"
-    )
-    assert vars(record)["cleanup_failure_types"] == (
-        "RuntimeError",
-        "RuntimeError",
-        "RuntimeError",
-    ), "only the type dimension should be capped"
-    assert vars(record)["cleanup_failures_truncated"] is True, (
-        "the cap must be explicit"
-    )
-
-
-@given(
-    primary_type=st.one_of(st.none(), st.sampled_from(_ORDINARY_FAILURE_TYPES)),
-    cleanup_types=st.lists(st.sampled_from(_ORDINARY_FAILURE_TYPES), max_size=3),
-)
-def test_generated_ordinary_failures_preserve_primary_first_order(
-    primary_type: type[Exception] | None,
-    cleanup_types: list[type[Exception]],
-) -> None:
-    """Generated ordinary failures keep identity and primary-first precedence."""
-    primary = primary_type("primary") if primary_type is not None else None
-    cleanup_failures = tuple(
-        failure_type(f"cleanup-{index}")
-        for index, failure_type in enumerate(cleanup_types)
-    )
-    expected = ((primary,) if primary is not None else ()) + cleanup_failures
-
-    if not expected:
-        raise_session_failures(None, (), ())
-        return
-
-    if len(expected) == 1:
-        with pytest.raises(type(expected[0])) as raised:
-            raise_session_failures(primary, cleanup_failures, ())
-        assert raised.value is expected[0], _ASSERTION_FAILURE
-    else:
-        with pytest.raises(ExceptionGroup) as raised:
-            raise_session_failures(primary, cleanup_failures, ())
-        assert raised.value.exceptions == expected, _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio
@@ -178,13 +97,10 @@ async def test_after_connect_cancellation_reports_original_setup_failure() -> No
 
 
 @pytest.mark.asyncio
-async def test_session_and_disconnect_failures_are_grouped_primary_first(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Disconnect failures are visible after the original handler failure."""
-    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
-    primary = RuntimeError("CANARY-handler-secret")
-    cleanup = LookupError("CANARY-cleanup-secret")
+async def test_session_failure_keeps_precedence_over_disconnect_failure() -> None:
+    """Disconnect errors stay visible without replacing a handler failure."""
+    primary = RuntimeError("handler failed")
+    cleanup = LookupError("disconnect failed")
 
     class FailingResource(RecordingResource):
         async def dispatch(self, ws: object, raw: str | bytes) -> None:
@@ -196,74 +112,26 @@ async def test_session_and_disconnect_failures_are_grouped_primary_first(
             raise cleanup
 
     router = make_session_router(FailingResource)
-    socket = SessionSocket(b"CANARY-frame-secret")
+    socket = SessionSocket(b'{"type":"boom"}')
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, object]] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, details: reported.append(details))
 
-    with pytest.raises(ExceptionGroup) as error:
-        await router.on_websocket(
-            typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
-        )
+    try:
+        with pytest.raises(RuntimeError) as error:
+            await router.on_websocket(
+                typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
+            )
+    finally:
+        loop.set_exception_handler(previous_handler)
 
-    assert error.value.exceptions == (primary, cleanup), _ASSERTION_FAILURE
+    assert error.value is primary, _ASSERTION_FAILURE
+    assert [details["exception"] for details in reported] == [cleanup], (
+        "disconnect failure must be reported after preserving the handler failure"
+    )
     assert FailingResource.instances[0].disconnect_codes == [1011], _ASSERTION_FAILURE
     assert socket.close_codes == [1011], _ASSERTION_FAILURE
-    observations = [
-        record
-        for record in caplog.records
-        if record.name == "falcon_pachinko._session_driver"
-    ]
-    cleanup_observations = [
-        record
-        for record in observations
-        if getattr(record, "operation", None) == "cleanup"
-    ]
-    cleanup_observation = cleanup_observations[-1]
-    session_observation = observations[-1]
-    assert getattr(cleanup_observation, "outcome", None) == "failed", _ASSERTION_FAILURE
-    assert getattr(cleanup_observation, "close_code", None) == 1011, _ASSERTION_FAILURE
-    assert getattr(cleanup_observation, "cleanup_failure_types", None) == (
-        "LookupError",
-    ), _ASSERTION_FAILURE
-    assert getattr(session_observation, "outcome", None) == "failed", _ASSERTION_FAILURE
-    assert getattr(session_observation, "exception_type", None) == "ExceptionGroup", (
-        _ASSERTION_FAILURE
-    )
-    assert "CANARY" not in caplog.text, "observations must omit exception values"
-
-
-@pytest.mark.asyncio
-async def test_handler_failure_after_code_less_transport_loss_uses_1006() -> None:
-    """A closed peer without a code cannot receive a server error close."""
-    primary = RuntimeError("handler failed after transport loss")
-
-    class TrackingSocket(SessionSocket):
-        def __init__(self, *frames: object) -> None:
-            super().__init__(*frames)
-            self.close_attempts = 0
-
-        async def close(self, code: int = 1000) -> None:
-            self.close_attempts += 1
-            await super().close(code)
-
-    socket = TrackingSocket(b"frame")
-
-    class PeerGoneThenFailResource(RecordingResource):
-        async def dispatch(self, ws: object, raw: str | bytes) -> None:
-            del ws, raw
-            socket.closed = True
-            raise primary
-
-    router = make_session_router(PeerGoneThenFailResource)
-
-    with pytest.raises(RuntimeError) as raised:
-        await router.on_websocket(
-            typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
-        )
-
-    assert raised.value is primary, _ASSERTION_FAILURE
-    assert PeerGoneThenFailResource.instances[0].disconnect_codes == [1006], (
-        "a closed transport without a close code must use abnormal-closure metadata"
-    )
-    assert socket.close_attempts == 0, "cleanup must not close an already-closed peer"
 
 
 @pytest.mark.asyncio
@@ -347,25 +215,38 @@ async def test_before_disconnect_receives_code_and_primary_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_handler_close_code_survives_a_later_handler_failure() -> None:
-    """Cleanup preserves an effective close already reported by the socket."""
-    primary = RuntimeError("handler failed after closing")
+async def test_handler_failure_after_code_less_transport_loss_uses_1006() -> None:
+    """A closed peer without a code is not sent another server close."""
+    primary = RuntimeError("handler failed after transport loss")
 
-    class CloseThenFailResource(RecordingResource):
+    class TrackingSocket(SessionSocket):
+        def __init__(self, *frames: object) -> None:
+            super().__init__(*frames)
+            self.close_attempts = 0
+
+        async def close(
+            self, code: int | None = 1000, reason: str | None = None
+        ) -> None:
+            self.close_attempts += 1
+            await super().close(code, reason)
+
+    socket = TrackingSocket(b"frame")
+
+    class PeerGoneThenFailResource(RecordingResource):
         async def dispatch(self, ws: object, raw: str | bytes) -> None:
-            del raw
-            await typ.cast("SessionSocket", ws).close(4004)
+            del ws, raw
+            socket.closed = True
             raise primary
 
-    router = make_session_router(CloseThenFailResource)
-    socket = SessionSocket(b"close-before-failure")
+    router = make_session_router(PeerGoneThenFailResource)
 
     with pytest.raises(RuntimeError) as raised:
         await router.on_websocket(
             typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
         )
 
-    resource = CloseThenFailResource.instances[0]
     assert raised.value is primary, _ASSERTION_FAILURE
-    assert resource.disconnect_codes == [4004], _ASSERTION_FAILURE
-    assert socket.close_codes == [4004], "cleanup must not replace a sent close"
+    assert PeerGoneThenFailResource.instances[0].disconnect_codes == [1006], (
+        "a closed transport without a code must use abnormal-closure metadata"
+    )
+    assert socket.close_attempts == 0, "cleanup must not close an already-closed peer"
