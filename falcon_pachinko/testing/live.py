@@ -368,8 +368,8 @@ class LiveWebSocketServer:
                 task.cancel()
         await self._cancel_or_consume_task(adapter.task)
 
-    async def _stop_server(self) -> None:
-        """Close sessions, stop the adapter and collect serve-task failures."""
+    async def _close_sessions(self) -> None:
+        """Close tracked sessions and record every cleanup failure."""
         for session in tuple(self._sessions):
             try:
                 async with asyncio.timeout(self._shutdown_timeout):
@@ -383,6 +383,9 @@ class LiveWebSocketServer:
             finally:
                 self._sessions.discard(session)
 
+    async def _stop_server(self) -> None:
+        """Stop the adapter and collect serve-task failures."""
+        await self._close_sessions()
         adapter = self._adapter
         if adapter is None:
             return

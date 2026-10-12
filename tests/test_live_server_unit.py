@@ -245,6 +245,24 @@ async def test_shutdown_timeout_bounds_session_close() -> None:
 
 
 @pytest.mark.asyncio
+async def test_close_sessions_continues_after_a_session_timeout() -> None:
+    """Attempt every tracked close even after an earlier timeout."""
+    server = LiveWebSocketServer(_make_app(), shutdown_timeout=0.01)
+    sessions = [typ.cast("WebSocketSession", _StalledSession()) for _ in range(2)]
+    server._sessions.update(sessions)
+
+    await server._close_sessions()
+
+    assert len(server.errors) == len(sessions), (
+        "each timed-out session close must be reported"
+    )
+    assert all(isinstance(error, LiveServerShutdownError) for error in server.errors), (
+        "every session timeout must retain its shutdown error type"
+    )
+    assert not server._sessions, "all attempted sessions must leave tracking"
+
+
+@pytest.mark.asyncio
 async def test_unacknowledged_captured_error_fails_teardown() -> None:
     """Raise captured application failures that were not acknowledged."""
     failure = RuntimeError("captured failure")
