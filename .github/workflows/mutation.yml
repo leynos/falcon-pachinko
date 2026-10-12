@@ -40,7 +40,7 @@ jobs:
       # rather than resolving the caller repository. Not used for any
       # external cloud auth.
       id-token: write
-    uses: leynos/shared-actions/.github/workflows/mutation-mutmut.yml@6ecf4a7691031f92c3e75e176705cf541ad5283d
+    uses: leynos/shared-actions/.github/workflows/mutation-mutmut.yml@aea9c14c24b73042e99f0be8245a4f171b67c31a
     with:
       # The package is top-level, so the module-glob translation needs no
       # prefix stripped: `falcon_pachinko/router.py` scopes the run to
