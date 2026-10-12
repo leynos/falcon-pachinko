@@ -29,6 +29,25 @@ remains telemetry-agnostic. It propagates the original startup exception to the
 application startup caller, leaving application-specific logging and metrics to
 the lifespan owner.
 
+## WebSocket receive-loop lifecycle
+
+`WebSocketRouter(receive_loop=True)` opts into a router-owned receive loop.
+After `on_connect` returns an accepting result, the router accepts the socket
+and dispatches incoming frames in order until the peer disconnects or dispatch
+fails. The default is `False`; in that mode the router returns after accepting
+and the application retains lifecycle ownership.
+
+With the loop enabled, `on_disconnect` runs exactly once after `on_connect`
+successfully accepts the connection, including peer disconnect, dispatch
+failure, cancellation, or failure in `after_connect` or `accept`. A rejected
+connection or an `on_connect` failure does not invoke it. `before_disconnect`
+hooks run before the callback, and a hook failure cannot skip it. Peer close
+codes are passed through, with `1006` used when a code is unavailable;
+cancellation and incomplete handshakes also use `1006`. Ordinary dispatch
+errors use the existing close path (default close code `1000`) before cleanup.
+If cleanup fails while another error or cancellation is already in flight, that
+original failure remains primary, and the cleanup failure is recorded as a note.
+
 ## Dependency bounds
 
 The package supports Falcon 4.x through `falcon>=4,<5`. Falcon follows

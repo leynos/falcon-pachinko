@@ -158,11 +158,21 @@ finalizes the connection manager API.
   - [x] Implement `async for` iterators (e.g., `conn_mgr.connections(room=...)`)
     for composable bulk operations.
 
-  - [x] Define the abstract backend interface (ABC) for the connection manager
-    to pave the way for future distributed backends.
+  - [x] Define the abstract backend interface (ABC) for alternative local
+    socket storage and instrumentation.
 
   - [x] Ensure the default `InProcessBackend` correctly implements this new,
     robust interface.
+
+  - [x] Add the serializable `FanoutTransport` contract and `ClusterFanout`
+    coordinator for distributed room membership and message delivery.
+
+  - [x] Add the byte-only in-memory fan-out transport for tests.
+
+  - [x] Validate cross-node room delivery with two live ASGI servers and real
+    WebSocket clients.
+
+  - [ ] Add a production broker adapter implementing `FanoutTransport`.
 
 ## 4. Cross-Cutting Concerns
 

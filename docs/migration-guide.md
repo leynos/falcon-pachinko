@@ -11,7 +11,9 @@ workflow to the composable `WebSocketRouter` architecture.
 - **Schema-first dispatch** via `msgspec` tagged unions and
   `@handles_message("tag")`.
 - **Router-level dependency injection** through `resource_factory`.
-- **Pluggable connection manager backends** enable distributed storage.
+- **Pluggable connection manager backends** enable alternative local storage;
+  see [Clustered deployments](users-guide.md#clustered-deployments) for
+  distributed room fan-out.
 - **Lifespan-managed workers** supersede `add_websocket_worker`.
 
 ## Diagnostic compatibility

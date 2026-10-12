@@ -394,16 +394,18 @@ class Parent(WebSocketResource):
 ## 8. Custom Connection Manager Backends (How-to)
 
 `WebSocketConnectionManager` delegates storage to a `ConnectionBackend`
-implementation. Swap in your own to support clustering or observability.
+implementation. Use a custom backend for alternative local storage or
+instrumentation. The registry owns live `WebSocketLike` objects in one process;
+it never serializes, proxies or shares those sockets across processes.
 
 ```python
 from falcon_pachinko.websocket import ConnectionBackend, WebSocketConnectionManager
 
 
-class RedisBackend(ConnectionBackend): ...
+class InstrumentedBackend(ConnectionBackend): ...
 
 
-conn_mgr = WebSocketConnectionManager(backend=RedisBackend(...))
+conn_mgr = WebSocketConnectionManager(backend=InstrumentedBackend(...))
 app.ws_connection_manager = conn_mgr  # before router mounts
 ```
 
@@ -418,6 +420,53 @@ Tests illustrating this pattern live in:
 
 - `tests/test_connection_manager_unit.py::test_manager_uses_custom_backend`
 - `tests/behaviour/custom_connection_backend.feature`
+
+### Clustered deployments
+
+Clustering uses `ClusterFanout` alongside a separate local
+`WebSocketConnectionManager`. Each process keeps and sends to its own live
+sockets. A `FanoutTransport` carries room leases and serialized `FanoutMessage`
+envelopes; it never carries a socket. An envelope is JSON encoded as bytes and
+contains `message_id`, `origin_node`, `room`, `payload` and `exclude`. The
+transport exchanges string identifiers, floating-point lease durations and byte
+envelopes; `listen()` yields bytes and `members()` returns node identifiers.
+
+Give each node a cluster-unique node ID and each connection a cluster-unique
+connection ID. Register and group connections through the coordinator, then
+publish application payloads through it:
+
+```python
+await fanout.add_connection(connection_id, ws)
+await fanout.join_room(connection_id, room)
+await fanout.publish(room, {"text": "hello"})
+await fanout.remove_connection(connection_id)  # on disconnect
+```
+
+Start `fanout.run` with `WorkerController` in the application lifespan and stop
+the controller during shutdown. Mount the router with
+`WebSocketRouter(receive_loop=True)` so the router keeps accepted sockets open,
+dispatches incoming frames and calls `on_disconnect` when the session ends.
+Each node subscribes while it has local members in a room. It removes the
+subscription when the last local member leaves, releases its memberships on
+graceful shutdown, and renews leases with a heartbeat (by default, every third
+of `lease_ttl`). If a process crashes, its remote membership expires after
+`lease_ttl` without a heartbeat.
+
+Fan-out is best effort and not durable: nodes that are down or whose leases
+have expired do not receive replayed messages. Per-socket ordering depends on
+the transport preserving per-publisher, per-node order; there is no global
+ordering guarantee. At-least-once transports can deliver duplicates, and the
+coordinator does not deduplicate them. `message_id` is available in the
+serialized envelope to applications, but is not added to the WebSocket payload.
+A transport publish failure is raised without retry; individual local send
+failures do not stop the listener, remove a connection or roll back the
+publish. When set, `send_timeout` bounds each local send. Existing local
+snapshots continue to skip stale local members.
+
+`InMemoryFanoutTransport` is provided for tests. A production Redis or RabbitMQ
+adapter must implement only `FanoutTransport` and is outside the scope of this
+release. Single-process applications can use `WebSocketConnectionManager` alone
+and need no broker.
 
 ## 9. Background Workers
 

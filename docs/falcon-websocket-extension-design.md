@@ -573,9 +573,13 @@ def handles_message(
 
 ### 3.7. `WebSocketConnectionManager`
 
-The `WebSocketConnectionManager` is crucial for enabling server-initiated
-messages and managing groups of connections. It will be built upon a pluggable
-backend interface to support both single-process and distributed deployments.
+The `WebSocketConnectionManager` enables server-initiated messages and manages
+groups of connections through a process-local socket registry. Its
+`ConnectionBackend` contract exposes live `WebSocketLike` instances and
+snapshots of them, so implementations must keep that registry within the owning
+process. A backend may provide alternative local storage or instrumentation; it
+must never serialize, proxy or return sockets owned by a different process.
+Single-process applications use the manager alone and need no broker.
 
 - **API Design**:
 
@@ -592,7 +596,7 @@ backend interface to support both single-process and distributed deployments.
     choose a timeout aligned with their backpressure strategy (e.g., smaller
     values for large rooms paired with a retry queue).
 
-  - **Async Iterators**: For bulk operations, the manager will expose async
+  - **Async Iterators**: For bulk operations, the manager exposes async
     iterators, making them highly composable.
 
     ```python
@@ -600,16 +604,50 @@ backend interface to support both single-process and distributed deployments.
         await ws.send_media(...)
     ```
 
-- Pluggable Backends for Multi-Worker Support:
+#### 3.7.1. Cluster membership and fan-out
 
-  The manager will be designed with a clear Abstract Base Class (ABC) defining
-  its interface. The initial 1.0 release will ship with a default
-  InProcessBackend suitable for single-worker deployments. However, the
-  architecture is explicitly designed to support distributed systems in the
-  future. A developer could implement a RedisBackend using Redis Pub/Sub to
-  enable broadcasting across multiple server processes. This provides a clear
-  and robust path to scalability without changing the application-level code
-  that interacts with the connection manager.
+Distributed delivery uses a separate, opt-in `ClusterFanout` coordinator and
+`FanoutTransport`. Each node retains its own live sockets in its local
+`WebSocketConnectionManager`; the transport exchanges only node and room
+identifiers, floating-point lease durations and serialized byte envelopes. A
+`FanoutMessage` is JSON encoded and carries `message_id`, `origin_node`, `room`,
+`payload` and `exclude`. The coordinator never obtains or proxies a remote
+socket. The transport's `members()` returns node identifiers and `listen()`
+yields envelopes as bytes.
+
+The coordinator acquires one lease for each node and room while that node has
+local members. It subscribes when the first local connection joins and
+unsubscribes when the last leaves. On startup and heartbeat it reacquires
+leases for occupied rooms. A graceful stop calls `release`; if a process
+crashes, the transport expires its leases after `lease_ttl` without a
+heartbeat. The default heartbeat interval is one third of `lease_ttl`. The
+in-memory test transport expires leases lazily during `publish` and `members`.
+Failed empty-room unsubscriptions are retried independently. While any such
+unsubscribe is pending, bulk refresh is skipped so an orphan lease can expire;
+occupied rooms are renewed individually. Existing local snapshots continue to
+skip stale local members.
+
+Applications register, join, publish and remove connections through the
+coordinator. Start `fanout.run` with `WorkerController` in the application
+lifespan and mount `WebSocketRouter(receive_loop=True)` so the router owns the
+accepted connection's receive loop and disconnect cleanup. Node IDs and
+connection IDs must be unique across the cluster. A production Redis or
+RabbitMQ adapter implements only `FanoutTransport`; such an adapter is outside
+the scope of this release.
+
+Delivery is best effort and not durable. There is no replay for nodes that are
+down or have expired leases. Per-socket order is guaranteed only when the
+transport preserves per-publisher, per-node order; there is no global order.
+At-least-once transports may duplicate envelopes, and the coordinator does not
+deduplicate them. `message_id` is available in the serialized envelope to
+applications and transport middleware, but is not added to the WebSocket
+payload. Applications that need client-side deduplication can include their own
+identifier in the payload. Serialization fails before a transport call;
+transport `publish` failures propagate without retry. Local send failures,
+including those exceeding `send_timeout`, do not stop the listener, evict the
+connection or roll back publication. Startup and listener transport failures
+propagate; transient heartbeat errors are logged by exception type and retried
+at the next interval.
 
 ### 3.8. Background Worker Integration via ASGI Lifespan
 
@@ -1796,23 +1834,39 @@ sophisticated targeting mechanisms could be added, such as:
 
 ### 6.4. Scalability for Distributed Systems
 
-The initial design of the `WebSocketConnectionManager` is for in-process
-operation, suitable for single-server deployments or those using sticky
-sessions. For applications requiring horizontal scaling across multiple server
-instances, this in-process manager becomes a limitation, as broadcasts would
-only reach clients connected to the same instance.
+`WebSocketConnectionManager` and its `ConnectionBackend` are process-local
+socket registries. Their snapshots contain live objects owned by the current
+ASGI process, so storing them in Redis or returning remote socket proxies is
+not a supported clustering design. Keep a local manager on each node and add
+`ClusterFanout` with a `FanoutTransport` when cross-node room delivery is
+needed. The transport carries serializable room and node membership plus
+JSON-encoded `FanoutMessage` envelopes as bytes; the receiving coordinator
+resolves each room against its own local registry and sends to its own sockets.
 
-A significant enhancement would be to make the `WebSocketConnectionManager`
-pluggable, allowing different backend implementations. For example:
+Membership is leased per node and room. The coordinator subscribes on the first
+local join, unsubscribes on the last local leave, and releases all node leases
+at graceful shutdown. A crashed node's membership expires after `lease_ttl`
+without a heartbeat; the default heartbeat interval is `lease_ttl / 3`. The
+in-memory test adapter expires leases lazily during `publish` and `members`.
+Failed unsubscribe cleanup is retried separately, while occupied rooms continue
+to be renewed individually. Local snapshots continue to skip stale local
+members.
 
-- An implementation using a message bus like Redis Pub/Sub (similar to Django
-  Channels' channel layer 5) would enable inter-process communication, allowing
-  a message published on one instance to be delivered to WebSockets connected
-  to other instances. Designing the `WebSocketConnectionManager` with a clear
-  interface (e.g., an Abstract Base Class) from the outset would facilitate
-  this evolution, allowing the library to start simple but provide a clear
-  upgrade path for distributed deployments without requiring a fundamental
-  rewrite of the application logic that interacts with the manager.
+Run the coordinator's receive loop through `WorkerController` in the ASGI
+lifespan. `WebSocketRouter(receive_loop=True)` keeps accepted connections open,
+dispatches received frames and calls `on_disconnect` once when that session
+ends. Single-process deployments need neither the coordinator nor a broker.
+
+Fan-out is best effort and not durable, with no replay for down or expired
+nodes. Per-socket ordering depends on the transport preserving per-publisher,
+per-node order, and there is no global ordering. At-least-once transports may
+duplicate envelopes; the coordinator does not deduplicate them. The envelope's
+`message_id` is available to applications and transport middleware but is not
+added to the WebSocket payload. Publish serialization errors occur before any
+transport call; transport publish failures propagate without retry. A local
+send failure does not stop the listener, evict its connection or roll back the
+publish. Production Redis and RabbitMQ adapters implement only
+`FanoutTransport` and remain out of scope.
 
 ### 6.5. Testing Utilities
 
