@@ -515,6 +515,10 @@ pytest_add_cli_args = [
     "no:cacheprovider",
 ]
 
+[[tool.duplication_gate.allow]]
+members = ["falcon_pachinko/_session.py", "falcon_pachinko/websocket.py"]
+reason = "Nose reports the matching empty-list guards as unnamed fragments, so exact path-only keys are required. Session cleanup raises the first failure and annotates later ones; room broadcasting raises one failure or groups several. Sharing the guard would couple independent error contracts. The complete-family exception covers only locations in these two named modules; review any future matching family."
+
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"

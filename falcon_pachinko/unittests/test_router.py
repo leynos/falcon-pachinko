@@ -8,7 +8,6 @@ import types
 import typing as typ
 
 import falcon
-import falcon.asgi
 import pytest
 
 from falcon_pachinko import HookContext, WebSocketResource, WebSocketRouter
