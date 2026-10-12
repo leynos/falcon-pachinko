@@ -98,32 +98,55 @@ guide for the exact rules.
 
 ## Step-by-Step Migration
 
-1) **Install websocket support** (unchanged):
+1) **Install websocket support:**
 
 ```python
+import falcon.asgi
 from falcon_pachinko import websocket
 
-app = falcon.App()
+app = falcon.asgi.App()
 websocket.install(app)
 ```
+
+`websocket.install(app)` initializes the app's connection manager and legacy
+WebSocket compatibility helpers. `router.attach()` registers the composable
+router with Falcon. Use a Falcon ASGI application for WebSocket routes.
 
 1) **Replace `add_websocket_route` with a router:**
 
 ```python
-from falcon_pachinko import WebSocketRouter
+from falcon_pachinko import WebSocketRouter, WebSocketResource
+
+
+class ChatResource(WebSocketResource):
+    pass
+
 
 router = WebSocketRouter()
 router.add_route("/chat/{room}", ChatResource, history_size=100)
-router.mount("/ws")
-app.add_route("/ws", router)
+router.attach(app, "/ws")
 ```
 
-- Route paths are now **relative to the router mount point**.
+- Route paths are **relative to the router mount point**. `attach()` mounts
+  the router and registers the Falcon routes; do not call `mount()` or
+  `app.add_route()` separately.
 - Resource initializer arguments moved from `args=`/`kwargs=` parameters to
   `*init_args`/`**init_kwargs` positional and keyword capture. Before:
   `router.add_route(path, Resource, args=(1,), kwargs={"n": 2})`; after:
   `router.add_route(path, Resource, 1, n=2)`. The `name` keyword is reserved
   for the route name and is never forwarded to the resource initializer.
+
+1) **Adopt the connection acceptance and session lifecycle:**
+
+- `on_connect(req, ws, **params)` decides whether the router accepts the
+  connection. Return `False` to reject it; returning `True` allows the router
+  to accept it after the hook. If the hook sends a frame, call
+  `await ws.accept()` first.
+- After acceptance, the router keeps a receive loop open and passes each raw
+  text or binary frame to `WebSocketResource.dispatch()`.
+- `on_disconnect(ws, close_code)` runs when that session ends. Use it to clean
+  up connection-scoped resources; the close code reflects the disconnect or
+  dispatch failure.
 
 1) **Adopt resource composition and state sharing:**
 
@@ -201,15 +224,20 @@ registration or mounting, before the route can handle a connection.
 
 - **Unit tests:** cover resource constructors, state handling, and any custom
   connection backend logic.
-- **Behavioural tests:** exercise router mounting, nested paths, DI, and worker
-  lifecycles with `pytest-bdd`.
-- **Reference fixtures:** reuse `WebSocketTestClient` and `WebSocketSimulator`
-  to validate both real and simulated websocket flows.
+- **Live acceptance tests:** for each WebSocket lifecycle feature, add a
+  `pytest-bdd` scenario using `live_websocket_server` and `WebSocketTestClient`
+  against a Falcon ASGI app configured with `router.attach()`. This verifies
+  the real responder and socket lifecycle.
+- **Simulator tests:** keep `WebSocketSimulator` coverage for fast unit and
+  behavioural checks of routing, hooks, dependency injection, and resource
+  logic. Simulator tests complement the live acceptance path; they do not
+  replace it.
 
 ## Common Pitfalls
 
-- Forgetting to call `router.mount(prefix)` results in 404s; mount before
-  hooking into the Falcon app.
+- Calling `router.mount(prefix)` without registering the router on the Falcon
+  app leaves requests unrouted. Use `router.attach(app, prefix)`, which mounts
+  the router and registers the exact and descendant paths.
 - Custom backends must implement *all* methods from `ConnectionBackend`,
   raising `ValueError` on duplicate IDs and ignoring stale room entries in
   `snapshot` or documenting alternative semantics.
