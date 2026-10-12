@@ -123,6 +123,53 @@ test server imports Uvicorn lazily and uses its lifespan readiness and
 graceful-shutdown APIs; the behavioural contract belongs to Falcon-Pachinko's
 adapter protocol, not to Uvicorn.
 
+## WebSocket responder and live-harness boundaries
+
+`WebSocketRouter.attach(app, prefix)` is the Falcon composition boundary. It
+compiles the router's relative paths, registers the exact mount and descendant
+catch-all routes, and installs raw-frame media handlers on the app. The router
+accepts a connection after `on_connect()` succeeds, then starts
+`_session.run_session()` for that resource and socket.
+
+`install_raw_websocket_media_handlers()` wraps the app-wide TEXT and BINARY
+handlers once. Inbound deserialization passes frames through as raw `str` or
+`bytes` for resource dispatch; outbound serializers remain the configured
+Falcon serializers. Attaching warns when it finds customized inbound handlers,
+because their deserializers are replaced for every WebSocket responder on that
+app. Repeated installation does not wrap a handler again.
+
+`_session.run_session()` receives one raw frame at a time and passes it to
+`WebSocketResource.dispatch()`. Its transport-supplied disconnect classifier
+keeps Falcon's `WebSocketDisconnected` exception at the router boundary; the
+simulator emits `_PeerDisconnectedError` from `falcon_pachinko._disconnect`.
+The classifier passes only the close code into the session core, which does not
+import Falcon. A peer disconnect preserves its close code or defaults to
+`1000`. A dispatch failure closes an open socket with `1011`, while local
+cancellation reports `1006` to cleanup and is re-raised. Disconnect hooks and
+`on_disconnect()` run exactly once. If both the session and cleanup fail, the
+session failure remains primary and cleanup failures are attached as exception
+notes; absent a session failure, the first cleanup failure is raised with later
+failures noted.
+
+The `ServerAdapter` protocol isolates the ASGI server. Its `task` property is
+the serve-loop task, `start(app, sock)` returns only after lifespan startup and
+listener readiness, and `stop()` requests graceful shutdown. The harness binds
+the ephemeral socket before passing it to the adapter, then joins the task
+during teardown. The default Uvicorn adapter is imported lazily and implements
+that contract using Uvicorn's lifespan and graceful-stop support.
+
+`live_websocket_server` provides a per-test runner with a fresh event loop. Its
+`run()` method executes awaitables on that loop; `start()` tracks each harness
+and `close()` exits servers in reverse order, cancels leftover tasks, shuts
+down async generators and the default executor, and closes the loop. Startup
+timeouts or failures trigger partial-startup cleanup and are reported as
+`LiveServerStartupError`. A shutdown deadline records
+`LiveServerShutdownError`. Unacknowledged captured application or server-task
+failures are grouped into `LiveServerError` at teardown; `server.pop_errors()`
+acknowledges failures a scenario has asserted. The capture handler is installed
+during startup, so a custom Falcon `Exception` handler must be registered
+afterwards and call `server.record_error(ex)`.
+
 ## Validation error import boundary
 
 Use `from falcon_pachinko.utils import ValidationError` as the stable import

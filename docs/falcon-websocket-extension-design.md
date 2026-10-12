@@ -47,12 +47,14 @@ After Falcon routes a connection to the router, `on_connect()` decides whether
 to accept it. The router owns acceptance after that hook; a resource that sends
 a frame from `on_connect()` must call `await ws.accept()` first. Once accepted,
 the router repeatedly receives raw frames and invokes
-`WebSocketResource.dispatch()` until Falcon reports a disconnect. Cleanup calls
-`on_disconnect(ws, close_code)` once: normal disconnects preserve the peer's
-code or default to `1000`, dispatch failures use `1011`, and local task
-cancellation closes with `1001` and passes that code to the cleanup hook
-before cancellation is re-raised. The
-router does not send a close frame to a socket Falcon has already closed.
+`WebSocketResource.dispatch()` until the session driver identifies a peer
+disconnect. The driver handles Falcon's `WebSocketDisconnected` exception and
+the simulator's framework-independent package signal, preserving their close
+codes. Cleanup calls `on_disconnect(ws, close_code)` once: normal disconnects
+preserve the peer's code or default to `1000`, dispatch failures use `1011`, and
+local task cancellation closes with `1001` and passes that code to the cleanup
+hook before cancellation is re-raised. The router does not send a close frame to
+a socket Falcon has already closed.
 
 ### WebSocket session lifecycle
 

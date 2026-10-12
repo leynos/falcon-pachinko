@@ -5,7 +5,7 @@ from __future__ import annotations
 import types
 import typing as typ
 
-import falcon
+from falcon_pachinko._disconnect import _PeerDisconnectedError
 
 from falcon_pachinko.websocket import (
     ConnectionBackend,
@@ -45,7 +45,9 @@ class RecordingWebSocket:
     async def receive_media(self) -> object:
         """End setup-only router tests with a normal peer disconnect."""
         self.receive_calls += 1
-        raise falcon.WebSocketDisconnected(self.close_code or 1000)
+        self.closed = True
+        self.close_code = self.close_code or 1000
+        raise _PeerDisconnectedError(code=self.close_code)
 
 
 class RequestStub:

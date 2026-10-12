@@ -7,7 +7,7 @@ import dataclasses as dc
 import typing as typ
 from contextlib import asynccontextmanager
 
-import falcon
+from falcon_pachinko._disconnect import _PeerDisconnectedError
 import msgspec.json as msjson
 
 from ._common import (
@@ -95,10 +95,10 @@ class WebSocketSimulator(_LifecycleSocket):
         message = await self._inbound.get()
         if isinstance(message, _DisconnectMarker):
             await self.close(code=message.code)
-            raise falcon.WebSocketDisconnected(code=message.code)
+            raise _PeerDisconnectedError(code=message.code)
         if message is _CLOSED_SENTINEL:
             self._inbound.put_nowait(_CLOSED_SENTINEL)
-            raise falcon.WebSocketDisconnected(self.close_code)
+            raise _PeerDisconnectedError(self.close_code)
         self.received_messages.append(message)
         return message
 
@@ -160,7 +160,7 @@ class WebSocketSimulator(_LifecycleSocket):
     async def push_message(self, payload: object, *, kind: FrameKind = "json") -> None:
         """Queue ``payload`` as if it were received from the peer."""
         if self.closed:
-            raise falcon.WebSocketDisconnected(self.close_code)
+            raise _PeerDisconnectedError(self.close_code)
         data = self._prepare_inbound_payload(payload, kind)
         await self._inbound.put(data)
 

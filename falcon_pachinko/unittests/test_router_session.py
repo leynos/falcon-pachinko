@@ -15,6 +15,7 @@ from hypothesis import example, given
 from hypothesis import strategies as st
 
 from falcon_pachinko import WebSocketResource, WebSocketRouter
+from falcon_pachinko._disconnect import _PeerDisconnectedError
 from falcon_pachinko.unittests.helpers import DummyWS, RecordingWS, make_req
 
 if typ.TYPE_CHECKING:
@@ -96,7 +97,7 @@ class _QueuedWebSocket(RecordingWS):
         self.receive_started.set()
         if self.frames:
             return self.frames.pop(0)
-        raise falcon.WebSocketDisconnected(code=self.disconnect_code)
+        raise _PeerDisconnectedError(code=self.disconnect_code)
 
 
 def test_router_attach_registers_asgi_routes_and_wraps_media_once() -> None:

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 
-import falcon
 import msgspec.json as msjson
 import pytest
 from hypothesis import example, given
 from hypothesis import strategies as st
 
+from falcon_pachinko._disconnect import _PeerDisconnectedError
 from falcon_pachinko.testing import WebSocketSimulator
 
 
@@ -30,6 +30,29 @@ async def test_accept_and_close_record_state() -> None:
     await simulator.close(code=1011)
     assert simulator.closed is True, "close() must mark the simulator closed"
     assert simulator.close_code == 1011, "close() must record the given close code"
+
+
+@pytest.mark.asyncio
+async def test_push_disconnect_raises_internal_signal_and_persists_code() -> None:
+    """Queued disconnects close the simulator and remain visible to receivers."""
+    simulator = WebSocketSimulator()
+    await simulator.push_text("before disconnect")
+    await simulator.push_disconnect(code=1001)
+
+    assert await simulator.receive_text() == "before disconnect", (
+        "queued frames must be received before the disconnect marker"
+    )
+    with pytest.raises(_PeerDisconnectedError) as first:
+        await simulator.receive_media()
+    with pytest.raises(_PeerDisconnectedError) as second:
+        await simulator.receive_media()
+
+    assert first.value.code == second.value.code == 1001, (
+        "later receives must repeat the original disconnect code"
+    )
+    assert simulator.closed is True, "a peer disconnect must close the simulator"
+    assert simulator.close_code == 1001, "the simulator must retain the peer code"
+    assert simulator.lifecycle_event.is_set(), "close must wake lifecycle waiters"
 
 
 @pytest.mark.asyncio
@@ -121,7 +144,7 @@ async def test_close_wakes_a_blocked_receive_with_disconnect_code() -> None:
 
     await simulator.close(code=4001)
 
-    with pytest.raises(falcon.WebSocketDisconnected) as caught:
+    with pytest.raises(_PeerDisconnectedError) as caught:
         await asyncio.wait_for(pending_receive, timeout=1)
     assert caught.value.code == 4001, "the wake-up must preserve the close code"
 
@@ -132,7 +155,7 @@ async def test_receive_after_close_raises_disconnect() -> None:
     simulator = WebSocketSimulator()
     await simulator.close(code=4002)
 
-    with pytest.raises(falcon.WebSocketDisconnected) as caught:
+    with pytest.raises(_PeerDisconnectedError) as caught:
         await simulator.receive_text()
     assert caught.value.code == 4002, "closed sockets must keep reporting their code"
 
@@ -151,6 +174,6 @@ async def test_queued_frames_are_delivered_before_disconnect() -> None:
     assert await simulator.receive_bytes() == b"second", (
         "the second queued frame must be delivered"
     )
-    with pytest.raises(falcon.WebSocketDisconnected) as caught:
+    with pytest.raises(_PeerDisconnectedError) as caught:
         await simulator.receive_media()
     assert caught.value.code == 4003, "disconnect follows the queued frames"

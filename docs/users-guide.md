@@ -116,7 +116,7 @@ resource and its hooks.
     failure. Rejected connections do not run this lifecycle.
 - Session frames arrive as raw `str` or `bytes` from `ws.receive_media()` and
   are passed to `WebSocketResource.dispatch()`. After acceptance, the router
-  receives and dispatches frames until Falcon reports a disconnect.
+  receives and dispatches frames until the peer disconnects.
 
 `router.attach()` installs pass-through TEXT and BINARY deserializers in the
 application's shared `ws_options.media_handlers` mapping while preserving its
@@ -333,11 +333,15 @@ values, so omission remains the default security boundary.
 
 1) **Choose a factory** – Pass `resource_factory` to `WebSocketRouter`.
 2) **Provide services** – Register shared services in the container.
-3) **Mount the router** – All route instantiation flows through your factory.
+3) **Attach the router** – All route instantiation flows through your factory.
 
 ```python
-from falcon_pachinko import ServiceContainer, WebSocketRouter
+import falcon.asgi
 
+from falcon_pachinko import ServiceContainer, WebSocketRouter, install
+
+app = falcon.asgi.App()
+install(app)
 conn_mgr = app.ws_connection_manager
 container = ServiceContainer()
 container.register("conn_mgr", conn_mgr)
@@ -345,8 +349,14 @@ container.register("db", my_db_pool)
 
 router = WebSocketRouter(resource_factory=container.create_resource)
 router.add_route("/rooms/{room}", ChatResource)
-router.mount("/ws")
+router.attach(app, "/ws")
 ```
+
+Configure the Falcon application and any application services before calling
+`attach()`. It registers the router's exact and descendant routes and installs
+the raw-frame media handlers needed by real Falcon WebSocket responders.
+`mount()` only compiles routes for simulator-based tests; it does not register
+the router on a Falcon application.
 
 ### Test-friendly factories
 
