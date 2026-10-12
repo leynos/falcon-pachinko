@@ -38,18 +38,9 @@ def _adapt_frame(media: object) -> str | bytes:
     return msjson.encode(media)
 
 
-def _log_close_failure(close_code: int, error: BaseException) -> None:
-    """Log safe exception metadata when a best-effort close fails."""
-    logger.error(
-        "Failed to close WebSocket with code %s: %s",
-        close_code,
-        _type_name(error),
-    )
-
-
-def _log_cleanup_failure(operation: str, error: BaseException) -> None:
+def _log_session_failure(context: str, error: BaseException) -> None:
     """Log safe exception metadata without reflecting caller-controlled text."""
-    logger.error("Failure in %s cleanup: %s", operation, _type_name(error))
+    logger.error("%s: %s", context, _type_name(error))
 
 
 async def _close_after_failure(websocket: WebSocketLike, close_code: int) -> None:
@@ -62,7 +53,9 @@ async def _close_after_failure(websocket: WebSocketLike, close_code: int) -> Non
     except Exception as exc:  # ruff: ignore[blind-except] - preserve session errors
         close_error = exc
     if close_error is not None:
-        _log_close_failure(close_code, close_error)
+        _log_session_failure(
+            f"Failed to close WebSocket with code {close_code}", close_error
+        )
 
 
 async def _attempt_cleanup(
@@ -77,11 +70,11 @@ async def _attempt_cleanup(
     except asyncio.CancelledError as exc:
         if not suppress_errors:
             raise
-        _log_cleanup_failure(operation, exc)
+        _log_session_failure(f"Failure in {operation} cleanup", exc)
     except Exception as exc:  # ruff: ignore[blind-except] - handle all cleanup failures
         if not suppress_errors:
             return exc
-        _log_cleanup_failure(operation, exc)
+        _log_session_failure(f"Failure in {operation} cleanup", exc)
     return None
 
 
