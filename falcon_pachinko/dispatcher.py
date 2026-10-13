@@ -17,7 +17,7 @@ from .exceptions import (
     HandlerSignatureError,
     SignatureInspectionError,
 )
-from .handlers import HandlerInfo, get_payload_type
+from .handlers import LIFECYCLE_CALLBACK_NAMES, HandlerInfo, get_payload_type
 from .schema import validate_strict_payload
 from .utils import to_snake_case
 
@@ -78,8 +78,35 @@ def _expected_type_label(info: object) -> str:
 def find_conventional_handler(
     resource: WebSocketResource, tag: str
 ) -> HandlerInfo | None:
-    """Return a handler matching ``on_{tag}`` if present."""
+    """Return a handler matching ``on_{tag}`` if the class allows that name.
+
+    Only names in ``_conventional_handler_names`` are considered. That
+    allowlist is built once when the class is created and excludes the
+    lifecycle callbacks, so a peer-chosen tag cannot reach ``on_connect``,
+    ``on_disconnect`` or ``on_unhandled``, nor an alias of one. A class
+    without the attribute (a non-monitored stand-in) offers no conventional
+    handlers at all.
+
+    Returns
+    -------
+    HandlerInfo | None
+        The discovered handler, or ``None`` when the class exposes no usable
+        conventional handler for ``tag``.
+    """
     name = f"on_{to_snake_case(tag)}"
+    allowed = getattr(resource.__class__, "_conventional_handler_names", frozenset())
+    if name not in allowed:
+        if name in LIFECYCLE_CALLBACK_NAMES:
+            # The refusal is silent for an ordinary unknown tag, but a peer
+            # reaching for a reserved callback is a security-relevant signal
+            # worth making observable. Only the normalised name is logged:
+            # it is one of three module constants, so rendering it through
+            # ``_identifier`` cannot disclose peer-supplied text.
+            logger.debug(
+                "Refused conventional handler %s (reason=reserved_lifecycle_tag)",
+                _identifier(name),
+            )
+        return None
     func = getattr(resource.__class__, name, None)
     if func is None or not inspect.iscoroutinefunction(func):
         return None

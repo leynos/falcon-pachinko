@@ -236,6 +236,52 @@ threaded positionally through each helper.
 `req` is cast to `falcon.Request` at the point `_Dispatch` is constructed in
 `_try_route`, consistent with the cast-at-the-edge policy described above.
 
+## Reserved lifecycle dispatch
+
+The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are driven by
+the connection lifecycle, never by an envelope `type`, so the dispatcher
+refuses to resolve them by convention.
+
+The conventional allowlist is `_conventional_handler_names` in
+`falcon_pachinko/resource.py`, computed once per class by
+`_init_conventional_handler_names`. Class creation inspects each `on_*`
+attribute with `inspect.getattr_static` rather than `getattr`, so a descriptor
+named `on_*` cannot run, or raise, while the class is being created; the raw
+attribute it returns means only a plain coroutine function is admitted. A
+`@staticmethod` is not: it has no `self` for the dispatcher to pass. A
+`@classmethod` is not either: it would receive the class in that position.
+`functools.partialmethod` is excluded explicitly, because from Python 3.13
+`inspect.iscoroutinefunction` unwraps it, so the raw descriptor would be
+admitted on some interpreters and not others, and because class access yields a
+generated wrapper rather than the function the test saw. The predicate still
+unwraps it for the reserved-name check, so a callback cannot hide behind one.
+
+`LIFECYCLE_CALLBACK_NAMES` and `is_lifecycle_callback`, both in
+`falcon_pachinko/handlers.py`, are the single source of truth: registration
+(`WebSocketResource.add_handler`, `@handles_message`) calls the predicate
+directly, and the conventional allowlist that
+`dispatcher.find_conventional_handler` consults is built from it, so the two
+paths cannot drift. `is_lifecycle_callback` unwraps both sides of every
+comparison with `_unwrap_handler`, then checks the callable's own `__name__`
+and, failing that, identity against the reserved entries in the owner's MRO,
+which is what catches a neutral alias such as `on_bye = on_disconnect` or a
+function copied from a parent resource under a new name.
+
+`_unwrap_handler` peels `functools.partial`, a `_HandlesMessageDescriptor` (the
+object `@handles_message` returns), the standard-library descriptor families
+(`functools.partialmethod`, `functools.singledispatchmethod`,
+`functools.cached_property`, `property`), `classmethod` and `staticmethod`
+objects, and bound methods. For the generated class-view of a `partialmethod` or
+`singledispatchmethod`, `_descriptor_view_owner` follows the descriptor
+backlink the view carries. A `functools.wraps` wrapper is deliberately *not*
+unwrapped: it is a distinct function that only borrows metadata, so following
+`__wrapped__` would over-reject an unrelated handler.
+
+Explicit registration takes precedence: dispatch looks up the exact envelope
+`type` first and falls back to convention only on a miss, so a reserved tag
+stays legal for a distinct method; see §3.6 of the
+[design document](falcon-websocket-extension-design.md).
+
 ## Lint and Typecheck Toolchain
 
 `make lint` provisions nose, then runs Ruff, both Pylint passes, ambrleaks and
