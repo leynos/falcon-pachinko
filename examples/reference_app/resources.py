@@ -189,6 +189,7 @@ class TaskStreamResource(WebSocketResource):
         conn_id = secrets.token_hex(12)
         await self._conn_mgr.add_connection(conn_id, ws)
         self._conn_id = conn_id
+        is_accepted = False
         try:
             await self._conn_mgr.join_room(conn_id, _workspace_room(workspace_id))
             self.state.setdefault("workspace_id", workspace_id)
@@ -202,6 +203,7 @@ class TaskStreamResource(WebSocketResource):
                 user=self.state["user"],
             )
             await ws.accept()
+            is_accepted = getattr(ws, "unaccepted", False) is False
             await ws.send_media({
                 "type": "session.ready",
                 "payload": {
@@ -210,9 +212,12 @@ class TaskStreamResource(WebSocketResource):
                 },
             })
         except BaseException:
-            # Rollback must include cancellation after manager registration.
-            await self._conn_mgr.remove_connection(conn_id)
-            self._conn_id = None
+            # Before acceptance the resource owns rollback, including cancellation.
+            # An accept that changes state before failing still promises cleanup;
+            # retain its identity so on_disconnect can remove and audit it.
+            if not is_accepted and getattr(ws, "unaccepted", True) is not False:
+                await self._conn_mgr.remove_connection(conn_id)
+                self._conn_id = None
             raise
         return True
 
