@@ -627,6 +627,35 @@ unsubscribe is pending, bulk refresh is skipped so an orphan lease can expire;
 occupied rooms are renewed individually. Existing local snapshots continue to
 skip stale local members.
 
+**Screen-reader caption.** Room membership is leased per node, not per
+connection: the node subscribes when its first local connection joins a room
+and unsubscribes only after its last local member leaves.
+
+```mermaid
+sequenceDiagram
+    accTitle: Leased room membership
+    accDescr {
+        A local connection joins a room and is registered in the local manager.
+        The coordinator subscribes the node, renews its lease with heartbeats,
+        and unsubscribes when the last local member leaves.
+    }
+    participant Connection
+    participant Fanout as ClusterFanout
+    participant Manager as Local connection manager
+    participant Transport as FanoutTransport
+    Connection->>Fanout: add_connection(conn_id, websocket)
+    Fanout->>Manager: add_connection(conn_id, websocket)
+    Connection->>Fanout: join_room(conn_id, room)
+    Fanout->>Manager: join_room(conn_id, room)
+    Fanout->>Transport: subscribe(room, node_id, ttl)
+    loop heartbeat
+        Fanout->>Transport: refresh(node_id, ttl)
+    end
+    Connection->>Fanout: remove_connection(conn_id)
+    Fanout->>Manager: remove_connection(conn_id)
+    Fanout->>Transport: unsubscribe(room, node_id)
+```
+
 Applications register, join, publish and remove connections through the
 coordinator. Start `fanout.run` with `WorkerController` in the application
 lifespan and mount `WebSocketRouter(receive_loop=True)` so the router owns the
@@ -1856,6 +1885,36 @@ Run the coordinator's receive loop through `WorkerController` in the ASGI
 lifespan. `WebSocketRouter(receive_loop=True)` keeps accepted connections open,
 dispatches received frames and calls `on_disconnect` once when that session
 ends. Single-process deployments need neither the coordinator nor a broker.
+
+**Screen-reader caption.** With `receive_loop=True`, the router accepts the
+connection after `on_connect` approves it, dispatches incoming frames in order,
+then calls `on_disconnect` once when the peer disconnects.
+
+```mermaid
+sequenceDiagram
+    accTitle: Router session cleanup
+    accDescr {
+        The client connects and receives approval from the resource. The router
+        accepts the socket, dispatches ordered frames, and calls on_disconnect
+        with the close code after WebSocketDisconnected.
+    }
+    participant Client
+    participant Router as WebSocketRouter
+    participant Resource as WebSocketResource
+    participant Socket
+    Client->>Router: WebSocket connection
+    Router->>Resource: on_connect()
+    Resource-->>Router: accepting result
+    Router->>Socket: accept()
+    loop ordered frames
+        Router->>Socket: receive_media()
+        Socket-->>Router: frame
+        Router->>Resource: dispatch(ws, raw)
+    end
+    Socket-->>Router: WebSocketDisconnected
+    Router->>Resource: on_disconnect(ws, close_code)
+    Router-->>Client: session cleanup completed
+```
 
 Fan-out is best effort and not durable, with no replay for down or expired
 nodes. Per-socket ordering depends on the transport preserving per-publisher,
