@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
+import falcon
 import pytest
 
 from falcon_pachinko._router_session import _ConnectionSession
@@ -29,6 +30,15 @@ class FailingCleanupResource(SessionResource):
         await super().on_disconnect(ws, close_code)
         msg = "cleanup failed"
         raise RuntimeError(msg)
+
+
+class PeerDisconnectingAcceptedResource(SessionResource):
+    """Report a peer close while sending the initial accepted-session frame."""
+
+    @typ.override
+    async def on_accepted(self, ws: object) -> None:
+        """Simulate the peer closing during post-acceptance setup."""
+        raise falcon.WebSocketDisconnected(code=4007)
 
 
 @pytest.mark.parametrize(
@@ -71,6 +81,30 @@ async def test_receive_loop_acceptance_failure_disconnects_once() -> None:
         "accept failure must clean up registered state once"
     )
     assert socket.closed, "accept failure must use the existing error close path"
+
+
+@pytest.mark.parametrize("receive_loop", [False, True])
+@pytest.mark.asyncio
+async def test_accepted_setup_peer_disconnect_uses_peer_code_without_reclosing(
+    receive_loop: bool,
+) -> None:
+    """Peer closure during accepted setup uses normal ordered cleanup."""
+    resource = PeerDisconnectingAcceptedResource()
+    socket = SessionSocket()
+    router = session_router(resource, receive_loop=receive_loop)
+    observed_codes: list[int | None] = []
+    router.global_hooks.add(
+        "before_disconnect", lambda context: observed_codes.append(context.close_code)
+    )
+
+    await router.on_websocket(make_req("/session"), socket)
+
+    assert socket.accepted, "on_accepted must run only after the handshake"
+    assert not socket.closed, "peer disconnect cleanup must not close a closed peer"
+    assert observed_codes == [4007], "disconnect hooks must receive the peer code"
+    assert resource.disconnects == [(socket, 4007)], (
+        "resource cleanup must receive the peer code exactly once"
+    )
 
 
 @pytest.mark.asyncio

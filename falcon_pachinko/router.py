@@ -637,18 +637,32 @@ class WebSocketRouter:
         should_accept = await self._execute_resource_handler(
             resource, dispatch, context, hook_manager
         )
+        if should_accept:
+            connection_session = _ConnectionSession(
+                resource, dispatch.ws, hook_manager
+            )
+            acceptance = self._finalize_connection(
+                resource,
+                dispatch.ws,
+                should_accept=True,
+                context=context,
+                hook_manager=hook_manager,
+                on_accept=connection_session.mark_accepted,
+            )
+            await connection_session.run(
+                acceptance,
+                on_policy_close=dispatch.mark_session_close_attempted,
+                receive_loop=self._receive_loop,
+            )
+            return True
+
         acceptance = self._finalize_connection(
             resource,
             dispatch.ws,
-            should_accept=should_accept,
+            should_accept=False,
             context=context,
             hook_manager=hook_manager,
         )
-        if self._receive_loop and should_accept:
-            await _ConnectionSession(resource, dispatch.ws, hook_manager).run(
-                acceptance, on_policy_close=dispatch.mark_session_close_attempted
-            )
-            return True
         return await acceptance
 
     @staticmethod
@@ -696,6 +710,7 @@ class WebSocketRouter:
         should_accept: bool,
         context: HookContext,
         hook_manager: HookManager,
+        on_accept: cabc.Callable[[], None] | None = None,
     ) -> bool:
         """Complete the connection lifecycle and honour ``should_accept``."""
         context.result = should_accept
@@ -703,10 +718,15 @@ class WebSocketRouter:
         if not should_accept:
             await ws.close()
             return True
+        if getattr(ws, "closed", False):
+            return True
         if WebSocketRouter._is_socket_unaccepted(ws):
             await ws.accept()
-        if not getattr(ws, "closed", False):
-            await resource.on_accepted(ws)
+        if getattr(ws, "closed", False):
+            return True
+        if on_accept is not None:
+            on_accept()
+        await resource.on_accepted(ws)
         return True
 
     @staticmethod

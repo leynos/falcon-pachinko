@@ -18,7 +18,7 @@ from falcon_pachinko import (
     handles_message,
 )
 from falcon_pachinko.router import _AcceptedConnection
-from falcon_pachinko.unittests.helpers import DummyWS, RecordingWS, make_req
+from falcon_pachinko.unittests.helpers import RecordingWS, make_req
 
 
 class _AcceptingResource(WebSocketResource):
@@ -107,6 +107,22 @@ class _LifecycleResource(WebSocketResource):
         self.events.append(f"disconnected:{close_code}")
 
 
+class _DisconnectingAcceptedResource(WebSocketResource):
+    """Resource whose initial send observes a normal peer disconnect."""
+
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        return True
+
+    async def on_accepted(self, ws: object) -> None:
+        raise falcon.WebSocketDisconnected(code=4007)
+
+    async def on_disconnect(self, ws: object, close_code: int) -> None:
+        self.events.append(f"disconnected:{close_code}")
+
+
 class _ScriptedTextWebSocket(RecordingWS):
     """Return scripted text frames or raise a scripted receive outcome."""
 
@@ -135,7 +151,10 @@ async def test_uri_template_fallback_strips_terminal_greedy_path_field() -> None
         {"path": "/api/ok", "uri_template": "/api/{_pachinko_path:path}"},
     )()
 
-    await router.on_websocket(req, DummyWS())
+    ws = RecordingWS()
+    await router.on_websocket(req, ws)
+
+    assert ws.accepted == [None], "URI-template fallback should accept /api/ok"
 
 
 def test_attach_requires_a_mounted_router() -> None:
@@ -279,6 +298,28 @@ async def test_on_accepted_failure_runs_disconnect_finalization() -> None:
         "before:1011",
         "disconnected:1011",
     ], "disconnect hooks must precede resource cleanup after setup failure"
+
+
+@pytest.mark.asyncio
+async def test_on_accepted_peer_disconnect_uses_the_peer_close_code() -> None:
+    """A peer disconnect during accepted setup completes as normal cleanup."""
+    events: list[str] = []
+    router = WebSocketRouter()
+    router.global_hooks.add(
+        "before_disconnect",
+        lambda context: events.append(f"before:{context.close_code}"),
+    )
+    router.add_route("/test", _DisconnectingAcceptedResource, events)
+    router.mount("/")
+    ws = RecordingWS()
+
+    await router.on_websocket(make_req("/test", "/"), ws)
+
+    assert ws.accepted == [None], "the handshake must precede accepted setup"
+    assert not ws.closed, "normal peer disconnect must not trigger another close"
+    assert events == ["before:4007", "disconnected:4007"], (
+        "disconnect callbacks must retain the peer's close code and order"
+    )
 
 
 def _accepted_lifecycle_connection(

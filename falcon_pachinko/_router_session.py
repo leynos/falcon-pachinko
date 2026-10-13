@@ -3,21 +3,26 @@
 ``WebSocketRouter(receive_loop=True)`` enters this owner after ``on_connect``
 allows the connection and before acceptance completes. If acceptance setup
 fails, it runs disconnect hooks and attempts resource cleanup with close code
-1006. Once acceptance succeeds, it transfers frame reception and disconnect
-cleanup to the shared ``session.drive_session`` loop. During cleanup, hooks
-precede the resource callback, which is attempted once even if cancellation
-interrupts it. The shared driver may retry a hook interrupted by cancellation
-before the callback, while preventing a second callback attempt.
+1006. A peer disconnect during post-accept setup uses the peer's close code;
+unexpected post-accept failures close with 1011. Once acceptance succeeds, it
+transfers frame reception and disconnect cleanup to the shared
+``session.drive_session`` loop when enabled. During cleanup, hooks precede the
+resource callback, which is attempted once even if cancellation interrupts it.
+The shared driver may retry a hook interrupted by cancellation before the
+callback, while preventing a second callback attempt.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import typing as typ
 
+import falcon
+
 from ._observability import _observe_operation
 from .diagnostics import _type_name
-from .session import drive_session
+from .session import _close_after_failure, drive_session
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -45,6 +50,11 @@ class _ConnectionSession:
         self.hook_manager = hook_manager
         self.close_code = 1006
         self.has_disconnected = False
+        self.has_accepted = False
+
+    def mark_accepted(self) -> None:
+        """Record successful acceptance before post-accept setup begins."""
+        self.has_accepted = True
 
     async def __aenter__(self) -> _ConnectionSession:
         """Return the owner before the router completes acceptance."""
@@ -86,10 +96,37 @@ class _ConnectionSession:
         acceptance: cabc.Awaitable[bool],
         *,
         on_policy_close: cabc.Callable[[], None],
+        receive_loop: bool = True,
     ) -> None:
-        """Protect acceptance, then transfer the session to the shared driver."""
+        """Protect acceptance, then transfer to the configured session owner."""
         async with self:
-            await acceptance
+            try:
+                await acceptance
+            except falcon.WebSocketDisconnected as disconnected:
+                self.close_code = (
+                    disconnected.code if disconnected.code is not None else 1006
+                )
+                return
+            except asyncio.CancelledError:
+                if self.has_accepted:
+                    self.close_code = 1006
+                    await _close_after_failure(self.ws, self.close_code)
+                raise
+            except Exception:
+                if self.has_accepted:
+                    self.close_code = 1011
+                    await _close_after_failure(self.ws, self.close_code)
+                raise
+
+            if getattr(self.ws, "closed", False):
+                self.close_code = 1006
+                return
+            if not receive_loop:
+                # Explicit opt-out preserves the application's receive and
+                # disconnect ownership after setup has succeeded.
+                self.has_disconnected = True
+                return
+
             resource, ws, hook_manager = self.resource, self.ws, self.hook_manager
             # There is no suspension between transfer and entering the driver.
             # Its protected receive await owns cancellation and cleanup; this
