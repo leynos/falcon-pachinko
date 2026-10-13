@@ -8,10 +8,10 @@ workers, and testing utilities.
 
 ## 1. Core Concepts
 
-- **WebSocketRouter** – Mountable Falcon resource that owns route definitions
-  and orchestrates instantiation.
+- **WebSocketRouter** – Falcon-attached router that owns route definitions and
+  orchestrates resource instantiation.
 - **WebSocketResource** – Per-connection handler exposing lifecycle hooks
-  (`on_connect`, `on_disconnect`) and message handlers.
+  (`on_connect`, `on_accepted`, `on_disconnect`) and message handlers.
 - **Composable hierarchy** – Resources can register child routes with
   `add_subroute`, passing context and shared state down the chain.
 - **Schema-driven dispatch** – Define a `msgspec` tagged union `schema` and
@@ -25,30 +25,38 @@ workers, and testing utilities.
 ## 2. Quickstart (Composable Routing)
 
 ```python
-import falcon
+import falcon.asgi
 from falcon_pachinko import WebSocketResource, WebSocketRouter, handles_message
 
 
 class ChatResource(WebSocketResource):
     async def on_connect(self, req, ws, room: str) -> bool:
-        await ws.accept()
         self.state["room"] = room
         return True  # continue to message handling
+
+    async def on_accepted(self, ws):
+        await ws.send_media({"type": "session.ready"})
 
     @handles_message("chat.message")
     async def handle_message(self, ws, payload):
         await ws.send_media({"type": "echo", "text": payload.text})
 
 
-app = falcon.App()
+app = falcon.asgi.App()
 router = WebSocketRouter()
 router.add_route("/chat/{room}", ChatResource)
-app.add_route("/ws", router)  # router is a Falcon resource
 router.mount("/ws")
+router.attach(app)  # register Falcon's responder adapter
 ```
 
-- The router is mounted once (`router.mount("/ws")`) and handles all descendant
-  paths relative to that prefix.
+- Call `mount(prefix)` before `attach(app)`. The adapter registers the mounted
+  prefix and its nested paths with Falcon.
+- `on_connect` runs before acceptance. Use it for validation and setup without
+  sending or receiving WebSocket frames. The adapter accepts an approved
+  connection, then calls `on_accepted(ws)` for initial WebSocket I/O.
+- The adapter owns the production `receive_text()` loop and passes each text
+  frame to schema-driven `dispatch()`. Binary frames are closed with code 1003;
+  applications do not need to write a receive loop.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
 
@@ -103,11 +111,21 @@ resource and its hooks.
 ## 3. Resource Lifecycle & State
 
 - `on_connect(req, ws, **params) -> bool | None`
-  - Accept/close/inspect headers, seed `self.state`, return `False` to stop
-    processing after connect.
-- `on_disconnect(req, ws, close_code, **params) -> None`
-  - Clean up resources; runs even if connection negotiation fails after
-    acceptance.
+  - Validate the request and seed `self.state`; return `False` to reject the
+    handshake. Do not accept the socket or perform WebSocket I/O here.
+- `on_accepted(ws) -> None`
+  - Runs immediately after the router accepts the socket. Register the
+    connection and send any initial frames here.
+- `on_disconnect(ws, close_code) -> None`
+  - Clean up after an accepted connection. The router first notifies the
+    `before_disconnect` hooks, then calls this method, including after an
+    accepted setup or handler failure.
+
+The router uses `falcon.WebSocketDisconnected.code` for peer disconnects. An
+unexpected post-accept exception is closed with code 1011; cancellation is
+reported to cleanup as 1006 and is re-raised. The production adapter supports
+text frames; a binary frame is closed with 1003.
+
 - `self.state`
   - Dict-like proxy shared across all resources in the same connection chain.
   - Override via `get_child_context()` to supply a custom state store (e.g.,
@@ -297,12 +315,13 @@ values, so omission remains the default security boundary.
 
 1) **Choose a factory** – Pass `resource_factory` to `WebSocketRouter`.
 2) **Provide services** – Register shared services in the container.
-3) **Mount the router** – All route instantiation flows through your factory.
+3) **Mount and attach the router** – All route instantiation flows through
+   your factory.
 
 ```python
-from falcon_pachinko import ServiceContainer, WebSocketRouter
+from falcon_pachinko import ServiceContainer, WebSocketRouter, install
 
-conn_mgr = app.ws_connection_manager
+conn_mgr = install(app)
 container = ServiceContainer()
 container.register("conn_mgr", conn_mgr)
 container.register("db", my_db_pool)
@@ -310,6 +329,7 @@ container.register("db", my_db_pool)
 router = WebSocketRouter(resource_factory=container.create_resource)
 router.add_route("/rooms/{room}", ChatResource)
 router.mount("/ws")
+router.attach(app)
 ```
 
 ### Test-friendly factories
@@ -357,7 +377,7 @@ class RedisBackend(ConnectionBackend): ...
 
 
 conn_mgr = WebSocketConnectionManager(backend=RedisBackend(...))
-app.ws_connection_manager = conn_mgr  # before router mounts
+# Register this manager in the same resource factory/container used by the router.
 ```
 
 Backend requirements (see `ConnectionBackend` ABC):
@@ -375,16 +395,21 @@ Tests illustrating this pattern live in:
 ## 9. Background Workers
 
 - Use `WorkerController` to start/stop async tasks during ASGI lifespan.
-- Prefer `@app.lifespan` to wire startup/shutdown; workers can depend on the
-  same DI container used for WebSocket resources.
+- Use Falcon middleware `process_startup(scope, event)` and
+  `process_shutdown(scope, event)` to start and stop workers. Workers can use
+  the same DI container as WebSocket resources.
 - If `start()` fails while creating or scheduling a worker, it closes any
   rejected coroutine, cancels and awaits tasks already scheduled, resets the
   controller and re-raises the original error. The same controller can then be
   started again. Rollback failures are attached to the original error as notes.
 
 ```python
-from falcon_pachinko import WorkerController, worker
+import falcon.asgi
 
+from falcon_pachinko import WorkerController, install, worker
+
+app = falcon.asgi.App()
+conn_mgr = install(app)
 controller = WorkerController()
 
 
@@ -394,11 +419,15 @@ async def broadcaster(*, conn_mgr):
         await ws.send_media({"type": "ping"})
 
 
-@app.lifespan
-async def lifespan(app):
-    await controller.start(broadcaster, conn_mgr=app.ws_connection_manager)
-    yield
-    await controller.stop()
+class WorkerLifecycleMiddleware:
+    async def process_startup(self, scope, event):
+        await controller.start(broadcaster, conn_mgr=conn_mgr)
+
+    async def process_shutdown(self, scope, event):
+        await controller.stop()
+
+
+app.add_middleware(WorkerLifecycleMiddleware())
 ```
 
 The `@worker` decorator is optional and marks intent only.
@@ -414,6 +443,8 @@ it. An undecorated async function works in the same way.
   for fast unit tests.
 - **Pytest fixtures** – See `tests/behaviour/*.feature` and
   `falcon_pachinko/unittests` helpers for factory utilities.
+- **Live ASGI server** – `serve_asgi_app(app)` starts Falcon and its lifespan
+  on an ephemeral local port for tests using `WebSocketTestClient`.
 
 The `websocket_simulator` pytest fixture (from `falcon_pachinko.testing`) takes
 no parameters and yields a `SimulatorRouterHarness`: a pre-mounted router and
@@ -427,20 +458,43 @@ router and simulator by hand.
 Recommended strategy:
 
 - Unit test pure resource logic with `WebSocketSimulator`.
-- Behavioural tests with `pytest-bdd` to exercise router composition, hooks,
-  DI, and connection manager flows.
+- Use the live ASGI server and `WebSocketTestClient` for Falcon responder,
+  handshake, and lifespan behaviour. Simulator-based behavioural tests remain
+  useful for focused router/resource coverage, but do not prove Falcon's live
+  responder lifecycle. Direct `router.on_websocket()` calls set up and accept a
+  connection, including `on_accepted`, but do not run the production receive
+  loop.
 - Worker tests using the `WorkerController` fixture from
   `tests/behaviour/lifespan_workers.feature`.
 
 ## 11. Reference Example
 
-`examples/reference_app` wires together:
+`examples/reference_app` is the acceptance example for the live Falcon ASGI
+WebSocket path. Start it from the repository root with either command:
 
-- Router mounted at `/ws`
-- Schema-driven resources composed as parent/child/grandchild
-- Router-level DI via `ServiceContainer`
-- Connection manager usage from both resources and workers
-- Behavioural coverage via `pytest-bdd`
+```bash
+python -m examples.reference_app.server
+# or
+uvicorn --factory examples.reference_app.server:create_app --host 127.0.0.1 --port 8000
+```
 
-Use it as a blueprint for production deployments and adapt the patterns shown
-there to your own DI container, state store, and connection backend.
+Connect to `/ws/workspaces/atlas/projects/triage/tasks` with
+`x-workspace-token: seekrit` and `x-user: casey`. The route resolves through
+the nested `WorkspaceResource` → `ProjectResource` → `TaskStreamResource`
+chain. The `before_connect` hook validates the workspace token; an invalid
+token rejects the handshake with HTTP 403 and records `auth.rejected` with
+reason `invalid_token`.
+
+After acceptance, the app registers the connection in `workspace:atlas` and
+sends `session.ready`. Send a JSON `task.add` message, for example
+`{"type":"task.add","task_id":"T-42","title":"Investigate"}`. The schema
+decodes it into the handler, which replies with `task.added`; a lifespan worker
+sends an `announcement` whose payload kind is `task_added` to the workspace.
+The tested live journey then disconnects with code 1000, triggers
+`before_disconnect` and `on_disconnect`, and verifies connection manager
+cleanup plus the `workspace.loaded`, `project.loaded`, `session.open`,
+`message.received`, `message.processed`, and `session.closed` audit events for
+the same connection. See `tests/behaviour/reference_example_live.feature`. The
+app factory exposes the example container as `app.reference_services`, so the
+audit trail, workspace repository, and connection manager can be inspected
+after a live test.

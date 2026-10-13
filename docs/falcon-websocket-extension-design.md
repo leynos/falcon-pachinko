@@ -56,12 +56,12 @@ Falcon also handles events like lost connections by raising a
 `WebSocketDisconnected` exception. Middleware components and media handlers can
 be used to augment WebSocket flows, similar to regular HTTP requests.[^2]
 
-However, Falcon's native support routes an entire WebSocket connection to a
-single `on_websocket` handler. For applications requiring dispatch based on
-incoming message types (e.g., in a chat application with different commands
-like 'send_message', 'user_typing', etc.), developers must implement this logic
-manually within the `on_websocket` method. This can lead to large, complex
-conditional structures that are difficult to maintain and test.
+Falcon's native support routes an entire WebSocket connection to a single
+`on_websocket` responder. Falcon-Pachinko's `WebSocketRouter.attach(app)` adds
+an adapter at the mounted prefix. The adapter accepts approved connections,
+calls `on_accepted`, and owns a text-frame receive loop that delegates messages
+to schema-driven dispatch. Applications do not implement a receive loop or call
+`dispatch()` themselves on this production path.
 
 ### 2.2. Starlette
 
@@ -190,15 +190,13 @@ import falcon.asgi
 import falcon_pachinko  # The proposed extension library
 
 app = falcon.asgi.App()
-falcon_pachinko.install(
-    app
-)  # This would initialize and attach app.ws_connection_manager
+conn_mgr = falcon_pachinko.install(app)
 ```
 
-This `install` function would instantiate the `WebSocketConnectionManager` and
-make it accessible via the application instance (e.g.,
-`app.ws_connection_manager`), allowing other parts of the application,
-including background workers, to access it.
+`install` returns the `WebSocketConnectionManager` for use by resources and
+background workers. For Falcon application instances that support dynamic
+attributes, it also exposes the manager as `app.ws_connection_manager` for
+compatibility.
 
 ### 3.4. Routing WebSocket Connections
 
@@ -276,24 +274,30 @@ logic.
 
 - **Lifecycle Methods**:
 
-  - `async def on_connect(self, req, ws, **params) -> bool`: WebSocket
-    connection is established and routed to this resource. `req` is the
+  - `async def on_connect(self, req, ws, **params) -> bool`: Called after the
+    request is routed but before the WebSocket is accepted. `req` is the
     standard Falcon `Request` object associated with the initial HTTP upgrade
     request, and `ws` is a `WebSocketLike` **connection**. The protocol defines
     the minimal `send_media`, `accept`, and `close` methods needed by the
     resource. `params` will contain any path parameters from the route. It
-    returns `True` to accept the connection or `False` to reject it. If `False`
-    is returned, the library will handle sending an appropriate closing
-    handshake (e.g., HTTP 403 or a custom code if supported by an extension
-    like WebSocket Denial Response 12). This boolean return abstracts the
-    direct `await ws.accept()` or `await ws.close()` call, simplifying the
-    resource method to focus on connection logic rather than raw ASGI
-    mechanics. This design aligns with Falcon's higher-level approach for HTTP
-    handlers, where the framework manages response sending.
+    returns `True` to continue toward acceptance or `False` to reject the
+    connection. Use this phase for validation and setup only; do not send or
+    receive WebSocket frames. The router accepts approved connections and then
+    calls `on_accepted(ws)` immediately after acceptance. Initial registration
+    and WebSocket I/O belong in `on_accepted` or later handlers.
+
+  - `async def on_accepted(self, ws: WebSocketLike) -> None`: Called once the
+    handshake has been accepted. It is the resource's first safe point for
+    WebSocket I/O. The router does not call it for rejected connections.
 
   - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: Called
-    when the WebSocket connection is closed, either by the client or the
-    server. `close_code` provides the WebSocket close code.
+    for accepted connections during disconnect finalization. The router first
+    notifies the bound `before_disconnect` hooks, then calls this resource
+    cleanup method. Peer disconnects use `WebSocketDisconnected.code`; an
+    unexpected post-accept exception is reported as 1011 and cancellation as
+    1006.
+    Binary frames are unsupported by the production adapter and close with
+    code 1003.
 
   - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str,
     bytes])`
@@ -572,9 +576,9 @@ startup exception is re-raised; rollback failures are attached to it as notes.
 
 #### 3.8.3. Application Usage
 
-Developers will instantiate the `WorkerController` and use Falcon's
-`@app.lifespan` context manager (available since Falcon 4.0) to manage the
-worker lifecycle.
+Applications instantiate `WorkerController` and bind it to Falcon's ASGI
+lifespan with middleware `process_startup(scope, event)` and
+`process_shutdown(scope, event)` methods.
 
 ```python
 # app.py
@@ -582,11 +586,8 @@ import falcon.asgi
 import pachinko
 from pachinko.workers import WorkerController, worker
 
-# Assume conn_mgr is created via falcon_pachinko.install(app)
-# and is available as app.ws_connection_manager
 app = falcon.asgi.App()
-pachinko.install(app)
-conn_mgr = app.ws_connection_manager
+conn_mgr = pachinko.install(app)
 
 
 # 1. Define workers as ordinary async functions with explicit dependencies
@@ -606,16 +607,15 @@ async def announcement_worker(
 controller = WorkerController()
 
 
-@app.lifespan
-async def lifespan(app_instance):
-    # Start workers, injecting dependencies as keyword arguments
-    await controller.start(
-        announcement_worker,
-        conn_mgr=conn_mgr,
-    )
-    yield
-    # --- app is live ---
-    await controller.stop()
+class WorkerLifecycleMiddleware:
+    async def process_startup(self, scope, event):
+        await controller.start(announcement_worker, conn_mgr=conn_mgr)
+
+    async def process_shutdown(self, scope, event):
+        await controller.stop()
+
+
+app.add_middleware(WorkerLifecycleMiddleware())
 ```
 
 This pattern eliminates the need for a bespoke worker registry, making the
@@ -641,8 +641,7 @@ accustomed to Falcon.
 
 - **Route Definition**
 
-  - Key elements: `app.add_websocket_route()` and
-    `WebSocketRouter.add_route()`
+  - Key elements: `WebSocketRouter.add_route()`, `mount()`, and `attach()`
   - Purpose: maps a URI path to a `WebSocketResource`.
   - Falcon analogy: `app.add_route()`.
 
@@ -654,8 +653,9 @@ accustomed to Falcon.
 
 - **Connection Lifecycle**
 
-  - Key elements: `on_connect()`, `on_disconnect()`
-  - Purpose: setup and teardown hooks for each connection.
+  - Key elements: `on_connect()`, `on_accepted()`, `before_disconnect`,
+    and `on_disconnect()`
+  - Purpose: pre-accept validation, post-accept setup, and ordered cleanup.
   - Falcon analogy: request/response middleware.
 
 - **Message Handling (Typed)**
@@ -672,13 +672,13 @@ accustomed to Falcon.
 
 - **Background Worker Integration**
 
-  - Key elements: `WorkerController`, `@app.lifespan`
+  - Key elements: `WorkerController`, Falcon lifespan middleware
   - Purpose: manages long-running tasks within the ASGI lifecycle.
   - Falcon analogy: custom patterns.
 
 - **Connection Management (Global)**
 
-  - Key elements: `app.ws_connection_manager`
+  - Key elements: the `WebSocketConnectionManager` returned by `install(app)`
   - Purpose: tracks connections and enables broadcasting.
   - Falcon analogy: N/A.
 
@@ -843,11 +843,13 @@ from falcon_pachinko.workers import WorkerController
 # Assuming an authentication middleware `AuthMiddleware` that sets `req.context.user`
 
 app = falcon.asgi.App(middleware=[AuthMiddleware()])
-falcon_pachinko.install(app)
-conn_mgr = app.ws_connection_manager
+conn_mgr = falcon_pachinko.install(app)
 
-# Add the WebSocket route
-app.add_websocket_route("/ws/chat/{room_name}", ChatRoomResource)
+# Mount and attach the WebSocket router
+chat_router = falcon_pachinko.WebSocketRouter()
+chat_router.add_route("/chat/{room_name}", ChatRoomResource)
+chat_router.mount("/ws")
+chat_router.attach(app)
 
 
 # Define a background worker
@@ -872,11 +874,15 @@ async def system_announcement_worker(
 controller = WorkerController()
 
 
-@app.lifespan
-async def lifespan(app_instance):
-    await controller.start(system_announcement_worker, conn_mgr=conn_mgr)
-    yield
-    await controller.stop()
+class WorkerLifecycleMiddleware:
+    async def process_startup(self, scope, event):
+        await controller.start(system_announcement_worker, conn_mgr=conn_mgr)
+
+    async def process_shutdown(self, scope, event):
+        await controller.stop()
+
+
+app.add_middleware(WorkerLifecycleMiddleware())
 ```
 
 ### 4.4. Client-Side Interaction (Conceptual)
@@ -968,9 +974,9 @@ creation of modular, hierarchical WebSocket APIs.
 
 #### 5.1.1. Mounting the Router
 
-Instead of assigning a router to a special application attribute, it is mounted
-at a URL prefix using Falcon's standard `app.add_route()` method. This makes the
-`WebSocketRouter` a first-class citizen in Falcon's routing tree.
+Mount the router at a URL prefix, then attach its Falcon responder adapter.
+`mount()` compiles the WebSocket routes; `attach()` registers the canonical
+prefix and a greedy descendant route with Falcon.
 
 ```python
 import falcon.asgi
@@ -979,17 +985,12 @@ from falcon_pachinko.router import WebSocketRouter  # New component
 app = falcon.asgi.App()
 chat_router = WebSocketRouter()
 
-# The WebSocketRouter instance is mounted like any other Falcon resource.
-# It will handle all WebSocket connections under the '/ws/chat/' prefix.
-app.add_route("/ws/chat", chat_router)
-
-# To achieve this, the WebSocketRouter will implement the on_websocket
-# responder method, which will contain the logic to dispatch the connection
-# to the correct sub-route defined on the router itself.
+chat_router.mount("/ws/chat")
+chat_router.attach(app)
 ```
 
-This creates a clean architectural boundary and leverages Falcon's existing,
-well-understood routing mechanism for composition.
+The private adapter resolves the concrete request path through the router and
+hands accepted sockets to the router-owned text receive and dispatch loop.
 
 #### 5.1.2. `add_route` API, Factories, and URL Reversal
 
@@ -1049,7 +1050,7 @@ sequenceDiagram
     participant WebSocketResource
 
     Client->>FalconApp: Initiate WebSocket connection (URL)
-    FalconApp->>WebSocketRouter: on_websocket(req, ws)
+    FalconApp->>WebSocketRouter: adapter.on_websocket(req, ws)
     WebSocketRouter->>WebSocketRouter: Validate mount prefix
     WebSocketRouter->>WebSocketRouter: Match path against a route's prefix
     WebSocketRouter->>WebSocketResource: Instantiate resource from factory
@@ -1057,13 +1058,17 @@ sequenceDiagram
     WebSocketRouter->>WebSocketRouter: Run before_connect hooks
     WebSocketRouter->>WebSocketResource: on_connect(req, ws, **params)
     WebSocketRouter->>WebSocketRouter: Run after_connect hooks
-    alt on_connect returns False
+    alt on_connect rejects
         WebSocketRouter->>Client: Close WebSocket
-    else on_connect returns True
+    else connection accepted
         WebSocketRouter->>Client: Accept WebSocket
-    end
-    alt Unhandled exception during dispatch
-        WebSocketRouter->>Client: Close WebSocket
+        WebSocketRouter->>WebSocketResource: on_accepted(ws)
+        loop text frames
+            FalconApp->>WebSocketRouter: receive_text()
+            WebSocketRouter->>WebSocketResource: dispatch(ws, raw)
+        end
+        WebSocketRouter->>WebSocketRouter: before_disconnect hooks
+        WebSocketRouter->>WebSocketResource: on_disconnect(ws, close_code)
     end
 ```
 
@@ -1311,25 +1316,31 @@ class ChatResource(WebSocketResource):
 
 #### 5.3.2. Automated Dispatch Logic
 
-The base `WebSocketResource` would contain a receive loop that performs the
-following steps:
+The production receive loop belongs to the Falcon responder adapter installed by
+`WebSocketRouter.attach(app)`. It receives text frames and passes them to
+`WebSocketResource.dispatch()`, which performs the following steps:
 
-1. Receive a raw message from the WebSocket.
+1. Decode the raw text frame received from the adapter using
+   `msgspec.json.decode(message, type=self.schema)`.
 
-2. Decode the message using `msgspec.json.decode(message, type=self.schema)`.
    `msgspec`'s tagged union support automatically inspects a tag field in the
    JSON to select the correct `Struct` for decoding.
 
-3. Inspect the `tag` of the resulting `Struct` instance.
+2. Inspect the `tag` of the resulting `Struct` instance.
 
-4. Find a handler registered with `@handles_message` for that tag. If not found,
+3. Find a handler registered with `@handles_message` for that tag. If not found,
    attempt to find a handler by the `on_{tag}` naming convention.
 
-5. Dynamically invoke the handler, e.g.,
+4. Dynamically invoke the handler, e.g.,
    `await self.on_send_message(req, ws, msg)`.
 
-This schema-driven design completely eliminates boilerplate dispatch logic and
-provides "zero-cost" validation via `msgspec`.
+This schema-driven design eliminates application-owned dispatch loops and
+provides validation via `msgspec`. A direct `router.on_websocket()` call
+performs connection setup and calls `on_accepted`, but returns without a
+receive loop; simulator-based tests may then drive resource dispatch
+themselves. The attached Falcon responder owns receive and dispatch on the
+production path. Binary frames are unsupported there and are closed with code
+1003.
 
 #### 5.3.3. Error Handling
 
@@ -1540,8 +1551,11 @@ mounted at ``/ws`` and instantiates ``WorkspaceResource`` → ``ProjectResource`
 → ``TaskStreamResource`` chains through the shared `ServiceContainer`, allowing
 hooks to seed per-connection state while message handlers rely on schema-driven
 dispatch. The same container also wires the announcement worker and HTTP
-helpers, providing a concrete illustration of the stateful, per-connection
-resources described in §5.5.1.
+helpers. `create_app()` installs the router with `mount("/ws")` followed by
+`attach(app)`, and Falcon lifespan middleware starts and stops the worker. The
+live BDD feature exercises acceptance, receive/dispatch, worker broadcast and
+disconnect cleanup through a real Falcon ASGI server. `examples/random_status`
+is a separate, older example and does not demonstrate this responder adapter.
 
 ##### Usage Patterns
 
@@ -1783,9 +1797,11 @@ async def test_echo(websocket_simulator: SimulatorRouterHarness) -> None:
         }
 ```
 
-- **Lifecycle Management**: `connect()` dispatches the request through
+- **Lifecycle Management**: `connect()` performs router setup through
   `router.on_websocket()` and guarantees the simulator and the underlying
-  websocket stub are closed on exit, even if the resource left them open.
+  websocket stub are closed on exit, even if the resource left them open. Direct
+  `on_websocket()` calls are setup-only; this harness does not exercise
+  Falcon's production responder receive loop.
 
 - **Behavioural Testing**: Because routes can be added to `harness.router` at
   any point before `connect()` is awaited, higher-level fixtures can compose
@@ -1875,7 +1891,7 @@ sequenceDiagram
     Developer->>WSSim: simulator.push_message(data)
     activate WSSim
     activate App
-    WSSim->>App: Inject frame (router receive loop)
+    WSSim->>App: Inject frame (simulator-driven dispatch)
     deactivate WSSim
 
     Developer->>WSConn: session.send_json(data)
