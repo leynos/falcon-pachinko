@@ -21,6 +21,8 @@ from falcon_pachinko.testing import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from falcon.asgi import WebSocket
+
     from falcon_pachinko.testing.client import WebSocketSession
     from falcon_pachinko.testing.live import ASGIApplication
 
@@ -52,23 +54,55 @@ class _StalledSession:
         await asyncio.Future()
 
 
+class _ConfigurableSession:
+    """Record successful closure or reproduce a failed close handshake."""
+
+    def __init__(self, close_error: Exception | None = None) -> None:
+        self.close_error = close_error
+        self.closed = False
+
+    async def close(self) -> None:
+        if self.close_error is not None:
+            raise self.close_error
+        self.closed = True
+
+
+class _RecordingWebSocket:
+    """Record the close code selected by Falcon's exception handler."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.close_code: int | None = None
+
+    async def close(self, *, code: int | None = None) -> None:
+        self.closed = True
+        self.close_code = code
+
+
+class _AdapterOptions(typ.TypedDict, total=False):
+    """Select the failure modes used by a fake server adapter."""
+
+    start_error: Exception | None
+    hang_on_start: bool
+    hang_on_stop: bool
+    close_socket_after_start: bool
+    stop_error: Exception | None
+
+
 class _FakeAdapter:
     """Provide deterministic readiness and stop behaviour without a server."""
 
-    def __init__(
-        self,
-        *,
-        start_error: Exception | None = None,
-        hang_on_stop: bool = False,
-        close_socket_after_start: bool = False,
-    ) -> None:
+    def __init__(self, **options: typ.Unpack[_AdapterOptions]) -> None:
         """Select startup, shutdown, and socket-ownership behaviours."""
         self._finished = asyncio.Event()
         self.task = asyncio.create_task(self._serve())
-        self.start_error = start_error
-        self.hang_on_stop = hang_on_stop
-        self.close_socket_after_start = close_socket_after_start
+        self.start_error = options.get("start_error")
+        self.hang_on_start = options.get("hang_on_start", False)
+        self.hang_on_stop = options.get("hang_on_stop", False)
+        self.close_socket_after_start = options.get("close_socket_after_start", False)
+        self.stop_error = options.get("stop_error")
         self.started = asyncio.Event()
+        self.start_entered = asyncio.Event()
         self.socket: socket.socket | None = None
         self.app: ASGIApplication | None = None
 
@@ -80,14 +114,19 @@ class _FakeAdapter:
         """Record startup inputs and signal readiness or close the socket."""
         self.socket = sock
         self.app = app
+        self.start_entered.set()
         if self.start_error is not None:
             raise self.start_error
+        if self.hang_on_start:
+            await asyncio.Future()
         if self.close_socket_after_start:
             sock.close()
         self.started.set()
 
     async def stop(self) -> None:
         """Finish the serve task unless configured to miss its deadline."""
+        if self.stop_error is not None:
+            raise self.stop_error
         if self.hang_on_stop:
             await asyncio.Future()
         self._finished.set()
@@ -135,6 +174,16 @@ async def test_base_url_uses_ephemeral_loopback_port() -> None:
         )
 
 
+def test_unstarted_server_rejects_address_and_missing_adapter() -> None:
+    """Readiness-dependent server properties must fail before startup."""
+    server = LiveWebSocketServer(_make_app())
+
+    with pytest.raises(RuntimeError, match="available after the live server starts"):
+        _ = server.base_url
+    with pytest.raises(RuntimeError, match="adapter must be configured"):
+        server._validate_adapter()
+
+
 @pytest.mark.asyncio
 async def test_base_url_survives_adapter_taking_socket_ownership() -> None:
     """Read the bound URL after the adapter closes its owned socket."""
@@ -177,9 +226,31 @@ async def test_concurrent_servers_receive_distinct_ephemeral_ports() -> None:
 
 
 @pytest.mark.asyncio
+async def test_server_instance_cannot_be_entered_twice() -> None:
+    """A live server context owns one socket and therefore has one entry."""
+    adapter = _FakeAdapter()
+    server = LiveWebSocketServer(_make_app(), adapter=adapter)
+
+    async with server:
+
+        async def reenter_server() -> None:
+            async with server:
+                pytest.fail("the context must reject repeated entry")
+
+        with pytest.raises(RuntimeError, match="can only be entered once"):
+            await reenter_server()
+
+    assert adapter.task.done(), "leaving the context must stop the adapter task"
+
+
+@pytest.mark.asyncio
 async def test_startup_failure_raises_before_entering_context() -> None:
     """Wrap adapter startup errors before exposing a live context."""
-    adapter = _FakeAdapter(start_error=RuntimeError("lifespan failed"))
+    startup_error = RuntimeError("lifespan failed")
+    adapter = _FakeAdapter(
+        start_error=startup_error,
+        stop_error=RuntimeError("adapter stop failed"),
+    )
 
     async def start_server() -> None:
         async with LiveWebSocketServer(_make_app(), adapter=adapter):
@@ -188,12 +259,52 @@ async def test_startup_failure_raises_before_entering_context() -> None:
     with pytest.raises(LiveServerStartupError) as caught:
         await start_server()
 
-    assert isinstance(caught.value.__cause__, RuntimeError), (
-        "startup failure must retain its original cause"
+    assert caught.value.__cause__ is startup_error, (
+        "cleanup failure must not replace the adapter startup failure"
     )
-    assert str(caught.value.__cause__) == "lifespan failed", (
-        "startup failure must retain the adapter's message"
+    assert adapter.task.cancelled(), "a partially started adapter task must be stopped"
+
+
+@pytest.mark.asyncio
+async def test_cancelling_startup_releases_partial_resources() -> None:
+    """Cancellation during readiness must close both tasks and the socket."""
+    adapter = _FakeAdapter(hang_on_start=True)
+    server = LiveWebSocketServer(_make_app(), adapter=adapter)
+
+    async def enter_server() -> None:
+        async with server:
+            pytest.fail("the context must not yield while startup is pending")
+
+    entering = asyncio.create_task(enter_server())
+    await adapter.start_entered.wait()
+    entering.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await entering
+
+    assert adapter.task.done(), "startup cancellation must stop the serve task"
+    assert adapter.socket is not None, "startup cancellation must retain the socket"
+    assert adapter.socket.fileno() == -1, (
+        "startup cancellation must release the prebound socket"
     )
+
+
+@pytest.mark.asyncio
+async def test_startup_timeout_cancels_the_pending_adapter_request() -> None:
+    """A readiness deadline must fail startup and stop its adapter task."""
+    adapter = _FakeAdapter(hang_on_start=True)
+
+    with pytest.raises(LiveServerStartupError) as caught:
+        async with LiveWebSocketServer(
+            _make_app(), adapter=adapter, startup_timeout=0.05
+        ):
+            pytest.fail("the context must not yield before adapter readiness")
+
+    assert isinstance(caught.value.__cause__, TimeoutError), (
+        "the startup error must retain its readiness timeout"
+    )
+    assert adapter.start_entered.is_set(), "the adapter must have received startup"
+    assert adapter.task.done(), "startup timeout must stop the serve task"
 
 
 @pytest.mark.asyncio
@@ -279,6 +390,88 @@ async def test_close_sessions_continues_after_a_session_timeout() -> None:
         "every session timeout must retain its shutdown error type"
     )
     assert not server._sessions, "all attempted sessions must leave tracking"
+
+
+@pytest.mark.asyncio
+async def test_close_sessions_continues_after_a_session_error() -> None:
+    """A failed close must be recorded while later sessions still close."""
+    close_error = RuntimeError("session close failed")
+    failed = typ.cast("WebSocketSession", _ConfigurableSession(close_error))
+    succeeding_session = _ConfigurableSession()
+    succeeding = typ.cast("WebSocketSession", succeeding_session)
+    server = LiveWebSocketServer(_make_app())
+    server._sessions.update((failed, succeeding))
+
+    await server._close_sessions()
+
+    assert server.errors == (close_error,), "the close failure must be retained"
+    assert succeeding_session.closed, "later session cleanup must still run"
+    assert not server._sessions, "all attempted sessions must leave tracking"
+
+
+@pytest.mark.asyncio
+async def test_adapter_stop_failure_is_reported_and_its_task_is_cancelled() -> None:
+    """A stop error must be retained after its abandoned serve task is cancelled."""
+    stop_error = RuntimeError("adapter stop failed")
+    adapter = _FakeAdapter(stop_error=stop_error)
+
+    with pytest.raises(LiveServerError) as caught:
+        async with LiveWebSocketServer(_make_app(), adapter=adapter):
+            pass
+
+    assert caught.value.exceptions == (stop_error,), (
+        "teardown must expose the adapter's original failure"
+    )
+    assert adapter.task.cancelled(), "a failed stop must not leak its serve task"
+
+
+@pytest.mark.asyncio
+async def test_websocket_exception_handler_closes_with_server_error_code() -> None:
+    """A responder failure must close an open WebSocket with code 1011."""
+    server = LiveWebSocketServer(_make_app())
+    error = RuntimeError("responder failed")
+    websocket = _RecordingWebSocket()
+
+    await server._handle_exception(
+        typ.cast("falcon.Request", object()),
+        None,
+        error,
+        {},
+        typ.cast("WebSocket", websocket),
+    )
+
+    assert websocket.closed, "WebSocket responder failures must close the socket"
+    assert websocket.close_code == 1011, (
+        "WebSocket responder failures must use the server-error close code"
+    )
+    assert server.errors == (error,), "the original responder error must be retained"
+
+
+@pytest.mark.asyncio
+async def test_http_exception_handler_requires_a_response() -> None:
+    """A missing Falcon response must remain a visible adapter contract error."""
+    server = LiveWebSocketServer(_make_app())
+    error = RuntimeError("responder failed")
+
+    with pytest.raises(RuntimeError, match="did not provide a response"):
+        await server._handle_exception(
+            typ.cast("falcon.Request", object()), None, error, {}
+        )
+
+    assert server.errors == (error,), "the original responder error must be retained"
+
+
+def test_live_server_error_keeps_its_type_when_filtered() -> None:
+    """Exception-group filtering must preserve the live-server public type."""
+    failure = RuntimeError("server failed")
+    group = LiveServerError((failure, ValueError("another failure")))
+
+    filtered = group.derive((failure,))
+
+    assert isinstance(filtered, LiveServerError), (
+        "filtered server failures must retain their public exception type"
+    )
+    assert filtered.exceptions == (failure,), "the filtered error must remain intact"
 
 
 @pytest.mark.asyncio
