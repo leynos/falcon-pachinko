@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
 import secrets
 import typing as typ
@@ -211,15 +212,34 @@ class TaskStreamResource(WebSocketResource):
                     "project": project_id,
                 },
             })
-        except BaseException:
+        except BaseException as error:
             # Before acceptance the resource owns rollback, including cancellation.
             # An accept that changes state before failing still promises cleanup;
             # retain its identity so on_disconnect can remove and audit it.
             if not is_accepted and getattr(ws, "unaccepted", True) is not False:
-                await self._conn_mgr.remove_connection(conn_id)
-                self._conn_id = None
+                interruption = await self._rollback_connection(conn_id)
+                if interruption is not None and not isinstance(
+                    error, asyncio.CancelledError
+                ):
+                    raise interruption from error
             raise
         return True
+
+    async def _rollback_connection(self, conn_id: str) -> asyncio.CancelledError | None:
+        """Join pre-accept removal even when the session is cancelled again."""
+        # No framework disconnect is promised yet; rollback must finish before
+        # the owning task exits, rather than merely outliving it under a shield.
+        removal = asyncio.create_task(self._conn_mgr.remove_connection(conn_id))
+        interruption: asyncio.CancelledError | None = None
+        while not removal.done():
+            try:
+                await asyncio.shield(removal)
+            except asyncio.CancelledError as exc:
+                if interruption is None:
+                    interruption = exc
+        removal.result()
+        self._conn_id = None
+        return interruption
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Remove the websocket from the connection manager on disconnect."""
