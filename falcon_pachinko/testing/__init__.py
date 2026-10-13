@@ -6,6 +6,7 @@ from ._common import MissingDependencyError
 from .client import TraceEvent, WebSocketTestClient
 from .fixtures import websocket_simulator
 from .harness import SimulatorConnection, SimulatorRouterHarness
+from .live_server import serve_asgi_app
 from .simulator import WebSocketSimulator
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "TraceEvent",
     "WebSocketSimulator",
     "WebSocketTestClient",
+    "serve_asgi_app",
     "websocket_simulator",
 ]

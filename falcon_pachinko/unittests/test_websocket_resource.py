@@ -218,6 +218,10 @@ class LifecycleResource(WebSocketResource):
         """Record the close code the lifecycle supplied."""
         self.lifecycle.append(f"disconnect:{close_code}")
 
+    async def on_accepted(self, ws: WebSocketLike) -> None:
+        """Record that the connection lifecycle accepted the socket."""
+        self.lifecycle.append("accepted")
+
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Record the original frame handed to the fallback."""
         self.fallback.append(message)
@@ -532,7 +536,15 @@ async def test_sync_handler_ignored_and_fallback_behaviour() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "tag",
-    ["connect", "disconnect", "unhandled", "Disconnect", "DISCONNECT"],
+    [
+        "connect",
+        "accepted",
+        "disconnect",
+        "unhandled",
+        "Accepted",
+        "Disconnect",
+        "DISCONNECT",
+    ],
 )
 async def test_reserved_tags_never_reach_lifecycle_callback(tag: str) -> None:
     """Reserved tags fall back without invoking a lifecycle callback.
@@ -717,9 +729,12 @@ def test_conventional_registry_excludes_lifecycle_names() -> None:
     """The class registry lists message names and never lifecycle names."""
     names = LifecycleResource._conventional_handler_names
     assert "on_ping" in names, "an ordinary conventional handler stays registered"
-    assert names.isdisjoint({"on_connect", "on_disconnect", "on_unhandled"}), (
-        f"lifecycle names must not be dispatchable: {sorted(names)}"
-    )
+    assert names.isdisjoint({
+        "on_connect",
+        "on_accepted",
+        "on_disconnect",
+        "on_unhandled",
+    }), f"lifecycle names must not be dispatchable: {sorted(names)}"
     assert WebSocketResource._conventional_handler_names == frozenset(), (
         "the base class must expose no conventional handlers"
     )

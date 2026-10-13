@@ -168,6 +168,17 @@ def test_decorating_lifecycle_callback_is_rejected() -> None:
             ) -> None: ...
 
 
+def test_decorating_on_accepted_callback_is_rejected() -> None:
+    """A decorated acceptance hook cannot be registered as a message."""
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_accepted"):
+
+        class DecoratedAccepted(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
+            WebSocketResource
+        ):
+            @handles_message("accepted")
+            async def on_accepted(self, ws: WebSocketLike, payload: object) -> None: ...
+
+
 def test_decorating_lifecycle_name_under_unrelated_tag_is_rejected() -> None:
     """The reserved name, not the tag, is what rejects the registration.
 
@@ -387,8 +398,8 @@ class LifecycleParent(WebSocketResource):
 def test_lifecycle_callback_names_cover_the_base_class_hooks() -> None:
     """The reserved set names exactly the base class's lifecycle hooks.
 
-    ``WebSocketResource`` defines three ``on_*`` coroutine callbacks that are
-    not message handlers. If a fourth is added, this test should fail so the
+    ``WebSocketResource`` defines four ``on_*`` coroutine callbacks that are
+    not message handlers. If another is added, this test should fail so the
     set is extended deliberately rather than left behind.
     """
     base_hooks = {

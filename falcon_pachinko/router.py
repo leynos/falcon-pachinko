@@ -9,6 +9,7 @@ Falcon app and used to generate URLs for registered routes.
 
 from __future__ import annotations
 
+import asyncio
 import collections.abc as cabc
 import contextlib
 import dataclasses as dc
@@ -18,7 +19,17 @@ import threading
 import typing as typ
 
 import falcon
+import falcon.asgi
 
+from ._router_lifecycle import (
+    _AcceptedConnection,
+    _ConnectionFinalization,
+    _Dispatch,
+    _FalconResponderAdapter,
+    _request_path_template,
+    _RequestLike,
+    _RouteAttempt,
+)
 from ._uri_template import _compile_prefix_template, compile_uri_template
 from .hooks import HookCollection, HookContext, HookManager
 from .protocols import WebSocketLike
@@ -46,26 +57,6 @@ type SimulatorFactory = cabc.Callable[
 ]
 
 
-class _RequestLike(typ.Protocol):
-    """Request surface consumed by the router before resource dispatch."""
-
-    @property
-    def path(self) -> str:
-        """The request path."""
-
-    @property
-    def path_template(self) -> str:
-        """The mount path template."""
-
-
-def _request_path_template(req: _RequestLike) -> str:
-    """Return the mounted path template, defaulting like Falcon does."""
-    try:
-        return req.path_template
-    except AttributeError:
-        return ""
-
-
 def _normalize_path(path: str) -> str:
     """Ensure the path has a leading slash."""
     if not path.startswith("/"):
@@ -87,16 +78,6 @@ class _RouteMatch:
 
     params: dict[str, str]
     remaining: str
-
-
-@dc.dataclass(slots=True)
-class _Dispatch:
-    """Mutable per-request state threaded through the routing pipeline."""
-
-    route: WebSocketRouter._CompiledRoute
-    req: falcon.Request
-    ws: WebSocketLike
-    match: _RouteMatch
 
 
 class WebSocketRouter:
@@ -131,6 +112,7 @@ class WebSocketRouter:
         self._raw: list[WebSocketRouter._RawRoute] = []
         self._routes: list[WebSocketRouter._CompiledRoute] = []
         self._mount_prefix: str = ""
+        self._attached = False
         self._mount_lock = threading.Lock()
         self._names: dict[str, str] = {}
         self._registration = _RouteRegistrationService(
@@ -200,6 +182,48 @@ class WebSocketRouter:
 
             self._mount_prefix = canonical
             self._routes.extend(compiled_routes)
+
+    def attach(self, app: falcon.asgi.App) -> None:
+        """Register the router's Falcon responder at its mounted prefix.
+
+        Call :meth:`mount` before attaching the router. The responder handles
+        both the prefix itself and every nested path below it. It owns a
+        text-only receive loop; binary frames are closed as unsupported data
+        with close code 1003.
+
+        Raises
+        ------
+        RuntimeError
+            If the router has not been mounted or has already been attached.
+        """
+        with self._mount_lock:
+            if not self._mount_prefix:
+                msg = "router must be mounted before it can be attached"
+                raise RuntimeError(msg)
+            if self._attached:
+                msg = "router is already attached to a Falcon app"
+                raise RuntimeError(msg)
+
+            prefix = self._mount_prefix.rstrip("/")
+            prefix_template = prefix or "/"
+            greedy_template = self._greedy_route_template(prefix)
+            adapter = _FalconResponderAdapter(self)
+            app.add_route(prefix_template, adapter)
+            app.add_route(greedy_template, adapter)
+            self._attached = True
+
+    def _greedy_route_template(self, prefix: str) -> str:
+        """Build the nested Falcon route with an unused private field name."""
+        used_names = set(compile_uri_template(self._mount_prefix).groupindex)
+        for route in self._raw:
+            used_names.update(compile_uri_template(route.template).groupindex)
+
+        field_name = "_falcon_pachinko_path"
+        while field_name in used_names:
+            field_name += "_"
+        if not prefix:
+            return f"/{{{field_name}:path}}"
+        return f"{prefix}/{{{field_name}:path}}"
 
     def add_route(
         self,
@@ -276,39 +300,44 @@ class WebSocketRouter:
     async def on_websocket(
         self, req: _RequestLike, ws: WebSocketLike
     ) -> None:  # pragma: no cover - simple wrapper
-        """Dispatch the connection to the first matching route.
+        """Set up the first matching resource without owning its receive loop.
 
-        ``req.path_template`` is assumed to be a prefix of ``req.path``. If the
-        assumption fails, :class:`falcon.HTTPNotFound` is raised to signal that
-        the requested path does not map to this router's mount point.
+        This setup-only entry point remains useful for direct simulator tests.
+        Falcon applications should call :meth:`attach` so the responder adapter
+        can also receive and dispatch text frames for the accepted connection.
 
-        Raises
-        ------
-        falcon.HTTPNotFound
-            If ``req.path_template`` does not match this router's mount point,
-            or if no registered route matches ``req.path``.
         """
-        # Handle missing or empty path_template by defaulting to root "/"
+        await self._setup_websocket(req, ws)
+
+    async def _setup_websocket(
+        self, req: _RequestLike, ws: WebSocketLike
+    ) -> _AcceptedConnection | None:
+        """Resolve, accept, and initialise a matching resource if permitted."""
         prefix = _request_path_template(req).rstrip("/") or "/"
         if prefix != self._mount_prefix:
             msg = (
-                f"path_template '{prefix}' does not match router mount "
+                f"request template '{prefix}' does not match router mount "
                 f"'{self._mount_prefix}'"
             )
             raise falcon.HTTPNotFound(description=msg)
 
-        # Routes are tested in the order they were added. Register more
-        # specific paths before general ones to control precedence.
         for route in self._routes:
-            if await self._try_route(route, req, ws):
-                return
+            attempt = await self._try_route_setup(route, req, ws)
+            if attempt.matched:
+                return attempt.connection
 
         raise falcon.HTTPNotFound
 
     async def _try_route(
         self, route: _CompiledRoute, req: _RequestLike, ws: WebSocketLike
     ) -> bool:
-        """Attempt to handle ``req`` using ``route``.
+        """Return whether ``route`` resolves and handles ``req``."""
+        return (await self._try_route_setup(route, req, ws)).matched
+
+    async def _try_route_setup(
+        self, route: _CompiledRoute, req: _RequestLike, ws: WebSocketLike
+    ) -> _RouteAttempt:
+        """Attempt setup and return its match and accepted connection state.
 
         The routing sequence is as follows:
 
@@ -325,13 +354,13 @@ class WebSocketRouter:
 
         Returns
         -------
-        bool
-            ``True`` if the request was handled by this route, ``False``
-            otherwise.
+        _RouteAttempt
+            Whether this route handled the path and, when accepted, the
+            resource and effective socket for the responder loop.
         """
         match = self._validate_and_normalize_path(route, req)
         if match is None:
-            return False
+            return _RouteAttempt(matched=False)
         # cast: downstream hooks and ``on_connect`` are typed against
         # ``falcon.Request``; the router accepts any ``_RequestLike`` so tests
         # can supply structural stand-ins.
@@ -341,15 +370,19 @@ class WebSocketRouter:
             )
         )
 
-    async def _execute_route_with_error_handling(self, dispatch: _Dispatch) -> bool:
-        """Run the routing pipeline and close the socket on unexpected errors."""
+    async def _execute_route_with_error_handling(
+        self, dispatch: _Dispatch
+    ) -> _RouteAttempt:
+        """Run the routing pipeline and close pre-acceptance errors."""
         ws_for_cleanup: WebSocketLike = dispatch.ws
         try:
             dispatch.ws = await self._prepare_websocket(dispatch.req, dispatch.ws)
             ws_for_cleanup = dispatch.ws
             return await self._process_route_resolution(dispatch)
         except Exception as exc:
-            if not getattr(exc, "_pachinko_factory_closed", False):
+            if not dispatch.accepted and not getattr(
+                exc, "_pachinko_factory_closed", False
+            ):
                 with contextlib.suppress(Exception):
                     await ws_for_cleanup.close()
             raise
@@ -402,8 +435,8 @@ class WebSocketRouter:
             return False
         return inspect.iscoroutinefunction(func)
 
-    async def _process_route_resolution(self, dispatch: _Dispatch) -> bool:
-        """Resolve the final resource and dispatch the connection."""
+    async def _process_route_resolution(self, dispatch: _Dispatch) -> _RouteAttempt:
+        """Resolve the final resource and perform connection setup."""
         base_resource = await self._instantiate_resource(
             dispatch.route.factory, dispatch.ws
         )
@@ -412,15 +445,16 @@ class WebSocketRouter:
             base_resource, dispatch.match, chain, dispatch.ws
         )
         if resource is None:
-            return False
+            return _RouteAttempt(matched=False)
         if not self._validate_final_resource(
             resource, base_resource, dispatch.route, dispatch.req
         ):
-            return False
+            return _RouteAttempt(matched=False)
         manager = self._setup_hook_management(chain)
-        return await self._handle_websocket_connection(
+        connection = await self._handle_websocket_connection(
             resource, dispatch, hook_manager=manager
         )
+        return _RouteAttempt(matched=True, connection=connection)
 
     @staticmethod
     def _validate_final_resource(
@@ -536,7 +570,7 @@ class WebSocketRouter:
         dispatch: _Dispatch,
         *,
         hook_manager: HookManager,
-    ) -> bool:
+    ) -> _AcceptedConnection | None:
         """Accept or close the connection based on ``resource`` decision."""
         context = await self._prepare_connection_context(
             hook_manager, resource, dispatch
@@ -545,10 +579,13 @@ class WebSocketRouter:
             resource, dispatch, context, hook_manager
         )
         return await self._finalize_connection(
-            dispatch.ws,
-            should_accept=should_accept,
-            context=context,
-            hook_manager=hook_manager,
+            resource,
+            _ConnectionFinalization(
+                dispatch=dispatch,
+                should_accept=should_accept,
+                context=context,
+                hook_manager=hook_manager,
+            ),
         )
 
     @staticmethod
@@ -588,22 +625,98 @@ class WebSocketRouter:
             await hook_manager.notify_after_connect(context)
             raise
 
-    @staticmethod
     async def _finalize_connection(
-        ws: WebSocketLike,
-        *,
-        should_accept: bool,
-        context: HookContext,
-        hook_manager: HookManager,
-    ) -> bool:
+        self,
+        resource: WebSocketResource,
+        finalization: _ConnectionFinalization,
+    ) -> _AcceptedConnection | None:
         """Complete the connection lifecycle and honour ``should_accept``."""
+        dispatch = finalization.dispatch
+        ws = dispatch.ws
+        context = finalization.context
+        hook_manager = finalization.hook_manager
+        should_accept = finalization.should_accept
         context.result = should_accept
         await hook_manager.notify_after_connect(context)
         if not should_accept:
             await ws.close()
-            return True
+            return None
+
+        connection = _AcceptedConnection(resource, ws, hook_manager)
         await ws.accept()
-        return True
+        dispatch.accepted = True
+        try:
+            await resource.on_accepted(ws)
+        except falcon.WebSocketDisconnected as disconnected:
+            await self._finalize_disconnect(connection, disconnected.code)
+            return None
+        except asyncio.CancelledError as error:
+            await self._handle_post_accept_error(connection, error)
+            raise
+        except Exception as error:
+            await self._handle_post_accept_error(connection, error)
+            raise
+        return connection
+
+    async def _handle_post_accept_error(
+        self, connection: _AcceptedConnection, error: BaseException
+    ) -> None:
+        """Close failed sessions and preserve their primary error."""
+        close_code = 1006
+        if not isinstance(error, asyncio.CancelledError):
+            close_code = 1011
+            with contextlib.suppress(Exception):
+                await connection.ws.close(code=close_code)
+        await self._finalize_disconnect_preserving_error(
+            connection, close_code=close_code, primary_error=error
+        )
+
+    @staticmethod
+    async def _finalize_disconnect(
+        connection: _AcceptedConnection, close_code: int
+    ) -> None:
+        """Run disconnect hooks before resource cleanup, even if a hook fails."""
+        error: BaseException | None = None
+        try:
+            await connection.hook_manager.notify_before_disconnect(
+                connection.resource,
+                ws=connection.ws,
+                close_code=close_code,
+            )
+        # A failing hook must not prevent the resource cleanup callback.
+        except (asyncio.CancelledError, Exception) as exc:  # ruff: ignore[blind-except]
+            error = exc
+
+        try:
+            await connection.resource.on_disconnect(connection.ws, close_code)
+        # Preserve the first failure while still completing remaining cleanup.
+        except (asyncio.CancelledError, Exception) as exc:  # ruff: ignore[blind-except]
+            if error is None:
+                error = exc
+            else:
+                error.add_note(
+                    f"Resource disconnect cleanup also raised {type(exc).__name__}"
+                )
+
+        if error is not None:
+            raise error
+
+    @classmethod
+    async def _finalize_disconnect_preserving_error(
+        cls,
+        connection: _AcceptedConnection,
+        *,
+        close_code: int,
+        primary_error: BaseException,
+    ) -> None:
+        """Complete disconnect callbacks without replacing a primary failure."""
+        try:
+            await cls._finalize_disconnect(connection, close_code)
+        # Cleanup errors should not replace the handler or cancellation error.
+        except (asyncio.CancelledError, Exception) as cleanup_error:  # ruff: ignore[blind-except]
+            primary_error.add_note(
+                f"Disconnect finalization also raised {type(cleanup_error).__name__}"
+            )
 
 
 class _RouteRegistrationService:

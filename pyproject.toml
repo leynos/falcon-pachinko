@@ -44,7 +44,7 @@ dev = [
 
 [project.optional-dependencies]
 examples = ["aiosqlite", "uvicorn", "websocket-client"]
-testing = ["websockets>=11,<13"]
+testing = ["uvicorn>=0.30,<1", "websockets>=11,<13"]
 
 [tool.pyright]
 pythonVersion = "3.12"
