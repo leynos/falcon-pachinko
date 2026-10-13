@@ -83,9 +83,9 @@ def find_conventional_handler(
     Only names in ``_conventional_handler_names`` are considered. That
     allowlist is built once when the class is created and excludes the
     lifecycle callbacks, so a peer-chosen tag cannot reach ``on_connect``,
-    ``on_disconnect`` or ``on_unhandled``, nor an alias of one. A class
-    without the attribute (a non-monitored stand-in) offers no conventional
-    handlers at all.
+    ``on_accepted``, ``on_disconnect`` or ``on_unhandled``, nor an alias of one.
+    A class without the attribute (a non-monitored stand-in) offers no
+    conventional handlers at all.
 
     Returns
     -------
@@ -100,7 +100,7 @@ def find_conventional_handler(
             # The refusal is silent for an ordinary unknown tag, but a peer
             # reaching for a reserved callback is a security-relevant signal
             # worth making observable. Only the normalised name is logged:
-            # it is one of three module constants, so rendering it through
+            # it is one of four module constants, so rendering it through
             # ``_identifier`` cannot disclose peer-supplied text.
             logger.debug(
                 "Refused conventional handler %s (reason=reserved_lifecycle_tag)",

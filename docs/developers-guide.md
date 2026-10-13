@@ -419,9 +419,9 @@ threaded positionally through each helper.
 
 ## Reserved lifecycle dispatch
 
-The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are driven by
-the connection lifecycle, never by an envelope `type`, so the dispatcher
-refuses to resolve them by convention.
+The `on_connect`, `on_accepted`, `on_disconnect` and `on_unhandled` callbacks
+are driven by the connection lifecycle, never by an envelope `type`, so the
+dispatcher refuses to resolve them by convention.
 
 The conventional allowlist is `_conventional_handler_names` in
 `falcon_pachinko/resource.py`, computed once per class by
