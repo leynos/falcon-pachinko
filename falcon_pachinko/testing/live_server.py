@@ -82,6 +82,10 @@ async def _serve(server: uvicorn.Server) -> None:
                 f"ASGI lifespan startup failed (server exited with status {error.code})"
             )
         raise RuntimeError(msg) from error
+    if not server.started:
+        # Older Uvicorn releases return instead of exiting on lifespan failure.
+        msg = "ASGI lifespan startup failed (server returned before starting)"
+        raise RuntimeError(msg)
 
 
 @contextlib.asynccontextmanager

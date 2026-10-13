@@ -207,6 +207,7 @@ async def test_reserved_envelope_tag_leaves_live_membership_intact(tag: str) -> 
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
+    await resource.on_accepted(ws)
 
     await _dispatch(resource, ws, {"type": tag, "payload": 1000})
 
@@ -239,6 +240,7 @@ async def test_reserved_envelope_cannot_evict_through_real_lifecycle() -> None:
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
+    await resource.on_accepted(ws)
     conn_id = resource._conn_id
 
     await _dispatch(resource, ws, {"type": "disconnect", "payload": 1000})
@@ -275,6 +277,7 @@ async def test_connect_envelope_tag_does_not_reconnect() -> None:
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
+    await resource.on_accepted(ws)
     ready_count = len(ws.messages)
 
     await _dispatch(resource, ws, {"type": "connect", "payload": True})

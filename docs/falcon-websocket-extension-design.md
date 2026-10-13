@@ -373,8 +373,9 @@ avoids a monolithic receive loop with extensive conditional logic.
      saw. Only the conventional path narrows this way; explicit registration
      with `@handles_message` or `add_handler` is unaffected.
 
-     The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are
-     reserved and are never admitted to the allowlist, along with any alias or
+     The `on_connect`, `on_accepted`, `on_disconnect` and `on_unhandled`
+     callbacks are reserved and are never admitted to the allowlist, along
+     with any alias or
      inherited copy of them. They are lifecycle-driven, so a peer-chosen tag
      that names one would let a remote client drive cleanup for a live socket.
      The wrappers that hide the underlying function are unwrapped before
@@ -1339,8 +1340,12 @@ provides validation via `msgspec`. A direct `router.on_websocket()` call
 performs connection setup and calls `on_accepted`, but returns without a
 receive loop; simulator-based tests may then drive resource dispatch
 themselves. The attached Falcon responder owns receive and dispatch on the
-production path. Binary frames are unsupported there and are closed with code
-1003.
+production path. Peer-selected tags cannot invoke `on_connect`, `on_accepted`,
+`on_disconnect`, or `on_unhandled`: lifecycle callbacks and their aliases are
+excluded from the dispatch allowlist, and registering a lifecycle callback as a
+message handler is rejected. A reserved tag therefore reaches `on_unhandled`
+unless a distinct message handler explicitly owns that tag. Binary frames are
+unsupported there and are closed with code 1003.
 
 #### 5.3.3. Error Handling
 

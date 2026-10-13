@@ -14,10 +14,12 @@ from falcon_pachinko.testing import (
     WebSocketTestClient,
     serve_asgi_app,
 )
-from falcon_pachinko.testing.live_server import _wait_for_startup
+from falcon_pachinko.testing.live_server import _serve, _wait_for_startup
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    import uvicorn
 
 
 class _EchoResource:
@@ -119,6 +121,21 @@ async def test_startup_wait_surfaces_an_early_server_failure() -> None:
     task = asyncio.create_task(fail_startup())
     with pytest.raises(RuntimeError, match="lifespan startup failed"):
         await _wait_for_startup(ServerState(), task, timeout_seconds=1.0)
+
+
+@pytest.mark.asyncio
+async def test_serve_surfaces_a_normal_return_before_startup() -> None:
+    """Older Uvicorn startup failures can return without raising."""
+
+    class ServerState:
+        started = False
+
+        async def serve(self) -> None:
+            return
+
+    server = typ.cast("uvicorn.Server", ServerState())
+    with pytest.raises(RuntimeError, match="ASGI lifespan startup failed"):
+        await _serve(server)
 
 
 @pytest.mark.asyncio

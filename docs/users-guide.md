@@ -210,15 +210,16 @@ a handler propagates.
 
 A peer chooses the envelope `type`, so the set of method names the dispatcher
 is willing to resolve from that choice is fixed when the resource class is
-created. The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are
-driven by the connection lifecycle and are **never** dispatchable. An alias
-such as `on_bye = on_disconnect`, and a copy inherited from a parent resource,
-are excluded on the same terms. The same applies to the coroutine behind a
-descriptor — `@classmethod`, `@staticmethod`, `functools.partialmethod`,
-`functools.singledispatchmethod`, `functools.cached_property` or `property` —
-when the same function is also aliased under a neutral name, and to the bound
-method or generated wrapper that reading such an entry through the class
-yields, which explicit registration passes to `add_handler`.
+created. The `on_connect`, `on_accepted`, `on_disconnect` and `on_unhandled`
+callbacks are driven by the connection lifecycle and are **never**
+dispatchable. An alias such as `on_bye = on_disconnect`, and a copy inherited
+from a parent resource, are excluded on the same terms. The same applies to the
+coroutine behind a descriptor — `@classmethod`, `@staticmethod`,
+`functools.partialmethod`, `functools.singledispatchmethod`,
+`functools.cached_property` or `property` — when the same function is also
+aliased under a neutral name, and to the bound method or generated wrapper that
+reading such an entry through the class yields, which explicit registration
+passes to `add_handler`.
 
 A tag that normalizes to a reserved name — `disconnect`, `Disconnect` and
 `DISCONNECT` all reduce to `on_disconnect` — cannot select the lifecycle
@@ -316,7 +317,7 @@ values, so omission remains the default security boundary.
 1) **Choose a factory** – Pass `resource_factory` to `WebSocketRouter`.
 2) **Provide services** – Register shared services in the container.
 3) **Mount and attach the router** – All route instantiation flows through
-   your factory.
+   the configured factory.
 
 ```python
 from falcon_pachinko import ServiceContainer, WebSocketRouter, install
