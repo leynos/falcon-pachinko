@@ -75,7 +75,8 @@ parent resource, and not the coroutine behind a descriptor such as
 `@classmethod`, `@staticmethod`, `functools.partialmethod`,
 `functools.singledispatchmethod`, `functools.cached_property` or `property`. A
 tag that normalizes to a reserved name, such as `disconnect`, no longer
-resolves; the frame reaches `on_unhandled` with the original payload.
+resolves; the frame reaches `on_unhandled` with the original frame — its
+`str | bytes` message argument, not a decoded payload.
 
 Registering such a callable as a message handler now raises
 `ReservedHandlerRegistrationError`, whether through `@handles_message` or
