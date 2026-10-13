@@ -1,4 +1,14 @@
-"""Private lifecycle state and Falcon responder adapter for WebSocket routing."""
+"""Carry connection state and serve mounted WebSocket routers through Falcon.
+
+The private dataclasses keep the resolved resource, effective socket, and hook
+manager together between setup and disconnect handling. WebSocketRouter.attach
+registers the responder adapter, which owns accepted text-frame reception.
+
+Applications use these helpers indirectly by mounting and attaching a router::
+
+    router.mount("/ws")
+    router.attach(app)
+"""
 
 from __future__ import annotations
 

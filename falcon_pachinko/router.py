@@ -663,6 +663,9 @@ class WebSocketRouter:
         dispatch.accepted = True
         try:
             await resource.on_accepted(ws)
+        except falcon.WebSocketDisconnected as disconnected:
+            await self._finalize_disconnect(connection, disconnected.code)
+            return None
         except asyncio.CancelledError as error:
             await self._handle_post_accept_error(connection, error)
             raise
