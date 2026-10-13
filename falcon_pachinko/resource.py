@@ -274,10 +274,7 @@ class WebSocketResource:
     async def on_connect(  # ruff: ignore[no-self-use] - overridable hook; subclasses use ``self``
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
-        """Decide whether the connection should be accepted after handshake.
-
-        Called after the WebSocket handshake is complete to determine
-        acceptance.
+        """Decide whether to accept the connection before the handshake.
 
         Parameters
         ----------
@@ -292,8 +289,28 @@ class WebSocketResource:
         -------
         bool
             ``True`` to accept the WebSocket connection; ``False`` to reject it
+
+        Notes
+        -----
+        This method runs before the handshake is accepted. Use it for
+        validation and setup that does not send or receive WebSocket frames.
         """
         return True
+
+    async def on_accepted(self, ws: WebSocketLike) -> None:
+        """Perform connection setup after the handshake has been accepted.
+
+        Parameters
+        ----------
+        ws : WebSocketLike
+            The accepted WebSocket connection.
+
+        Notes
+        -----
+        The router calls this method immediately after :meth:`ws.accept`.
+        WebSocket I/O, including sending initial application messages, belongs
+        here or in later message handlers, never in :meth:`on_connect`.
+        """
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Handle cleanup or custom logic when the connection is closed.

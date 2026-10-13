@@ -10,8 +10,15 @@ import falcon
 import falcon.asgi
 import pytest
 
-from falcon_pachinko import HookContext, WebSocketResource, WebSocketRouter
-from falcon_pachinko.router import _compile_prefix_template, compile_uri_template
+from falcon_pachinko import (
+    HookContext,
+    WebSocketResource,
+    WebSocketRouter,
+)
+from falcon_pachinko.router import (
+    _compile_prefix_template,
+    compile_uri_template,
+)
 from falcon_pachinko.unittests.helpers import DummyWS, RecordingWS, make_req
 from falcon_pachinko.unittests.resource_factories import resource_factory
 
