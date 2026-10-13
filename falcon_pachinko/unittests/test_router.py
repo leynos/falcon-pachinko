@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import functools
 import inspect
 import types
@@ -20,11 +19,6 @@ from falcon_pachinko import (
 from falcon_pachinko.router import _compile_prefix_template, compile_uri_template
 from falcon_pachinko.unittests.helpers import DummyWS, RecordingWS, make_req
 from falcon_pachinko.unittests.resource_factories import resource_factory
-from falcon_pachinko.unittests.router_session_helpers import (
-    SessionResource,
-    SessionSocket,
-    session_router,
-)
 
 pytest_plugins = ["falcon_pachinko.unittests.test_app_install"]
 
@@ -755,49 +749,4 @@ async def test_resource_initializer_may_require_its_own_name() -> None:
     assert built == ["resource-name"], (
         "the factory must forward the initializer's own name, distinct from "
         "the route name"
-    )
-
-
-@pytest.mark.asyncio
-async def test_receive_loop_dispatches_frames_in_order_and_disconnects_once() -> None:
-    """Strings and bytes pass unchanged; decoded media becomes JSON bytes."""
-    resource = SessionResource()
-    socket = SessionSocket(("text", b"binary", {"value": 1}))
-    router = session_router(resource, receive_loop=True)
-    await router.on_websocket(make_req("/session"), socket)
-    assert resource.frames == ["text", b"binary", b'{"value":1}'], (
-        "frames must dispatch in receive order"
-    )
-    assert resource.disconnects == [(socket, 1001)], (
-        "peer close code must reach one cleanup call"
-    )
-    assert socket.accepted, "the receive loop must follow acceptance"
-
-
-@pytest.mark.asyncio
-async def test_receive_loop_dispatch_failure_closes_and_disconnects_once() -> None:
-    """Ordinary dispatch errors close through the existing path and stop receiving."""
-    resource = SessionResource(dispatch_error=RuntimeError("dispatch failed"))
-    socket = SessionSocket(("first", "second"))
-    router = session_router(resource, receive_loop=True)
-    await router.on_websocket(make_req("/session"), socket)
-    assert socket.closed, "dispatch failure must close the socket"
-    assert resource.frames == ["first"], "dispatch failure must end the receive loop"
-    assert resource.disconnects == [(socket, 1000)], (
-        "the router close code must reach one cleanup call"
-    )
-
-
-@pytest.mark.asyncio
-async def test_disabled_receive_loop_preserves_immediate_return() -> None:
-    """Existing applications own receive and cleanup when the option is off."""
-    resource = SessionResource()
-    socket = SessionSocket(None)
-    router = session_router(resource, receive_loop=False)
-    async with asyncio.timeout(1):
-        await router.on_websocket(make_req("/session"), socket)
-    assert socket.accepted, "the default path must still accept"
-    assert socket.receive_calls == 0, "the default path must not receive frames"
-    assert not resource.disconnects, (
-        "the default path must retain existing lifecycle ownership"
     )

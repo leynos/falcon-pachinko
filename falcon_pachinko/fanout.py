@@ -103,6 +103,7 @@ class ClusterFanout:
     """
 
     # Explicit timing options are part of the opt-in public coordinator API.
+    # @codescene(disable:"Excess Number of Function Arguments") #179 API; 2026-10-13
     # pylint: disable-next=too-many-arguments  # required transport and lease configuration
     def __init__(  # ruff: ignore[too-many-arguments] - required transport and lease configuration
         self,

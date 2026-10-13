@@ -7,6 +7,8 @@ import typing as typ
 
 import pytest
 
+from falcon_pachinko._router_session import _ConnectionSession
+from falcon_pachinko.hooks import HookCollection, HookManager
 from falcon_pachinko.unittests.helpers import make_req
 from falcon_pachinko.unittests.router_session_helpers import (
     SessionResource,
@@ -18,10 +20,27 @@ if typ.TYPE_CHECKING:
     from falcon_pachinko import HookContext
 
 
+class FailingCleanupResource(SessionResource):
+    """Record disconnect then fail, so cleanup idempotency is observable."""
+
+    @typ.override
+    async def on_disconnect(self, ws: object, close_code: int) -> None:
+        await super().on_disconnect(ws, close_code)
+        msg = "cleanup failed"
+        raise RuntimeError(msg)
+
+
+@pytest.mark.parametrize(
+    "resource_type",
+    [SessionResource, FailingCleanupResource],
+    ids=["cleanup-succeeds", "cleanup-fails"],
+)
 @pytest.mark.asyncio
-async def test_receive_loop_cancellation_disconnects_once() -> None:
-    """Cancellation cleans up accepted sessions and remains observable."""
-    resource = SessionResource()
+async def test_receive_loop_cancellation_disconnects_once(
+    resource_type: type[SessionResource],
+) -> None:
+    """Cancellation cleans up once even if cleanup fails, and still propagates."""
+    resource = resource_type()
     socket = SessionSocket(None)
     router = session_router(resource, receive_loop=True)
     task = asyncio.create_task(router.on_websocket(make_req("/session"), socket))
@@ -116,35 +135,6 @@ async def test_receive_loop_failing_disconnect_hook_cannot_skip_cleanup() -> Non
 
 
 @pytest.mark.asyncio
-async def test_receive_loop_cancellation_survives_cleanup_failure() -> None:
-    """An ordinary cleanup failure cannot replace the caller's cancellation."""
-
-    class FailingCleanupResource(SessionResource):
-        @typ.override
-        async def on_disconnect(self, ws: object, close_code: int) -> None:
-            await super().on_disconnect(ws, close_code)
-            msg = "cleanup failed"
-            raise RuntimeError(msg)
-
-    resource = FailingCleanupResource()
-    socket = SessionSocket(None)
-    router = session_router(resource, receive_loop=True)
-    task = asyncio.create_task(router.on_websocket(make_req("/session"), socket))
-    try:
-        async with asyncio.timeout(1):
-            await socket.receiving.wait()
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert resource.disconnects == [(socket, 1006)], (
-            "failing cleanup must run only once"
-        )
-    finally:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-
-
-@pytest.mark.asyncio
 async def test_receive_loop_logs_dispatch_failure_without_exception_values(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -156,4 +146,72 @@ async def test_receive_loop_logs_dispatch_failure_without_exception_values(
     assert "RuntimeError" in caplog.text, "dispatch failures must leave a diagnostic"
     assert "CANARY-dispatch-secret" not in caplog.text, (
         "diagnostics must omit exception values"
+    )
+
+
+@pytest.mark.asyncio
+async def test_receive_loop_dispatches_frames_in_order_and_disconnects_once() -> None:
+    """Strings and bytes pass unchanged; decoded media becomes JSON bytes."""
+    resource = SessionResource()
+    socket = SessionSocket(("text", b"binary", {"value": 1}))
+    router = session_router(resource, receive_loop=True)
+    await router.on_websocket(make_req("/session"), socket)
+    assert resource.frames == ["text", b"binary", b'{"value":1}'], (
+        "frames must dispatch in receive order"
+    )
+    assert resource.disconnects == [(socket, 1001)], (
+        "peer close code must reach one cleanup call"
+    )
+    assert socket.accepted, "the receive loop must follow acceptance"
+
+
+@pytest.mark.asyncio
+async def test_receive_loop_dispatch_failure_closes_and_disconnects_once() -> None:
+    """Ordinary dispatch errors close through the existing path and stop receiving."""
+    resource = SessionResource(dispatch_error=RuntimeError("dispatch failed"))
+    socket = SessionSocket(("first", "second"))
+    router = session_router(resource, receive_loop=True)
+    await router.on_websocket(make_req("/session"), socket)
+    assert socket.closed, "dispatch failure must close the socket"
+    assert resource.frames == ["first"], "dispatch failure must end the receive loop"
+    assert resource.disconnects == [(socket, 1000)], (
+        "the router close code must reach one cleanup call"
+    )
+
+
+@pytest.mark.asyncio
+async def test_disabled_receive_loop_preserves_immediate_return() -> None:
+    """Existing applications own receive and cleanup when the option is off."""
+    resource = SessionResource()
+    socket = SessionSocket(None)
+    router = session_router(resource, receive_loop=False)
+    async with asyncio.timeout(1):
+        await router.on_websocket(make_req("/session"), socket)
+    assert socket.accepted, "the default path must still accept"
+    assert socket.receive_calls == 0, "the default path must not receive frames"
+    assert not resource.disconnects, (
+        "the default path must retain existing lifecycle ownership"
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_owner_cleanup_failure_is_idempotent() -> None:
+    """A failed cleanup callback is not retried when the owner exits again."""
+    resource = FailingCleanupResource()
+    socket = SessionSocket()
+    hook_manager = HookManager(
+        global_hooks=HookCollection(),
+        resources=[resource],
+    )
+    session = _ConnectionSession(resource, socket, hook_manager)
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        async with session:
+            pass
+
+    async with session:
+        pass
+
+    assert resource.disconnects == [(socket, 1006)], (
+        "the cleanup callback must run only once despite its failure"
     )

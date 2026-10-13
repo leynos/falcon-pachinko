@@ -46,7 +46,15 @@ codes are passed through, with `1006` used when a code is unavailable;
 cancellation and incomplete handshakes also use `1006`. Ordinary dispatch
 errors use the existing close path (default close code `1000`) before cleanup.
 If cleanup fails while another error or cancellation is already in flight, that
-original failure remains primary, and the cleanup failure is recorded as a note.
+original failure remains primary, and the cleanup failure is recorded as a
+note. The accepted-session state for this opt-in path lives in the private
+`falcon_pachinko._router_session` component; `WebSocketRouter` retains route
+resolution and the shared acceptance path. `ClusterFanout.__init__` has a
+method-scoped CodeScene *Excess Number of Function Arguments* exception because
+its explicit, typed collaborators and timing options form the public wiring
+contract; replacing them with a configuration object or opaque keyword
+arguments would change that contract. Keep this exception limited to that
+method, without a cohesion suppression or project threshold change.
 
 ## Dependency bounds
 
