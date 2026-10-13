@@ -320,8 +320,9 @@ logic.
 ### 3.6. Message Handling and Dispatch
 
 A key feature of Falcon-Pachinko is its ability to dispatch incoming WebSocket
-messages to specific handler methods within the `WebSocketResource`. This
-avoids a monolithic receive loop with extensive conditional logic.
+messages to specific handler methods within the `WebSocketResource`. The
+resource handles decoding and handler resolution while the router-owned session
+driver controls frame reception and dispatch order.
 
 - **Message Format Assumption**: The dispatch mechanism assumes messages are
   JSON objects containing a 'type' field that acts as a discriminator, for
@@ -1323,25 +1324,26 @@ class ChatResource(WebSocketResource):
 
 #### 5.3.2. Automated Dispatch Logic
 
-The base `WebSocketResource` would contain a receive loop that performs the
-following steps:
+For each accepted connection, `WebSocketRouter` owns the receive loop. Its
+session driver calls `receive_media()` and awaits
+`WebSocketResource.dispatch()` for each frame before receiving the next one.
+The resource's dispatch method performs these steps:
 
-1. Receive a raw message from the WebSocket.
+1. Decode the received raw message using
+   `msgspec.json.decode(message, type=self.schema)`. `msgspec`'s tagged union
+   support automatically inspects a tag field in the JSON to select the correct
+   `Struct` for decoding.
 
-2. Decode the message using `msgspec.json.decode(message, type=self.schema)`.
-   `msgspec`'s tagged union support automatically inspects a tag field in the
-   JSON to select the correct `Struct` for decoding.
+2. Inspect the `tag` of the resulting `Struct` instance.
 
-3. Inspect the `tag` of the resulting `Struct` instance.
-
-4. Find a handler registered with `@handles_message` for that tag. If not found,
+3. Find a handler registered with `@handles_message` for that tag. If not found,
    attempt to find a handler by the `on_{tag}` naming convention.
 
-5. Dynamically invoke the handler, e.g.,
+4. Dynamically invoke the handler, e.g.,
    `await self.on_send_message(req, ws, msg)`.
 
-This schema-driven design completely eliminates boilerplate dispatch logic and
-provides "zero-cost" validation via `msgspec`.
+This schema-driven dispatch keeps message validation and handler selection in
+the resource, separate from the router-owned transport receive loop.
 
 #### 5.3.3. Error Handling
 
@@ -1809,8 +1811,8 @@ enables white-box testing of router behaviour without needing an ASGI server.
   code. Helper shortcuts (`send_json`, `pop_sent`) keep tests concise.
 
 - **Spying and Injection**: Tests enqueue inbound messages via
-  `await simulator.push_message({...})` before driving the resource's receive
-  loop. Outbound frames are recorded and made available through
+  `await simulator.push_message({...})` before driving the router-owned session
+  for the resource. Outbound frames are recorded and made available through
   `simulator.sent_messages`, enabling assertions about order, payload, or
   metadata. Because the simulator is dependency-injectable, resources can be
   exercised in isolation alongside fake connection managers or hook managers.
@@ -1954,7 +1956,7 @@ sequenceDiagram
     Developer->>WSSim: simulator.push_message(data)
     activate WSSim
     activate App
-    WSSim->>App: Inject frame (router receive loop)
+    WSSim->>App: Inject frame into router-owned session
     deactivate WSSim
 
     Developer->>WSConn: session.send_json(data)
