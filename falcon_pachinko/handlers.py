@@ -8,8 +8,15 @@ dispatch use. ``dispatcher.py`` and ``resource.py`` import both from here.
 Registration rejects a handler that implements a reserved lifecycle callback
 so that a peer-chosen tag can never reach ``on_connect``, ``on_disconnect`` or
 ``on_unhandled``. The check recognises a lifecycle callback by its name and by
-identity against the class it was defined on, including through
-``functools.partial`` wrappers and ``handles_message`` descriptors.
+identity against the class it was defined on. Both sides of that comparison
+are first reduced to the function they ultimately invoke, so a callback
+cannot hide behind a ``functools.partial``, a ``handles_message`` descriptor,
+a standard-library descriptor family (``functools.partialmethod``,
+``functools.singledispatchmethod``, ``functools.cached_property`` or
+``property``), a ``classmethod``/``staticmethod`` object, or the class-view
+those descriptors generate. A ``functools.wraps`` wrapper is *not* unwrapped:
+it is a distinct function that merely borrows metadata, so refusing it would
+misclassify an independent handler that happens to share a ``__name__``.
 
 A wrapper then, that *calls* a lifecycle method rather than *being* one reads
 as an ordinary handler:
@@ -65,14 +72,50 @@ LIFECYCLE_CALLBACK_NAMES: frozenset[str] = frozenset({
 })
 
 
+def _descriptor_view_owner(view: object) -> object | None:
+    """Return the descriptor whose class-view ``view`` is, or ``None``.
+
+    Reading a ``functools.partialmethod`` or
+    ``functools.singledispatchmethod`` through the class yields a generated
+    wrapper rather than the descriptor stored in the class dictionary, and
+    neither wrapper reveals the reserved implementation on its own: a
+    ``partialmethod`` view is named ``_method``, and a
+    ``singledispatchmethod`` view is a plain function whose identity the
+    class does not hold. Both carry a backlink to their descriptor —
+    ``partialmethod`` through ``__partialmethod__`` (``_partialmethod`` on
+    Python 3.12), ``singledispatchmethod`` through the ``register`` bound
+    method's ``__self__`` — which is what lets the identity comparison reach
+    the wrapped coroutine again.
+
+    Returns
+    -------
+    object | None
+        The owning descriptor, or ``None`` when ``view`` is not such a view.
+    """
+    backlink = getattr(view, "__partialmethod__", None)
+    if backlink is None:
+        backlink = getattr(view, "_partialmethod", None)
+    if isinstance(backlink, functools.partialmethod):
+        return backlink
+    owner = getattr(getattr(view, "register", None), "__self__", None)
+    if isinstance(owner, functools.singledispatchmethod):
+        return owner
+    return None
+
+
 def _unwrap_handler(action: object) -> object:
     """Peel the wrappers that hide the function a handler ultimately invokes.
 
-    Four wrapper families matter. A ``functools.partial`` exposes neither the
-    wrapped function's ``__name__`` nor its identity. A
-    ``_HandlesMessageDescriptor`` is the object ``@handles_message`` returns;
-    it is not callable itself until ``__get__`` binds it, and a class may
-    store it under any name, including a reserved one. A ``classmethod`` or
+    A ``functools.partial`` exposes neither the wrapped function's
+    ``__name__`` nor its identity. A ``_HandlesMessageDescriptor`` is the
+    object ``@handles_message`` returns; it is not callable itself until
+    ``__get__`` binds it, and a class may store it under any name, including
+    a reserved one. The standard-library descriptor families —
+    ``functools.partialmethod``, ``functools.singledispatchmethod`` and
+    ``functools.cached_property``, which hold the function in ``func``, and
+    ``property``, which holds it in ``fget`` — hide the coroutine the same
+    way, and their class-views hide it behind a generated wrapper that
+    :func:`_descriptor_view_owner` unwraps. A ``classmethod`` or
     ``staticmethod`` object stored in the class dictionary is a descriptor
     rather than the coroutine, so comparing it directly with a plain alias of
     the same function always fails; both expose the underlying function as
@@ -90,10 +133,43 @@ def _unwrap_handler(action: object) -> object:
         match action:
             case functools.partial() | _HandlesMessageDescriptor():
                 action = action.func
+            case (
+                functools.partialmethod()
+                | functools.singledispatchmethod()
+                | functools.cached_property()
+            ):
+                action = action.func
+            case property():
+                action = action.fget
             case classmethod() | staticmethod() | types.MethodType():
                 action = action.__func__
             case _:
-                return action
+                owner = _descriptor_view_owner(action)
+                if owner is None:
+                    return action
+                action = owner
+
+
+def handler_qualname(action: object) -> str:
+    """Return the name a refusal message should use for ``action``.
+
+    The name is read from the unwrapped callable so that the message points
+    at the lifecycle function a user registered, not at the generated wrapper
+    that happened to carry it: a bound ``functools.partialmethod`` view is
+    named ``_method``, and a ``functools.partial`` has no name at all.
+
+    Returns
+    -------
+    str
+        The unwrapped callable's qualified name, falling back to the original
+        action's qualified name and then to its repr.
+    """
+    resolved = _unwrap_handler(action)
+    return (
+        getattr(resolved, "__qualname__", None)
+        or getattr(action, "__qualname__", None)
+        or repr(action)
+    )
 
 
 def _has_reserved_name(action: object) -> bool:
@@ -129,10 +205,13 @@ def is_lifecycle_callback(owner: type, action: object) -> bool:
     example ``on_disconnect = handles_message("bye")(cleanup)`` — hides the
     function that ``__set_name__`` registers, so comparing the descriptor
     against a registered function would both miss the reserved name and fail
-    the identity test. A ``classmethod`` or ``staticmethod`` object stored in
-    the class dictionary hides the coroutine behind ``__func__``, so an alias
-    of that coroutine under a neutral name would escape an identity test that
-    compared the two as-is.
+    the identity test. The standard-library descriptor families hold the
+    coroutine in ``func`` or ``fget``, and their class-views hold it in a
+    generated wrapper with a backlink to the descriptor, so an alias of that
+    coroutine under a neutral name would escape an identity test that compared
+    the objects as-is. A ``classmethod`` or ``staticmethod`` object stored in
+    the class dictionary hides the coroutine behind ``__func__`` for the same
+    reason.
 
     Parameters
     ----------
@@ -146,10 +225,6 @@ def is_lifecycle_callback(owner: type, action: object) -> bool:
     bool
         ``True`` when the callable is a reserved lifecycle callback.
     """
-    if not callable(action) and not isinstance(
-        action, (_HandlesMessageDescriptor, classmethod, staticmethod)
-    ):
-        return False
     resolved = _unwrap_handler(action)
     if not callable(resolved):
         return False
@@ -255,8 +330,7 @@ class _HandlesMessageDescriptor:
         # annotated parameters after ``self``, which signature validation
         # would reject as ambiguous before the reserved name was considered.
         if _has_reserved_name(func):
-            func_name: str = getattr(func, "__qualname__", repr(func))
-            raise ReservedHandlerRegistrationError(message_type, func_name)
+            raise ReservedHandlerRegistrationError(message_type, handler_qualname(func))
         self.message_type = message_type
         self.func = func
         self.payload_type = get_payload_type(func)

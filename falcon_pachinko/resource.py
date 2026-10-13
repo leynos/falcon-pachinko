@@ -31,6 +31,7 @@ from .handlers import (
     Handler,
     HandlerInfo,
     _HandlesMessageDescriptor,
+    handler_qualname,
     is_lifecycle_callback,
 )
 from .hooks import HookCollection, HookManager
@@ -229,14 +230,25 @@ class WebSocketResource:
         cannot pass the resource the registered handler signature promises,
         and a ``classmethod`` receives the class in that position. Both
         shapes are rejected here rather than failing at call time.
+
+        ``functools.partialmethod`` is excluded explicitly. From Python 3.13
+        the coroutine test unwraps it, so the raw descriptor would satisfy
+        the test while class access yields a generated wrapper rather than
+        the function recorded here — admission would then vary with the
+        interpreter version. Keeping the family out makes the allowlist
+        identical on every supported runtime. The predicate still unwraps it
+        for the reserved-name check, so a lifecycle callback cannot hide
+        behind one.
         """
         names = {
             name
             for name in dir(cls)
             if name.startswith("on_")
-            and inspect.iscoroutinefunction(
-                member := inspect.getattr_static(cls, name, None)
+            and not isinstance(
+                member := inspect.getattr_static(cls, name, None),
+                functools.partialmethod,
             )
+            and inspect.iscoroutinefunction(member)
             and not is_lifecycle_callback(cls, member)
         }
         cls._conventional_handler_names = frozenset(names)
@@ -246,10 +258,9 @@ class WebSocketResource:
         """Reject registered handlers that implement a lifecycle callback."""
         for message_type, info in handlers.items():
             if is_lifecycle_callback(cls, info.handler):
-                qualname: str = getattr(
-                    info.handler, "__qualname__", repr(info.handler)
+                raise ReservedHandlerRegistrationError(
+                    message_type, handler_qualname(info.handler)
                 )
-                raise ReservedHandlerRegistrationError(message_type, qualname)
 
     @classmethod
     def _init_schema_registry(cls) -> None:
@@ -329,8 +340,9 @@ class WebSocketResource:
             only, so a peer tag must never be able to invoke one.
         """
         if is_lifecycle_callback(cls, handler):
-            qualname: str = getattr(handler, "__qualname__", repr(handler))
-            raise ReservedHandlerRegistrationError(message_type, qualname)
+            raise ReservedHandlerRegistrationError(
+                message_type, handler_qualname(handler)
+            )
         cls.handlers[message_type] = HandlerInfo(handler, payload_type, strict)
 
     async def dispatch(self, ws: WebSocketLike, raw: str | bytes) -> None:

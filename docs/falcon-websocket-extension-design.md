@@ -362,18 +362,27 @@ avoids a monolithic receive loop with extensive conditional logic.
      class is being created. That also means `@staticmethod` and `@classmethod`
      coroutines are not admitted: the dispatcher passes the resource instance
      in the `self` position, which a static method does not accept and a class
-     method would receive as the class. Only the conventional path narrows this
-     way; explicit registration with `@handles_message` or `add_handler` is
-     unaffected.
+     method would receive as the class. `functools.partialmethod` is excluded
+     for two reasons: from Python 3.13 the coroutine test unwraps it, so the
+     raw descriptor would be admitted on some interpreters and not others, and
+     class lookup yields a generated wrapper rather than the function the test
+     saw. Only the conventional path narrows this way; explicit registration
+     with `@handles_message` or `add_handler` is unaffected.
 
      The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are
      reserved and are never admitted to the allowlist, along with any alias or
      inherited copy of them. They are lifecycle-driven, so a peer-chosen tag
      that names one would let a remote client drive cleanup for a live socket.
-     Wrapper families are unwrapped before identity is compared: a
-     `functools.partial`, a `@handles_message` descriptor, a `classmethod` or
-     `staticmethod` object, and a bound method are all reduced to the function
-     they wrap. An alias under a neutral name therefore cannot drift into the
+     The wrappers that hide the underlying function are unwrapped before
+     identity is compared: a `functools.partial`, a `@handles_message`
+     descriptor, a standard-library descriptor family
+     (`functools.partialmethod`, `functools.singledispatchmethod`,
+     `functools.cached_property`, `property`), a `classmethod` or
+     `staticmethod` object, a bound method, and the generated class-view of
+     the `functools` descriptors. A `functools.wraps` wrapper is deliberately
+     *not* unwrapped: it is a distinct function that only borrows metadata, so
+     unwrapping `__wrapped__` would over-reject an unrelated handler.
+     An alias under a neutral name therefore cannot drift into the
      peer-reachable registry. A reserved tag is instead treated as unhandled:
      the explicit registry is consulted first by exact tag string, and only
      when it holds no handler for that string does the frame reach

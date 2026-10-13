@@ -196,10 +196,11 @@ created. The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are
 driven by the connection lifecycle and are **never** dispatchable. An alias
 such as `on_bye = on_disconnect`, and a copy inherited from a parent resource,
 are excluded on the same terms. The same applies to the coroutine behind a
-`@classmethod` or `@staticmethod` entry when the same function is also aliased
-under a neutral name, and to the bound method that reading such a
-`@classmethod` through the class yields, which explicit registration passes to
-`add_handler`.
+descriptor — `@classmethod`, `@staticmethod`, `functools.partialmethod`,
+`functools.singledispatchmethod`, `functools.cached_property` or `property` —
+when the same function is also aliased under a neutral name, and to the bound
+method or generated wrapper that reading such an entry through the class
+yields, which explicit registration passes to `add_handler`.
 
 A tag that normalizes to a reserved name — `disconnect`, `Disconnect` and
 `DISCONNECT` all reduce to `on_disconnect` — cannot select the lifecycle
