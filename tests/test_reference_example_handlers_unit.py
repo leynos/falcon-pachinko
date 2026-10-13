@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import typing as typ
 
 import msgspec.json as msjson
@@ -20,6 +21,7 @@ from examples.reference_app.services import (
     TaskCreationParams,
     WorkspaceRepository,
 )
+from falcon_pachinko.router import WebSocketRouter
 from falcon_pachinko.websocket import InProcessBackend, WebSocketConnectionManager
 from tests._stubs import RecordingWebSocket, RequestStub
 
@@ -30,6 +32,70 @@ if typ.TYPE_CHECKING:
 
 _WORKSPACE = "atlas"
 _PROJECT = "triage"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stage", "failure", "expected_code"),
+    [
+        pytest.param(
+            "accept", RuntimeError("accepted setup failed"), 1011, id="accept-failure"
+        ),
+        pytest.param(
+            "ready", RuntimeError("ready send failed"), 1011, id="ready-failure"
+        ),
+        pytest.param(
+            "accept",
+            asyncio.CancelledError("accepted setup cancelled"),
+            1001,
+            id="accept-cancellation",
+        ),
+        pytest.param(
+            "ready",
+            asyncio.CancelledError("ready send cancelled"),
+            1001,
+            id="ready-cancellation",
+        ),
+    ],
+)
+async def test_accepted_setup_failure_is_removed_and_audited_by_router(
+    stage: str, failure: BaseException, expected_code: int
+) -> None:
+    """Preserve accepted session identity until the framework runs cleanup."""
+    manager = WebSocketConnectionManager()
+    resource, _repo, audit, _feed = _build_resource(manager)
+
+    class FailingSetupSocket(RecordingWebSocket):
+        async def accept(self, subprotocol: str | None = None) -> None:
+            """Fail after recording transport acceptance when requested."""
+            await super().accept(subprotocol)
+            if stage == "accept":
+                raise failure
+
+        async def send_media(self, data: object) -> None:
+            """Fail the readiness send after the handshake completes."""
+            if stage == "ready":
+                raise failure
+            await super().send_media(data)
+
+    socket = FailingSetupSocket()
+    router = WebSocketRouter(resource_factory=lambda _factory: resource)
+    router.add_route(
+        "/workspaces/{workspace_id}/projects/{project_id}/tasks", TaskStreamResource
+    )
+    router.mount("/ws")
+    with pytest.raises(type(failure)) as raised:
+        await asyncio.wait_for(
+            router.on_websocket(_connect_request(), socket), timeout=1
+        )
+    assert raised.value is failure, "cleanup must preserve the original setup failure"
+    assert not manager.websockets, "accepted setup failures must release membership"
+    closed = [record for record in audit.records if record["event"] == "session.closed"]
+    assert len(closed) == 1, "accepted setup failure must be audited exactly once"
+    metadata = typ.cast("dict[str, object]", closed[0]["metadata"])
+    assert metadata["close_code"] == expected_code, (
+        "closure must retain the session policy code"
+    )
 
 
 class FailingJoinBackend(InProcessBackend):
