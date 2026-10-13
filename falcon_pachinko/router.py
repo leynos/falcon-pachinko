@@ -125,6 +125,7 @@ class WebSocketRouter:
         self._resource_factory = resource_factory or (lambda factory: factory())
         self._simulator_factory = simulator_factory
         self._receive_loop = receive_loop
+        self._attached = False
 
     @staticmethod
     def _compile_route(
@@ -192,39 +193,64 @@ class WebSocketRouter:
         self._mount_prefix = canonical
         self._routes.extend(compiled_routes)
 
-    def attach(self, app: object, prefix: str) -> None:
-        """Mount this router on a real Falcon ASGI ``app``.
+    def attach(self, app: object, prefix: str | None = None) -> None:
+        """Attach this router to a Falcon ASGI ``app``.
 
         Falcon's normal route table serves the WebSocket responder. The exact
-        mount route handles a connection at ``prefix`` and the path converter
-        routes descendants through the same responder. ``attach`` also
-        configures raw text and binary media handlers so ``receive_media()``
-        returns frames for :meth:`WebSocketResource.dispatch`.
+        mount route handles a connection at the mount prefix and the path
+        converter routes descendants through the same responder. If ``prefix``
+        is omitted, call :meth:`mount` first. Passing a prefix retains the
+        convenience form that mounts and attaches in one call. ``attach`` also
+        configures Falcon's raw text and binary media handlers so
+        ``receive_media()`` returns frames for :meth:`WebSocketResource.dispatch`.
 
         Raises
         ------
         TypeError
             If ``app`` is not a Falcon ASGI application.
+        RuntimeError
+            If the router is unmounted, already attached, or already mounted
+            at a different prefix.
         """
         if not isinstance(app, falcon.asgi.App):
             msg = "attach() requires a falcon.asgi.App instance"
             raise TypeError(msg)
 
-        canonical = self._canonical_mount_prefix(prefix)
         with self._mount_lock:
+            if self._attached:
+                msg = "router is already attached to a Falcon app"
+                raise RuntimeError(msg)
+
+            original_prefix = self._mount_prefix
+            original_routes = list(self._routes)
+            if prefix is None:
+                if not original_prefix:
+                    msg = "router must be mounted before it can be attached"
+                    raise RuntimeError(msg)
+                canonical = original_prefix
+            else:
+                canonical = self._canonical_mount_prefix(prefix)
+                if original_prefix and canonical != original_prefix:
+                    msg = (
+                        f"router is already mounted at '{original_prefix}', "
+                        f"not '{canonical}'"
+                    )
+                    raise RuntimeError(msg)
+
             media_handlers = typ.cast(
                 "cabc.MutableMapping[falcon.WebSocketPayloadType, object]",
                 app.ws_options.media_handlers,
             )
             original_handlers = dict(media_handlers)
-            self._mount_locked(canonical)
+            if not original_prefix:
+                self._mount_locked(canonical)
             try:
                 install_raw_websocket_media_handlers(media_handlers)
 
+                prefix_template = canonical.rstrip("/") or "/"
                 routes = (
-                    ("/", "/{pachinko_path:path}")
-                    if canonical == "/"
-                    else (canonical, f"{canonical}/{{pachinko_path:path}}")
+                    prefix_template,
+                    self._greedy_route_template(canonical),
                 )
                 for route in routes:
                     app.add_route(route, self)
@@ -236,9 +262,23 @@ class WebSocketRouter:
                 # second. Keep the router reusable so the caller can repair the
                 # app and retry; re-adding the same route replaces that partial
                 # registration in Falcon.
-                self._mount_prefix = ""
-                self._routes.clear()
+                self._mount_prefix = original_prefix
+                self._routes[:] = original_routes
                 raise
+            self._attached = True
+
+    def _greedy_route_template(self, prefix: str) -> str:
+        """Build the nested Falcon route with an unused capture name."""
+        used_names = set(compile_uri_template(self._mount_prefix).groupindex)
+        for route in self._raw:
+            used_names.update(compile_uri_template(route.canonical).groupindex)
+
+        field_name = "_falcon_pachinko_path"
+        while field_name in used_names:
+            field_name += "_"
+        if prefix == "/":
+            return f"/{{{field_name}:path}}"
+        return f"{prefix}/{{{field_name}:path}}"
 
     def add_route(
         self,
@@ -598,6 +638,7 @@ class WebSocketRouter:
             resource, dispatch, context, hook_manager
         )
         acceptance = self._finalize_connection(
+            resource,
             dispatch.ws,
             should_accept=should_accept,
             context=context,
@@ -649,6 +690,7 @@ class WebSocketRouter:
 
     @staticmethod
     async def _finalize_connection(
+        resource: WebSocketResource,
         ws: WebSocketLike,
         *,
         should_accept: bool,
@@ -663,6 +705,8 @@ class WebSocketRouter:
             return True
         if WebSocketRouter._is_socket_unaccepted(ws):
             await ws.accept()
+        if not getattr(ws, "closed", False):
+            await resource.on_accepted(ws)
         return True
 
     @staticmethod

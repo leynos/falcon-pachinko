@@ -279,6 +279,8 @@ class WebSocketResource:
 
         The router calls this during connection setup. The ``after_connect``
         hooks run after this method and before the router calls ``accept()``.
+        Use :meth:`on_accepted` for setup that requires an accepted socket or
+        performs WebSocket I/O.
 
         Parameters
         ----------
@@ -295,6 +297,21 @@ class WebSocketResource:
             ``True`` to accept the WebSocket connection; ``False`` to reject it
         """
         return True
+
+    async def on_accepted(self, ws: WebSocketLike) -> None:
+        """Perform connection setup after the router accepts the socket.
+
+        Parameters
+        ----------
+        ws : WebSocketLike
+            The accepted WebSocket connection.
+
+        Notes
+        -----
+        The router calls this immediately after acceptance and before its
+        receive loop. WebSocket I/O, including initial application messages,
+        belongs here or in later message handlers, never in :meth:`on_connect`.
+        """
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Handle cleanup for a router-owned WebSocket session.
