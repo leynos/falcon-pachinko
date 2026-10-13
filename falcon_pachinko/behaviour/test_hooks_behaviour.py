@@ -139,16 +139,19 @@ def given_router(context: dict[str, typ.Any]) -> None:
     router.global_hooks.add("after_connect", global_hook)
     router.global_hooks.add("before_receive", global_hook)
     router.global_hooks.add("after_receive", global_hook)
+    router.global_hooks.add("before_disconnect", global_hook)
 
     HookedParent.hooks.add("before_connect", parent_hook)
     HookedParent.hooks.add("after_connect", parent_hook)
     HookedParent.hooks.add("before_receive", parent_hook)
     HookedParent.hooks.add("after_receive", parent_hook)
+    HookedParent.hooks.add("before_disconnect", parent_hook)
 
     HookedChild.hooks.add("before_connect", child_hook)
     HookedChild.hooks.add("after_connect", child_hook)
     HookedChild.hooks.add("before_receive", child_hook)
     HookedChild.hooks.add("after_receive", child_hook)
+    HookedChild.hooks.add("before_disconnect", child_hook)
 
     router.add_route("/hooks", HookedParent)
     router.mount("/")
@@ -163,16 +166,19 @@ def given_router_global_only(context: dict[str, typ.Any]) -> None:
     router.global_hooks.add("after_connect", global_hook)
     router.global_hooks.add("before_receive", global_hook)
     router.global_hooks.add("after_receive", global_hook)
+    router.global_hooks.add("before_disconnect", global_hook)
 
     router.add_route("/hooks", HookedParent)
     router.mount("/")
     context["router"] = router
 
 
-def _connect_client(context: dict[str, typ.Any]) -> tuple[HookedChild, DummyWS]:
+def _connect_client(
+    context: dict[str, typ.Any], frames: cabc.Iterable[object] = ()
+) -> tuple[HookedChild, DummyWS]:
     """Run the connect lifecycle and record the params hooks injected."""
     router: WebSocketRouter = context["router"]
-    ws = DummyWS()
+    ws = DummyWS(frames)
     req = make_req("/hooks/child")
     asyncio.run(router.on_websocket(req, ws))
 
@@ -190,22 +196,24 @@ def _record_hook_observations(context: dict[str, typ.Any]) -> None:
 @when("a client connects and sends a message")
 def when_client_connects(context: dict[str, typ.Any]) -> None:
     """Simulate a connection followed by a dispatched message."""
-    child, ws = _connect_client(context)
-
-    asyncio.run(child.dispatch(ws, b'{"type":"noop"}'))
+    _connect_client(context, [b'{"type":"noop"}'])
     _record_hook_observations(context)
 
 
 @when("a client connects and sends a message that triggers an error")
 def when_client_connects_with_error(context: dict[str, typ.Any]) -> None:
     """Simulate a connection followed by a dispatched message that raises."""
-    child, ws = _connect_client(context)
+    router: WebSocketRouter = context["router"]
+    ws = DummyWS([b'{"type":"error"}'])
+    req = make_req("/hooks/child")
 
     try:
-        asyncio.run(child.dispatch(ws, b'{"type":"error"}'))
+        asyncio.run(router.on_websocket(req, ws))
     except ValueError as exc:
         context["error"] = exc
 
+    child = HookedChild.instances[-1]
+    context["child_params"] = child.params
     _record_hook_observations(context)
 
 
@@ -242,6 +250,9 @@ def then_receive_order(context: dict[str, typ.Any]) -> None:
             "child.after_receive",
             "parent.after_receive",
             "global.after_receive",
+            "global.before_disconnect",
+            "parent.before_disconnect",
+            "child.before_disconnect",
         ],
     )
     assert context["after_errors"] == [
@@ -260,6 +271,7 @@ def then_only_global_hooks(context: dict[str, typ.Any]) -> None:
         "global.before_receive",
         "handler.child",
         "global.after_receive",
+        "global.before_disconnect",
     ], "only global hooks should have run when no resource hooks are registered"
     params = context["child_params"]
     assert params["global"] is True, "global before_connect hook should set its flag"
@@ -292,11 +304,16 @@ def then_error_propagates(context: dict[str, typ.Any]) -> None:
     assert isinstance(context["error"], ValueError), (
         "the captured error should be the ValueError raised by on_error"
     )
-    assert context["events"][-3:] == [
+    assert context["events"][-6:-3] == [
         "child.after_receive",
         "parent.after_receive",
         "global.after_receive",
     ], "after_receive hooks should still run in order despite the error"
+    assert context["events"][-3:] == [
+        "global.before_disconnect",
+        "parent.before_disconnect",
+        "child.before_disconnect",
+    ], "failure cleanup must run before_disconnect hooks in layer order"
     assert context["after_errors"] == [
         ("child", context["error"]),
         ("parent", context["error"]),

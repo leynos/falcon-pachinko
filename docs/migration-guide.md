@@ -137,6 +137,16 @@ app.add_route("/ws", router)
 - Register handlers with `@handles_message("tag")` or `on_tag` methods.
 - Replace legacy `on_message` fallbacks with `on_unhandled`.
 
+After connection setup succeeds, `WebSocketRouter` accepts the connection and
+owns frame reception and dispatch until disconnect. Remove application-owned
+receive loops, manual `accept()` calls, and direct calls to
+`WebSocketResource.dispatch()`. Keep message handling in resource handlers and
+`on_unhandled`; frames are dispatched sequentially, and returning normally from
+`on_unhandled` keeps the session open. The router runs `before_disconnect`
+before `on_disconnect`. Cancellation closes with code `1001`; unexpected
+receive or handler failures close with `1011` and propagate the original
+exception.
+
 1) **Wire dependency injection via `resource_factory`:**
 
 ```python

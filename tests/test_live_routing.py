@@ -62,6 +62,11 @@ class _RecordingResource(WebSocketResource):
         self.observations.selected.append(self.identity)
         return True
 
+    async def on_probe(self, ws: WebSocketLike, payload: None) -> None:
+        """Reply from the accepted session after the client probes the route."""
+        del payload
+        await ws.send_media(self.identity)
+
 
 _RecordingResource.hooks = HookCollection()
 
@@ -96,8 +101,6 @@ class _RoutingAdapter:
             # Both APIs use send_media positionally; only its parameter name differs.
             typ.cast("WebSocketLike", ws),
         )
-        identity = self._observations.selected[-1]
-        await ws.send_media(identity)
 
 
 def _create_live_router(observations: _LiveObservations) -> WebSocketRouter:
@@ -228,11 +231,12 @@ async def test_live_websocket_routes_select_literal_resource_and_hooks(
     path: str,
     identity: str,
 ) -> None:
-    """Real Falcon handshakes preserve literal routes and hook ownership."""
+    """Live Falcon sessions preserve literal routes and hook ownership."""
     base_url, observations = live_routing_server
     client = WebSocketTestClient(base_url, allow_insecure=True)
 
     async with client.connect(path) as session:
+        await session.send_json({"type": "probe"})
         message = await session.receive_json()
 
     assert message == identity, "the live handshake must reach its intended resource"

@@ -28,6 +28,7 @@ from .protocols import WebSocketLike
 # that raises NameError when introspected would be a trap for runtime
 # consumers, so the name it references has to resolve at runtime too.
 from .resource import WebSocketResource
+from .session import drive_session
 
 if typ.TYPE_CHECKING:
     import re
@@ -63,7 +64,8 @@ def _request_path_template(req: _RequestLike) -> str:
     try:
         return req.path_template
     except AttributeError:
-        return ""
+        # Falcon calls this value ``uri_template`` on its request object.
+        return getattr(req, "uri_template", "")
 
 
 def _normalize_path(path: str) -> str:
@@ -97,6 +99,11 @@ class _Dispatch:
     req: falcon.Request
     ws: WebSocketLike
     match: _RouteMatch
+    session_close_attempted: bool = False
+
+    def mark_session_close_attempted(self) -> None:
+        """Record when the session driver owns the policy close."""
+        self.session_close_attempted = True
 
 
 class WebSocketRouter:
@@ -349,7 +356,8 @@ class WebSocketRouter:
             ws_for_cleanup = dispatch.ws
             return await self._process_route_resolution(dispatch)
         except Exception as exc:
-            if not getattr(exc, "_pachinko_factory_closed", False):
+            factory_closed = getattr(exc, "_pachinko_factory_closed", False)
+            if not dispatch.session_close_attempted and not factory_closed:
                 with contextlib.suppress(Exception):
                     await ws_for_cleanup.close()
             raise
@@ -537,19 +545,27 @@ class WebSocketRouter:
         *,
         hook_manager: HookManager,
     ) -> bool:
-        """Accept or close the connection based on ``resource`` decision."""
+        """Run connection setup, then own the accepted session until closure."""
         context = await self._prepare_connection_context(
             hook_manager, resource, dispatch
         )
         should_accept = await self._execute_resource_handler(
             resource, dispatch, context, hook_manager
         )
-        return await self._finalize_connection(
+        await self._finalize_connection(
             dispatch.ws,
             should_accept=should_accept,
             context=context,
             hook_manager=hook_manager,
         )
+        if should_accept:
+            await drive_session(
+                resource,
+                dispatch.ws,
+                hook_manager,
+                on_policy_close=dispatch.mark_session_close_attempted,
+            )
+        return True
 
     @staticmethod
     async def _prepare_connection_context(

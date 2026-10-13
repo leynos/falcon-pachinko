@@ -291,9 +291,11 @@ logic.
     mechanics. This design aligns with Falcon's higher-level approach for HTTP
     handlers, where the framework manages response sending.
 
-  - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: Called
-    when the WebSocket connection is closed, either by the client or the
-    server. `close_code` provides the WebSocket close code.
+  - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: After
+    an accepted session ends, the router first notifies `before_disconnect`
+    hooks and then calls this method. `close_code` is the peer's code (1000 if
+    absent), 1001 for server cancellation, or 1011 for an unexpected receive or
+    handler failure. Rejected negotiations do not call this method.
 
   - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str,
     bytes])`
@@ -318,8 +320,9 @@ logic.
 ### 3.6. Message Handling and Dispatch
 
 A key feature of Falcon-Pachinko is its ability to dispatch incoming WebSocket
-messages to specific handler methods within the `WebSocketResource`. This
-avoids a monolithic receive loop with extensive conditional logic.
+messages to specific handler methods within the `WebSocketResource`. The
+resource handles decoding and handler resolution while the router-owned session
+driver controls frame reception and dispatch order.
 
 - **Message Format Assumption**: The dispatch mechanism assumes messages are
   JSON objects containing a 'type' field that acts as a discriminator, for
@@ -1061,9 +1064,19 @@ sequenceDiagram
         WebSocketRouter->>Client: Close WebSocket
     else on_connect returns True
         WebSocketRouter->>Client: Accept WebSocket
-    end
-    alt Unhandled exception during dispatch
-        WebSocketRouter->>Client: Close WebSocket
+        loop while the session is open
+            Client->>WebSocketRouter: TEXT or BINARY frame
+            WebSocketRouter->>WebSocketResource: dispatch(frame)
+            WebSocketResource-->>Client: optional response
+        end
+        alt Unexpected receive or dispatch exception
+            WebSocketRouter->>Client: Close WebSocket with 1011
+            WebSocketRouter->>WebSocketRouter: before_disconnect hooks (best effort)
+            WebSocketRouter->>WebSocketResource: Best-effort on_disconnect(1011)
+        else Peer disconnect
+            WebSocketRouter->>WebSocketRouter: before_disconnect hooks
+            WebSocketRouter->>WebSocketResource: on_disconnect(peer code)
+        end
     end
 ```
 
@@ -1300,36 +1313,37 @@ class ChatResource(WebSocketResource):
 
     # Handler by decorator (canonical) for tag='join'
     @handles_message("join")
-    async def on_join(self, req, ws, msg: Join):
+    async def on_join(self, ws, msg: Join):
         print(f"Joining room: {msg.room}")
 
     # Handler by convention (convenience) for tag='sendMessage'
     # The framework converts 'sendMessage' to 'on_send_message'
-    async def on_send_message(self, req, ws, msg: SendMessage):
+    async def on_send_message(self, ws, msg: SendMessage):
         print(f"Message received: {msg.text}")
 ```
 
 #### 5.3.2. Automated Dispatch Logic
 
-The base `WebSocketResource` would contain a receive loop that performs the
-following steps:
+For each accepted connection, `WebSocketRouter` owns the receive loop. Its
+session driver calls `receive_media()` and awaits
+`WebSocketResource.dispatch()` for each frame before receiving the next one.
+The resource's dispatch method performs these steps:
 
-1. Receive a raw message from the WebSocket.
+1. Decode the received raw message using
+   `msgspec.json.decode(message, type=self.schema)`. `msgspec`'s tagged union
+   support automatically inspects a tag field in the JSON to select the correct
+   `Struct` for decoding.
 
-2. Decode the message using `msgspec.json.decode(message, type=self.schema)`.
-   `msgspec`'s tagged union support automatically inspects a tag field in the
-   JSON to select the correct `Struct` for decoding.
+2. Inspect the `tag` of the resulting `Struct` instance.
 
-3. Inspect the `tag` of the resulting `Struct` instance.
-
-4. Find a handler registered with `@handles_message` for that tag. If not found,
+3. Find a handler registered with `@handles_message` for that tag. If not found,
    attempt to find a handler by the `on_{tag}` naming convention.
 
-5. Dynamically invoke the handler, e.g.,
-   `await self.on_send_message(req, ws, msg)`.
+4. Dynamically invoke the handler, e.g.,
+   `await self.on_send_message(ws, msg)`.
 
-This schema-driven design completely eliminates boilerplate dispatch logic and
-provides "zero-cost" validation via `msgspec`.
+This schema-driven dispatch keeps message validation and handler selection in
+the resource, separate from the router-owned transport receive loop.
 
 #### 5.3.3. Error Handling
 
@@ -1341,8 +1355,12 @@ frame kind and length. This follows the payload-omission policy described in
 RFC 0001 and ADR 0007. Application hooks can still read raw frames and remain a
 trusted boundary.
 
-- A `msgspec.ValidationError` raised during decoding should be caught, and a
-  customizable error hook should be invoked.
+- During decoding and payload validation, the dispatcher routes
+  `DecodeError` and `ValidationError` failures to `on_unhandled`. The stable
+  package import `falcon_pachinko.utils.ValidationError` is the same class as
+  `msgspec.ValidationError`. The router-owned session driver delegates to that
+  dispatcher and does not translate its errors; exceptions raised by message
+  handlers therefore reach the session's 1011 close-and-propagate policy.
 
 - If a message has a valid tag that does not correspond to any registered
   handler, the `on_unhandled(self, req, ws, msg)` fallback method on the base
@@ -1400,6 +1418,67 @@ The specific sequence is as follows:
 This provides maximum control, allowing outer layers to act as setup/teardown
 guards for inner layers. An exception in a `before_*` hook should terminate the
 connection attempt immediately.
+
+Once Falcon accepts the connection, the router owns a single inline receive
+loop. It passes each text or binary frame to the selected resource's dispatcher
+and waits for that dispatch to finish before receiving the next frame. The loop
+creates no task per frame. A normal peer close runs `before_disconnect` hooks
+and then `on_disconnect`; cancellation closes with 1001 and propagates, while
+an unexpected receive or handler exception closes with 1011, runs best-effort
+cleanup, and propagates the original exception. Returning normally from
+`on_unhandled` leaves the session open.
+
+```mermaid
+stateDiagram-v2
+    accTitle: WebSocket session state transitions
+    accDescr: Negotiation accepts or rejects. Active dispatches until close, error, or cancellation; cleanup follows.
+    [*] --> Negotiating
+    Negotiating --> Rejected: on_connect returns False
+    Negotiating --> Active: accept()
+    Active --> Active: receive_media() / dispatch()
+    Active --> Closing: WebSocketDisconnected
+    Active --> Failed: receive or handler exception
+    Active --> Cancelled: task cancellation
+    Closing --> Disconnected: before_disconnect / on_disconnect
+    Failed --> Disconnected: close(1011) / best-effort cleanup
+    Cancelled --> Disconnected: close(1001) / best-effort cleanup
+    Rejected --> [*]
+    Disconnected --> [*]
+```
+
+Figure 5.4.2a. WebSocket session states from negotiation and dispatch through
+peer closure, failure, or cancellation cleanup.
+
+```mermaid
+sequenceDiagram
+    accTitle: WebSocket session message sequence
+    accDescr: Router accepts, dispatches frames in order, may reply, then runs disconnect hooks and on_disconnect.
+    participant Client
+    participant WebSocketRouter
+    participant WebSocketResource
+    participant Hooks
+
+    Client->>WebSocketRouter: WebSocket connection
+    WebSocketRouter->>WebSocketResource: on_connect(req, ws, params)
+    WebSocketRouter->>Hooks: after_connect
+    WebSocketRouter->>Client: accept()
+    loop Until peer disconnects
+        Client->>WebSocketRouter: TEXT or BINARY frame
+        WebSocketRouter->>WebSocketRouter: receive_media()
+        WebSocketRouter->>WebSocketResource: dispatch(ws, raw_frame)
+        WebSocketResource-->>Client: Optional reply
+    end
+    WebSocketRouter->>Hooks: before_disconnect
+    WebSocketRouter->>WebSocketResource: on_disconnect(ws, peer_code)
+```
+
+Figure 5.4.2b. The router accepts the connection, dispatches each client frame
+sequentially, and runs disconnect hooks before the resource callback.
+
+Route matching and message policy remain in their shared boundaries: the router
+uses the URI-template compiler, and the session passes each accepted frame to
+`WebSocketResource.dispatch()`. This keeps route safety, schema and tag
+validation, and diagnostic handling out of the transport loop.
 
 ### 5.5. Architectural Implications
 
@@ -1727,11 +1806,13 @@ enables white-box testing of router behaviour without needing an ASGI server.
 - **Interface**: It implements the same async methods as
   `falcon.asgi.WebSocket` (`accept`, `close`, `send_media`, `receive_media`),
   but internally uses asyncio queues so tests can inject messages or spy on
-  emitted frames. Helper shortcuts (`send_json`, `pop_sent`) keep tests concise.
+  emitted frames. `close(code)` wakes a blocked receive; queued frames are
+  returned first, then receives raise `falcon.WebSocketDisconnected` with that
+  code. Helper shortcuts (`send_json`, `pop_sent`) keep tests concise.
 
 - **Spying and Injection**: Tests enqueue inbound messages via
-  `await simulator.push_message({...})` before driving the resource's receive
-  loop. Outbound frames are recorded and made available through
+  `await simulator.push_message({...})` before driving the router-owned session
+  for the resource. Outbound frames are recorded and made available through
   `simulator.sent_messages`, enabling assertions about order, payload, or
   metadata. Because the simulator is dependency-injectable, resources can be
   exercised in isolation alongside fake connection managers or hook managers.
@@ -1762,13 +1843,13 @@ def _websocket_simulator() -> cabc.Iterator[SimulatorRouterHarness]:
 ```
 
 A test registers routes on `harness.router` and then uses the async context
-manager `harness.connect(path, *, initial_inbound=None)` to dispatch a
-simulated connection through the router. `connect()` yields a
-`SimulatorConnection` exposing `accepted`, `closed`, `close_code`,
-`subprotocol`, and `sent_messages`, plus helpers such as `pop_sent()`,
-`pop_sent_json()`, `push_json()`, `push_text()`, and `push_bytes()`. Both the
-simulator and the underlying websocket stub are closed automatically when the
-context exits:
+manager `harness.connect(path, *, initial_inbound=None)` to drive a simulated
+connection through the router. `connect()` runs the router in a task, waits for
+connection readiness, and yields a `SimulatorConnection` exposing `accepted`,
+`closed`, `close_code`, `subprotocol`, and `sent_messages`, plus helpers such as
+`pop_sent()`, `pop_sent_json()`, `push_json()`, `push_text()`, and
+`push_bytes()`. Both the simulator and the underlying websocket stub are closed
+automatically when the context exits:
 
 ```python
 async def test_echo(websocket_simulator: SimulatorRouterHarness) -> None:
@@ -1783,9 +1864,9 @@ async def test_echo(websocket_simulator: SimulatorRouterHarness) -> None:
         }
 ```
 
-- **Lifecycle Management**: `connect()` dispatches the request through
-  `router.on_websocket()` and guarantees the simulator and the underlying
-  websocket stub are closed on exit, even if the resource left them open.
+- **Lifecycle Management**: `connect()` starts `router.on_websocket()` and
+  guarantees the simulator is closed and the router task awaited on exit, even
+  if the resource left the socket open. Session errors propagate to the test.
 
 - **Behavioural Testing**: Because routes can be added to `harness.router` at
   any point before `connect()` is awaited, higher-level fixtures can compose
@@ -1875,7 +1956,7 @@ sequenceDiagram
     Developer->>WSSim: simulator.push_message(data)
     activate WSSim
     activate App
-    WSSim->>App: Inject frame (router receive loop)
+    WSSim->>App: Inject frame into router-owned session
     deactivate WSSim
 
     Developer->>WSConn: session.send_json(data)

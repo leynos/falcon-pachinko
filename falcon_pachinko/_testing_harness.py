@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
+import typing as typ
 from types import SimpleNamespace
 
 from .testing._common import _ORIGINAL_WS_RECEIVE_MSG, _LifecycleSocket
 from .testing.simulator import WebSocketSimulator
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 
 class _OriginalWebSocket(_LifecycleSocket):
@@ -30,6 +35,25 @@ class _OriginalWebSocket(_LifecycleSocket):
 class _HarnessSimulator(WebSocketSimulator):
     """Simulator variant that mirrors lifecycle events to the original stub."""
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.ready_event = asyncio.Event()
+
+    async def _signal_ready_after(self, operation: cabc.Awaitable[None]) -> None:
+        """Wake readiness waiters after a mirrored lifecycle operation."""
+        try:
+            await operation
+        finally:
+            self.ready_event.set()
+
+    async def accept(self, subprotocol: str | None = None) -> None:
+        """Signal readiness after the simulator mirrors handshake acceptance."""
+        await self._signal_ready_after(super().accept(subprotocol))
+
+    async def close(self, code: int = 1000) -> None:
+        """Signal readiness after the simulator mirrors connection closure."""
+        await self._signal_ready_after(super().close(code))
+
     # pylint: disable-next=trivial-attribute-wrapper  # deliberate seam: testing.harness binds the ASGI stub through this name to keep the intent explicit
     def bind_original(self, original: _OriginalWebSocket) -> None:
         """Associate ``original`` so lifecycle events stay in sync."""
@@ -42,4 +66,9 @@ class _TestRequest:
 
     path: str
     path_template: str
+    headers: dict[str, str] = dc.field(default_factory=dict)
     context: SimpleNamespace = dc.field(default_factory=SimpleNamespace)
+
+    def get_header(self, name: str, default: str | None = None) -> str | None:
+        """Return a case-insensitive header value for reference hooks."""
+        return self.headers.get(name.lower(), default)
