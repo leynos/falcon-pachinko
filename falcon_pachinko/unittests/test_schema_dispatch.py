@@ -1,6 +1,7 @@
 """Tests for schema-driven dispatch using msgspec tagged unions."""
 
 import asyncio
+import logging
 import re
 import typing as typ
 
@@ -156,6 +157,18 @@ class ReservedTagResource(WebSocketResource):
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Record fallback frames."""
         self.raw.append(message)
+
+
+class EnvelopeResource(ReservedTagResource):
+    """Schema-less sibling, so undeclared envelope tags reach the lookup.
+
+    The conventional ``find_conventional_handler`` lookup only runs on the
+    envelope path. A schema-backed resource rejects an undeclared tag while
+    decoding, so dropping the schema is what lets a test observe how the
+    lookup treats reserved and ordinary tags.
+    """
+
+    schema = None
 
 
 class UntaggedFallbackResource(WebSocketResource):
@@ -314,6 +327,41 @@ async def test_schema_reserved_tag_does_not_reach_lifecycle_callback() -> None:
         f"the reserved tag must not invoke on_disconnect: {r.lifecycle}"
     )
     assert r.raw == [raw], "the reserved tag must fall back with the raw frame"
+
+
+@pytest.mark.asyncio
+async def test_reserved_tag_refusal_logs_a_reason_token(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A refused reserved tag is the only refusal the debug signal reports.
+
+    An ordinary unknown tag is an ordinary unhandled frame, so logging its
+    refusal would be high-cardinality noise; a tag reaching for a reserved
+    lifecycle callback is a security-relevant signal worth observing.
+
+    Both frames go through the *schema-less* envelope path, which is where
+    ``find_conventional_handler`` runs. A schema-backed resource rejects an
+    undeclared tag during decoding and never reaches the lookup, so it could
+    not show that an ordinary tag stays silent.
+    """
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
+    r = EnvelopeResource()
+    r.bind_default_hook_manager()
+    reserved = msjson.encode({"type": "disconnect", "payload": 1000})
+    await r.dispatch(DummyWS(), reserved)
+    reasons = [record.getMessage() for record in caplog.records]
+    assert any("reserved_lifecycle_tag" in reason for reason in reasons), (
+        f"the reserved refusal must carry its reason token: {reasons}"
+    )
+    assert not r.lifecycle, "logging the refusal must not change the dispatch"
+    assert r.raw == [reserved], "the reserved tag must still fall back"
+
+    caplog.clear()
+    unknown = msjson.encode({"type": "foo", "payload": 1})
+    await r.dispatch(DummyWS(), unknown)
+    assert "reserved_lifecycle_tag" not in caplog.text, (
+        f"an ordinary unknown tag must not emit the reserved-tag signal: {caplog.text}"
+    )
 
 
 def test_invalid_schema_type_raises() -> None:

@@ -30,20 +30,30 @@ Both API channels are exercised, because the reserved check guards both:
 The shapes live together here because they share one cause (a descriptor
 family the unwrapping helper must know about) and one fix: the helper's
 family list. Adding a family means adding its rows to the tables below.
+
+The finite tables cannot enumerate the open-ended space of discriminator
+spellings, so a property test at the end of the module asserts the same
+security invariant over arbitrary discriminator text, with the reserved
+names exercised directly as generated case variants rather than only by
+chance.
 """
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import typing as typ
 
 import msgspec.json as msjson
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from falcon_pachinko import WebSocketLike, WebSocketResource
 from falcon_pachinko.exceptions import ReservedHandlerRegistrationError
 from falcon_pachinko.handlers import is_lifecycle_callback
 from falcon_pachinko.unittests.helpers import DummyWS
+from falcon_pachinko.utils import to_snake_case
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -342,3 +352,104 @@ def test_lifecycle_predicate_recognises_every_descriptor_family() -> None:
         assert is_lifecycle_callback(owner, callable_), (
             f"{label} must be recognised as a lifecycle callback"
         )
+
+
+# ``connect`` and ``unhandled`` normalise to names the resource double below
+# does not implement, so their frames fall back. ``disconnect`` is reserved
+# *and* implemented, which is the escape under test.
+_RESERVED_DISCRIMINATOR_NAMES = ("disconnect", "connect", "unhandled")
+# The neutral handler's name is probed directly for the same reason as the
+# reserved ones: a random draw reaches it far too rarely to rely on chance,
+# and the test must show the one reachable handler still receives its frame.
+_NEUTRAL_HANDLER_NAME = "neutral"
+_PROBE_NAMES = (*_RESERVED_DISCRIMINATOR_NAMES, _NEUTRAL_HANDLER_NAME)
+
+
+def _probe_name_spellings() -> list[str]:
+    """Return each probed name in the spellings a peer could send.
+
+    ``to_snake_case`` lower-cases, so the lower-case, upper-case and
+    capitalised forms of a name all normalise back to it.
+
+    Returns
+    -------
+    list[str]
+        Each probed name in its lower-case, upper-case and capitalised form.
+    """
+    spellings: list[str] = []
+    for base in _PROBE_NAMES:
+        spellings.extend((base, base.upper(), base.capitalize()))
+    return spellings
+
+
+# Surrogates are excluded because a lone surrogate cannot be UTF-8 encoded
+# into a frame; control characters are excluded because they are not the
+# discriminator spellings this invariant is about. The probed names are
+# excluded from the arbitrary draw because the sampled spellings below cover
+# them directly instead of leaving them to chance.
+_DISCRIMINATOR_TEXT = st.text(
+    alphabet=st.characters(exclude_categories=("Cs", "Cc")),
+    max_size=32,
+).filter(lambda tag: to_snake_case(tag) not in _PROBE_NAMES)
+
+_DISCRIMINATORS = _DISCRIMINATOR_TEXT | st.sampled_from(_probe_name_spellings())
+
+
+class InertProbeResource(WebSocketResource):
+    """Dispatch double whose lifecycle records every peer-selected call.
+
+    ``on_neutral`` is the only handler a discriminator can select, so any
+    frame that reaches the lifecycle recorder, rather than the neutral
+    recorder or the fallback, is a peer selecting a reserved callback.
+    """
+
+    def __init__(self) -> None:
+        self.lifecycle: list[int] = []
+        self.neutral: list[object] = []
+        self.fallback: list[str | bytes] = []
+
+    async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+        """Record a lifecycle connection that no peer tag may cause."""
+        self.lifecycle.append(close_code)
+
+    async def on_neutral(self, ws: WebSocketLike, payload: object) -> None:
+        """Record payloads from the one reachable neutral handler."""
+        self.neutral.append(payload)
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record the original frame handed to the fallback."""
+        self.fallback.append(message)
+
+
+@given(discriminator=_DISCRIMINATORS)
+def test_arbitrary_discriminators_cannot_select_a_lifecycle_callback(
+    discriminator: str,
+) -> None:
+    """No envelope discriminator reaches a lifecycle callback from a peer.
+
+    The frame must reach either the one neutral handler or the fallback with
+    its original bytes; ``on_disconnect`` must never record a close code.
+    """
+
+    async def dispatch_frame() -> tuple[InertProbeResource, str | bytes]:
+        """Dispatch one generated discriminator and return what it recorded."""
+        resource = InertProbeResource()
+        resource.bind_default_hook_manager()
+        raw = msjson.encode({"type": discriminator, "payload": "payload"})
+        await resource.dispatch(DummyWS(), raw)
+        return resource, raw
+
+    resource, raw = asyncio.run(dispatch_frame())
+    assert not resource.lifecycle, (
+        f"the tag {discriminator!r} must not invoke on_disconnect: {resource.lifecycle}"
+    )
+    if to_snake_case(discriminator) == _NEUTRAL_HANDLER_NAME:
+        assert resource.neutral == ["payload"], (
+            f"the neutral handler must receive the payload for {discriminator!r}"
+        )
+        assert not resource.fallback, "a delivered frame must not fall back"
+    else:
+        assert resource.fallback == [raw], (
+            f"the frame for {discriminator!r} must fall back with its original bytes"
+        )
+        assert not resource.neutral, "an undelivered frame must not reach a handler"

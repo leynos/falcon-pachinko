@@ -17,7 +17,7 @@ from .exceptions import (
     HandlerSignatureError,
     SignatureInspectionError,
 )
-from .handlers import HandlerInfo, get_payload_type
+from .handlers import LIFECYCLE_CALLBACK_NAMES, HandlerInfo, get_payload_type
 from .schema import validate_strict_payload
 from .utils import to_snake_case
 
@@ -96,6 +96,16 @@ def find_conventional_handler(
     name = f"on_{to_snake_case(tag)}"
     allowed = getattr(resource.__class__, "_conventional_handler_names", frozenset())
     if name not in allowed:
+        if name in LIFECYCLE_CALLBACK_NAMES:
+            # The refusal is silent for an ordinary unknown tag, but a peer
+            # reaching for a reserved callback is a security-relevant signal
+            # worth making observable. Only the normalised name is logged:
+            # it is one of three module constants, so rendering it through
+            # ``_identifier`` cannot disclose peer-supplied text.
+            logger.debug(
+                "Refused conventional handler %s (reason=reserved_lifecycle_tag)",
+                _identifier(name),
+            )
         return None
     func = getattr(resource.__class__, name, None)
     if func is None or not inspect.iscoroutinefunction(func):

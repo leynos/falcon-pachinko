@@ -66,6 +66,35 @@ check. There the configuration `TypeError` propagates during dispatch instead
 of reaching `on_unhandled`; it is deliberately not converted into a bad-frame
 fallback, which would disguise a broken schema as a malformed message.
 
+## Reserved lifecycle handlers
+
+The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are reserved:
+they are driven by the connection lifecycle, and a peer-chosen envelope `type`
+can no longer select them — not an alias of one, not a copy inherited from a
+parent resource, and not the coroutine behind a descriptor such as
+`@classmethod`, `@staticmethod`, `functools.partialmethod`,
+`functools.singledispatchmethod`, `functools.cached_property` or `property`. A
+tag that normalizes to a reserved name, such as `disconnect`, no longer
+resolves; the frame reaches `on_unhandled` with the original payload.
+
+Registering such a callable as a message handler now raises
+`ReservedHandlerRegistrationError`, whether through `@handles_message` or
+`add_handler`.
+
+Rename a message handler whose name collides with a lifecycle callback, or keep
+the tag and register a distinct handler for it explicitly:
+
+```python
+class ChatResource(WebSocketResource):
+    @handles_message("disconnect")
+    async def handle_disconnect(self, ws, payload: object) -> None: ...
+```
+
+The reserved tag string itself stays legal for a distinct method; only the
+lifecycle callback is refused. See
+[Reserved lifecycle names](users-guide.md#reserved-lifecycle-names) in the user
+guide for the exact rules.
+
 ## Step-by-Step Migration
 
 1) **Install websocket support** (unchanged):
