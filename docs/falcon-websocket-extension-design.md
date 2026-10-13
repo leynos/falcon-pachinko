@@ -1313,12 +1313,12 @@ class ChatResource(WebSocketResource):
 
     # Handler by decorator (canonical) for tag='join'
     @handles_message("join")
-    async def on_join(self, req, ws, msg: Join):
+    async def on_join(self, ws, msg: Join):
         print(f"Joining room: {msg.room}")
 
     # Handler by convention (convenience) for tag='sendMessage'
     # The framework converts 'sendMessage' to 'on_send_message'
-    async def on_send_message(self, req, ws, msg: SendMessage):
+    async def on_send_message(self, ws, msg: SendMessage):
         print(f"Message received: {msg.text}")
 ```
 
@@ -1340,7 +1340,7 @@ The resource's dispatch method performs these steps:
    attempt to find a handler by the `on_{tag}` naming convention.
 
 4. Dynamically invoke the handler, e.g.,
-   `await self.on_send_message(req, ws, msg)`.
+   `await self.on_send_message(ws, msg)`.
 
 This schema-driven dispatch keeps message validation and handler selection in
 the resource, separate from the router-owned transport receive loop.
