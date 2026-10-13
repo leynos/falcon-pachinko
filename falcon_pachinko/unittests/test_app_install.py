@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 import typing as typ
 
+import falcon.asgi
 import pytest
 
 from falcon_pachinko import install
@@ -149,6 +150,17 @@ def test_install_adds_methods_and_manager(dummy_app: SupportsWebSocket) -> None:
     ), "install() should attach a threading.Lock for route registration"
 
 
+def test_install_returns_manager_for_slot_only_falcon_app() -> None:
+    """Falcon's slotted App can use the public installation return value."""
+    app = falcon.asgi.App()
+
+    conn_mgr = install(app)
+
+    assert isinstance(conn_mgr, WebSocketConnectionManager), (
+        "install() must return its manager when Falcon disallows instance attrs"
+    )
+
+
 def test_add_websocket_route_registers_resource(
     dummy_app: SupportsWebSocket, dummy_resource_cls: type[WebSocketResource]
 ) -> None:
@@ -180,7 +192,10 @@ def test_install_is_idempotent(dummy_app: SupportsWebSocket) -> None:
     first_create_fn = dummy_app.create_websocket_resource
     first_lock = dummy_app._websocket_route_lock  # pyright: ignore[reportPrivateUsage]  # test inspects the installed private lock
 
-    install(dummy_app)
+    installed_manager = install(dummy_app)
+    assert installed_manager is first_manager, (
+        "re-install() should return the existing connection manager"
+    )
     assert dummy_app.ws_connection_manager is first_manager, (
         "re-install() should not replace the connection manager"
     )
