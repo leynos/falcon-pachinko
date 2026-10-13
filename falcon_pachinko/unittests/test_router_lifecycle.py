@@ -17,6 +17,7 @@ from falcon_pachinko import (
     WebSocketRouter,
     handles_message,
 )
+from falcon_pachinko._router_lifecycle import _FalconResponderAdapter
 from falcon_pachinko.router import _AcceptedConnection
 from falcon_pachinko.unittests.helpers import RecordingWS, make_req
 
@@ -327,7 +328,7 @@ def _accepted_lifecycle_connection(
     ws: _ScriptedTextWebSocket,
     *,
     fail_handler: bool = False,
-) -> tuple[WebSocketRouter, _AcceptedConnection]:
+) -> tuple[_FalconResponderAdapter, _AcceptedConnection]:
     """Build the accepted router state consumed by scripted receive tests."""
     router = WebSocketRouter()
     router.global_hooks.add(
@@ -336,7 +337,7 @@ def _accepted_lifecycle_connection(
     )
     resource = _LifecycleResource(events, fail_handler=fail_handler)
     manager = router._setup_hook_management([resource])
-    return router, _AcceptedConnection(resource, ws, manager)
+    return _FalconResponderAdapter(router), _AcceptedConnection(resource, ws, manager)
 
 
 @pytest.mark.asyncio
@@ -344,9 +345,9 @@ async def test_receive_loop_uses_peer_code_without_closing_again() -> None:
     """A peer disconnect's code reaches hooks and resource cleanup unchanged."""
     events: list[str] = []
     ws = _ScriptedTextWebSocket([falcon.WebSocketDisconnected(code=4001)])
-    router, connection = _accepted_lifecycle_connection(events, ws)
+    adapter, connection = _accepted_lifecycle_connection(events, ws)
 
-    await router._drive_accepted_connection(connection)
+    await adapter._drive_accepted_connection(connection)
 
     assert events == ["before:4001", "disconnected:4001"], (
         "the peer close code must be shared after before-disconnect hooks"
@@ -355,14 +356,29 @@ async def test_receive_loop_uses_peer_code_without_closing_again() -> None:
 
 
 @pytest.mark.asyncio
+async def test_receive_loop_closes_binary_frames_as_unsupported_data() -> None:
+    """The text-only production adapter rejects binary frames with code 1003."""
+    events: list[str] = []
+    ws = _ScriptedTextWebSocket([falcon.PayloadTypeError()])
+    adapter, connection = _accepted_lifecycle_connection(events, ws)
+
+    await adapter._drive_accepted_connection(connection)
+
+    assert ws.closed == [1003], "unsupported binary frames must close with 1003"
+    assert events == ["before:1003", "disconnected:1003"], (
+        "unsupported frames must complete disconnect hooks in order"
+    )
+
+
+@pytest.mark.asyncio
 async def test_handler_error_closes_with_1011_and_is_reraised() -> None:
     """Unexpected handler errors close the socket and retain their exception."""
     events: list[str] = []
     ws = _ScriptedTextWebSocket(["{}"])
-    router, connection = _accepted_lifecycle_connection(events, ws, fail_handler=True)
+    adapter, connection = _accepted_lifecycle_connection(events, ws, fail_handler=True)
 
     with pytest.raises(RuntimeError):
-        await router._drive_accepted_connection(connection)
+        await adapter._drive_accepted_connection(connection)
 
     assert ws.closed == [1011], "handler errors must close with code 1011"
     assert events == ["before:1011", "disconnected:1011"], (
@@ -375,10 +391,10 @@ async def test_cancellation_finalizes_with_1006_and_is_reraised() -> None:
     """Cancellation uses abnormal close metadata and is propagated."""
     events: list[str] = []
     ws = _ScriptedTextWebSocket([asyncio.CancelledError()])
-    router, connection = _accepted_lifecycle_connection(events, ws)
+    adapter, connection = _accepted_lifecycle_connection(events, ws)
 
     with pytest.raises(asyncio.CancelledError):
-        await router._drive_accepted_connection(connection)
+        await adapter._drive_accepted_connection(connection)
 
     assert not ws.closed, "cancellation must not send reserved code 1006"
     assert events == ["before:1006", "disconnected:1006"], (

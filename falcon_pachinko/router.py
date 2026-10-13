@@ -29,7 +29,6 @@ from ._router_lifecycle import (
     _request_path_template,
     _RequestLike,
     _RouteAttempt,
-    _TextReceivingWebSocket,
 )
 from ._uri_template import _compile_prefix_template, compile_uri_template
 from .hooks import HookCollection, HookContext, HookManager
@@ -188,7 +187,9 @@ class WebSocketRouter:
         """Register the router's Falcon responder at its mounted prefix.
 
         Call :meth:`mount` before attaching the router. The responder handles
-        both the prefix itself and every nested path below it.
+        both the prefix itself and every nested path below it. It owns a
+        text-only receive loop; binary frames are closed as unsupported data
+        with close code 1003.
 
         Raises
         ------
@@ -326,23 +327,6 @@ class WebSocketRouter:
                 return attempt.connection
 
         raise falcon.HTTPNotFound
-
-    async def _drive_accepted_connection(self, connection: _AcceptedConnection) -> None:
-        """Receive text frames until disconnect, dispatching them in order."""
-        resource, ws = connection.resource, connection.ws
-        try:
-            text_ws = typ.cast("_TextReceivingWebSocket", ws)
-            while True:
-                raw = await text_ws.receive_text()
-                await resource.dispatch(ws, raw)
-        except falcon.WebSocketDisconnected as disconnected:
-            await self._finalize_disconnect(connection, disconnected.code)
-        except asyncio.CancelledError as error:
-            await self._handle_post_accept_error(connection, error)
-            raise
-        except Exception as error:
-            await self._handle_post_accept_error(connection, error)
-            raise
 
     async def _try_route(
         self, route: _CompiledRoute, req: _RequestLike, ws: WebSocketLike

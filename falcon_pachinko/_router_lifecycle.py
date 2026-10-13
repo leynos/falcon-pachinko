@@ -12,13 +12,14 @@ Applications use these helpers indirectly by mounting and attaching a router::
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
 import typing as typ
 
-if typ.TYPE_CHECKING:
-    import falcon
-    import falcon.asgi
+import falcon
+import falcon.asgi
 
+if typ.TYPE_CHECKING:
     from .hooks import HookContext, HookManager
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
@@ -112,4 +113,39 @@ class _FalconResponderAdapter:
             req, typ.cast("WebSocketLike", ws)
         )
         if connection is not None:
-            await self._router._drive_accepted_connection(connection)
+            await self._drive_accepted_connection(connection)
+
+    async def _drive_accepted_connection(self, connection: _AcceptedConnection) -> None:
+        """Receive text frames until disconnect, dispatching them in order."""
+        router = self._router
+        resource, ws = connection.resource, connection.ws
+        try:
+            text_ws = typ.cast("_TextReceivingWebSocket", ws)
+            while True:
+                raw = await text_ws.receive_text()
+                await resource.dispatch(ws, raw)
+        except falcon.WebSocketDisconnected as disconnected:
+            await router._finalize_disconnect(connection, disconnected.code)
+        except falcon.PayloadTypeError:
+            await self._close_unsupported_frame(connection)
+        except asyncio.CancelledError as error:
+            await router._handle_post_accept_error(connection, error)
+            raise
+        except Exception as error:
+            await router._handle_post_accept_error(connection, error)
+            raise
+
+    async def _close_unsupported_frame(self, connection: _AcceptedConnection) -> None:
+        """Close a text-only session when its peer sends a binary frame."""
+        try:
+            await connection.ws.close(code=1003)
+        except falcon.WebSocketDisconnected as disconnected:
+            await self._router._finalize_disconnect(connection, disconnected.code)
+        except asyncio.CancelledError as error:
+            await self._router._handle_post_accept_error(connection, error)
+            raise
+        except Exception as error:
+            await self._router._handle_post_accept_error(connection, error)
+            raise
+        else:
+            await self._router._finalize_disconnect(connection, 1003)
