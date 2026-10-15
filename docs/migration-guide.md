@@ -163,7 +163,8 @@ router.attach(app, "/ws")
 After connection setup succeeds, `WebSocketRouter` accepts the connection and
 owns frame reception and dispatch until disconnect. Remove application-owned
 receive loops, manual `accept()` calls, and direct calls to
-`WebSocketResource.dispatch()`. Keep message handling in resource handlers and
+`WebSocketResource.dispatch()`, except for `await ws.accept()` before sending a
+frame inside `on_connect()`. Keep message handling in resource handlers and
 `on_unhandled`; frames are dispatched sequentially, and returning normally from
 `on_unhandled` keeps the session open. The router runs `before_disconnect`
 before `on_disconnect`. Cancellation closes with code `1001`; unexpected

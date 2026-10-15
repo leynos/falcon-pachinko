@@ -36,13 +36,22 @@ def test_attach_can_retry_after_route_registration_failure(
         ) -> None:
             if uri_template == failing_route and not self._failed_once:
                 self._failed_once = True
+                # Rollback must recover keys removed during registration too.
+                del self.ws_options.media_handlers[falcon.WebSocketPayloadType.BINARY]
                 msg = "route registration failed"
                 raise RuntimeError(msg)
             super().add_route(uri_template, resource, **kwargs)
 
     app = FailingFalconApp()
+    original_handlers = dict(app.ws_options.media_handlers)
     with pytest.raises(RuntimeError, match="route registration failed"):
         router.attach(app, "/ws")
+
+    assert dict(app.ws_options.media_handlers) == original_handlers, (
+        "attach failure must restore the app media handlers"
+    )
+    assert not router._mount_prefix, "attach failure must clear the mount prefix"
+    assert not router._routes, "attach failure must clear registered routes"
 
     router.attach(app, "/ws")
 

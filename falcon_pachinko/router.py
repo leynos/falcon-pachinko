@@ -203,12 +203,13 @@ class WebSocketRouter:
 
         canonical = self._canonical_mount_prefix(prefix)
         with self._mount_lock:
+            media_handlers = typ.cast(
+                "cabc.MutableMapping[falcon.WebSocketPayloadType, object]",
+                app.ws_options.media_handlers,
+            )
+            original_handlers = dict(media_handlers)
             self._mount_locked(canonical)
             try:
-                media_handlers = typ.cast(
-                    "cabc.MutableMapping[falcon.WebSocketPayloadType, object]",
-                    app.ws_options.media_handlers,
-                )
                 install_raw_websocket_media_handlers(media_handlers)
 
                 routes = (
@@ -219,6 +220,9 @@ class WebSocketRouter:
                 for route in routes:
                     app.add_route(route, self)
             except BaseException:
+                # Media handlers are shared by every WebSocket route on the app.
+                media_handlers.clear()
+                media_handlers.update(original_handlers)
                 # Falcon may have accepted the first route before rejecting the
                 # second. Keep the router reusable so the caller can repair the
                 # app and retry; re-adding the same route replaces that partial
