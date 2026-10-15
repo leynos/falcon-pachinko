@@ -204,6 +204,72 @@ async def test_router_attach_dispatches_parameterized_route_through_falcon() -> 
 
 
 @pytest.mark.asyncio
+async def test_router_attach_preserves_binary_frames_and_serializes_responses() -> None:
+    """Preserve inbound bytes and use the wrapped binary serializer on send."""
+
+    class BinaryMediaHandler:
+        def __init__(self) -> None:
+            self.serialized: list[object] = []
+
+        def deserialize(self, payload: object) -> object:
+            return b"decoded by the original handler"
+
+        def serialize(self, media: object) -> bytes:
+            self.serialized.append(media)
+            assert isinstance(media, bytes), "binary media must remain bytes"
+            return b"serialized:" + media
+
+    class BinaryEchoResource(WebSocketResource):
+        instances: typ.ClassVar[list[BinaryEchoResource]] = []
+
+        def __init__(self) -> None:
+            self.received: str | bytes | None = None
+            self.received_event = asyncio.Event()
+            type(self).instances.append(self)
+
+        async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Accept the connection for the binary-frame regression."""
+            return True
+
+        async def on_unhandled(self, ws: object, message: str | bytes) -> None:
+            """Record raw input and send it through Falcon's binary serializer."""
+            self.received = message
+            self.received_event.set()
+            socket = typ.cast("falcon.asgi.WebSocket", ws)
+            await socket.send_media(message, falcon.WebSocketPayloadType.BINARY)
+
+    payload = b"\x00\x01raw binary frame"
+    BinaryEchoResource.instances.clear()
+    binary_handler = BinaryMediaHandler()
+    app = falcon.asgi.App()
+    media_handlers = typ.cast(
+        "cabc.MutableMapping[falcon.WebSocketPayloadType, object]",
+        app.ws_options.media_handlers,
+    )
+    media_handlers[falcon.WebSocketPayloadType.BINARY] = binary_handler
+    router = WebSocketRouter()
+    router.add_route("/binary", BinaryEchoResource)
+    with pytest.warns(UserWarning, match="BINARY"):
+        router.attach(app, "/ws")
+    conductor = falcon.testing.ASGIConductor(app)
+
+    async with conductor.simulate_ws("/ws/binary") as websocket:
+        await websocket.send_data(payload)
+        assert BinaryEchoResource.instances, "the binary route must create a resource"
+        resource = BinaryEchoResource.instances[-1]
+        await asyncio.wait_for(resource.received_event.wait(), timeout=1.0)
+        response = await websocket.receive_data()
+
+    assert resource.received == payload, "binary input must reach the handler unchanged"
+    assert binary_handler.serialized == [payload], (
+        "the installed wrapper must delegate binary serialization"
+    )
+    assert response == b"serialized:" + payload, (
+        "the peer must receive the configured binary serialization"
+    )
+
+
+@pytest.mark.asyncio
 async def test_attach_documents_raw_media_contract_for_other_falcon_routes() -> None:
     """Falcon responders on the same app observe the installed raw handlers."""
 

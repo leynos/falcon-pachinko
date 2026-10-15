@@ -525,6 +525,31 @@ async def test_escaped_asgi_exception_is_recorded_and_reraised() -> None:
 
 
 @pytest.mark.asyncio
+async def test_escaped_asgi_exception_is_not_recorded_when_capture_is_disabled() -> (
+    None
+):
+    """Propagate escaped failures without storing them when capture is disabled."""
+    failure = RuntimeError("escaped ASGI failure")
+
+    class EscapingApp(falcon.asgi.App):
+        async def __call__(self, scope: object, receive: object, send: object) -> None:
+            raise failure
+
+    app = EscapingApp()
+    adapter = _FakeAdapter()
+
+    async with LiveWebSocketServer(
+        app, adapter=adapter, capture_errors=False
+    ) as server:
+        assert adapter.app is app, "disabled capture must pass through the original app"
+        with pytest.raises(RuntimeError) as caught:
+            await adapter.app({}, None, None)
+
+        assert caught.value is failure, "the original application failure must escape"
+        assert server.errors == (), "disabled capture must leave errors empty"
+
+
+@pytest.mark.asyncio
 async def test_serve_task_failure_is_reported_during_teardown() -> None:
     """Surface serve-task exceptions when the live context exits."""
     adapter = _FailingServeAdapter()
