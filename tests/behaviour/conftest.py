@@ -34,6 +34,12 @@ def live_event_loop(
         loop.close()
 
 
+@pytest.fixture
+def event_loop(live_event_loop: asyncio.AbstractEventLoop) -> asyncio.AbstractEventLoop:
+    """Share the live-loop owner with other behaviour fixtures."""
+    return live_event_loop
+
+
 @given("a live Falcon ASGI WebSocket server", target_fixture="context")
 def given_live_server(
     live_event_loop: asyncio.AbstractEventLoop,
@@ -68,6 +74,9 @@ def then_client_close_recorded(context: LiveScenario) -> None:
     context.event_loop.run_until_complete(stop_server(context))
     records = context.recorder.disconnect_records
     assert len(records) == 1, "one accepted client must disconnect exactly once"
+    assert context.recorder.disconnect_invocations == 1, (
+        "on_disconnect must be invoked exactly once"
+    )
     assert records[0][1] == 4000, "cleanup must receive the client's close code"
 
 
