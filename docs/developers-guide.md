@@ -56,6 +56,54 @@ contract; replacing them with a configuration object or opaque keyword
 arguments would change that contract. Keep this exception limited to that
 method, without a cohesion suppression or project threshold change.
 
+## Cluster fan-out maintenance
+
+Keep `ConnectionBackend` and `WebSocketConnectionManager` as process-local
+registries for live sockets. `ClusterFanout` coordinates distributed room
+membership through a `FanoutTransport` that exchanges string identifiers and
+floating-point lease durations as metadata, and serialized envelopes as bytes;
+it never transfers live sockets. A lease is per node and room: subscribe on the
+first local join, unsubscribe on the last local leave, refresh by heartbeat,
+release during graceful shutdown, and let `lease_ttl` expire membership after a
+crash. Resources should call `add_connection`, `join_room`, `publish` and
+`remove_connection` through the coordinator, with `fanout.run` started and
+stopped by `WorkerController` in the ASGI lifespan. See the
+[user guide's clustered deployment section](users-guide.md#clustered-deployments),
+the
+[fan-out design](falcon-websocket-extension-design.md#371-cluster-membership-and-fan-out),
+and the
+[scalability discussion](falcon-websocket-extension-design.md#64-scalability-for-distributed-systems).
+
+Delivery is best effort, with no durability or replay to down or expired nodes.
+Per-socket ordering depends on the transport preserving per-publisher, per-node
+order; there is no global ordering, and duplicates are possible with
+at-least-once transports. The coordinator does not deduplicate; `message_id` is
+available in the envelope but is not added to WebSocket payloads, so
+applications needing deduplication must supply their own payload identifier.
+Serialization failures occur before publication, transport publish failures
+propagate without retry, and local send failures do not stop the listener,
+evict connections or roll back publication. The in-memory test transport is
+`InMemoryFanoutTransport`; the real two-server BDD lives in
+`tests/behaviour/cluster_fanout.feature` and
+`tests/behaviour/test_cluster_fanout_steps.py`.
+
+`WorkerController` remains telemetry-agnostic. `ClusterFanout` and session
+cleanup may emit standard DEBUG events with fixed fields `operation`, `outcome`,
+`duration_seconds` measured with a monotonic clock, and `exception_type`; use
+fixed operation and outcome values for publication, membership maintenance,
+listener termination and disconnect cleanup. Keep successful message decoding
+and local delivery silent, distinguish decode failures from delivery failures,
+and emit no unconditional per-frame events. Exclude identifiers, payloads,
+exception values and tracebacks. Host logging handlers may aggregate metrics or
+start and end spans using task or context; broker decorators may measure queue
+waits and operations, while existing lifecycle hooks support resource
+instrumentation. Filter, sample or aggregate to bound event volume because
+publication and lease renewal are frequent and DEBUG is off by default. Metrics
+must use fixed operation and outcome dimensions, never room, message,
+connection or node IDs as labels. Keep instrumentation optional and
+host-configured, with no mandatory SDK, public constructor changes or
+`WorkerController` changes.
+
 ## Dependency bounds
 
 The package supports Falcon 4.x through `falcon>=4,<5`. Falcon follows

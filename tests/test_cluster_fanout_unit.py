@@ -9,6 +9,7 @@ import pytest
 
 from falcon_pachinko import ClusterFanout, FanoutMessage, WebSocketConnectionManager
 from falcon_pachinko.testing import InMemoryFanoutTransport
+from tests._fanout_stubs import _FailOnceSocket, _NotifyingSocket
 from tests._stubs import RecordingWebSocket
 
 
@@ -103,38 +104,6 @@ def test_envelope_round_trip() -> None:
     )
 
 
-class _NotifyingSocket(RecordingWebSocket):
-    """Signal completed sends without polling.
-
-    Reuse the shared socket stub for lifecycle recording.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.sent = asyncio.Event()
-
-    async def send_media(self, data: object) -> None:
-        """Record the message and notify the waiting test."""
-        await super().send_media(data)
-        self.sent.set()
-
-
-class _FailOnceSocket(_NotifyingSocket):
-    """Fail one delivery then accept subsequent messages."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._failed = False
-
-    async def send_media(self, data: object) -> None:
-        """Exercise isolated ordinary send failures."""
-        if not self._failed:
-            self._failed = True
-            msg = "first delivery fails"
-            raise RuntimeError(msg)
-        await super().send_media(data)
-
-
 @pytest.mark.asyncio
 async def test_listener_survives_failed_send() -> None:
     """A failed recipient stays registered and receives later messages."""
@@ -191,6 +160,7 @@ async def test_restart_resubscribes_existing_local_rooms() -> None:
     original_subscribe = transport.subscribe
 
     async def subscribe(room: str, node_id: str, *, ttl: float) -> None:
+        """Signal after the restarted worker reacquires its room lease."""
         await original_subscribe(room, node_id, ttl=ttl)
         renewed.set()
 
@@ -229,6 +199,7 @@ async def test_heartbeat_reacquires_expired_local_room_lease() -> None:
     original_refresh = transport.refresh
 
     async def refresh(node_id: str, *, ttl: float) -> None:
+        """Signal when the heartbeat refresh reaches the transport."""
         await original_refresh(node_id, ttl=ttl)
         refreshed.set()
 
@@ -270,6 +241,7 @@ async def test_heartbeat_retries_failed_last_member_unsubscribe(operation: str) 
     has_failed = False
 
     async def unsubscribe(room: str, node_id: str) -> None:
+        """Fail the first removal and signal when heartbeat retries it."""
         nonlocal has_failed
         if not has_failed:
             has_failed = True
@@ -320,12 +292,14 @@ async def test_failed_unsubscribe_does_not_block_other_rooms_or_prolong_lease() 
     original_subscribe = transport.subscribe
 
     async def unsubscribe(room: str, node_id: str) -> None:
+        """Keep bad-room removal pending while allowing other cleanup."""
         if room == "bad":
             msg = "persistent room cleanup failure"
             raise RuntimeError(msg)
         await original_unsubscribe(room, node_id)
 
     async def subscribe(room: str, node_id: str, *, ttl: float) -> None:
+        """Record an occupied-room renewal after pending removals are retried."""
         await original_subscribe(room, node_id, ttl=ttl)
         renewed.set()
 
@@ -373,6 +347,7 @@ async def test_heartbeat_recovers_from_transient_transport_failure(
     original_subscribe = transport.subscribe
 
     def renew() -> None:
+        """Raise once, then signal that heartbeat retries have recovered."""
         nonlocal calls
         calls += 1
         if calls == 2:
@@ -382,10 +357,12 @@ async def test_heartbeat_recovers_from_transient_transport_failure(
             recovered.set()
 
     async def refresh(node_id: str, *, ttl: float) -> None:
+        """Apply the injected heartbeat failure before refreshing leases."""
         renew()
         await original_refresh(node_id, ttl=ttl)
 
     async def subscribe(room: str, node_id: str, *, ttl: float) -> None:
+        """Apply the injected heartbeat failure before subscribing rooms."""
         renew()
         await original_subscribe(room, node_id, ttl=ttl)
 
@@ -415,8 +392,10 @@ async def test_heartbeat_recovers_from_transient_transport_failure(
 @pytest.mark.parametrize("failure", ["raise", "stall"])
 async def test_shutdown_release_is_bounded_and_preserves_cancellation(
     failure: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A broken broker release must not mask cancellation or hang shutdown."""
+    caplog.set_level("DEBUG", logger="falcon_pachinko.fanout")
     transport = InMemoryFanoutTransport()
     node = ClusterFanout(
         "a",
@@ -430,10 +409,12 @@ async def test_shutdown_release_is_bounded_and_preserves_cancellation(
     original_refresh = transport.refresh
 
     async def refresh(node_id: str, *, ttl: float) -> None:
+        """Signal worker startup after membership refresh completes."""
         await original_refresh(node_id, ttl=ttl)
         started.set()
 
     async def release(node_id: str) -> None:
+        """Raise or stall to exercise bounded worker cleanup."""
         if failure == "raise":
             msg = "broker release failed"
             raise RuntimeError(msg)
@@ -452,6 +433,11 @@ async def test_shutdown_release_is_bounded_and_preserves_cancellation(
         )
         with pytest.raises(asyncio.CancelledError):
             await task
+        assert any(
+            vars(record).get("operation") == "release"
+            and vars(record).get("outcome") == "failed"
+            for record in caplog.records
+        ), "release errors and expiry must be observable as operational failures"
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
@@ -471,6 +457,7 @@ async def test_shutdown_is_bounded_while_membership_holds_lock() -> None:
     subscribing = asyncio.Event()
 
     async def subscribe(room: str, node_id: str, *, ttl: float) -> None:
+        """Hold the membership lock until task cancellation interrupts it."""
         subscribing.set()
         await asyncio.Event().wait()
 

@@ -57,6 +57,7 @@ async def test_live_server_bounds_stalled_shutdown(
     class StalledServer(uvicorn.Server):
         @typ.override
         async def serve(self, sockets: list[socket.socket] | None = None) -> None:
+            """Hold startup open so bounded helper teardown can be tested."""
             self.started = True
             try:
                 await asyncio.Event().wait()

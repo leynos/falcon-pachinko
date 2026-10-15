@@ -25,6 +25,7 @@ class FailingCleanupResource(SessionResource):
 
     @typ.override
     async def on_disconnect(self, ws: object, close_code: int) -> None:
+        """Record cleanup before simulating a failing resource hook."""
         await super().on_disconnect(ws, close_code)
         msg = "cleanup failed"
         raise RuntimeError(msg)
@@ -80,6 +81,7 @@ async def test_receive_loop_after_connect_failure_disconnects_once() -> None:
     router = session_router(resource, receive_loop=True)
 
     def fail_after_connect(context: HookContext) -> None:
+        """Inject a post-connect failure after resource state is acquired."""
         msg = "after_connect failed"
         raise RuntimeError(msg)
 
@@ -101,6 +103,7 @@ async def test_receive_loop_runs_disconnect_hooks_before_cleanup() -> None:
     observed: list[tuple[str, int | None, int]] = []
 
     def before_disconnect(context: HookContext) -> None:
+        """Capture hook order and state before resource cleanup runs."""
         observed.append((
             str(context.event),
             context.close_code,
@@ -123,6 +126,7 @@ async def test_receive_loop_failing_disconnect_hook_cannot_skip_cleanup() -> Non
     router = session_router(resource, receive_loop=True)
 
     def before_disconnect(context: HookContext) -> None:
+        """Raise from the hook to verify cleanup remains protected."""
         msg = "disconnect hook failed"
         raise RuntimeError(msg)
 

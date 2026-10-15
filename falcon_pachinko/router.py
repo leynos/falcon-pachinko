@@ -82,6 +82,14 @@ class WebSocketRouter:
     general ones to control precedence. Paths are normalized so that a template
     ``"/foo"`` matches ``"/foo"`` and ``"/foo/"`` equally. If a trailing slash is
     included in the template, generated URLs will preserve it.
+
+    With ``receive_loop=True``, the router owns an accepted session: it reads
+    frames in order and calls ``on_disconnect`` once after ``on_connect``
+    accepts, including when ``after_connect``, ``accept`` or frame dispatch
+    fails, or when the task is cancelled. A rejected or failing ``on_connect``
+    does not call ``on_disconnect``. The default ``False`` preserves the
+    legacy lifecycle in which the router returns after acceptance and the
+    application owns further receives and cleanup.
     """
 
     def __init__(
@@ -92,16 +100,26 @@ class WebSocketRouter:
         simulator_factory: SimulatorFactory | None = None,
         receive_loop: bool = False,
     ) -> None:
-        """Initialize route state and optional factories.
+        """Create a router and configure its accepted-session receive loop.
 
         Parameters
         ----------
-        name : str or None
-            Optional name used to scope route names registered by this router.
-        resource_factory : ResourceFactory or None
-            Factory used to create resources for matched routes.
-        simulator_factory : SimulatorFactory or None
-            Optional factory used to provide a WebSocket implementation.
+        name : str or None, default=None
+            Optional router name used by route registration.
+        resource_factory : ResourceFactory or None, default=None
+            Optional factory used to create routed resources.
+        simulator_factory : SimulatorFactory or None, default=None
+            Optional factory used by simulator routing.
+        receive_loop : bool, default=False
+            If true, after ``on_connect`` accepts, keep the socket open and
+            dispatch values from Falcon's decoded ``receive_media()`` in order.
+            Text and bytes pass through unchanged; other media values are JSON
+            encoded before dispatch. This does not expose raw ASGI frames.
+            The router calls ``on_disconnect`` once when that accepted session
+            ends, including cancellation or ``after_connect``/``accept``
+            failure. Rejected connections and ``on_connect`` failures do not
+            trigger the callback. If false, return after acceptance so the
+            application retains receive and cleanup ownership.
         """
         self._raw: list[_RawRoute] = []
         self._routes: list[_CompiledRoute] = []

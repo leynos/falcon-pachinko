@@ -14,6 +14,7 @@ import typing as typ
 
 import falcon
 
+from ._observability import _observe_operation
 from .diagnostics import _type_name
 from .dispatcher import msjson
 
@@ -67,14 +68,15 @@ class _ConnectionSession:
             return
 
         self.has_disconnected = True
-        try:
-            await self.hook_manager.notify_before_disconnect(
-                self.resource,
-                ws=self.ws,
-                close_code=self.close_code,
-            )
-        finally:
-            await self.resource.on_disconnect(self.ws, self.close_code)
+        with _observe_operation(logger, "disconnect"):
+            try:
+                await self.hook_manager.notify_before_disconnect(
+                    self.resource,
+                    ws=self.ws,
+                    close_code=self.close_code,
+                )
+            finally:
+                await self.resource.on_disconnect(self.ws, self.close_code)
 
     async def receive_frames(self) -> None:
         """Dispatch sequential frames until disconnect or an ordinary error."""

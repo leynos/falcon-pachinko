@@ -459,8 +459,10 @@ ordering guarantee. At-least-once transports can deliver duplicates, and the
 coordinator does not deduplicate them. `message_id` is available in the
 serialized envelope to applications, but is not added to the WebSocket payload.
 A transport publish failure is raised without retry; individual local send
-failures do not stop the listener, remove a connection or roll back the
-publish. When set, `send_timeout` bounds each local send. Existing local
+failures do not stop the listener, remove a connection or roll back the publish.
+`send_timeout` defaults to 5.0 seconds; any numeric value must be finite and
+positive. Pass `None` explicitly for unbounded sends; a blocked send can stall
+the sequential listener and delay delivery to other rooms. Existing local
 snapshots continue to skip stale local members.
 
 `InMemoryFanoutTransport` is provided for tests. A production Redis or RabbitMQ

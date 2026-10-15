@@ -37,6 +37,7 @@ class RecordingTransport(FanoutTransport):
     """Record boundary types without accepting any socket registry reference."""
 
     def __init__(self) -> None:
+        """Create an observable proxy around the shared byte transport."""
         self.inner = InMemoryFanoutTransport()
         self.observed: list[tuple[str, type[object]]] = []
         self.ready = {"a": asyncio.Event(), "b": asyncio.Event()}
@@ -100,6 +101,7 @@ class SocketRecordingBackend(InProcessBackend):
     """Track identities of sockets registered and accessed by one server."""
 
     def __init__(self) -> None:
+        """Initialise per-server identity sets for ownership assertions."""
         super().__init__()
         self.registered: set[int] = set()
         self.snapshotted: set[int] = set()
@@ -133,6 +135,7 @@ class RoomResource(WebSocketResource):
     """Join a logical room locally and publish through byte-only fan-out."""
 
     def __init__(self, fanout: ClusterFanout) -> None:
+        """Bind one resource instance to its node's fan-out coordinator."""
         self.fanout = fanout
         self.conn_id = f"{fanout.node_id}:{uuid.uuid4()}"
         self.room = ""
@@ -164,6 +167,7 @@ class RouterMount:
     """Adapt Falcon's greedy mount to Pachinko's explicit mount prefix."""
 
     def __init__(self, router: WebSocketRouter) -> None:
+        """Keep the mounted router available to Falcon's ASGI adapter."""
         self.router = router
 
     async def on_websocket(
@@ -261,6 +265,7 @@ def cluster_context(
     )
 
     async def start() -> None:
+        """Start both servers before their worker listeners and sessions."""
         for node in context.nodes:
             url = await context.stack.enter_async_context(live_server(node.app))
             context.urls.append(url)
@@ -290,6 +295,7 @@ def connect_clients(cluster_context: ClusterContext) -> ClusterContext:
     """Keep both real WebSocket sessions open across scenario steps."""
 
     async def connect() -> None:
+        """Open one real client session against each mounted server."""
         for client in cluster_context.clients:
             session = await cluster_context.stack.enter_async_context(
                 client.connect("/ws/rooms/lobby")
@@ -327,6 +333,7 @@ def receive_first(context: ClusterContext) -> None:
     """Real clients on distinct sockets receive the shared logical publish."""
 
     async def receive() -> None:
+        """Collect each client's first payload within its own timeout."""
         for session in context.sessions:
             async with asyncio.timeout(3):
                 message = await session.receive_json()
@@ -379,6 +386,7 @@ def only_first_member(context: ClusterContext) -> None:
     """Poll metadata with a bound while real disconnect cleanup completes."""
 
     async def wait_for_cleanup() -> None:
+        """Wait for unsubscribe notifications until only node A remains."""
         async with asyncio.timeout(3):
             while True:
                 context.transport.changed.clear()
@@ -411,6 +419,7 @@ def receive_after_disconnect(context: ClusterContext) -> None:
     """Remote cleanup leaves the other real client and its delivery path intact."""
 
     async def receive() -> None:
+        """Verify A receives the publish and B receives no later frame."""
         async with asyncio.timeout(3):
             message = await context.sessions[0].receive_json()
         assert message == {"text": "second"}, (

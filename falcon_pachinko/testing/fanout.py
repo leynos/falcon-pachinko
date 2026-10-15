@@ -21,7 +21,7 @@ class InMemoryFanoutTransport(FanoutTransport):
         self._inboxes: dict[str, asyncio.Queue[bytes | None]] = {}
 
     def _expire(self) -> None:
-        """Forget expired memberships lazily before routing or inspection."""
+        """Forget expired memberships lazily before routing or renewal."""
         now = self._clock()
         self._rooms = {
             room: active
@@ -81,5 +81,11 @@ class InMemoryFanoutTransport(FanoutTransport):
 
     async def members(self, room: str) -> tuple[str, ...]:
         """Inspect sorted unexpired membership without exposing queues."""
-        self._expire()
-        return tuple(sorted(self._rooms.get(room, {})))
+        now = self._clock()
+        return tuple(
+            sorted(
+                node_id
+                for node_id, expiry in self._rooms.get(room, {}).items()
+                if expiry > now
+            )
+        )
