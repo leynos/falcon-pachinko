@@ -110,10 +110,11 @@ class WebSocketRouter:
         simulator_factory : SimulatorFactory or None, default=None
             Optional factory used by simulator routing.
         receive_loop : bool, default=False
-            If true, after ``on_connect`` accepts, keep the socket open and
-            dispatch values from Falcon's decoded ``receive_media()`` in order.
-            Text and bytes pass through unchanged; other media values are JSON
-            encoded before dispatch. This does not expose raw ASGI frames.
+            If true, dispatch ``receive_media()`` values in order after
+            acceptance. Falcon decodes media by default. For raw TEXT/BINARY
+            input, call ``configure_raw_frame_media(app)`` before WebSocket
+            creation. This app-wide setting retains outgoing serializers;
+            other decoded values are JSON encoded before dispatch.
             The router calls ``on_disconnect`` once when that accepted session
             ends, including cancellation or ``after_connect``/``accept``
             failure. Rejected connections and ``on_connect`` failures do not

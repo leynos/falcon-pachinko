@@ -1490,8 +1490,16 @@ With `WebSocketRouter(receive_loop=True)`, the router owns the receive loop for
 each accepted connection. Its session driver calls `receive_media()` and awaits
 `WebSocketResource.dispatch()` for each frame before receiving the next one.
 With the default `False`, the router returns after acceptance and the
-application owns subsequent receives. The resource's dispatch method performs
-these steps:
+application owns subsequent receives.
+
+Falcon may decode media before `receive_media()` returns it, so enabling the
+receive loop does not by itself guarantee exact raw frames. Applications that
+need original TEXT or BINARY payloads call the existing
+`configure_raw_frame_media(app)` helper before constructing WebSocket
+connections. The setting is app-wide, including ordinary Falcon WebSocket
+routes, and preserves the configured outgoing serializers for both frame types.
+
+The resource's dispatch method performs these steps:
 
 1. Decode the received raw message using
    `msgspec.json.decode(message, type=self.schema)`. `msgspec`'s tagged union

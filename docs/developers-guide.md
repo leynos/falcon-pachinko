@@ -449,6 +449,13 @@ objects prepared for connection setup. With the default `receive_loop=False`,
 the router returns after acceptance and the application owns further receives
 and cleanup.
 
+Falcon may decode incoming media before `receive_media()` returns it, so
+`receive_loop=True` alone does not guarantee exact raw TEXT or BINARY input.
+For that contract, call `configure_raw_frame_media(app)` before constructing
+WebSocket connections. The opt-in applies to all WebSocket routes on the app,
+including ordinary Falcon routes, while preserving its configured outgoing TEXT
+and BINARY serializers.
+
 An ordinary peer disconnect runs `before_disconnect` hooks and then attempts
 `on_disconnect(ws, peer_code)` once; a missing peer close code maps to 1006.
 Cancellation before disconnect cleanup starts closes with 1001 and re-raises

@@ -22,6 +22,7 @@ from falcon_pachinko import (
     WebSocketResource,
     WebSocketRouter,
     WorkerController,
+    configure_raw_frame_media,
 )
 from falcon_pachinko.testing import InMemoryFanoutTransport, WebSocketTestClient
 from tests._live_server import live_server
@@ -204,6 +205,7 @@ def make_node(node_id: str, transport: RecordingTransport) -> Node:
     router.add_route("/rooms/{room}", RoomResource, fanout)
     router.mount("/ws")
     app = falcon.asgi.App()
+    configure_raw_frame_media(app)
     app.add_route("/ws/{rest:path}", RouterMount(router))
     return Node(node_id, app, backend, manager, fanout)
 

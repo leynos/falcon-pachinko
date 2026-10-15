@@ -212,8 +212,10 @@ class ChatResource(WebSocketResource):
   `await ws.close(code=...)` when its policy requires closure.
 
 Falcon's default WebSocket media handlers may decode frames before
-`receive_media()` returns them. When schema dispatch needs the original text or
-binary frame, configure the app before serving requests:
+`receive_media()` returns them; `receive_loop=True` alone does not guarantee
+that dispatch receives the exact raw frame. When schema dispatch needs the
+original TEXT or BINARY payload, configure the app with
+`configure_raw_frame_media(app)` before constructing WebSocket connections:
 
 ```python
 from falcon_pachinko import configure_raw_frame_media
@@ -221,9 +223,12 @@ from falcon_pachinko import configure_raw_frame_media
 configure_raw_frame_media(app)
 ```
 
-The helper preserves incoming `str` and `bytes` frames and encodes outgoing
-text media as JSON. It encodes non-byte binary media as MessagePack; byte-like
-binary payloads pass through unchanged.
+This is an app-wide setting, so it also affects ordinary Falcon WebSocket
+routes in the same application. The helper preserves incoming `str` and `bytes`
+payloads while retaining the app's configured outgoing TEXT and BINARY
+serializers. The standalone `RawTextMediaHandler` and `RawBinaryMediaHandler`
+continue to encode JSON and MessagePack respectively when explicitly installed
+as handlers.
 
 The stable import path is `from falcon_pachinko.utils import ValidationError`.
 It is the same class as `msgspec.ValidationError`, so existing
