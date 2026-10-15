@@ -10,6 +10,7 @@ import typing as typ
 import falcon
 import msgspec.json as msjson
 
+from ._disconnect import _PeerDisconnectedError
 from .diagnostics import _type_name
 
 if typ.TYPE_CHECKING:
@@ -154,7 +155,7 @@ async def drive_session(
                 media = await session.websocket.receive_media()
                 raw = _adapt_frame(media)
                 await session.resource.dispatch(session.websocket, raw)
-            except falcon.WebSocketDisconnected as exc:
+            except (falcon.WebSocketDisconnected, _PeerDisconnectedError) as exc:
                 close_code = exc.code if exc.code is not None else 1000
                 break
     except asyncio.CancelledError:

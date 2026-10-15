@@ -25,7 +25,7 @@ workers, and testing utilities.
 ## 2. Quickstart (Composable Routing)
 
 ```python
-import falcon
+import falcon.asgi
 from falcon_pachinko import WebSocketResource, WebSocketRouter, handles_message
 
 
@@ -39,15 +39,14 @@ class ChatResource(WebSocketResource):
         await ws.send_media({"type": "echo", "text": payload.text})
 
 
-app = falcon.App()
+app = falcon.asgi.App()
 router = WebSocketRouter()
 router.add_route("/chat/{room}", ChatResource)
-app.add_route("/ws", router)  # router is a Falcon resource
-router.mount("/ws")
+router.attach(app, "/ws")
 ```
 
-- The router is mounted once (`router.mount("/ws")`) and handles all descendant
-  paths relative to that prefix.
+- `attach()` mounts the router at `/ws` and registers a Falcon catch-all route
+  for descendant paths.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
 - After `on_connect` and the `after_connect` hooks succeed, the router accepts
@@ -107,13 +106,25 @@ resource and its hooks.
   - Inspect headers and seed `self.state`; return `False` to reject the
     connection. The router runs `after_connect` hooks before it calls
     `accept()`, then begins receiving frames when this method allows the
-    connection.
+    connection. If `on_connect()` sends a frame itself, call `await ws.accept()`
+    first.
 - `on_disconnect(ws, close_code) -> None`
   - Clean up after an accepted session ends. The router runs
     `before_disconnect` hooks first, then calls `on_disconnect`. The code is
-    the peer's close code, `1001` when the server cancels the session, or
-    `1011` after an unexpected receive or handler failure. Rejected
-    connections do not run this lifecycle.
+    the peer's close code (or `1000` when absent), `1001` when the server
+    cancels the session, or `1011` after an unexpected receive or handler
+    failure. Rejected connections do not run this lifecycle.
+- Session frames arrive as raw `str` or `bytes` from `ws.receive_media()` and
+  are passed to `WebSocketResource.dispatch()`. After acceptance, the router
+  receives and dispatches frames until the peer disconnects.
+
+`router.attach()` installs pass-through TEXT and BINARY deserializers in the
+application's shared `ws_options.media_handlers` mapping while preserving its
+outbound serializers. Consequently, every Falcon WebSocket responder on that
+application receives raw frames from `receive_media()`; responders that need
+decoded objects must decode those frames themselves. `attach()` warns when it
+finds customized media handlers that it will replace.
+
 - `self.state`
   - Dict-like proxy shared across all resources in the same connection chain.
   - Override via `get_child_context()` to supply a custom state store (e.g.,
@@ -322,11 +333,16 @@ values, so omission remains the default security boundary.
 
 1) **Choose a factory** – Pass `resource_factory` to `WebSocketRouter`.
 2) **Provide services** – Register shared services in the container.
-3) **Mount the router** – All route instantiation flows through your factory.
+3) **Attach the router** – All route instantiation flows through the configured
+   factory.
 
 ```python
-from falcon_pachinko import ServiceContainer, WebSocketRouter
+import falcon.asgi
 
+from falcon_pachinko import ServiceContainer, WebSocketRouter, install
+
+app = falcon.asgi.App()
+install(app)
 conn_mgr = app.ws_connection_manager
 container = ServiceContainer()
 container.register("conn_mgr", conn_mgr)
@@ -334,8 +350,14 @@ container.register("db", my_db_pool)
 
 router = WebSocketRouter(resource_factory=container.create_resource)
 router.add_route("/rooms/{room}", ChatResource)
-router.mount("/ws")
+router.attach(app, "/ws")
 ```
+
+Configure the Falcon application and any application services before calling
+`attach()`. It registers the router's exact and descendant routes and installs
+the raw-frame media handlers needed by real Falcon WebSocket responders.
+`mount()` only compiles routes for simulator-based tests; it does not register
+the router on a Falcon application.
 
 ### Test-friendly factories
 
@@ -437,8 +459,59 @@ it. An undecorated async function works in the same way.
   while trace representations and `TraceEvent.summary()` show safe metadata.
 - **WebSocketSimulator** – In-memory fake implementing the WebSocket protocol
   for fast unit tests.
+- **Live server harness** – `LiveWebSocketServer` serves a real Falcon ASGI app
+  on an ephemeral localhost port. The `live_websocket_server` pytest fixture
+  provides `start(app)` and a loop-bound `run(awaitable, timeout=...)` helper.
+  Connect with `server.connect(path)` to use `WebSocketTestClient` over a real
+  RFC WebSocket connection and have the fixture track the client for teardown.
 - **Pytest fixtures** – See `tests/behaviour/*.feature` and
   `falcon_pachinko/unittests` helpers for factory utilities.
+
+An async test can use the server directly:
+
+```python
+import pytest
+
+from falcon_pachinko.testing import LiveWebSocketServer
+
+
+@pytest.mark.asyncio
+async def test_ping_reply() -> None:
+    app = build_app()
+
+    async with LiveWebSocketServer(app) as server:
+        async with server.connect("/ws/chat") as session:
+            await session.send_json({"type": "ping"})
+            assert await session.receive_json() == {"type": "pong"}
+
+        assert server.pop_errors() == ()
+```
+
+Entering the server waits for ASGI lifespan startup and listener readiness.
+`server.connect()` tracks each client, and server teardown closes any clients
+the test leaves open. `server.errors` returns a read-only snapshot of captured
+failures; `server.pop_errors()` returns and acknowledges them. The harness
+captures exceptions handled by Falcon, exceptions escaping the ASGI callable,
+and server-task failures. Unacknowledged failures are grouped in
+`LiveServerError` when the test body completed without an exception. If the
+test body is already raising, the harness adds captured failures as notes to
+that exception so the original failure stays primary.
+
+When `capture_errors=True`, use a fresh Falcon app for each server instance:
+the capture handler remains registered on the app after server shutdown.
+
+A startup timeout or ordinary startup exception raises
+`LiveServerStartupError`. A shutdown deadline is recorded as
+`LiveServerShutdownError` and reported during teardown using the same error
+handling. The harness installs its Falcon `Exception` capture handler when the
+server starts, replacing a handler registered earlier. If the application needs
+a custom handler, register it after startup and have it call
+`server.record_error(ex)`; otherwise Falcon may consume the exception before
+the harness can report it. For synchronous tests, use the
+`live_websocket_server` fixture's `start(app)` and
+`run(awaitable, timeout=...)` methods instead. See the
+[developer guide's WebSocket lifecycle guidance](developers-guide.md#websocket-lifecycle-acceptance-tests)
+for the fixture and custom-handler details.
 
 The `websocket_simulator` pytest fixture (from `falcon_pachinko.testing`) takes
 no parameters and yields a `SimulatorRouterHarness`: a pre-mounted router and
@@ -452,10 +525,13 @@ router and simulator by hand.
 Recommended strategy:
 
 - Unit test pure resource logic with `WebSocketSimulator`.
-- Behavioural tests with `pytest-bdd` to exercise router composition, hooks,
-  DI, and connection manager flows.
-- Worker tests using the `WorkerController` fixture from
-  `tests/behaviour/lifespan_workers.feature`.
+- Use `pytest-bdd` live-server scenarios as the required acceptance path for
+  every WebSocket lifecycle feature. These prove that real Falcon ASGI
+  responders keep a socket open and exchange frames over a real connection.
+- Keep simulator tests for fast routing, hooks, DI, and connection-manager
+  coverage; they complement the live suite and do not replace it.
+- The `lifespan_workers.feature` BDD scenarios verify workers running during
+  application lifespan; the feature file is not a fixture.
 
 ## 11. Reference Example
 

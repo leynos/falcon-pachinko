@@ -44,7 +44,7 @@ dev = [
 
 [project.optional-dependencies]
 examples = ["aiosqlite", "uvicorn>=0.34,<1", "websocket-client"]
-testing = ["websockets>=11,<13"]
+testing = ["uvicorn>=0.34,<1", "websockets>=11,<13"]
 
 [tool.pyright]
 pythonVersion = "3.12"
@@ -519,5 +519,6 @@ pytest_add_cli_args = [
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["falcon_pachinko"]
+[tool.setuptools.packages.find]
+include = ["falcon_pachinko*"]
+exclude = ["falcon_pachinko.behaviour*", "falcon_pachinko.unittests*"]

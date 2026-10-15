@@ -33,6 +33,96 @@ then detail the core components and API of Falcon-Pachinko, followed by an
 illustrative use case. Finally, potential future enhancements and conclusions
 will be discussed.
 
+## Current implementation: Falcon routing and session contract
+
+The implementation uses `falcon.asgi.App` and
+`WebSocketRouter.attach(app, prefix)` to register both the exact mount and a
+catch-all descendant route. `attach()` installs pass-through TEXT and BINARY
+deserializers in the application's shared WebSocket media-handler mapping, so
+every Falcon WebSocket responder on that app receives raw `str` or `bytes` from
+`receive_media()`. Outbound serialization continues through the configured
+handler. Attaching warns when it replaces customized media handlers.
+
+After Falcon routes a connection to the router, `on_connect()` decides whether
+to accept it. The router owns acceptance after that hook; a resource that sends
+a frame from `on_connect()` must call `await ws.accept()` first. Once accepted,
+the router repeatedly receives raw frames and invokes
+`WebSocketResource.dispatch()` until the session driver identifies a peer
+disconnect. The driver handles Falcon's `WebSocketDisconnected` exception and
+the simulator's framework-independent package signal, preserving their close
+codes. Cleanup calls `on_disconnect(ws, close_code)` once: normal disconnects
+preserve the peer's code or default to `1000`, dispatch failures use `1011`,
+and local task cancellation closes with `1001` and passes that code to the
+cleanup hook before cancellation is re-raised. The router does not send a close
+frame to a socket Falcon has already closed.
+
+### WebSocket session lifecycle
+
+```mermaid
+stateDiagram-v2
+    accTitle: WebSocket session state transitions
+    accDescr {
+        The session starts while the router runs on_connect. A false result
+        closes the session; a true result leads to acceptance and a persistent
+        receive and dispatch loop. A clean disconnect, dispatch failure or
+        cancellation each invokes on_disconnect once with its corresponding
+        close code, then ends in the disconnected state.
+    }
+
+    [*] --> Connecting
+    Connecting --> Accepted: on_connect returns true
+    Connecting --> Closed: on_connect returns false
+    Accepted --> Receiving: accept()
+    Receiving --> Receiving: receive_media() and dispatch(ws, raw)
+    Receiving --> CleanDisconnect: WebSocketDisconnected
+    Receiving --> Failed: dispatch exception
+    Receiving --> Cancelled: task cancellation
+    CleanDisconnect --> Disconnected: on_disconnect(ws, 1000 or peer code)
+    Failed --> Disconnected: close(1011), on_disconnect(ws, 1011)
+    Cancelled --> Disconnected: close(1001), on_disconnect(ws, 1001)
+    Closed --> [*]
+    Disconnected --> [*]
+```
+
+**Figure: WebSocket session states from connection through acceptance, frame
+dispatch and exactly-once disconnect cleanup.**
+
+```mermaid
+sequenceDiagram
+    accTitle: Falcon WebSocket responder lifecycle
+    accDescr {
+        Falcon routes the connection to WebSocketRouter, which calls the
+        resource's on_connect hook before accepting. The router then receives
+        raw frames and dispatches each one until disconnect, followed by the
+        resource's on_disconnect hook with the final close code.
+    }
+
+    participant Client
+    participant FalconApp
+    participant WebSocketRouter
+    participant WebSocketResource
+    participant WebSocket
+
+    Client->>FalconApp: WebSocket connection
+    FalconApp->>WebSocketRouter: on_websocket(req, ws)
+    WebSocketRouter->>WebSocketResource: on_connect(req, ws, params)
+    WebSocketResource-->>WebSocketRouter: continue session
+    WebSocketRouter->>WebSocket: accept()
+    loop Until disconnect
+        WebSocketRouter->>WebSocket: receive_media()
+        WebSocket-->>WebSocketRouter: raw str or bytes frame
+        WebSocketRouter->>WebSocketResource: dispatch(ws, raw)
+    end
+    WebSocketRouter->>WebSocketResource: on_disconnect(ws, close_code)
+```
+
+**Figure: Falcon routes a WebSocket connection to the router, which accepts the
+session, dispatches each raw frame, and calls the resource's disconnect hook
+when the session ends.**
+
+This implemented contract supersedes the future-tense responder and receive
+loop descriptions in the original proposal below.
+
 ## 2. Literature Survey and Existing Solutions
 
 Before detailing the proposed design, it is pertinent to survey existing
@@ -282,14 +372,10 @@ logic.
     request, and `ws` is a `WebSocketLike` **connection**. The protocol defines
     the minimal `send_media`, `accept`, and `close` methods needed by the
     resource. `params` will contain any path parameters from the route. It
-    returns `True` to accept the connection or `False` to reject it. If `False`
-    is returned, the library will handle sending an appropriate closing
-    handshake (e.g., HTTP 403 or a custom code if supported by an extension
-    like WebSocket Denial Response 12). This boolean return abstracts the
-    direct `await ws.accept()` or `await ws.close()` call, simplifying the
-    resource method to focus on connection logic rather than raw ASGI
-    mechanics. This design aligns with Falcon's higher-level approach for HTTP
-    handlers, where the framework manages response sending.
+    returns `True` to continue the session or `False` to reject it. The router
+    accepts the connection after this hook unless the resource already accepted
+    it. Because the hook runs before router-owned acceptance, a resource that
+    sends from `on_connect()` must first call `await ws.accept()`.
 
   - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: After
     an accepted session ends, the router first notifies `before_disconnect`
@@ -748,6 +834,9 @@ class ChatRoomResource(WebSocketResource):
 
         await self.join_room(self.room_name)
 
+        # on_connect runs before router-owned acceptance; accept before sending.
+        await ws.accept()
+
         await ws.send_media({
             "type": "serverSystemMessage",
             "payload": {"text": f"Welcome {self.user.name} to room '{room_name}'!"},
@@ -971,9 +1060,10 @@ creation of modular, hierarchical WebSocket APIs.
 
 #### 5.1.1. Mounting the Router
 
-Instead of assigning a router to a special application attribute, it is mounted
-at a URL prefix using Falcon's standard `app.add_route()` method. This makes the
-`WebSocketRouter` a first-class citizen in Falcon's routing tree.
+Instead of assigning a router to a special application attribute, call
+`router.attach(app, prefix)`. This installs an exact route and a descendant
+catch-all route in Falcon's routing tree, then configures the application's
+shared WebSocket media handlers to preserve raw inbound frames.
 
 ```python
 import falcon.asgi
@@ -982,13 +1072,8 @@ from falcon_pachinko.router import WebSocketRouter  # New component
 app = falcon.asgi.App()
 chat_router = WebSocketRouter()
 
-# The WebSocketRouter instance is mounted like any other Falcon resource.
-# It will handle all WebSocket connections under the '/ws/chat/' prefix.
-app.add_route("/ws/chat", chat_router)
-
-# To achieve this, the WebSocketRouter will implement the on_websocket
-# responder method, which will contain the logic to dispatch the connection
-# to the correct sub-route defined on the router itself.
+# attach() registers the exact mount and a descendant catch-all route.
+chat_router.attach(app, "/ws/chat")
 ```
 
 This creates a clean architectural boundary and leverages Falcon's existing,
@@ -1020,7 +1105,7 @@ chat_router = WebSocketRouter(name="chat")  # Give the router a name for reversa
 # Add a route to the router, giving it a name for url_for.
 chat_router.add_route("/{room_id}", ChatResource, name="room", history_size=100)
 
-app.add_route("/ws/chat", chat_router)
+chat_router.attach(app, "/ws/chat")
 
 # Generate a URL:
 # url = app.url_for('chat:room', room_id='general') # Hypothetical top-level reversal
@@ -1325,9 +1410,9 @@ class ChatResource(WebSocketResource):
 #### 5.3.2. Automated Dispatch Logic
 
 For each accepted connection, `WebSocketRouter` owns the receive loop. Its
-session driver calls `receive_media()` and awaits
-`WebSocketResource.dispatch()` for each frame before receiving the next one.
-The resource's dispatch method performs these steps:
+session driver calls `receive_media()` and passes each raw frame to
+`WebSocketResource.dispatch()` before receiving the next one. The resource's
+dispatch method performs these steps:
 
 1. Decode the received raw message using
    `msgspec.json.decode(message, type=self.schema)`. `msgspec`'s tagged union
@@ -1738,6 +1823,49 @@ that encapsulates common setup. Together they support both end-to-end exercises
 against a running ASGI server and hermetic unit tests that spy on the framework
 internals.
 
+The live server harness owns an ephemeral listener, waits for explicit server
+readiness, tracks client sessions, and reports unacknowledged server failures
+during teardown. Its default Uvicorn adapter is replaceable through the
+server-adapter protocol.
+
+```mermaid
+sequenceDiagram
+    accTitle: Live WebSocket server harness lifecycle
+    accDescr {
+        The BDD test starts the harness, which asks the server adapter to serve
+        Falcon on a prebound socket. After readiness, the test connects a real
+        WebSocketTestClient. During teardown the harness closes tracked client
+        sessions, stops the adapter gracefully, and surfaces errors that the
+        test has not acknowledged.
+    }
+
+    participant Test as BDD test
+    participant Harness as LiveWebSocketServer
+    participant Adapter as Uvicorn adapter
+    participant Falcon as Falcon ASGI app
+    participant Client as WebSocketTestClient
+
+    Test->>Harness: start(app)
+    Harness->>Adapter: start(_asgi_app(), socket)
+    Adapter->>Falcon: serve with lifespan
+    Adapter-->>Harness: readiness
+    Harness-->>Test: base_url available
+    Test->>Harness: connect(path)
+    Harness->>Client: connect(path)
+    Client->>Falcon: WebSocket handshake and frames
+    Falcon-->>Client: responses and close
+    Test->>Harness: pop_errors()
+    Test->>Harness: stop server
+    Harness->>Client: close tracked sessions
+    Harness->>Adapter: stop()
+    Adapter-->>Harness: graceful shutdown
+    Harness-->>Test: surface unacknowledged errors
+```
+
+**Figure: The BDD test starts a ready live server, exchanges WebSocket frames,
+then closes tracked clients and observes any unacknowledged errors during
+graceful shutdown.**
+
 #### 6.5.1. `WebSocketTestClient`
 
 The `WebSocketTestClient` offers a lightweight façade over an existing
@@ -1807,8 +1935,8 @@ enables white-box testing of router behaviour without needing an ASGI server.
   `falcon.asgi.WebSocket` (`accept`, `close`, `send_media`, `receive_media`),
   but internally uses asyncio queues so tests can inject messages or spy on
   emitted frames. `close(code)` wakes a blocked receive; queued frames are
-  returned first, then receives raise `falcon.WebSocketDisconnected` with that
-  code. Helper shortcuts (`send_json`, `pop_sent`) keep tests concise.
+  returned first, then receives signal peer disconnection with that code.
+  Helper shortcuts (`send_json`, `pop_sent`) keep tests concise.
 
 - **Spying and Injection**: Tests enqueue inbound messages via
   `await simulator.push_message({...})` before driving the router-owned session

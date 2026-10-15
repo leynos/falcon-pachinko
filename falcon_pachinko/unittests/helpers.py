@@ -8,7 +8,7 @@ import types
 import typing as typ
 from collections import deque
 
-import falcon
+from falcon_pachinko._disconnect import _PeerDisconnectedError
 
 
 def make_req(path: str, path_template: str = "") -> types.SimpleNamespace:
@@ -78,10 +78,10 @@ class DummyWS:
         """Return the next scripted frame or raise a disconnect event."""
         self.receive_calls += 1
         if self._closed:
-            raise falcon.WebSocketDisconnected(self._close_code)
+            raise _PeerDisconnectedError(self._close_code)
         if self._frames:
             return self._frames.popleft()
-        raise falcon.WebSocketDisconnected(self._disconnect_code)
+        raise _PeerDisconnectedError(self._disconnect_code)
 
 
 class RecordingWS(DummyWS):

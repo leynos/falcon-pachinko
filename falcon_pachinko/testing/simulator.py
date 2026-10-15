@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import typing as typ
 from contextlib import asynccontextmanager
 
-import falcon
 import msgspec.json as msjson
+
+from falcon_pachinko._disconnect import _PeerDisconnectedError
 
 from ._common import (
     _BINARY_PAYLOAD_REQUIRED_MSG,
@@ -25,6 +27,13 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _DisconnectMarker:
+    """Queue an explicit peer disconnect with its close code."""
+
+    code: int
+
+
 class WebSocketSimulator(_LifecycleSocket):
     """In-memory :class:`WebSocketLike` implementation for hermetic tests."""
 
@@ -34,6 +43,15 @@ class WebSocketSimulator(_LifecycleSocket):
         inbound: asyncio.Queue[object] | None = None,
         outbound: asyncio.Queue[object] | None = None,
     ) -> None:
+        """Create a simulator with optional queues for each frame direction.
+
+        Parameters
+        ----------
+        inbound : asyncio.Queue or None
+            Queue of frames received by the simulated application.
+        outbound : asyncio.Queue or None
+            Queue of frames sent by the simulated application.
+        """
         super().__init__()
         self._inbound = inbound or asyncio.Queue()
         self._outbound = outbound or asyncio.Queue()
@@ -76,9 +94,12 @@ class WebSocketSimulator(_LifecycleSocket):
     async def receive_media(self) -> object:
         """Return the next inbound frame queued via :meth:`push_message`."""
         message = await self._inbound.get()
+        if isinstance(message, _DisconnectMarker):
+            await self.close(code=message.code)
+            raise _PeerDisconnectedError(code=message.code)
         if message is _CLOSED_SENTINEL:
             self._inbound.put_nowait(_CLOSED_SENTINEL)
-            raise falcon.WebSocketDisconnected(self.close_code)
+            raise _PeerDisconnectedError(self.close_code)
         self.received_messages.append(message)
         return message
 
@@ -140,9 +161,13 @@ class WebSocketSimulator(_LifecycleSocket):
     async def push_message(self, payload: object, *, kind: FrameKind = "json") -> None:
         """Queue ``payload`` as if it were received from the peer."""
         if self.closed:
-            raise falcon.WebSocketDisconnected(self.close_code)
+            raise _PeerDisconnectedError(self.close_code)
         data = self._prepare_inbound_payload(payload, kind)
         await self._inbound.put(data)
+
+    async def push_disconnect(self, code: int = 1000) -> None:
+        """Queue a peer disconnect after any frames already in the queue."""
+        await self._inbound.put(_DisconnectMarker(code))
 
     def _prepare_inbound_payload(self, payload: object, kind: FrameKind) -> object:
         match kind:

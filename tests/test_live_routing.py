@@ -60,6 +60,8 @@ class _RecordingResource(WebSocketResource):
     ) -> bool:
         """Record the selected live resource and accept the connection."""
         self.observations.selected.append(self.identity)
+        await ws.accept()
+        await ws.send_media(self.identity)
         return True
 
     async def on_probe(self, ws: WebSocketLike, payload: None) -> None:

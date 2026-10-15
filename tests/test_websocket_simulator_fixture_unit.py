@@ -79,6 +79,27 @@ class ChattyResource(WebSocketResource):
         return False
 
 
+class ClosingResource(WebSocketResource):
+    """Close an accepted session from its message handler."""
+
+    instances: typ.ClassVar[list[ClosingResource]] = []
+
+    def __init__(self) -> None:
+        self.closed_event = asyncio.Event()
+        ClosingResource.instances.append(self)
+
+    async def on_connect(
+        self, req: falcon.Request, ws: WebSocketLike, **params: object
+    ) -> bool:
+        """Keep the session open for the dispatched close frame."""
+        return True
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Close the socket from the active responder session."""
+        await ws.close(code=1000)
+        self.closed_event.set()
+
+
 @pytest.mark.asyncio
 class TestWebSocketSimulatorFixture:
     """Unit tests covering simulator fixture routing and lifecycle mirroring."""
@@ -286,3 +307,44 @@ class TestWebSocketSimulatorFixture:
         assert caught.value.__cause__ is first_timeout, (
             "the session timeout must retain the first shutdown timeout"
         )
+
+    async def test_startup_failure_is_not_reported_as_a_second_task_error(
+        self,
+        websocket_simulator: SimulatorRouterHarness,
+    ) -> None:
+        """The same startup exception is not described as a second failure."""
+        failure = RuntimeError("responder failed before accepting")
+
+        class EarlyFailingResource(WebSocketResource):
+            async def on_connect(
+                self, req: falcon.Request, ws: WebSocketLike, **params: object
+            ) -> bool:
+                raise failure
+
+        websocket_simulator.router.add_route("/early-failure", EarlyFailingResource)
+
+        with pytest.raises(RuntimeError, match="before accepting") as raised:
+            async with websocket_simulator.connect("/early-failure"):
+                pytest.fail("a failing responder must fail before yielding a session")
+
+        assert raised.value is failure, "the original startup exception must propagate"
+        notes = getattr(raised.value, "__notes__", ())
+        assert not any("responder task also failed" in note for note in notes), (
+            "the exception must not report itself as an additional task failure"
+        )
+
+    async def test_server_initiated_close_stops_the_receive_loop(
+        self,
+        websocket_simulator: SimulatorRouterHarness,
+    ) -> None:
+        """A close from a dispatched handler wakes the blocked receiver."""
+        ClosingResource.instances.clear()
+        websocket_simulator.router.add_route("/close", ClosingResource)
+
+        async with websocket_simulator.connect("/close") as connection:
+            resource = ClosingResource.instances[-1]
+            await connection.push_text("close")
+            await asyncio.wait_for(resource.closed_event.wait(), timeout=1.0)
+
+        assert connection.close_code == 1000, "the handler's close code must persist"
+        assert connection.websocket.closed is True, "the peer must be closed too"

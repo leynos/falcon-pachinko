@@ -98,6 +98,77 @@ The auto-merge workflow needs no change for this: `dependabot-automerge.yml`
 keys on the actor `dependabot[bot]`, not on the ecosystem that opened the pull
 request.
 
+## WebSocket lifecycle acceptance tests
+
+Every WebSocket lifecycle feature requires a pytest-bdd scenario using
+`live_websocket_server`, `WebSocketTestClient`, and an application mounted with
+`WebSocketRouter.attach()`. The scenario must exercise real Falcon ASGI
+responders over a real socket. Simulator scenarios remain useful for fast
+behavioural coverage, but they do not establish the production responder
+contract and cannot replace the live-server suite.
+
+The live harness captures failures from Falcon's `Exception` handler and from
+exceptions escaping the ASGI callable. Tests can inspect the read-only
+`server.errors` snapshot or acknowledge asserted failures with
+`server.pop_errors()`. Applications that register their own `Exception` handler
+must register it after `live_websocket_server.start(app)` because the harness
+installs its capture handler during startup and replaces a handler registered
+earlier. The application handler must call `server.record_error(ex)`; otherwise
+Falcon may consume the exception before the harness can report it.
+Unacknowledged server failures fail context teardown, while `pop_errors()`
+marks failures that the scenario intentionally asserted.
+
+The `testing` extra and `dev` dependency group include `uvicorn>=0.34,<1`. The
+test server imports Uvicorn lazily and uses its lifespan readiness and
+graceful-shutdown APIs; the behavioural contract belongs to Falcon-Pachinko's
+adapter protocol, not to Uvicorn.
+
+## WebSocket responder and live-harness boundaries
+
+`WebSocketRouter.attach(app, prefix)` is the Falcon composition boundary. It
+compiles the router's relative paths, registers the exact mount and descendant
+catch-all routes, and installs raw-frame media handlers on the app. The router
+accepts a connection after `on_connect()` succeeds, then starts
+`session.drive_session()` for that resource and socket.
+
+`install_raw_websocket_media_handlers()` wraps the app-wide TEXT and BINARY
+handlers once. Inbound deserialization passes frames through as raw `str` or
+`bytes` for resource dispatch; outbound serializers remain the configured
+Falcon serializers. Attaching warns when it finds customized inbound handlers,
+because their deserializers are replaced for every WebSocket responder on that
+app. Repeated installation does not wrap a handler again.
+
+`session.drive_session()` receives one frame at a time and passes it to
+`WebSocketResource.dispatch()`. Falcon signals a peer disconnect with
+`falcon.WebSocketDisconnected`; the simulator uses the package's internal
+peer-disconnect signal. The driver preserves the close code, defaulting to
+`1000` when it is absent. A receive or dispatch failure closes an open socket
+with `1011`, runs best-effort disconnect cleanup, and re-raises the original
+failure. Local cancellation closes with `1001`, runs best-effort cleanup, and
+re-raises `CancelledError`. Disconnect hooks and `on_disconnect()` run once.
+For an ordinary peer disconnect, cleanup errors propagate after both cleanup
+steps have been attempted; during failure or cancellation cleanup errors are
+logged and do not replace the primary outcome.
+
+The `ServerAdapter` protocol isolates the ASGI server. Its `task` property is
+the serve-loop task, `start(app, sock)` returns only after lifespan startup and
+listener readiness, and `stop()` requests graceful shutdown. The harness binds
+the ephemeral socket before passing it to the adapter, then joins the task
+during teardown. The default Uvicorn adapter is imported lazily and implements
+that contract using Uvicorn's lifespan and graceful-stop support.
+
+`live_websocket_server` provides a per-test runner with a fresh event loop. Its
+`run()` method executes awaitables on that loop; `start()` tracks each harness
+and `close()` exits servers in reverse order, cancels leftover tasks, shuts
+down async generators and the default executor, and closes the loop. Startup
+timeouts or failures trigger partial-startup cleanup and are reported as
+`LiveServerStartupError`. A shutdown deadline records
+`LiveServerShutdownError`. Unacknowledged captured application or server-task
+failures are grouped into `LiveServerError` at teardown; `server.pop_errors()`
+acknowledges failures a scenario has asserted. The capture handler is installed
+during startup, so a custom Falcon `Exception` handler must be registered
+afterwards and call `server.record_error(ex)`.
+
 ## Validation error import boundary
 
 Use `from falcon_pachinko.utils import ValidationError` as the stable import
@@ -302,9 +373,9 @@ propagates. Failure cleanup errors are logged and do not replace the session
 failure.
 
 Test sockets must terminate receive loops. `DummyWS` and `RecordingWS` return
-their scripted frames in order and then raise `falcon.WebSocketDisconnected`.
-The simulator drains queued frames before reporting closure; `close(code)`
-wakes a pending receive. `SimulatorRouterHarness.connect()` starts
+their scripted frames in order and then signal peer disconnection. The
+simulator drains queued frames before reporting closure; `close(code)` wakes a
+pending receive. `SimulatorRouterHarness.connect()` starts
 `router.on_websocket()` as a task, waits for accept/close/readiness, and on
 exit closes the simulator and awaits the router task. Unit and simulator tests
 use this harness for fast lifecycle coverage.
@@ -502,15 +573,23 @@ query's own warning remains a final check for a wholly empty scan. Stale
 allow-rule diagnostics say “unmatched in this capped scan” because absence from
 a ranked report does not prove that duplication has disappeared.
 
-The scan covers shipped direct modules under `falcon_pachinko/`. Its explicit
-setuptools package list omits `testing/`, `unittests/`, and `behaviour/`, so
-those directories are excluded with root-relative globs. The gate also omits
-`examples/`, top-level `tests/`, `tools/`, and maintenance `scripts/`: these
-are examples, tests, tooling, and the gate itself, rather than shipped
-production modules. The configured roots are passed together in one detector
-invocation so cross-root families remain visible. The initial report selected
-only `__init__.py`, `exceptions.py`, `router.py`, and `websocket.py`, with no
-excluded paths.
+The scan covers production modules under `falcon_pachinko/`. Setuptools uses
+package discovery with the `falcon_pachinko*` include pattern and excludes
+`falcon_pachinko.behaviour*` and `falcon_pachinko.unittests*`. The installed
+distribution therefore includes `falcon_pachinko.testing`, but omits the
+behaviour and unit-test support packages. These package-discovery rules are
+separate from the duplication gate's source exclusions for `testing/`,
+`unittests/`, and `behaviour/`. The gate also omits `examples/`, top-level
+`tests/`, `tools/`, and maintenance `scripts/`: these are examples, tests,
+tooling, and the gate itself, rather than shipped production modules. The
+configured roots are passed together in one detector invocation so cross-root
+families remain visible. The initial report selected only `__init__.py`,
+`exceptions.py`, `router.py`, and `websocket.py`, with no excluded paths.
+
+`make build` installs the `dev` dependency group with `uv sync --group dev`; it
+does not install the optional `examples` extra. Run
+`uv sync --group dev --extra examples` before running example programs or tests
+that require example-only dependencies such as `aiosqlite`.
 
 The detector runs `syntax,semantic,near`, with a minimum of 24 intermediate-
 language tokens, `surface = "all"`, and a top-30 ranked-family limit. `all`
@@ -579,6 +658,7 @@ The repository's initial families were adjudicated as follows:
 | Import fragments in `router.py` and `__init__.py`                                         | Intentional. The router imports implementation dependencies; the package initializer re-exports the public package surface. A separate helper would add an import-only module, while routing router imports through the initializer would create a cycle. Nose gives this fragment no unit name, so exact path-only keys are necessary; a future unnamed family must include locations in both files, and every listed path must match at least one location. | `tests/test_package_exports.py`                                                                                                                                   |
 | `_uri_template.py::compile_uri_template` and `_uri_template.py::_compile_prefix_template` | Retained as separate thin variants of the existing `_compile_template_with_suffix`: complete URI matching permits an optional trailing slash, while prefix matching enforces segment boundaries. The main-branch extraction changed the module path but not these contracts.                                                                                                                                                                                  | `falcon_pachinko/unittests/test_router.py::test_template_compilers_keep_complete_and_prefix_match_semantics` and `falcon_pachinko/unittests/test_uri_template.py` |
 | Unnamed fragments in `diagnostics.py`                                                     | The sequence and mapping code emits different opening delimiters. Sequence traversal preserves list or tuple shape; mapping traversal filters and normalizes keys and reports omitted entries. A shared renderer would couple their distinct output and budget rules. Nose supplies no unit names, so this exact path-only key also covers future fragments in the file; review them rather than treating the entry as blanket approval.                      | `tests/test_diagnostics_unit.py`                                                                                                                                  |
+| `_session.py` and `websocket.py` unnamed guard fragments                                  | Intentional. Nose reports both empty-list guards as unnamed fragments, so path-only keys are required. Session cleanup raises the first failure and annotates later failures; room broadcasting re-raises one failure or groups several. Sharing the guard would couple distinct error contracts. The exception covers only families located in both named modules; review any future matching family.                                                        | `falcon_pachinko/unittests/test_router_session.py` and `tests/test_connection_manager_unit.py`                                                                    |
 
 No application code was changed to clear the initial report. The gate modules
 and tests are focused adoption evidence, not a detector benchmark; no benchmark

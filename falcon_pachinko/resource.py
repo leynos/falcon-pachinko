@@ -115,7 +115,8 @@ class WebSocketResource:
             msg = "resource must be callable"
             raise TypeError(msg)
 
-        from .router import _canonical_path, _compile_prefix_template
+        from ._route_support import _canonical_path
+        from ._uri_template import _compile_prefix_template
 
         canonical = _canonical_path(path)
         pattern = _compile_prefix_template(canonical)
