@@ -101,7 +101,7 @@ class SocketRecordingBackend(InProcessBackend):
     """Track identities of sockets registered and accessed by one server."""
 
     def __init__(self) -> None:
-        """Initialise per-server identity sets for ownership assertions."""
+        """Initialize per-server identity sets for ownership assertions."""
         super().__init__()
         self.registered: set[int] = set()
         self.snapshotted: set[int] = set()

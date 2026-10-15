@@ -37,24 +37,25 @@ and dispatches incoming frames in order until the peer disconnects or dispatch
 fails. The default is `False`; in that mode the router returns after accepting
 and the application retains lifecycle ownership.
 
-With the loop enabled, `on_disconnect` runs exactly once after `on_connect`
-successfully accepts the connection, including peer disconnect, dispatch
-failure, cancellation, or failure in `after_connect` or `accept`. A rejected
-connection or an `on_connect` failure does not invoke it. `before_disconnect`
-hooks run before the callback, and a hook failure cannot skip it. Peer close
-codes are passed through, with `1006` used when a code is unavailable;
-cancellation and incomplete handshakes also use `1006`. Ordinary dispatch
-errors use the existing close path (default close code `1000`) before cleanup.
-If cleanup fails while another error or cancellation is already in flight, that
-original failure remains primary, and the cleanup failure is recorded as a
-note. The accepted-session state for this opt-in path lives in the private
-`falcon_pachinko._router_session` component; `WebSocketRouter` retains route
-resolution and the shared acceptance path. `ClusterFanout.__init__` has a
-method-scoped CodeScene *Excess Number of Function Arguments* exception because
-its explicit, typed collaborators and timing options form the public wiring
-contract; replacing them with a configuration object or opaque keyword
-arguments would change that contract. Keep this exception limited to that
-method, without a cohesion suppression or project threshold change.
+With the loop enabled, `on_disconnect` is attempted exactly once after a
+successful `on_connect`, including peer disconnect, dispatch failure,
+cancellation, or failure in `after_connect` or `accept`. A rejected connection
+or an `on_connect` failure does not invoke it. `before_disconnect` hooks run
+before the callback; a hook interrupted before the callback may be retried
+during cancellation cleanup. A callback interrupted by cancellation is not
+invoked a second time. Peer close codes are passed through, with `1006` used
+when the peer code is missing. Cancellation after acceptance closes with `1001`
+and propagates `CancelledError`; unexpected receive or handler failures close
+with `1011` and propagate the original exception. Failure during
+`after_connect` or `accept` runs cleanup with `1006`.
+
+The private `falcon_pachinko._router_session` component owns the opt-in
+acceptance phase. After acceptance, it transfers frame reception and cleanup to
+the shared `session.drive_session()` loop; `WebSocketRouter` retains route
+resolution and connection setup. If cleanup fails during incomplete acceptance
+while a primary error is active, the wrapper adds a note containing only the
+cleanup exception type. After transfer, the shared session driver logs cleanup
+failure types and preserves the primary session failure.
 
 ## Cluster fan-out maintenance
 
@@ -73,6 +74,13 @@ the
 [fan-out design](falcon-websocket-extension-design.md#371-cluster-membership-and-fan-out),
 and the
 [scalability discussion](falcon-websocket-extension-design.md#64-scalability-for-distributed-systems).
+
+`ClusterFanout.__init__` has a method-scoped CodeScene *Excess Number of
+Function Arguments* exception because its explicit, typed collaborators and
+timing options form the public wiring contract; replacing them with a
+configuration object or opaque keyword arguments would change that contract.
+Keep this exception limited to that method, without a cohesion suppression or
+project threshold change.
 
 Delivery is best effort, with no durability or replay to down or expired nodes.
 Per-socket ordering depends on the transport preserving per-publisher, per-node
@@ -428,24 +436,32 @@ Explicit registration takes precedence: dispatch looks up the exact envelope
 stays legal for a distinct method; see §3.6 of the
 [design document](falcon-websocket-extension-design.md).
 
-## Router-owned WebSocket sessions
+## Opt-in router-owned WebSocket sessions
 
-After route resolution, connection hooks, `on_connect`, and `after_connect`
-hooks succeed, `WebSocketRouter` accepts the socket and awaits the selected
-resource's session inline. The session repeatedly calls `receive_media()`,
-adapts decoded values to raw JSON frames when needed, and awaits
-`WebSocketResource.dispatch()` before reading the next frame. It creates no
-per-frame tasks. The selected child resource, bound hook manager, injected
-services, and connection-scoped state proxy are the same objects prepared for
-connection setup.
+With `receive_loop=True`, after route resolution, connection hooks,
+`on_connect`, and `after_connect` hooks succeed, `WebSocketRouter` accepts the
+socket and awaits the selected resource's session inline. The session
+repeatedly calls `receive_media()`, adapts decoded values to raw JSON frames
+when needed, and awaits `WebSocketResource.dispatch()` before reading the next
+frame. It creates no per-frame tasks. The selected child resource, bound hook
+manager, injected services, and connection-scoped state proxy are the same
+objects prepared for connection setup. With the default `receive_loop=False`,
+the router returns after acceptance and the application owns further receives
+and cleanup.
 
-An ordinary peer disconnect runs `before_disconnect` hooks and then
-`on_disconnect(ws, peer_code)`; a missing peer code maps to 1000. Cancellation
-closes with 1001 and re-raises `CancelledError`. An unexpected receive or
-handler exception closes with 1011, runs best-effort disconnect cleanup, and
-re-raises the original exception. A normal disconnect lifecycle error
-propagates. Failure cleanup errors are logged and do not replace the session
-failure.
+An ordinary peer disconnect runs `before_disconnect` hooks and then attempts
+`on_disconnect(ws, peer_code)` once; a missing peer close code maps to 1006.
+Cancellation before disconnect cleanup starts closes with 1001 and re-raises
+`CancelledError`. If cancellation interrupts a peer-close callback already in
+progress, that callback retains its peer code and is not retried, though the
+socket closes with 1001. An unexpected receive or handler exception closes with
+1011, runs best-effort disconnect cleanup, and re-raises the original
+exception. If `after_connect` or `accept` fails before the receive loop starts,
+cleanup uses 1006. Cancellation cleanup may retry a `before_disconnect` hook
+interrupted before the callback; an interruption inside the callback does not
+trigger a second attempt. A normal peer-cleanup lifecycle error propagates.
+During accepted-session failure cleanup, errors are logged by exception type
+and do not replace the session failure.
 
 Test sockets must terminate receive loops. `DummyWS` and `RecordingWS` return
 their scripted frames in order and then signal peer disconnection. The

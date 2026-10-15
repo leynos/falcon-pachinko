@@ -40,7 +40,6 @@ from .protocols import WebSocketLike
 # that raises NameError when introspected would be a trap for runtime
 # consumers, so the name it references has to resolve at runtime too.
 from .resource import WebSocketResource
-from .session import drive_session
 
 if typ.TYPE_CHECKING:
     import re
@@ -609,24 +608,18 @@ class WebSocketRouter:
         should_accept = await self._execute_resource_handler(
             resource, dispatch, context, hook_manager
         )
-        if self._receive_loop and should_accept:
-            async with _ConnectionSession(
-                resource, dispatch.ws, hook_manager
-            ) as session:
-                await self._finalize_connection(
-                    dispatch.ws,
-                    should_accept=True,
-                    context=context,
-                    hook_manager=hook_manager,
-                )
-                await session.receive_frames()
-                return True
-        return await self._finalize_connection(
+        acceptance = self._finalize_connection(
             dispatch.ws,
             should_accept=should_accept,
             context=context,
             hook_manager=hook_manager,
         )
+        if self._receive_loop and should_accept:
+            await _ConnectionSession(resource, dispatch.ws, hook_manager).run(
+                acceptance, on_policy_close=dispatch.mark_session_close_attempted
+            )
+            return True
+        return await acceptance
 
     @staticmethod
     async def _prepare_connection_context(

@@ -1,24 +1,26 @@
-"""Own accepted WebSocket sessions for the opt-in router receive loop.
+"""Own the opt-in WebSocket acceptance phase and transfer accepted sessions.
 
 ``WebSocketRouter(receive_loop=True)`` enters this owner after ``on_connect``
-succeeds and before acceptance completes. It dispatches received frames in
-order and invokes disconnect hooks and resource cleanup exactly once on exit,
-including after failed acceptance or cancellation.
+allows the connection and before acceptance completes. If acceptance setup
+fails, it runs disconnect hooks and attempts resource cleanup with close code
+1006. Once acceptance succeeds, it transfers frame reception and disconnect
+cleanup to the shared ``session.drive_session`` loop. During cleanup, hooks
+precede the resource callback, which is attempted once even if cancellation
+interrupts it. The shared driver may retry a hook interrupted by cancellation
+before the callback, while preventing a second callback attempt.
 """
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import typing as typ
 
-import falcon
-
 from ._observability import _observe_operation
 from .diagnostics import _type_name
-from .dispatcher import msjson
+from .session import drive_session
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import types
 
     from .hooks import HookManager
@@ -37,6 +39,7 @@ class _ConnectionSession:
         ws: WebSocketLike,
         hook_manager: HookManager,
     ) -> None:
+        """Own cleanup until acceptance transfers the session to its driver."""
         self.resource = resource
         self.ws = ws
         self.hook_manager = hook_manager
@@ -78,19 +81,23 @@ class _ConnectionSession:
             finally:
                 await self.resource.on_disconnect(self.ws, self.close_code)
 
-    async def receive_frames(self) -> None:
-        """Dispatch sequential frames until disconnect or an ordinary error."""
-        while True:
-            try:
-                frame = await self.ws.receive_media()
-                raw = frame if isinstance(frame, (str, bytes)) else msjson.encode(frame)
-                await self.resource.dispatch(self.ws, raw)
-            except falcon.WebSocketDisconnected as exc:
-                self.close_code = getattr(exc, "code", None) or 1006
-                return
-            except Exception as exc:  # ruff: ignore[blind-except] - session errors close locally without preventing disconnect cleanup
-                logger.warning("WebSocket session failed (%s)", _type_name(exc))
-                with contextlib.suppress(Exception):
-                    await self.ws.close()
-                self.close_code = 1000
-                return
+    async def run(
+        self,
+        acceptance: cabc.Awaitable[bool],
+        *,
+        on_policy_close: cabc.Callable[[], None],
+    ) -> None:
+        """Protect acceptance, then transfer the session to the shared driver."""
+        async with self:
+            await acceptance
+            resource, ws, hook_manager = self.resource, self.ws, self.hook_manager
+            # There is no suspension between transfer and entering the driver.
+            # Its protected receive await owns cancellation and cleanup; this
+            # context retains cleanup only for incomplete acceptance.
+            self.has_disconnected = True
+            await drive_session(
+                resource,
+                ws,
+                hook_manager,
+                on_policy_close=on_policy_close,
+            )

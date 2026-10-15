@@ -88,7 +88,7 @@ def test_failure_preserves_exception_and_omits_secrets(
     ), "exception text must not enter observation records"
 
 
-def test_unrecognised_operation_is_not_a_metric_label(
+def test_unrecognized_operation_is_not_a_metric_label(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Accidental caller-provided labels cannot leak identifiers into records."""

@@ -40,7 +40,7 @@ class ChatResource(WebSocketResource):
 
 
 app = falcon.asgi.App()
-router = WebSocketRouter()
+router = WebSocketRouter(receive_loop=True)
 router.add_route("/chat/{room}", ChatResource)
 router.attach(app, "/ws")
 ```
@@ -49,8 +49,9 @@ router.attach(app, "/ws")
   for descendant paths.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
-- After `on_connect` and the `after_connect` hooks succeed, the router accepts
-  the socket and owns the receive-and-dispatch session until it ends.
+- The example opts into a router-owned receive-and-dispatch session with
+  `receive_loop=True`. The default is `False`, which returns after acceptance
+  and leaves receives and cleanup to the application.
 
 ### The `add_route` signature
 
@@ -109,14 +110,21 @@ resource and its hooks.
     connection. If `on_connect()` sends a frame itself, call `await ws.accept()`
     first.
 - `on_disconnect(ws, close_code) -> None`
-  - Clean up after an accepted session ends. The router runs
-    `before_disconnect` hooks first, then calls `on_disconnect`. The code is
-    the peer's close code (or `1000` when absent), `1001` when the server
-    cancels the session, or `1011` after an unexpected receive or handler
-    failure. Rejected connections do not run this lifecycle.
+  - With `WebSocketRouter(receive_loop=True)`, after a successful
+    `on_connect`, the router runs `before_disconnect` hooks and attempts this
+    callback once when the accepted session ends, including setup failure in
+    `after_connect` or `accept`. The code is the peer's close code, or `1006`
+    when the peer code is missing or acceptance setup fails. Cancellation
+    before cleanup starts closes with `1001` and propagates. If cancellation
+    interrupts a peer-disconnect callback already in progress, it is not
+    retried and retains the peer code, while the socket closes with `1001`.
+    Unexpected receive or handler failures close with `1011` and propagate the
+    original exception. Rejected connections and failed `on_connect` calls do
+    not run this lifecycle. With the default `receive_loop=False`, the
+    application owns receive and cleanup.
 - Session frames arrive as raw `str` or `bytes` from `ws.receive_media()` and
-  are passed to `WebSocketResource.dispatch()`. After acceptance, the router
-  receives and dispatches frames until the peer disconnects.
+  are passed to `WebSocketResource.dispatch()`. With `receive_loop=True`, the
+  router receives and dispatches frames until the peer disconnects.
 
 `router.attach()` installs pass-through TEXT and BINARY deserializers in the
 application's shared `ws_options.media_handlers` mapping while preserving its
@@ -124,7 +132,6 @@ outbound serializers. Consequently, every Falcon WebSocket responder on that
 application receives raw frames from `receive_media()`; responders that need
 decoded objects must decode those frames themselves. `attach()` warns when it
 finds customized media handlers that it will replace.
-
 - `self.state`
   - Dict-like proxy shared across all resources in the same connection chain.
   - Override via `get_child_context()` to supply a custom state store (e.g.,
@@ -198,11 +205,11 @@ class ChatResource(WebSocketResource):
   hide it behind a bad-frame fallback while leaving the broken schema in place.
   Fix the schema instead of handling the exception.
 - The decorator supports `strict=False` to allow extra fields when required.
-- The router dispatches frames sequentially on the accepted connection. It
-  does not start a task per frame, so one handler completes before the next
-  frame is dispatched. Returning normally from `on_unhandled` keeps the session
-  open; application code can call `await ws.close(code=...)` when its policy
-  requires closure.
+- With `receive_loop=True`, the router dispatches frames sequentially on the
+  accepted connection. It does not start a task per frame, so one handler
+  completes before the next frame is dispatched. Returning normally from
+  `on_unhandled` keeps the session open; application code can call
+  `await ws.close(code=...)` when its policy requires closure.
 
 Falcon's default WebSocket media handlers may decode frames before
 `receive_media()` returns them. When schema dispatch needs the original text or
@@ -444,13 +451,14 @@ await fanout.remove_connection(connection_id)  # on disconnect
 
 Start `fanout.run` with `WorkerController` in the application lifespan and stop
 the controller during shutdown. Mount the router with
-`WebSocketRouter(receive_loop=True)` so the router keeps accepted sockets open,
+`WebSocketRouter(receive_loop=True)` so it keeps accepted sockets open,
 dispatches incoming frames and calls `on_disconnect` when the session ends.
-Each node subscribes while it has local members in a room. It removes the
-subscription when the last local member leaves, releases its memberships on
-graceful shutdown, and renews leases with a heartbeat (by default, every third
-of `lease_ttl`). If a process crashes, its remote membership expires after
-`lease_ttl` without a heartbeat.
+This receive loop is opt-in; the default returns after acceptance and leaves
+the session lifecycle to the application. Each node subscribes while it has
+local members in a room. It removes the subscription when the last local member
+leaves, releases its memberships on graceful shutdown, and renews leases with a
+heartbeat (by default, every third of `lease_ttl`). If a process crashes, its
+remote membership expires after `lease_ttl` without a heartbeat.
 
 Fan-out is best effort and not durable: nodes that are down or whose leases
 have expired do not receive replayed messages. Per-socket ordering depends on

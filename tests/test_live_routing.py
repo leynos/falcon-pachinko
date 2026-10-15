@@ -107,7 +107,7 @@ class _RoutingAdapter:
 
 def _create_live_router(observations: _LiveObservations) -> WebSocketRouter:
     """Register live routes and recording hooks on a mounted router."""
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
 
     def record_global_hook(context: HookContext) -> None:
         """Record global hook order around the resource-specific chain."""
@@ -239,7 +239,8 @@ async def test_live_websocket_routes_select_literal_resource_and_hooks(
 
     async with client.connect(path) as session:
         await session.send_json({"type": "probe"})
-        message = await session.receive_json()
+        async with asyncio.timeout(5):
+            message = await session.receive_json()
 
     assert message == identity, "the live handshake must reach its intended resource"
     assert observations.adapter_calls == [(path, path.removeprefix("/ws/"))], (

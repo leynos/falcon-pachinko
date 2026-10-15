@@ -162,16 +162,21 @@ router.attach(app, "/ws")
 - Register handlers with `@handles_message("tag")` or `on_tag` methods.
 - Replace legacy `on_message` fallbacks with `on_unhandled`.
 
-After connection setup succeeds, `WebSocketRouter` accepts the connection and
-owns frame reception and dispatch until disconnect. Remove application-owned
-receive loops, manual `accept()` calls, and direct calls to
-`WebSocketResource.dispatch()`, except for `await ws.accept()` before sending a
-frame inside `on_connect()`. Keep message handling in resource handlers and
-`on_unhandled`; frames are dispatched sequentially, and returning normally from
-`on_unhandled` keeps the session open. The router runs `before_disconnect`
-before `on_disconnect`. Cancellation closes with code `1001`; unexpected
-receive or handler failures close with `1011` and propagate the original
-exception.
+Set `WebSocketRouter(receive_loop=True)` to have the router accept the
+connection and own frame reception and dispatch until disconnect. In that mode,
+remove application-owned receive loops and direct calls to
+`WebSocketResource.dispatch()`. Call `await ws.accept()` in `on_connect()` only
+when sending a frame from that hook. Keep message handling in resource handlers
+and `on_unhandled`; frames are dispatched sequentially, and returning normally
+from `on_unhandled` keeps the session open. The router runs `before_disconnect`
+before attempting `on_disconnect` once. A missing peer close code or failure
+during `after_connect` or `accept` uses `1006` for cleanup. Cancellation before
+disconnect cleanup starts closes with `1001` and propagates. If cancellation
+interrupts a peer-disconnect callback already in progress, it is not retried and
+retains the peer code, while the socket closes with `1001`. Unexpected receive
+or handler failures close with `1011` and propagate the original exception.
+The default `receive_loop=False` returns after acceptance, leaving frame
+reception and cleanup to the application.
 
 1) **Wire dependency injection via `resource_factory`:**
 

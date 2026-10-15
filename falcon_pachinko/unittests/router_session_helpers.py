@@ -42,14 +42,14 @@ class SessionSocket(WebSocketLike):
         raise NotImplementedError
 
     async def receive_media(self) -> object:
-        """Yield queued frames then a peer disconnect with code 1001."""
+        """Yield queued frames then a peer disconnect with code 4000."""
         self.receive_calls += 1
         self.receiving.set()
         if self.frames is None:
             await asyncio.Event().wait()
         if self.frames:
             return self.frames.popleft()
-        raise falcon.WebSocketDisconnected(1001)
+        raise falcon.WebSocketDisconnected(4000)
 
 
 class SessionResource(WebSocketResource):

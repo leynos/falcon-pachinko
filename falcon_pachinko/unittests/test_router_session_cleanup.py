@@ -51,7 +51,7 @@ async def test_receive_loop_cancellation_disconnects_once(
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert resource.disconnects == [(socket, 1006)], (
+        assert resource.disconnects == [(socket, 1001)], (
             "cancellation must trigger exactly one cleanup"
         )
     finally:
@@ -112,10 +112,10 @@ async def test_receive_loop_runs_disconnect_hooks_before_cleanup() -> None:
 
     router.global_hooks.add("before_disconnect", before_disconnect)
     await router.on_websocket(make_req("/session"), socket)
-    assert observed == [("before_disconnect", 1001, 0)], (
+    assert observed == [("before_disconnect", 4000, 0)], (
         "hooks must precede resource cleanup"
     )
-    assert resource.disconnects == [(socket, 1001)], "hooks must not duplicate cleanup"
+    assert resource.disconnects == [(socket, 4000)], "hooks must not duplicate cleanup"
 
 
 @pytest.mark.asyncio
@@ -133,7 +133,7 @@ async def test_receive_loop_failing_disconnect_hook_cannot_skip_cleanup() -> Non
     router.global_hooks.add("before_disconnect", before_disconnect)
     with pytest.raises(RuntimeError, match="disconnect hook failed"):
         await router.on_websocket(make_req("/session"), socket)
-    assert resource.disconnects == [(socket, 1001)], (
+    assert resource.disconnects == [(socket, 4000)], (
         "hook failure must never skip cleanup"
     )
 
@@ -146,7 +146,8 @@ async def test_receive_loop_logs_dispatch_failure_without_exception_values(
     resource = SessionResource(dispatch_error=RuntimeError("CANARY-dispatch-secret"))
     socket = SessionSocket(("first",))
     router = session_router(resource, receive_loop=True)
-    await router.on_websocket(make_req("/session"), socket)
+    with pytest.raises(RuntimeError, match="CANARY-dispatch-secret"):
+        await router.on_websocket(make_req("/session"), socket)
     assert "RuntimeError" in caplog.text, "dispatch failures must leave a diagnostic"
     assert "CANARY-dispatch-secret" not in caplog.text, (
         "diagnostics must omit exception values"
@@ -163,7 +164,7 @@ async def test_receive_loop_dispatches_frames_in_order_and_disconnects_once() ->
     assert resource.frames == ["text", b"binary", b'{"value":1}'], (
         "frames must dispatch in receive order"
     )
-    assert resource.disconnects == [(socket, 1001)], (
+    assert resource.disconnects == [(socket, 4000)], (
         "peer close code must reach one cleanup call"
     )
     assert socket.accepted, "the receive loop must follow acceptance"
@@ -171,14 +172,17 @@ async def test_receive_loop_dispatches_frames_in_order_and_disconnects_once() ->
 
 @pytest.mark.asyncio
 async def test_receive_loop_dispatch_failure_closes_and_disconnects_once() -> None:
-    """Ordinary dispatch errors close through the existing path and stop receiving."""
-    resource = SessionResource(dispatch_error=RuntimeError("dispatch failed"))
+    """Dispatch errors retain the shared driver's policy and original exception."""
+    failure = RuntimeError("dispatch failed")
+    resource = SessionResource(dispatch_error=failure)
     socket = SessionSocket(("first", "second"))
     router = session_router(resource, receive_loop=True)
-    await router.on_websocket(make_req("/session"), socket)
+    with pytest.raises(RuntimeError, match="dispatch failed") as caught:
+        await router.on_websocket(make_req("/session"), socket)
+    assert caught.value is failure, "the shared session must preserve error identity"
     assert socket.closed, "dispatch failure must close the socket"
     assert resource.frames == ["first"], "dispatch failure must end the receive loop"
-    assert resource.disconnects == [(socket, 1000)], (
+    assert resource.disconnects == [(socket, 1011)], (
         "the router close code must reach one cleanup call"
     )
 

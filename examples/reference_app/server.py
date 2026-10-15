@@ -179,6 +179,7 @@ def build_router(
         name="reference",
         resource_factory=resource_factory or container.create_resource,
         simulator_factory=simulator_factory,
+        receive_loop=True,
     )
     router.add_route(
         "/workspaces/{workspace_id}",

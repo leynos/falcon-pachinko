@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
+import functools
 import logging
 import typing as typ
 
@@ -11,6 +12,7 @@ import falcon
 import msgspec.json as msjson
 
 from ._disconnect import _PeerDisconnectedError
+from ._observability import _observe_operation
 from .diagnostics import _type_name
 
 if typ.TYPE_CHECKING:
@@ -23,13 +25,24 @@ if typ.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@dc.dataclass(frozen=True, slots=True)
+@dc.dataclass(slots=True)
 class _SessionContext:
     """Hold the resource and socket selected during connection setup."""
 
     resource: WebSocketResource
     websocket: WebSocketLike
     hook_manager: HookManager
+    has_disconnected: bool = False
+
+    async def disconnect(self, close_code: int) -> None:
+        """Attempt resource cleanup once, including when it is cancelled."""
+        if self.has_disconnected:
+            return
+        # A cancellation inside the callback must not trigger a second call
+        # when peer cleanup switches to the server-shutdown policy.
+        self.has_disconnected = True
+        with _observe_operation(logger, "disconnect"):
+            await self.resource.on_disconnect(self.websocket, close_code)
 
 
 def _adapt_frame(media: object) -> str | bytes:
@@ -88,6 +101,7 @@ async def _run_disconnect_lifecycle(
     """Run before-disconnect hooks, then resource cleanup, in that order."""
 
     async def notify_hooks() -> None:
+        """Notify the selected resource's disconnect hooks before cleanup."""
         await session.hook_manager.notify_before_disconnect(
             session.resource,
             ws=session.websocket,
@@ -98,11 +112,10 @@ async def _run_disconnect_lifecycle(
         "before_disconnect", notify_hooks, suppress_errors=suppress_errors
     )
 
-    async def disconnect_resource() -> None:
-        await session.resource.on_disconnect(session.websocket, close_code)
-
     resource_error = await _attempt_cleanup(
-        "on_disconnect", disconnect_resource, suppress_errors=suppress_errors
+        "on_disconnect",
+        functools.partial(session.disconnect, close_code),
+        suppress_errors=suppress_errors,
     )
     if hook_error is not None:
         raise hook_error
@@ -138,9 +151,21 @@ async def drive_session(
     """Receive and dispatch frames inline until the WebSocket session ends.
 
     Peer disconnection runs the disconnect lifecycle with the peer's close
-    code (or 1000 if Falcon does not provide one). Cancellation closes with
+    code (or 1006 if Falcon does not provide one). Cancellation closes with
     1001 and is re-raised. Any other receive or handler failure closes with
     1011, runs best-effort cleanup, and is re-raised unchanged.
+
+    Parameters
+    ----------
+    resource : WebSocketResource
+        Resource that dispatches received frames and handles disconnect cleanup.
+    ws : WebSocketLike
+        Accepted socket used to receive frames and apply close policy.
+    hook_manager : HookManager
+        Hook manager that runs before-disconnect hooks before resource cleanup.
+    on_policy_close : collections.abc.Callable[[], None]
+        Callback that marks the router's close policy as attempted, preventing
+        the router from closing the socket a second time.
 
     Raises
     ------
@@ -156,16 +181,17 @@ async def drive_session(
                 raw = _adapt_frame(media)
                 await session.resource.dispatch(session.websocket, raw)
             except (falcon.WebSocketDisconnected, _PeerDisconnectedError) as exc:
-                close_code = exc.code if exc.code is not None else 1000
+                close_code = exc.code if exc.code is not None else 1006
                 break
     except asyncio.CancelledError:
         on_policy_close()
         await _close_after_failure(session.websocket, 1001)
         await _run_disconnect_lifecycle(session, 1001, suppress_errors=True)
         raise
-    except Exception:
+    except Exception as exc:
         # Record the attempt first so the router wrapper never closes twice.
         on_policy_close()
+        _log_session_failure("WebSocket session failed", exc)
         await _close_after_failure(session.websocket, 1011)
         await _run_disconnect_lifecycle(session, 1011, suppress_errors=True)
         raise
