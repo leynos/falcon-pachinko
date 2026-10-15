@@ -211,27 +211,32 @@ adapter protocol, not to Uvicorn.
 `WebSocketRouter.attach(app, prefix)` is the Falcon composition boundary. It
 compiles the router's relative paths, registers the exact mount and descendant
 catch-all routes, and installs raw-frame media handlers on the app. The router
-accepts a connection after `on_connect()` succeeds, then starts
-`session.drive_session()` for that resource and socket.
+accepts a connection after `on_connect()` succeeds. It starts
+`session.drive_session()` only when `receive_loop=True`; with the default
+`False`, it returns after acceptance and the application owns further receives
+and cleanup.
 
 `install_raw_websocket_media_handlers()` wraps the app-wide TEXT and BINARY
 handlers once. Inbound deserialization passes frames through as raw `str` or
 `bytes` for resource dispatch; outbound serializers remain the configured
 Falcon serializers. Attaching warns when it finds customized inbound handlers,
 because their deserializers are replaced for every WebSocket responder on that
-app. Repeated installation does not wrap a handler again.
+app. `configure_raw_frame_media(app)` provides the same idempotent setup for
+manually mounted routers and other Falcon WebSocket routes. Either entry point
+warns when customized inbound handlers will be replaced. Repeated installation
+does not wrap a handler again.
 
 `session.drive_session()` receives one frame at a time and passes it to
 `WebSocketResource.dispatch()`. Falcon signals a peer disconnect with
 `falcon.WebSocketDisconnected`; the simulator uses the package's internal
-peer-disconnect signal. The driver preserves the close code, defaulting to
-`1000` when it is absent. A receive or dispatch failure closes an open socket
-with `1011`, runs best-effort disconnect cleanup, and re-raises the original
-failure. Local cancellation closes with `1001`, runs best-effort cleanup, and
-re-raises `CancelledError`. Disconnect hooks and `on_disconnect()` run once.
-For an ordinary peer disconnect, cleanup errors propagate after both cleanup
-steps have been attempted; during failure or cancellation cleanup errors are
-logged and do not replace the primary outcome.
+peer-disconnect signal. The driver preserves the peer close code, using `1006`
+when Falcon does not provide one. A receive or dispatch failure closes an open
+socket with `1011`, runs best-effort disconnect cleanup, and re-raises the
+original failure. Local cancellation closes with `1001`, runs best-effort
+cleanup, and re-raises `CancelledError`. Disconnect hooks precede the single
+`on_disconnect()` attempt. For an ordinary peer disconnect, cleanup errors
+propagate after both cleanup steps have been attempted; during failure or
+cancellation cleanup errors are logged and do not replace the primary outcome.
 
 The `ServerAdapter` protocol isolates the ASGI server. Its `task` property is
 the serve-loop task, `start(app, sock)` returns only after lifespan startup and
@@ -451,10 +456,13 @@ and cleanup.
 
 Falcon may decode incoming media before `receive_media()` returns it, so
 `receive_loop=True` alone does not guarantee exact raw TEXT or BINARY input.
-For that contract, call `configure_raw_frame_media(app)` before constructing
-WebSocket connections. The opt-in applies to all WebSocket routes on the app,
-including ordinary Falcon routes, while preserving its configured outgoing TEXT
-and BINARY serializers.
+`router.attach()` enables raw input for all WebSocket routes on the app while
+preserving the configured outgoing TEXT and BINARY serializers. For a manually
+mounted router or another Falcon WebSocket route, call
+`configure_raw_frame_media(app)` before Falcon constructs WebSockets. Both
+entry points use the same idempotent setup and warn when customized inbound
+handlers will be replaced; Falcon's default decoding applies when neither is
+used.
 
 An ordinary peer disconnect runs `before_disconnect` hooks and then attempts
 `on_disconnect(ws, peer_code)` once; a missing peer close code maps to 1006.
@@ -478,12 +486,15 @@ pending receive. `SimulatorRouterHarness.connect()` starts
 exit closes the simulator and awaits the router task. Unit and simulator tests
 use this harness for fast lifecycle coverage.
 
-The `tests/behaviour/_live_server.py` fixture runs a real Falcon ASGI app under
-Uvicorn on an ephemeral loopback port. Its router-session scenarios use
-`WebSocketTestClient` to prove frame order, binary handling, fallback
+The public `LiveWebSocketServer` harness and `live_websocket_server` fixture
+run real Falcon ASGI apps under Uvicorn on ephemeral loopback ports. The
+two-node fan-out scenario uses a dedicated event loop and an `AsyncExitStack`
+for both servers, their workers, and real `WebSocketTestClient` sessions. Its
+stack closes sessions before workers and servers, then closes the loop. The
+real router-session scenarios prove frame order, binary handling, fallback
 continuation, replies, failure close codes, and peer disconnect callbacks over
-a real network connection. Run those scenarios with `make test`; run the
-documentation gates with `make markdownlint` and `make spelling`.
+network sockets. Run those scenarios with `make test`; run the documentation
+gates with `make markdownlint` and `make spelling`.
 
 ## Lint and Typecheck Toolchain
 

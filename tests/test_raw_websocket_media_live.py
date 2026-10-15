@@ -16,8 +16,7 @@ from falcon_pachinko import (
     WebSocketRouter,
     configure_raw_frame_media,
 )
-from falcon_pachinko.testing import WebSocketTestClient
-from tests._live_server import live_server
+from falcon_pachinko.testing import LiveWebSocketServer
 
 if typ.TYPE_CHECKING:
     from falcon_pachinko import WebSocketLike
@@ -61,15 +60,13 @@ async def test_live_router_dispatch_preserves_exact_raw_frames(
 ) -> None:
     """Identity media handlers preserve real TEXT and BINARY frame contents."""
     app = falcon.asgi.App()
-    configure_raw_frame_media(app)
     received = _ReceivedFrames()
     router = WebSocketRouter(receive_loop=True)
     router.add_route("/", _RecordingResource, received)
-    router.mount("/ws")
-    app.add_route("/ws", router)
+    router.attach(app, "/ws")
 
-    async with live_server(app) as url:
-        client = WebSocketTestClient(url, allow_insecure=True)
+    async with LiveWebSocketServer(app) as server:
+        client = server.client()
         async with client.connect("/ws") as session:
             await session.send(frame)
             async with asyncio.timeout(5):
@@ -134,8 +131,8 @@ async def test_live_ordinary_route_retains_both_custom_outgoing_serializers() ->
     received: asyncio.Queue[object] = asyncio.Queue()
     app.add_route("/ordinary", _OrdinaryRoute(received))
 
-    async with live_server(app) as url:
-        client = WebSocketTestClient(url, allow_insecure=True)
+    async with LiveWebSocketServer(app) as server:
+        client = server.client()
         async with client.connect("/ordinary") as session:
             await session.send_text('"app-wide raw"')
             async with asyncio.timeout(5):
@@ -173,8 +170,8 @@ async def test_live_unconfigured_app_retains_default_decoded_media() -> None:
     received: asyncio.Queue[object] = asyncio.Queue()
     app.add_route("/decoded", _DecodedRoute(received))
 
-    async with live_server(app) as url:
-        client = WebSocketTestClient(url, allow_insecure=True)
+    async with LiveWebSocketServer(app) as server:
+        client = server.client()
         async with client.connect("/decoded") as session:
             await session.send_text('{"value":1}')
             async with asyncio.timeout(5):

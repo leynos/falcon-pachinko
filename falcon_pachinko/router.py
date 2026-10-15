@@ -81,14 +81,6 @@ class WebSocketRouter:
     general ones to control precedence. Paths are normalized so that a template
     ``"/foo"`` matches ``"/foo"`` and ``"/foo/"`` equally. If a trailing slash is
     included in the template, generated URLs will preserve it.
-
-    With ``receive_loop=True``, the router owns an accepted session: it reads
-    frames in order and calls ``on_disconnect`` once after ``on_connect``
-    accepts, including when ``after_connect``, ``accept`` or frame dispatch
-    fails, or when the task is cancelled. A rejected or failing ``on_connect``
-    does not call ``on_disconnect``. The default ``False`` preserves the
-    legacy lifecycle in which the router returns after acceptance and the
-    application owns further receives and cleanup.
     """
 
     def __init__(
@@ -110,16 +102,12 @@ class WebSocketRouter:
         simulator_factory : SimulatorFactory or None, default=None
             Optional factory used by simulator routing.
         receive_loop : bool, default=False
-            If true, dispatch ``receive_media()`` values in order after
-            acceptance. Falcon decodes media by default. For raw TEXT/BINARY
-            input, call ``configure_raw_frame_media(app)`` before WebSocket
-            creation. This app-wide setting retains outgoing serializers;
-            other decoded values are JSON encoded before dispatch.
-            The router calls ``on_disconnect`` once when that accepted session
-            ends, including cancellation or ``after_connect``/``accept``
-            failure. Rejected connections and ``on_connect`` failures do not
-            trigger the callback. If false, return after acceptance so the
-            application retains receive and cleanup ownership.
+            If true, receive and dispatch frames in order after ``on_connect``
+            permits the session and attempt ``on_disconnect`` once, including
+            acceptance setup failure. ``attach()`` and
+            ``configure_raw_frame_media(app)`` share the User Guide's app-wide
+            raw-media setup. If false, return after acceptance; the application
+            owns receiving and cleanup.
         """
         self._raw: list[_RawRoute] = []
         self._routes: list[_CompiledRoute] = []

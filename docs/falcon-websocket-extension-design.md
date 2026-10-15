@@ -37,24 +37,32 @@ will be discussed.
 
 The implementation uses `falcon.asgi.App` and
 `WebSocketRouter.attach(app, prefix)` to register both the exact mount and a
-catch-all descendant route. `attach()` installs pass-through TEXT and BINARY
-deserializers in the application's shared WebSocket media-handler mapping, so
-every Falcon WebSocket responder on that app receives raw `str` or `bytes` from
-`receive_media()`. Outbound serialization continues through the configured
-handler. Attaching warns when it replaces customized media handlers.
+catch-all descendant route. `attach()` also enables pass-through TEXT and
+BINARY input in the application's shared WebSocket media-handler mapping,
+preserving the configured outgoing serializers. The public
+`configure_raw_frame_media(app)` helper uses the same idempotent setup for
+manually mounted routers and other Falcon WebSocket routes. Either entry point
+warns when it replaces customized inbound handlers. Falcon's default media
+decoding remains in effect when neither is used.
 
 After Falcon routes a connection to the router, `on_connect()` decides whether
 to accept it. The router owns acceptance after that hook; a resource that sends
-a frame from `on_connect()` must call `await ws.accept()` first. Once accepted,
-the router repeatedly receives raw frames and invokes
-`WebSocketResource.dispatch()` until the session driver identifies a peer
-disconnect. The driver handles Falcon's `WebSocketDisconnected` exception and
-the simulator's framework-independent package signal, preserving their close
-codes. Cleanup calls `on_disconnect(ws, close_code)` once: normal disconnects
-preserve the peer's code or default to `1000`, dispatch failures use `1011`,
-and local task cancellation closes with `1001` and passes that code to the
-cleanup hook before cancellation is re-raised. The router does not send a close
-frame to a socket Falcon has already closed.
+a frame from `on_connect()` must call `await ws.accept()` first. With
+`receive_loop=True`, the router receives frames in order and invokes
+`WebSocketResource.dispatch()` until the session ends; the default `False`
+returns after acceptance and leaves further receives and cleanup to the
+application. The driver handles Falcon's `WebSocketDisconnected` exception and
+the simulator's framework-independent package signal. After a successful
+`on_connect`, opt-in sessions attempt `on_disconnect` once, including setup
+failure in `after_connect` or `accept`. A missing peer code and setup failure
+use `1006`; unexpected receive or dispatch failures close with `1011` and
+propagate. Cancellation before cleanup starts closes with `1001` and
+propagates. If cancellation interrupts a peer-close callback already in
+progress, that callback retains its peer code and is not retried, while the
+socket closes with `1001`. Rejected connections and failed `on_connect` calls
+do not call the callback.
+
+The diagrams below show the opted-in `receive_loop=True` session path.
 
 ### WebSocket session lifecycle
 
@@ -62,11 +70,10 @@ frame to a socket Falcon has already closed.
 stateDiagram-v2
     accTitle: WebSocket session state transitions
     accDescr {
-        The session starts while the router runs on_connect. A false result
-        closes the session; a true result leads to acceptance and a persistent
-        receive and dispatch loop. A clean disconnect, dispatch failure or
-        cancellation each invokes on_disconnect once with its corresponding
-        close code, then ends in the disconnected state.
+        The opted-in session starts while the router runs on_connect. A false
+        result closes the session; a true result leads to acceptance and a
+        persistent receive and dispatch loop. Disconnect, failure or
+        cancellation leads to cleanup and then the disconnected state.
     }
 
     [*] --> Connecting
@@ -77,23 +84,23 @@ stateDiagram-v2
     Receiving --> CleanDisconnect: WebSocketDisconnected
     Receiving --> Failed: dispatch exception
     Receiving --> Cancelled: task cancellation
-    CleanDisconnect --> Disconnected: on_disconnect(ws, 1000 or peer code)
+    CleanDisconnect --> Disconnected: on_disconnect(peer code or 1006)
     Failed --> Disconnected: close(1011), on_disconnect(ws, 1011)
     Cancelled --> Disconnected: close(1001), on_disconnect(ws, 1001)
     Closed --> [*]
     Disconnected --> [*]
 ```
 
-**Figure: WebSocket session states from connection through acceptance, frame
-dispatch and exactly-once disconnect cleanup.**
+**Figure: Opted-in WebSocket session states from connection through acceptance,
+frame dispatch and disconnect cleanup.**
 
 ```mermaid
 sequenceDiagram
     accTitle: Falcon WebSocket responder lifecycle
     accDescr {
-        Falcon routes the connection to WebSocketRouter, which calls the
-        resource's on_connect hook before accepting. The router then receives
-        raw frames and dispatches each one until disconnect, followed by the
+        With receive_loop enabled, Falcon routes the connection to
+        WebSocketRouter, which calls on_connect before accepting. The router
+        then receives and dispatches frames until disconnect, followed by the
         resource's on_disconnect hook with the final close code.
     }
 
@@ -116,9 +123,8 @@ sequenceDiagram
     WebSocketRouter->>WebSocketResource: on_disconnect(ws, close_code)
 ```
 
-**Figure: Falcon routes a WebSocket connection to the router, which accepts the
-session, dispatches each raw frame, and calls the resource's disconnect hook
-when the session ends.**
+**Figure: For an opted-in session, Falcon routes a WebSocket connection to the
+router, which accepts it, dispatches frames, and calls the disconnect hook.**
 
 This implemented contract supersedes the future-tense responder and receive
 loop descriptions in the original proposal below.
@@ -378,14 +384,15 @@ logic.
     sends from `on_connect()` must first call `await ws.accept()`.
 
   - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: With
-    `WebSocketRouter(receive_loop=True)`, after a successful `on_connect` and
-    acceptance attempt, the router runs `before_disconnect` hooks and attempts
-    this callback exactly once. `close_code` is the peer's code, or 1006 when
-    the peer code is missing or acceptance setup fails. Cancellation after
-    acceptance closes with 1001 and propagates; unexpected receive or handler
-    failures close with 1011 and propagate. Rejected negotiations and failed
-    `on_connect` calls do not call it. With the default `receive_loop=False`,
-    the application owns session cleanup.
+    `WebSocketRouter(receive_loop=True)`, after `on_connect` permits the
+    session, the router attempts this callback once, including failure in
+    `after_connect` or `accept`. `close_code` is the peer's code or 1006 when
+    missing or setup fails. Cancellation before cleanup starts closes with
+    1001 and propagates; cancellation during an in-progress peer-close callback
+    does not retry it or replace its peer code, although the socket closes with
+    1001. Unexpected receive or handler failures close with 1011 and propagate.
+    Rejected negotiations and failed `on_connect` calls do not call it. With
+    the default `receive_loop=False`, the application owns session cleanup.
 
   - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str,
     bytes])`
@@ -1488,16 +1495,16 @@ class ChatResource(WebSocketResource):
 
 With `WebSocketRouter(receive_loop=True)`, the router owns the receive loop for
 each accepted connection. Its session driver calls `receive_media()` and awaits
-`WebSocketResource.dispatch()` for each frame before receiving the next one.
+`WebSocketResource.dispatch()` for each value before receiving the next one.
 With the default `False`, the router returns after acceptance and the
 application owns subsequent receives.
 
 Falcon may decode media before `receive_media()` returns it, so enabling the
-receive loop does not by itself guarantee exact raw frames. Applications that
-need original TEXT or BINARY payloads call the existing
-`configure_raw_frame_media(app)` helper before constructing WebSocket
-connections. The setting is app-wide, including ordinary Falcon WebSocket
-routes, and preserves the configured outgoing serializers for both frame types.
+receive loop does not by itself guarantee exact raw frames. `attach()` enables
+raw input automatically. For manually mounted routers or other Falcon WebSocket
+routes, call `configure_raw_frame_media(app)` before Falcon constructs
+WebSockets. Either setup path is app-wide and preserves the configured outgoing
+serializers for both frame types.
 
 The resource's dispatch method performs these steps:
 

@@ -185,7 +185,7 @@ async def test_router_attach_dispatches_parameterized_route_through_falcon() -> 
     """Attach routes real Falcon ASGI scopes to the router and resource."""
     AttachedPathResource.instances.clear()
     app = falcon.asgi.App()
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.add_route("/rooms/{room}", AttachedPathResource)
     router.attach(app, "/ws")
     conductor = falcon.testing.ASGIConductor(app)
@@ -247,7 +247,7 @@ async def test_router_attach_preserves_binary_frames_and_serializes_responses() 
         app.ws_options.media_handlers,
     )
     media_handlers[falcon.WebSocketPayloadType.BINARY] = binary_handler
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.add_route("/binary", BinaryEchoResource)
     with pytest.warns(UserWarning, match="BINARY"):
         router.attach(app, "/ws")
@@ -358,7 +358,7 @@ async def test_on_websocket_rejects_unregistered_descendant_template() -> None:
 async def test_on_websocket_dispatches_multiple_frames_and_cleans_once() -> None:
     """A session dispatches every raw frame and keeps the disconnect code."""
     SessionResource.instances.clear()
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.add_route("/session", SessionResource)
     router.mount("/")
     frames = ['{"type":"first"}', b'{"type":"second"}']
@@ -398,7 +398,7 @@ def test_generated_session_frames_preserve_order_and_disconnect_code(
     async def exercise_session() -> tuple[list[str | bytes], list[int]]:
         """Run one isolated session and return its observed lifecycle data."""
         SessionResource.instances.clear()
-        router = WebSocketRouter()
+        router = WebSocketRouter(receive_loop=True)
         router.add_route("/session", SessionResource)
         router.mount("/")
         ws = _QueuedWebSocket(frames, close_code=close_code)
@@ -431,7 +431,7 @@ async def test_cancelled_session_runs_cleanup_then_reraises() -> None:
             super().__init__()
             self.receive_started = asyncio.Event()
 
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.add_route("/session", SessionResource)
     router.mount("/")
     ws = BlockingWebSocket()
@@ -455,7 +455,7 @@ async def test_dispatch_error_closes_with_1011_and_runs_cleanup() -> None:
         async def on_explode(self, ws: object, payload: object) -> None:
             raise RuntimeError
 
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.add_route("/session", ExplodingResource)
     router.mount("/")
     ws = _QueuedWebSocket(['{"type":"explode"}'])
@@ -477,7 +477,7 @@ async def test_disconnect_raised_during_dispatch_is_a_normal_disconnect() -> Non
         async def on_unhandled(self, ws: object, message: str | bytes) -> None:
             raise falcon.WebSocketDisconnected(code=1001)
 
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.add_route("/session", DisconnectingResource)
     router.mount("/")
     ws = _QueuedWebSocket(['{"type":"push"}'])
@@ -555,7 +555,7 @@ async def test_router_does_not_accept_an_already_accepted_socket() -> None:
 async def test_session_adapts_decoded_receive_media_payloads() -> None:
     """Decoded Falcon media is encoded before raw-frame dispatch."""
     SessionResource.instances.clear()
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.add_route("/session", SessionResource)
     router.mount("/")
     ws = _QueuedWebSocket([{"already": "decoded"}])

@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import socket
 import typing as typ
 
 import falcon
 import falcon.asgi
 import pytest
 import pytest_asyncio
-import uvicorn
 from websockets.exceptions import InvalidStatusCode
 
 from falcon_pachinko import (
@@ -20,7 +18,7 @@ from falcon_pachinko import (
     WebSocketResource,
     WebSocketRouter,
 )
-from falcon_pachinko.testing import WebSocketTestClient
+from falcon_pachinko.testing import LiveWebSocketServer, WebSocketTestClient
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -129,57 +127,6 @@ def _create_live_router(observations: _LiveObservations) -> WebSocketRouter:
     return router
 
 
-class _ReadyServer(uvicorn.Server):
-    """Signal once Uvicorn has created its listening server."""
-
-    def __init__(self, config: uvicorn.Config, started_event: asyncio.Event) -> None:
-        """Retain the event that signals the listening socket is ready."""
-        super().__init__(config)
-        self._started_event = started_event
-
-    async def startup(self, sockets: list[socket.socket] | None = None) -> None:
-        """Signal test clients after Uvicorn finishes server startup."""
-        await super().startup(sockets=sockets)
-        self._started_event.set()
-
-
-async def _wait_for_server_start(
-    started_event: asyncio.Event, server_task: asyncio.Task[None]
-) -> None:
-    """Wait briefly for Uvicorn to start or fail."""
-    readiness_task = asyncio.create_task(started_event.wait())
-    try:
-        done, _ = await asyncio.wait(
-            {readiness_task, server_task},
-            timeout=5,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if readiness_task in done:
-            return
-        if server_task in done:
-            await server_task
-            msg = "Uvicorn stopped before reporting startup"
-            raise RuntimeError(msg)
-        msg = "Uvicorn did not report startup before the timeout"
-        raise TimeoutError(msg)
-    finally:
-        readiness_task.cancel()
-        await asyncio.gather(readiness_task, return_exceptions=True)
-
-
-async def _stop_server(server: uvicorn.Server, server_task: asyncio.Task[None]) -> None:
-    """Request a graceful shutdown and bound any server cleanup wait."""
-    server.should_exit = True
-    if server_task.done():
-        return
-
-    try:
-        await asyncio.wait_for(asyncio.shield(server_task), timeout=5)
-    except TimeoutError:
-        server_task.cancel()
-        await asyncio.gather(server_task, return_exceptions=True)
-
-
 @pytest_asyncio.fixture
 async def live_routing_server() -> cabc.AsyncIterator[tuple[str, _LiveObservations]]:
     """Serve Pachinko behind Falcon on a pre-bound loopback socket."""
@@ -188,33 +135,10 @@ async def live_routing_server() -> cabc.AsyncIterator[tuple[str, _LiveObservatio
     app = falcon.asgi.App()
     app.add_route("/ws/{rest:path}", _RoutingAdapter(router, observations))
 
-    started_event = asyncio.Event()
-    server = _ReadyServer(
-        uvicorn.Config(
-            app,
-            host="127.0.0.1",
-            port=0,
-            lifespan="off",
-            log_level="critical",
-            access_log=False,
-        ),
-        started_event,
-    )
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        # A zero timeout puts the listening socket in non-blocking mode.
-        listener.settimeout(0.0)
-        port = listener.getsockname()[1]
-        server_task = asyncio.create_task(server.serve(sockets=[listener]))
-        try:
-            await _wait_for_server_start(started_event, server_task)
-            yield f"ws://127.0.0.1:{port}", observations
-        finally:
-            await _stop_server(server, server_task)
-    finally:
-        listener.close()
+    # Retain Falcon's expected HTTPNotFound handshake response for near-misses;
+    # error capture would treat that intentional routing rejection as a failure.
+    async with LiveWebSocketServer(app, capture_errors=False) as server:
+        yield server.base_url, observations
 
 
 @pytest.mark.asyncio

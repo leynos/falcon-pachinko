@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import typing as typ
+import warnings
 
 import falcon
 import falcon.asgi
@@ -12,6 +13,7 @@ import msgspec.json as msjson
 import msgspec.msgpack as msmsgpack
 import pytest
 
+from falcon_pachinko import WebSocketResource, WebSocketRouter
 from falcon_pachinko.media import (
     RawBinaryMediaHandler,
     RawTextMediaHandler,
@@ -168,3 +170,64 @@ def test_configuration_is_idempotent_and_affects_only_the_selected_app() -> None
         untouched.ws_options.media_handlers[key] is handler
         for key, handler in other_handlers.items()
     ), "configuration must not change another application's handlers"
+
+
+@pytest.mark.parametrize(
+    "helper_first", [True, False], ids=["helper-attach", "attach-helper"]
+)
+def test_raw_helper_and_attach_share_idempotent_serialization_setup(
+    *,
+    helper_first: bool,
+) -> None:
+    """Either public setup order preserves wrappers and original serializers."""
+    app = falcon.asgi.App()
+    output = bytearray(b"custom-binary")
+    text, binary = _TextHandler(), _BinaryHandler(output)
+    app.ws_options.media_handlers = {
+        falcon.WebSocketPayloadType.TEXT: text,
+        falcon.WebSocketPayloadType.BINARY: binary,
+    }
+    router = WebSocketRouter(receive_loop=True)
+    router.add_route("/", WebSocketResource)
+
+    with warnings.catch_warnings(record=True) as first_warnings:
+        warnings.simplefilter("always")
+        if helper_first:
+            configure_raw_frame_media(app)
+        else:
+            router.attach(app, "/ws")
+    first_handlers = dict(app.ws_options.media_handlers)
+
+    with warnings.catch_warnings(record=True) as repeated_warnings:
+        warnings.simplefilter("always")
+        if helper_first:
+            router.attach(app, "/ws")
+        else:
+            configure_raw_frame_media(app)
+
+    assert all(
+        app.ws_options.media_handlers[key] is handler
+        for key, handler in first_handlers.items()
+    ), "mixing helper and attach must retain installed handler identities"
+    assert len(first_warnings) == 1, (
+        "first setup must warn about customized app-wide input"
+    )
+    assert not repeated_warnings, "repeated setup must not warn about its own adapters"
+    assert not text.calls, "neither setup entry point may probe TEXT serialization"
+    assert not binary.calls, "neither setup entry point may probe BINARY serialization"
+    media = {"reply": "input"}
+    handlers = app.ws_options.media_handlers
+    assert (
+        handlers[falcon.WebSocketPayloadType.TEXT].serialize(media) == "custom-text"
+    ), "both setup orders must retain the original TEXT serializer"
+    assert handlers[falcon.WebSocketPayloadType.BINARY].serialize(media) is output, (
+        "both setup orders must retain the original BINARY buffer identity"
+    )
+    assert len(text.calls) == 1, "the bound TEXT serializer must run once"
+    assert len(binary.calls) == 1, "the bound BINARY serializer must run once"
+    assert text.calls[0] is media, (
+        "TEXT serialization must receive the same media object"
+    )
+    assert binary.calls[0] is media, (
+        "BINARY serialization must receive the same media object"
+    )

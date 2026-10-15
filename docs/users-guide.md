@@ -46,7 +46,9 @@ router.attach(app, "/ws")
 ```
 
 - `attach()` mounts the router at `/ws` and registers a Falcon catch-all route
-  for descendant paths.
+  for descendant paths. It also enables pass-through TEXT and BINARY input for
+  every WebSocket route on the app, while preserving the configured outgoing
+  serializers. It warns if custom media handlers will be replaced.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
 - The example opts into a router-owned receive-and-dispatch session with
@@ -106,15 +108,14 @@ resource and its hooks.
 - `on_connect(req, ws, **params) -> bool | None`
   - Inspect headers and seed `self.state`; return `False` to reject the
     connection. The router runs `after_connect` hooks before it calls
-    `accept()`, then begins receiving frames when this method allows the
-    connection. If `on_connect()` sends a frame itself, call `await ws.accept()`
-    first.
+    `accept()`. With `receive_loop=True`, it then begins receiving frames; with
+    the default `False`, the application owns reception. If `on_connect()` sends
+    a frame itself, call `await ws.accept()` first.
 - `on_disconnect(ws, close_code) -> None`
-  - With `WebSocketRouter(receive_loop=True)`, after a successful
-    `on_connect`, the router runs `before_disconnect` hooks and attempts this
-    callback once when the accepted session ends, including setup failure in
-    `after_connect` or `accept`. The code is the peer's close code, or `1006`
-    when the peer code is missing or acceptance setup fails. Cancellation
+  - With `WebSocketRouter(receive_loop=True)`, after `on_connect` permits the
+    session, the router runs `before_disconnect` hooks and attempts this
+    callback once, including failure in `after_connect` or `accept`. The code
+    is the peer's code, or `1006` when it is missing or setup fails. Cancellation
     before cleanup starts closes with `1001` and propagates. If cancellation
     interrupts a peer-disconnect callback already in progress, it is not
     retried and retains the peer code, while the socket closes with `1001`.
@@ -122,16 +123,19 @@ resource and its hooks.
     original exception. Rejected connections and failed `on_connect` calls do
     not run this lifecycle. With the default `receive_loop=False`, the
     application owns receive and cleanup.
-- Session frames arrive as raw `str` or `bytes` from `ws.receive_media()` and
-  are passed to `WebSocketResource.dispatch()`. With `receive_loop=True`, the
-  router receives and dispatches frames until the peer disconnects.
+- With `receive_loop=True`, the router passes values returned by
+  `ws.receive_media()` to `WebSocketResource.dispatch()` in order until the
+  peer disconnects. Falcon may decode those values unless raw-frame media is
+  enabled for the app.
 
-`router.attach()` installs pass-through TEXT and BINARY deserializers in the
-application's shared `ws_options.media_handlers` mapping while preserving its
-outbound serializers. Consequently, every Falcon WebSocket responder on that
-application receives raw frames from `receive_media()`; responders that need
-decoded objects must decode those frames themselves. `attach()` warns when it
-finds customized media handlers that it will replace.
+For an attached router, `attach()` installs pass-through TEXT and BINARY
+deserializers in the application's shared `ws_options.media_handlers` mapping.
+For a manually mounted router, call `configure_raw_frame_media(app)` before
+Falcon constructs WebSockets. Both configure all WebSocket routes on the app,
+warn when replacing customized inbound handlers, and preserve the configured
+outgoing serializers. Falcon's default handlers decode input when neither entry
+point has enabled raw-frame handling.
+
 - `self.state`
   - Dict-like proxy shared across all resources in the same connection chain.
   - Override via `get_child_context()` to supply a custom state store (e.g.,
@@ -214,8 +218,10 @@ class ChatResource(WebSocketResource):
 Falcon's default WebSocket media handlers may decode frames before
 `receive_media()` returns them; `receive_loop=True` alone does not guarantee
 that dispatch receives the exact raw frame. When schema dispatch needs the
-original TEXT or BINARY payload, configure the app with
-`configure_raw_frame_media(app)` before constructing WebSocket connections:
+original TEXT or BINARY payload, configure the app before constructing
+WebSocket connections. `router.attach()` does this automatically; use
+`configure_raw_frame_media(app)` for manually mounted routers or other Falcon
+WebSocket routes:
 
 ```python
 from falcon_pachinko import configure_raw_frame_media
@@ -224,8 +230,8 @@ configure_raw_frame_media(app)
 ```
 
 This is an app-wide setting, so it also affects ordinary Falcon WebSocket
-routes in the same application. The helper preserves incoming `str` and `bytes`
-payloads while retaining the app's configured outgoing TEXT and BINARY
+routes in the same application. Both setup paths preserve incoming `str` and
+`bytes` payloads while retaining the app's configured outgoing TEXT and BINARY
 serializers. The standalone `RawTextMediaHandler` and `RawBinaryMediaHandler`
 continue to encode JSON and MessagePack respectively when explicitly installed
 as handlers.

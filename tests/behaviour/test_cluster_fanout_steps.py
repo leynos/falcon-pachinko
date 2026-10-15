@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import types
 import typing as typ
 import uuid
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -22,16 +21,19 @@ from falcon_pachinko import (
     WebSocketResource,
     WebSocketRouter,
     WorkerController,
-    configure_raw_frame_media,
 )
-from falcon_pachinko.testing import InMemoryFanoutTransport, WebSocketTestClient
-from tests._live_server import live_server
+from falcon_pachinko.testing import (
+    InMemoryFanoutTransport,
+    LiveWebSocketServer,
+    WebSocketTestClient,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from falcon_pachinko import WebSocketLike
     from falcon_pachinko.testing.client import WebSocketSession
+    from falcon_pachinko.testing.fixtures import _LiveServerRunner
 
 
 class RecordingTransport(FanoutTransport):
@@ -164,27 +166,6 @@ class RoomResource(WebSocketResource):
         await self.fanout.remove_connection(self.conn_id)
 
 
-class RouterMount:
-    """Adapt Falcon's greedy mount to Pachinko's explicit mount prefix."""
-
-    def __init__(self, router: WebSocketRouter) -> None:
-        """Keep the mounted router available to Falcon's ASGI adapter."""
-        self.router = router
-
-    async def on_websocket(
-        self,
-        req: falcon.asgi.Request,
-        ws: falcon.asgi.WebSocket,
-        rest: str,
-    ) -> None:
-        """Route the real server-owned socket with a mount-relative request."""
-        await self.router.on_websocket(
-            types.SimpleNamespace(path=req.path, path_template="/ws"),
-            # Falcon's media parameter name differs; its runtime surface matches.
-            typ.cast("WebSocketLike", ws),
-        )
-
-
 @dc.dataclass(slots=True)
 class Node:
     """Hold independently mounted application state for one server."""
@@ -203,10 +184,8 @@ def make_node(node_id: str, transport: RecordingTransport) -> Node:
     fanout = ClusterFanout(node_id, manager, transport, lease_ttl=3.0, send_timeout=1.0)
     router = WebSocketRouter(receive_loop=True)
     router.add_route("/rooms/{room}", RoomResource, fanout)
-    router.mount("/ws")
     app = falcon.asgi.App()
-    configure_raw_frame_media(app)
-    app.add_route("/ws/{rest:path}", RouterMount(router))
+    router.attach(app, "/ws")
     return Node(node_id, app, backend, manager, fanout)
 
 
@@ -229,7 +208,7 @@ async def running_node(
 class ClusterContext:
     """Own live servers, workers, and client sessions on a dedicated scenario loop."""
 
-    loop: asyncio.AbstractEventLoop
+    runner: _LiveServerRunner
     stack: AsyncExitStack
     transport: RecordingTransport
     nodes: tuple[Node, Node]
@@ -239,28 +218,13 @@ class ClusterContext:
 
 
 @pytest.fixture
-def event_loop(
-    event_loop_policy: asyncio.AbstractEventLoopPolicy,
-) -> cabc.Iterator[asyncio.AbstractEventLoop]:
-    """Use a dedicated scenario event loop, closed only after owned resources."""
-    loop = event_loop_policy.new_event_loop()
-    try:
-        asyncio.set_event_loop(loop)
-        yield loop
-    finally:
-        loop.run_until_complete(loop.shutdown_asyncgens())
-        asyncio.set_event_loop(None)
-        loop.close()
-
-
-@pytest.fixture
 def cluster_context(
-    event_loop: asyncio.AbstractEventLoop,
+    live_websocket_server: _LiveServerRunner,
 ) -> cabc.Iterator[ClusterContext]:
     """Enter servers then workers so sessions close before workers and servers."""
     transport = RecordingTransport()
     context = ClusterContext(
-        event_loop,
+        live_websocket_server,
         AsyncExitStack(),
         transport,
         (make_node("a", transport), make_node("b", transport)),
@@ -269,17 +233,19 @@ def cluster_context(
     async def start() -> None:
         """Start both servers before their worker listeners and sessions."""
         for node in context.nodes:
-            url = await context.stack.enter_async_context(live_server(node.app))
-            context.urls.append(url)
-            context.clients.append(WebSocketTestClient(url, allow_insecure=True))
+            server = await context.stack.enter_async_context(
+                LiveWebSocketServer(node.app)
+            )
+            context.urls.append(server.base_url)
+            context.clients.append(server.client())
         for node in context.nodes:
             await context.stack.enter_async_context(running_node(node, transport))
 
     try:
-        event_loop.run_until_complete(start())
+        context.runner.run(start(), timeout=15)
         yield context
     finally:
-        event_loop.run_until_complete(context.stack.aclose())
+        context.runner.run(context.stack.aclose(), timeout=15)
 
 
 @scenario(
@@ -304,7 +270,7 @@ def connect_clients(cluster_context: ClusterContext) -> ClusterContext:
             )
             cluster_context.sessions.append(session)
 
-    cluster_context.loop.run_until_complete(connect())
+    cluster_context.runner.run(connect(), timeout=5)
     for node in cluster_context.nodes:
         assert len(node.manager.websockets) == 1, (
             "each server must own one independently accepted socket"
@@ -318,15 +284,19 @@ def connect_clients(cluster_context: ClusterContext) -> ClusterContext:
 @then("lobby has both node memberships")
 def both_members(context: ClusterContext) -> None:
     """Both independent servers must subscribe to the same logical room."""
-    members = context.loop.run_until_complete(context.transport.members("lobby"))
+    members = context.runner.run(context.transport.members("lobby"), timeout=5)
     assert members == ("a", "b"), "both node identifiers must hold room leases"
 
 
 @when("client A publishes the first message")
 def publish_first(context: ClusterContext) -> None:
     """Initiate publish through client A's real server receive loop."""
-    context.loop.run_until_complete(
-        context.sessions[0].send_json({"type": "publish", "payload": {"text": "first"}})
+    context.runner.run(
+        context.sessions[0].send_json({
+            "type": "publish",
+            "payload": {"text": "first"},
+        }),
+        timeout=5,
     )
 
 
@@ -343,7 +313,7 @@ def receive_first(context: ClusterContext) -> None:
                 "both servers must deliver the published payload"
             )
 
-    context.loop.run_until_complete(receive())
+    context.runner.run(receive(), timeout=5)
 
 
 @then("only serializable values cross the fan-out transport")
@@ -380,7 +350,7 @@ def local_socket_ownership(context: ClusterContext) -> None:
 @when("client B disconnects")
 def disconnect_second(context: ClusterContext) -> None:
     """Close client B through its actual WebSocket connection."""
-    context.loop.run_until_complete(context.sessions[1].close())
+    context.runner.run(context.sessions[1].close(), timeout=5)
 
 
 @then("lobby retains only node A")
@@ -396,7 +366,7 @@ def only_first_member(context: ClusterContext) -> None:
                     break
                 await context.transport.changed.wait()
 
-    context.loop.run_until_complete(wait_for_cleanup())
+    context.runner.run(wait_for_cleanup(), timeout=5)
     assert not context.nodes[1].manager.websockets, (
         "client B must be removed from its local registry"
     )
@@ -408,11 +378,12 @@ def only_first_member(context: ClusterContext) -> None:
 @when("client A publishes the second message")
 def publish_second(context: ClusterContext) -> None:
     """Publish again after remote disconnect cleanup."""
-    context.loop.run_until_complete(
+    context.runner.run(
         context.sessions[0].send_json({
             "type": "publish",
             "payload": {"text": "second"},
-        })
+        }),
+        timeout=5,
     )
 
 
@@ -431,4 +402,4 @@ def receive_after_disconnect(context: ClusterContext) -> None:
             async with asyncio.timeout(0.2):
                 await context.sessions[1].receive_json()
 
-    context.loop.run_until_complete(receive())
+    context.runner.run(receive(), timeout=5)
