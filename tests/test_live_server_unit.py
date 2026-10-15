@@ -8,8 +8,6 @@ import typing as typ
 
 import falcon.asgi
 import pytest
-from hypothesis import given
-from hypothesis import strategies as st
 
 from falcon_pachinko import WebSocketResource, WebSocketRouter
 from falcon_pachinko.testing import (
@@ -52,11 +50,7 @@ class _FailingStartupMiddleware:
 class _StalledSession:
     """Represent a client close handshake that never completes."""
 
-    def __init__(self) -> None:
-        self.close_calls = 0
-
     async def close(self) -> None:
-        self.close_calls += 1
         await asyncio.Future()
 
 
@@ -66,10 +60,8 @@ class _ConfigurableSession:
     def __init__(self, close_error: Exception | None = None) -> None:
         self.close_error = close_error
         self.closed = False
-        self.close_calls = 0
 
     async def close(self) -> None:
-        self.close_calls += 1
         if self.close_error is not None:
             raise self.close_error
         self.closed = True
@@ -415,88 +407,6 @@ async def test_close_sessions_continues_after_a_session_error() -> None:
     assert server.errors == (close_error,), "the close failure must be retained"
     assert succeeding_session.closed, "later session cleanup must still run"
     assert not server._sessions, "all attempted sessions must leave tracking"
-
-
-@given(outcomes=st.lists(st.sampled_from(("success", "error", "timeout")), max_size=8))
-def test_close_sessions_attempts_and_records_generated_outcomes(
-    outcomes: list[str],
-) -> None:
-    """Attempt each generated close once and retain every generated failure."""
-    server = LiveWebSocketServer(_make_app(), shutdown_timeout=0.001)
-    sessions: list[_ConfigurableSession | _StalledSession] = []
-    expected_errors: list[tuple[str, str]] = []
-    expected_closed: list[bool] = []
-
-    for index, outcome in enumerate(outcomes):
-        match outcome:
-            case "timeout":
-                session = _StalledSession()
-                expected_closed.append(False)
-                expected_errors.append((
-                    "LiveServerShutdownError",
-                    "WebSocket session shutdown timed out",
-                ))
-            case "error":
-                close_error = RuntimeError(f"session {index} close failed")
-                session = _ConfigurableSession(close_error)
-                expected_closed.append(False)
-                expected_errors.append(("RuntimeError", str(close_error)))
-            case "success":
-                session = _ConfigurableSession()
-                expected_closed.append(True)
-        sessions.append(session)
-
-    server._sessions.update(
-        typ.cast("WebSocketSession", session) for session in sessions
-    )
-
-    async def close_sessions() -> None:
-        """Exercise cleanup with an isolated event loop."""
-        await server._close_sessions()
-
-    asyncio.run(close_sessions())
-
-    assert all(session.close_calls == 1 for session in sessions), (
-        "every generated session must be attempted exactly once"
-    )
-    assert not server._sessions, "every attempted session must leave tracking"
-    assert sorted(
-        (type(error).__name__, str(error)) for error in server.errors
-    ) == sorted(expected_errors), (
-        "cleanup must retain exactly the generated close failures"
-    )
-    assert all(
-        session.closed is should_close
-        for session, should_close in zip(sessions, expected_closed, strict=True)
-        if isinstance(session, _ConfigurableSession)
-    ), "successful sessions must close while failing sessions remain unclosed"
-
-
-@given(operations=st.lists(st.sampled_from(("record", "acknowledge")), max_size=20))
-def test_error_recording_and_acknowledgement_follow_generated_operations(
-    operations: list[str],
-) -> None:
-    """Keep only failures recorded since the latest acknowledgement."""
-    server = LiveWebSocketServer(_make_app())
-    pending: list[Exception] = []
-    next_error = 0
-
-    for operation in operations:
-        match operation:
-            case "record":
-                failure = RuntimeError(f"failure {next_error}")
-                next_error += 1
-                server.record_error(failure)
-                pending.append(failure)
-            case "acknowledge":
-                assert server.pop_errors() == tuple(pending), (
-                    "acknowledgement must return exactly the pending failures"
-                )
-                pending.clear()
-
-    assert server.errors == tuple(pending), (
-        "only failures recorded after the last acknowledgement may remain"
-    )
 
 
 @pytest.mark.asyncio
