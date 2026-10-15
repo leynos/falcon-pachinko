@@ -80,8 +80,12 @@ def then_handler_error_close(context: LiveScenario) -> None:
 @then("disconnect cleanup is recorded once with code 1011")
 def then_handler_error_recorded(context: LiveScenario) -> None:
     """Verify the accepted handler failure still ran one disconnect hook."""
+    context.event_loop.run_until_complete(stop_server(context))
     records = context.recorder.disconnect_records
     assert len(records) == 1, "handler failure must run cleanup exactly once"
+    assert context.recorder.disconnect_invocations == 1, (
+        "handler failure must invoke on_disconnect exactly once"
+    )
     assert records[0][1] == 1011, "cleanup must receive the failure close code"
 
 
@@ -126,9 +130,13 @@ def when_server_stops_idle(context: LiveScenario) -> LiveScenario:
 @then("disconnect cleanup records the close code sent by Uvicorn")
 def then_idle_shutdown_code(context: LiveScenario) -> None:
     """Compare the client-observed server close with the cleanup record."""
+    context.event_loop.run_until_complete(stop_server(context))
     context.event_loop.run_until_complete(close_client_context(context))
     records = context.recorder.disconnect_records
     assert len(records) == 1, "server shutdown must run cleanup once"
+    assert context.recorder.disconnect_invocations == 1, (
+        "idle shutdown must invoke on_disconnect exactly once"
+    )
     assert records[0][1] == context.observed_close_code, (
         "cleanup must receive Uvicorn's effective close code"
     )
@@ -157,7 +165,10 @@ def when_server_stops_blocked(context: LiveScenario) -> LiveScenario:
 @then("disconnect cleanup is recorded once with code 1001")
 def then_cancellation_cleanup(context: LiveScenario) -> None:
     """Verify task cancellation is reported as going away exactly once."""
-    context.event_loop.run_until_complete(close_client_context(context))
+    context.event_loop.run_until_complete(stop_server(context))
     records = context.recorder.disconnect_records
     assert len(records) == 1, "cancelled accepted sessions must clean up once"
+    assert context.recorder.disconnect_invocations == 1, (
+        "cancellation must invoke on_disconnect exactly once"
+    )
     assert records[0][1] == 1001, "cancellation cleanup must use code 1001"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import typing as typ
 
 import falcon
 import msgspec.json as msjson
@@ -12,6 +13,10 @@ from hypothesis import strategies as st
 
 from falcon_pachinko._disconnect import _PeerDisconnectedError
 from falcon_pachinko.testing import WebSocketSimulator
+
+if typ.TYPE_CHECKING:
+    from falcon_pachinko.testing._common import FrameKind
+
 
 _ASSERTION_FAILURE = "lifecycle expectation failed"
 
@@ -36,8 +41,8 @@ async def test_accept_and_close_record_state() -> None:
 
 
 @pytest.mark.asyncio
-async def test_push_disconnect_raises_internal_signal_and_persists_code() -> None:
-    """Queued disconnects close the simulator and remain visible to receivers."""
+async def test_push_disconnect_persists_code_on_later_receives() -> None:
+    """A queued peer close retains its code across public disconnect signals."""
     simulator = WebSocketSimulator()
     await simulator.push_text("before disconnect")
     await simulator.push_disconnect(code=1001)
@@ -47,10 +52,12 @@ async def test_push_disconnect_raises_internal_signal_and_persists_code() -> Non
     )
     with pytest.raises(_PeerDisconnectedError) as first:
         await simulator.receive_media()
-    with pytest.raises(_PeerDisconnectedError) as second:
+    with pytest.raises(falcon.WebSocketDisconnected) as second:
+        await simulator.receive_media()
+    with pytest.raises(falcon.WebSocketDisconnected) as third:
         await simulator.receive_media()
 
-    assert first.value.code == second.value.code == 1001, (
+    assert first.value.code == second.value.code == third.value.code == 1001, (
         "later receives must repeat the original disconnect code"
     )
     assert simulator.closed is True, "a peer disconnect must close the simulator"
@@ -173,7 +180,7 @@ async def test_close_wakes_a_blocked_receive_with_disconnect_code() -> None:
 
     await simulator.close(code=4001)
 
-    with pytest.raises(_PeerDisconnectedError) as caught:
+    with pytest.raises(falcon.WebSocketDisconnected) as caught:
         await asyncio.wait_for(pending_receive, timeout=1)
     assert caught.value.code == 4001, "the wake-up must preserve the close code"
 
@@ -184,7 +191,7 @@ async def test_receive_after_close_raises_disconnect() -> None:
     simulator = WebSocketSimulator()
     await simulator.close(code=4002)
 
-    with pytest.raises(_PeerDisconnectedError) as caught:
+    with pytest.raises(falcon.WebSocketDisconnected) as caught:
         await simulator.receive_text()
     assert caught.value.code == 4002, "closed sockets must keep reporting their code"
 
@@ -203,7 +210,7 @@ async def test_queued_frames_are_delivered_before_disconnect() -> None:
     assert await simulator.receive_bytes() == b"second", (
         "the second queued frame must be delivered"
     )
-    with pytest.raises(_PeerDisconnectedError) as caught:
+    with pytest.raises(falcon.WebSocketDisconnected) as caught:
         await simulator.receive_media()
     assert caught.value.code == 4003, "disconnect follows the queued frames"
 
@@ -230,3 +237,25 @@ async def test_close_with_full_bounded_queue_preserves_pending_frames(
     with pytest.raises(falcon.WebSocketDisconnected) as caught:
         await asyncio.wait_for(simulator.receive_media(), timeout=1)
     assert caught.value.code == 4004, "the first close code must survive queue draining"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "payload"),
+    [("text", "late"), ("bytes", b"late"), ("json", {"late": True})],
+)
+async def test_closed_simulator_rejects_new_inbound_frames(
+    kind: FrameKind, payload: object
+) -> None:
+    """No frame queued after close may be delivered after disconnect."""
+    simulator = WebSocketSimulator()
+    await simulator.close(4001)
+    await simulator.close(4002)
+
+    with pytest.raises(falcon.WebSocketDisconnected) as rejected:
+        await simulator.push_message(payload, kind=kind)
+    assert rejected.value.code == 4001, "late pushes must report the first close code"
+    for _ in range(2):
+        with pytest.raises(falcon.WebSocketDisconnected) as disconnected:
+            await asyncio.wait_for(simulator.receive_media(), timeout=1)
+        assert disconnected.value.code == 4001, "receives must stay disconnected"
