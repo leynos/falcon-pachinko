@@ -7,6 +7,7 @@ import typing as typ
 import falcon
 import pytest
 
+from falcon_pachinko._session_socket import receive_frame
 from falcon_pachinko.hooks import HookEvent
 from falcon_pachinko.resource import WebSocketResource
 from falcon_pachinko.router import WebSocketRouter
@@ -16,8 +17,19 @@ from falcon_pachinko.unittests._session_fixtures import (
     make_session_request,
     make_session_router,
 )
+from falcon_pachinko.unittests.helpers import DummyWS
 
 _ASSERTION_FAILURE = "lifecycle expectation failed"
+
+
+@pytest.mark.asyncio
+async def test_mapping_media_is_preserved_as_one_json_frame() -> None:
+    """A mapping frame is media, not a batch of frames to iterate."""
+    websocket = DummyWS({"type": "ping"})
+
+    assert await receive_frame(websocket) == b'{"type":"ping"}', (
+        "mapping media must be encoded as one JSON frame"
+    )
 
 
 @pytest.mark.asyncio
@@ -95,6 +107,35 @@ async def test_close_during_receive_skips_later_receive_hooks() -> None:
     assert events == ["before"], "a closed socket must not emit after-receive"
     assert RecordingResource.instances[0].handled_frames == [], (
         "a close from before-receive must suppress message handling"
+    )
+
+
+@pytest.mark.asyncio
+async def test_handler_close_skips_after_receive_hooks() -> None:
+    """A handler close prevents after-receive hooks from starting."""
+    events: list[str] = []
+
+    class ClosingResource(RecordingResource):
+        async def on_unhandled(self, ws: object, message: str | bytes) -> None:
+            await super().on_unhandled(ws, message)
+            await typ.cast("typ.Any", ws).close(4004)
+
+    router = make_session_router(ClosingResource)
+    router.global_hooks.add(
+        HookEvent.BEFORE_RECEIVE, lambda _context: events.append("before")
+    )
+    router.global_hooks.add(
+        HookEvent.AFTER_RECEIVE, lambda _context: events.append("after")
+    )
+    socket = SessionSocket(b'{"type":"unhandled"}')
+
+    await router.on_websocket(
+        typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
+    )
+
+    assert events == ["before"], "after-receive must not run after handler close"
+    assert ClosingResource.instances[0].disconnect_codes == [4004], (
+        "handler closure must still run disconnect cleanup"
     )
 
 
