@@ -123,7 +123,7 @@ application's shared `ws_options.media_handlers` mapping while preserving its
 outbound serializers. Consequently, every Falcon WebSocket responder on that
 application receives raw frames from `receive_media()`; responders that need
 decoded objects must decode those frames themselves. `attach()` warns when it
-finds customised media handlers that it will replace.
+finds customized media handlers that it will replace.
 
 - `self.state`
   - Dict-like proxy shared across all resources in the same connection chain.
@@ -333,7 +333,8 @@ values, so omission remains the default security boundary.
 
 1) **Choose a factory** – Pass `resource_factory` to `WebSocketRouter`.
 2) **Provide services** – Register shared services in the container.
-3) **Attach the router** – All route instantiation flows through your factory.
+3) **Attach the router** – All route instantiation flows through the configured
+   factory.
 
 ```python
 import falcon.asgi
@@ -495,6 +496,9 @@ and server-task failures. Unacknowledged failures are grouped in
 `LiveServerError` when the test body completed without an exception. If the
 test body is already raising, the harness adds captured failures as notes to
 that exception so the original failure stays primary.
+
+When `capture_errors=True`, use a fresh Falcon app for each server instance:
+the capture handler remains registered on the app after server shutdown.
 
 A startup timeout or ordinary startup exception raises
 `LiveServerStartupError`. A shutdown deadline is recorded as

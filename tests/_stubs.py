@@ -6,7 +6,6 @@ import types
 import typing as typ
 
 from falcon_pachinko._disconnect import _PeerDisconnectedError
-
 from falcon_pachinko.websocket import (
     ConnectionBackend,
     WebSocketConnectionNotFoundError,

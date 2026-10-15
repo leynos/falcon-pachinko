@@ -7,8 +7,9 @@ import dataclasses as dc
 import typing as typ
 from contextlib import asynccontextmanager
 
-from falcon_pachinko._disconnect import _PeerDisconnectedError
 import msgspec.json as msjson
+
+from falcon_pachinko._disconnect import _PeerDisconnectedError
 
 from ._common import (
     _BINARY_PAYLOAD_REQUIRED_MSG,

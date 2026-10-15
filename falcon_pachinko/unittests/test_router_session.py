@@ -486,21 +486,19 @@ async def test_router_does_not_accept_an_already_accepted_socket() -> None:
 
 
 @pytest.mark.asyncio
-async def test_session_rejects_non_raw_receive_media_payloads() -> None:
-    """Decoded objects fail with guidance to attach the router to Falcon."""
-
-    class DecodedWebSocket(RecordingWS):
-        @typ.override
-        async def receive_media(self) -> object:
-            return {"already": "decoded"}
-
+async def test_session_adapts_decoded_receive_media_payloads() -> None:
+    """Decoded Falcon media is encoded before raw-frame dispatch."""
+    SessionResource.instances.clear()
     router = WebSocketRouter()
     router.add_route("/session", SessionResource)
     router.mount("/")
+    ws = _QueuedWebSocket([{"already": "decoded"}])
 
-    with pytest.raises(TypeError, match=r"WebSocketRouter\.attach"):
-        await router.on_websocket(make_req("/session"), DecodedWebSocket())
+    await router.on_websocket(make_req("/session"), ws)
 
-    assert SessionResource.instances[-1].disconnect_codes == [1011], (
-        "invalid decoded payloads must run failure cleanup"
+    assert SessionResource.instances[-1].frames == [b'{"already":"decoded"}'], (
+        "decoded Falcon media must become the raw JSON frame"
+    )
+    assert SessionResource.instances[-1].disconnect_codes == [1000], (
+        "the finite test peer must disconnect cleanly after its one frame"
     )

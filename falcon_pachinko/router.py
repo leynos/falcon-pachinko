@@ -631,5 +631,14 @@ class WebSocketRouter:
         if not should_accept:
             await ws.close()
             return True
-        await ws.accept()
+        if WebSocketRouter._is_socket_unaccepted(ws):
+            await ws.accept()
         return True
+
+    @staticmethod
+    def _is_socket_unaccepted(ws: WebSocketLike) -> bool:
+        """Return whether the handshake still needs router-owned acceptance."""
+        unaccepted = getattr(ws, "unaccepted", None)
+        if isinstance(unaccepted, bool):
+            return unaccepted
+        return not bool(getattr(ws, "accepted", False))

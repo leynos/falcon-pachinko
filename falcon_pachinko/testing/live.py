@@ -96,7 +96,9 @@ class LiveWebSocketServer:
     The default Uvicorn adapter is imported lazily. Applications with a custom
     ``Exception`` error handler should register it after startup and call
     :meth:`record_error` from that handler so teardown can report failures
-    that Falcon handles internally.
+    that Falcon handles internally. When ``capture_errors=True``, use a fresh
+    Falcon app for each server instance because the capture handler remains
+    registered on the app after shutdown.
     """
 
     # @codescene(disable:"Excess Number of Function Arguments")

@@ -51,10 +51,10 @@ the router repeatedly receives raw frames and invokes
 disconnect. The driver handles Falcon's `WebSocketDisconnected` exception and
 the simulator's framework-independent package signal, preserving their close
 codes. Cleanup calls `on_disconnect(ws, close_code)` once: normal disconnects
-preserve the peer's code or default to `1000`, dispatch failures use `1011`, and
-local task cancellation closes with `1001` and passes that code to the cleanup
-hook before cancellation is re-raised. The router does not send a close frame to
-a socket Falcon has already closed.
+preserve the peer's code or default to `1000`, dispatch failures use `1011`,
+and local task cancellation closes with `1001` and passes that code to the
+cleanup hook before cancellation is re-raised. The router does not send a close
+frame to a socket Falcon has already closed.
 
 ### WebSocket session lifecycle
 
@@ -79,7 +79,7 @@ stateDiagram-v2
     Receiving --> Cancelled: task cancellation
     CleanDisconnect --> Disconnected: on_disconnect(ws, 1000 or peer code)
     Failed --> Disconnected: close(1011), on_disconnect(ws, 1011)
-    Cancelled --> Disconnected: on_disconnect(ws, 1006)
+    Cancelled --> Disconnected: close(1001), on_disconnect(ws, 1001)
     Closed --> [*]
     Disconnected --> [*]
 ```
@@ -1935,8 +1935,8 @@ enables white-box testing of router behaviour without needing an ASGI server.
   `falcon.asgi.WebSocket` (`accept`, `close`, `send_media`, `receive_media`),
   but internally uses asyncio queues so tests can inject messages or spy on
   emitted frames. `close(code)` wakes a blocked receive; queued frames are
-  returned first, then receives raise `falcon.WebSocketDisconnected` with that
-  code. Helper shortcuts (`send_json`, `pop_sent`) keep tests concise.
+  returned first, then receives signal peer disconnection with that code.
+  Helper shortcuts (`send_json`, `pop_sent`) keep tests concise.
 
 - **Spying and Injection**: Tests enqueue inbound messages via
   `await simulator.push_message({...})` before driving the router-owned session

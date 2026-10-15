@@ -107,7 +107,6 @@ class SimulatorConnection:
         """Queue a binary frame for the resource."""
         await self.simulator.push_bytes(payload)
 
-
     async def disconnect(self, code: int = 1000) -> None:
         """Queue a client disconnect after any pending inbound frames."""
         await self.simulator.push_disconnect(code)

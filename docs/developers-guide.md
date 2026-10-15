@@ -129,7 +129,7 @@ adapter protocol, not to Uvicorn.
 compiles the router's relative paths, registers the exact mount and descendant
 catch-all routes, and installs raw-frame media handlers on the app. The router
 accepts a connection after `on_connect()` succeeds, then starts
-`_session.run_session()` for that resource and socket.
+`session.drive_session()` for that resource and socket.
 
 `install_raw_websocket_media_handlers()` wraps the app-wide TEXT and BINARY
 handlers once. Inbound deserialization passes frames through as raw `str` or
@@ -138,18 +138,17 @@ Falcon serializers. Attaching warns when it finds customized inbound handlers,
 because their deserializers are replaced for every WebSocket responder on that
 app. Repeated installation does not wrap a handler again.
 
-`_session.run_session()` receives one raw frame at a time and passes it to
-`WebSocketResource.dispatch()`. Its transport-supplied disconnect classifier
-keeps Falcon's `WebSocketDisconnected` exception at the router boundary; the
-simulator emits `_PeerDisconnectedError` from `falcon_pachinko._disconnect`.
-The classifier passes only the close code into the session core, which does not
-import Falcon. A peer disconnect preserves its close code or defaults to
-`1000`. A dispatch failure closes an open socket with `1011`, while local
-cancellation reports `1006` to cleanup and is re-raised. Disconnect hooks and
-`on_disconnect()` run exactly once. If both the session and cleanup fail, the
-session failure remains primary and cleanup failures are attached as exception
-notes; absent a session failure, the first cleanup failure is raised with later
-failures noted.
+`session.drive_session()` receives one frame at a time and passes it to
+`WebSocketResource.dispatch()`. Falcon signals a peer disconnect with
+`falcon.WebSocketDisconnected`; the simulator uses the package's internal
+peer-disconnect signal. The driver preserves the close code, defaulting to
+`1000` when it is absent. A receive or dispatch failure closes an open socket
+with `1011`, runs best-effort disconnect cleanup, and re-raises the original
+failure. Local cancellation closes with `1001`, runs best-effort cleanup, and
+re-raises `CancelledError`. Disconnect hooks and `on_disconnect()` run once.
+For an ordinary peer disconnect, cleanup errors propagate after both cleanup
+steps have been attempted; during failure or cancellation cleanup errors are
+logged and do not replace the primary outcome.
 
 The `ServerAdapter` protocol isolates the ASGI server. Its `task` property is
 the serve-loop task, `start(app, sock)` returns only after lifespan startup and
@@ -374,9 +373,9 @@ propagates. Failure cleanup errors are logged and do not replace the session
 failure.
 
 Test sockets must terminate receive loops. `DummyWS` and `RecordingWS` return
-their scripted frames in order and then raise `falcon.WebSocketDisconnected`.
-The simulator drains queued frames before reporting closure; `close(code)`
-wakes a pending receive. `SimulatorRouterHarness.connect()` starts
+their scripted frames in order and then signal peer disconnection. The
+simulator drains queued frames before reporting closure; `close(code)` wakes a
+pending receive. `SimulatorRouterHarness.connect()` starts
 `router.on_websocket()` as a task, waits for accept/close/readiness, and on
 exit closes the simulator and awaits the router task. Unit and simulator tests
 use this harness for fast lifecycle coverage.

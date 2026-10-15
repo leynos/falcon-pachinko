@@ -90,6 +90,7 @@ examples = [
     { name = "websocket-client" },
 ]
 testing = [
+    { name = "uvicorn" },
     { name = "websockets" },
 ]
 
@@ -113,6 +114,7 @@ requires-dist = [
     { name = "falcon", specifier = ">=4,<5" },
     { name = "msgspec", specifier = ">=0.18,<1" },
     { name = "uvicorn", marker = "extra == 'examples'", specifier = ">=0.34,<1" },
+    { name = "uvicorn", marker = "extra == 'testing'", specifier = ">=0.34,<1" },
     { name = "websocket-client", marker = "extra == 'examples'" },
     { name = "websockets", marker = "extra == 'testing'", specifier = ">=11,<13" },
 ]

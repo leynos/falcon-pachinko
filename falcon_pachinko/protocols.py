@@ -20,6 +20,8 @@ class WebSocketLike(typ.Protocol):
     async def receive_media(self) -> object:
         """Receive a raw ``str``/``bytes`` frame or decoded media.
 
-        After the connection closes, raise ``falcon.WebSocketDisconnected``;
-        its ``code`` attribute contains the peer's close code when available.
+        On a Falcon socket, peer closure raises
+        ``falcon.WebSocketDisconnected`` with the peer's close code when
+        available. The test simulator uses an internal peer-disconnect signal;
+        the session driver recognizes both forms.
         """

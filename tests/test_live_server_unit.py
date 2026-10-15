@@ -617,15 +617,12 @@ async def test_uvicorn_import_failure_raises_missing_dependency_error(
 
     monkeypatch.setattr(uvicorn_adapter.importlib, "import_module", fail_uvicorn_import)
     adapter = uvicorn_adapter._UvicornAdapter(shutdown_timeout=0.1)
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        with pytest.raises(MissingDependencyError, match=r"falcon-pachinko\[testing\]"):
+            await adapter.start(_make_app(), sock)
 
-    with pytest.raises(MissingDependencyError, match=r"falcon-pachinko\[testing\]"):
-        await adapter.start(_make_app(), sock)
-
-    with pytest.raises(MissingDependencyError):
-        await adapter.task
-
-    sock.close()
+        with pytest.raises(MissingDependencyError):
+            await adapter.task
 
 
 @pytest.mark.asyncio
