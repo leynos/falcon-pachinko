@@ -149,30 +149,39 @@ class WebSocketRouter:
 
     def mount(self, prefix: str) -> None:
         """Compile stored routes with the given mount ``prefix``."""
+        canonical = self._canonical_mount_prefix(prefix)
+
+        with self._mount_lock:
+            self._mount_locked(canonical)
+
+    @staticmethod
+    def _canonical_mount_prefix(prefix: str) -> str:
+        """Validate and normalize a mount prefix."""
         if prefix and not prefix.startswith("/"):
             msg = "prefix must start with '/'"
             raise ValueError(msg)
 
-        canonical = prefix.rstrip("/") or "/"
+        return prefix.rstrip("/") or "/"
 
-        with self._mount_lock:
-            if self._mount_prefix:
-                msg = f"router already mounted at '{self._mount_prefix}'"
-                raise RuntimeError(msg)
+    def _mount_locked(self, canonical: str) -> None:
+        """Compile routes and set mount state while holding ``_mount_lock``."""
+        if self._mount_prefix:
+            msg = f"router already mounted at '{self._mount_prefix}'"
+            raise RuntimeError(msg)
 
-            compiled_routes: list[_CompiledRoute] = []
-            for raw in self._raw:
-                compiled_routes.append(
-                    self._compile_route(
-                        raw.canonical,
-                        raw.factory,
-                        canonical,
-                        self._routes + compiled_routes,
-                    )
+        compiled_routes: list[_CompiledRoute] = []
+        for raw in self._raw:
+            compiled_routes.append(
+                self._compile_route(
+                    raw.canonical,
+                    raw.factory,
+                    canonical,
+                    self._routes + compiled_routes,
                 )
+            )
 
-            self._mount_prefix = canonical
-            self._routes.extend(compiled_routes)
+        self._mount_prefix = canonical
+        self._routes.extend(compiled_routes)
 
     def attach(self, app: object, prefix: str) -> None:
         """Mount this router on a real Falcon ASGI ``app``.
@@ -192,21 +201,31 @@ class WebSocketRouter:
             msg = "attach() requires a falcon.asgi.App instance"
             raise TypeError(msg)
 
-        self.mount(prefix)
-        media_handlers = typ.cast(
-            "cabc.MutableMapping[falcon.WebSocketPayloadType, object]",
-            app.ws_options.media_handlers,
-        )
-        install_raw_websocket_media_handlers(media_handlers)
+        canonical = self._canonical_mount_prefix(prefix)
+        with self._mount_lock:
+            self._mount_locked(canonical)
+            try:
+                media_handlers = typ.cast(
+                    "cabc.MutableMapping[falcon.WebSocketPayloadType, object]",
+                    app.ws_options.media_handlers,
+                )
+                install_raw_websocket_media_handlers(media_handlers)
 
-        canonical = self._mount_prefix
-        if canonical == "/":
-            app.add_route("/", self)
-            app.add_route("/{pachinko_path:path}", self)
-            return
-
-        app.add_route(canonical, self)
-        app.add_route(f"{canonical}/{{pachinko_path:path}}", self)
+                routes = (
+                    ("/", "/{pachinko_path:path}")
+                    if canonical == "/"
+                    else (canonical, f"{canonical}/{{pachinko_path:path}}")
+                )
+                for route in routes:
+                    app.add_route(route, self)
+            except BaseException:
+                # Falcon may have accepted the first route before rejecting the
+                # second. Keep the router reusable so the caller can repair the
+                # app and retry; re-adding the same route replaces that partial
+                # registration in Falcon.
+                self._mount_prefix = ""
+                self._routes.clear()
+                raise
 
     def add_route(
         self,

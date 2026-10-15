@@ -647,6 +647,46 @@ async def test_router_mount_on_app() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "failing_route",
+    ["/ws", "/ws/{pachinko_path:path}"],
+    ids=("mount_route", "descendant_route"),
+)
+def test_attach_can_retry_after_route_registration_failure(
+    failing_route: str,
+) -> None:
+    """A failed Falcon route registration must leave the router reusable."""
+    router = WebSocketRouter()
+    router.add_route("/rooms/{room}", DummyResource)
+
+    class FailingFalconApp(falcon.asgi.App):
+        def __init__(self) -> None:
+            super().__init__()
+            self._failed_once = False
+
+        def add_route(
+            self,
+            uri_template: str,
+            resource: object,
+            **kwargs: object,
+        ) -> None:
+            if uri_template == failing_route and not self._failed_once:
+                self._failed_once = True
+                msg = "route registration failed"
+                raise RuntimeError(msg)
+            super().add_route(uri_template, resource, **kwargs)
+
+    app = FailingFalconApp()
+    with pytest.raises(RuntimeError, match="route registration failed"):
+        router.attach(app, "/ws")
+
+    router.attach(app, "/ws")
+
+    assert router._mount_prefix == "/ws", (
+        "retry after route registration failure should mount the router"
+    )
+
+
 @pytest.mark.asyncio
 async def test_router_uses_falcons_uri_template_for_mounted_route() -> None:
     """A real Falcon request exposes ``uri_template``, not ``path_template``."""
