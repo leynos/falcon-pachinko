@@ -206,3 +206,27 @@ async def test_queued_frames_are_delivered_before_disconnect() -> None:
     with pytest.raises(_PeerDisconnectedError) as caught:
         await simulator.receive_media()
     assert caught.value.code == 4003, "disconnect follows the queued frames"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capacity", [1, 2])
+async def test_close_with_full_bounded_queue_preserves_pending_frames(
+    capacity: int,
+) -> None:
+    """Closing never waits for queue capacity and still drains earlier frames."""
+    inbound: asyncio.Queue[object] = asyncio.Queue(maxsize=capacity)
+    simulator = WebSocketSimulator(inbound=inbound)
+    frames = [f"frame-{index}" for index in range(capacity)]
+    for frame in frames:
+        await simulator.push_text(frame)
+
+    await asyncio.wait_for(simulator.close(4004), timeout=1)
+    await asyncio.wait_for(simulator.close(4005), timeout=1)
+
+    received = [
+        await asyncio.wait_for(simulator.receive_text(), timeout=1) for _ in frames
+    ]
+    assert received == frames, "close must preserve queued frames in order"
+    with pytest.raises(falcon.WebSocketDisconnected) as caught:
+        await asyncio.wait_for(simulator.receive_media(), timeout=1)
+    assert caught.value.code == 4004, "the first close code must survive queue draining"
