@@ -60,7 +60,7 @@ def _create_app(
     """Build Falcon with raw frame media and the recording router hook."""
     app = falcon.asgi.App()
     configure_raw_frame_media(app)
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.add_route("/", lambda: resource_factory(recorder))
 
     def record_after_receive(context: HookContext) -> None:

@@ -37,24 +37,32 @@ will be discussed.
 
 The implementation uses `falcon.asgi.App` and
 `WebSocketRouter.attach(app, prefix)` to register both the exact mount and a
-catch-all descendant route. `attach()` installs pass-through TEXT and BINARY
-deserializers in the application's shared WebSocket media-handler mapping, so
-every Falcon WebSocket responder on that app receives raw `str` or `bytes` from
-`receive_media()`. Outbound serialization continues through the configured
-handler. Attaching warns when it replaces customized media handlers.
+catch-all descendant route. `attach()` also enables pass-through TEXT and
+BINARY input in the application's shared WebSocket media-handler mapping,
+preserving the configured outgoing serializers. The public
+`configure_raw_frame_media(app)` helper uses the same idempotent setup for
+manually mounted routers and other Falcon WebSocket routes. Either entry point
+warns when it replaces customized inbound handlers. Falcon's default media
+decoding remains in effect when neither is used.
 
 After Falcon routes a connection to the router, `on_connect()` decides whether
 to accept it. The router owns acceptance after that hook; a resource that sends
-a frame from `on_connect()` must call `await ws.accept()` first. Once accepted,
-the router repeatedly receives raw frames and invokes
-`WebSocketResource.dispatch()` until the session driver identifies a peer
-disconnect. The driver handles Falcon's `WebSocketDisconnected` exception and
-the simulator's framework-independent package signal, preserving their close
-codes. Cleanup calls `on_disconnect(ws, close_code)` once: normal disconnects
-preserve the peer's code or default to `1000`, dispatch failures use `1011`,
-and local task cancellation closes with `1001` and passes that code to the
-cleanup hook before cancellation is re-raised. The router does not send a close
-frame to a socket Falcon has already closed.
+a frame from `on_connect()` must call `await ws.accept()` first. With
+`receive_loop=True`, the router receives frames in order and invokes
+`WebSocketResource.dispatch()` until the session ends; the default `False`
+returns after acceptance and leaves further receives and cleanup to the
+application. The driver handles Falcon's `WebSocketDisconnected` exception and
+the simulator's framework-independent package signal. After a successful
+`on_connect`, opt-in sessions attempt `on_disconnect` once, including setup
+failure in `after_connect` or `accept`. A missing peer code and setup failure
+use `1006`; unexpected receive or dispatch failures close with `1011` and
+propagate. Cancellation before cleanup starts closes with `1001` and
+propagates. If cancellation interrupts a peer-close callback already in
+progress, that callback retains its peer code and is not retried, while the
+socket closes with `1001`. Rejected connections and failed `on_connect` calls
+do not call the callback.
+
+The diagrams below show the opted-in `receive_loop=True` session path.
 
 ### WebSocket session lifecycle
 
@@ -62,11 +70,10 @@ frame to a socket Falcon has already closed.
 stateDiagram-v2
     accTitle: WebSocket session state transitions
     accDescr {
-        The session starts while the router runs on_connect. A false result
-        closes the session; a true result leads to acceptance and a persistent
-        receive and dispatch loop. A clean disconnect, dispatch failure or
-        cancellation each invokes on_disconnect once with its corresponding
-        close code, then ends in the disconnected state.
+        The opted-in session starts while the router runs on_connect. A false
+        result closes the session; a true result leads to acceptance and a
+        persistent receive and dispatch loop. Disconnect, failure or
+        cancellation leads to cleanup and then the disconnected state.
     }
 
     [*] --> Connecting
@@ -77,23 +84,23 @@ stateDiagram-v2
     Receiving --> CleanDisconnect: WebSocketDisconnected
     Receiving --> Failed: dispatch exception
     Receiving --> Cancelled: task cancellation
-    CleanDisconnect --> Disconnected: on_disconnect(ws, 1000 or peer code)
+    CleanDisconnect --> Disconnected: on_disconnect(peer code or 1006)
     Failed --> Disconnected: close(1011), on_disconnect(ws, 1011)
     Cancelled --> Disconnected: close(1001), on_disconnect(ws, 1001)
     Closed --> [*]
     Disconnected --> [*]
 ```
 
-**Figure: WebSocket session states from connection through acceptance, frame
-dispatch and exactly-once disconnect cleanup.**
+**Figure: Opted-in WebSocket session states from connection through acceptance,
+frame dispatch and disconnect cleanup.**
 
 ```mermaid
 sequenceDiagram
     accTitle: Falcon WebSocket responder lifecycle
     accDescr {
-        Falcon routes the connection to WebSocketRouter, which calls the
-        resource's on_connect hook before accepting. The router then receives
-        raw frames and dispatches each one until disconnect, followed by the
+        With receive_loop enabled, Falcon routes the connection to
+        WebSocketRouter, which calls on_connect before accepting. The router
+        then receives and dispatches frames until disconnect, followed by the
         resource's on_disconnect hook with the final close code.
     }
 
@@ -116,9 +123,8 @@ sequenceDiagram
     WebSocketRouter->>WebSocketResource: on_disconnect(ws, close_code)
 ```
 
-**Figure: Falcon routes a WebSocket connection to the router, which accepts the
-session, dispatches each raw frame, and calls the resource's disconnect hook
-when the session ends.**
+**Figure: For an opted-in session, Falcon routes a WebSocket connection to the
+router, which accepts it, dispatches frames, and calls the disconnect hook.**
 
 This implemented contract supersedes the future-tense responder and receive
 loop descriptions in the original proposal below.
@@ -377,11 +383,16 @@ logic.
     it. Because the hook runs before router-owned acceptance, a resource that
     sends from `on_connect()` must first call `await ws.accept()`.
 
-  - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: After
-    an accepted session ends, the router first notifies `before_disconnect`
-    hooks and then calls this method. `close_code` is the peer's code (1000 if
-    absent), 1001 for server cancellation, or 1011 for an unexpected receive or
-    handler failure. Rejected negotiations do not call this method.
+  - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: With
+    `WebSocketRouter(receive_loop=True)`, after `on_connect` permits the
+    session, the router attempts this callback once, including failure in
+    `after_connect` or `accept`. `close_code` is the peer's code or 1006 when
+    missing or setup fails. Cancellation before cleanup starts closes with
+    1001 and propagates; cancellation during an in-progress peer-close callback
+    does not retry it or replace its peer code, although the socket closes with
+    1001. Unexpected receive or handler failures close with 1011 and propagate.
+    Rejected negotiations and failed `on_connect` calls do not call it. With
+    the default `receive_loop=False`, the application owns session cleanup.
 
   - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str,
     bytes])`
@@ -407,8 +418,9 @@ logic.
 
 A key feature of Falcon-Pachinko is its ability to dispatch incoming WebSocket
 messages to specific handler methods within the `WebSocketResource`. The
-resource handles decoding and handler resolution while the router-owned session
-driver controls frame reception and dispatch order.
+resource handles decoding and handler resolution; when
+`WebSocketRouter(receive_loop=True)` is enabled, its session driver controls
+frame reception and dispatch order.
 
 - **Message Format Assumption**: The dispatch mechanism assumes messages are
   JSON objects containing a 'type' field that acts as a discriminator, for
@@ -573,9 +585,13 @@ def handles_message(
 
 ### 3.7. `WebSocketConnectionManager`
 
-The `WebSocketConnectionManager` is crucial for enabling server-initiated
-messages and managing groups of connections. It will be built upon a pluggable
-backend interface to support both single-process and distributed deployments.
+The `WebSocketConnectionManager` enables server-initiated messages and manages
+groups of connections through a process-local socket registry. Its
+`ConnectionBackend` contract exposes live `WebSocketLike` instances and
+snapshots of them, so implementations must keep that registry within the owning
+process. A backend may provide alternative local storage or instrumentation; it
+must never serialize, proxy or return sockets owned by a different process.
+Single-process applications use the manager alone and need no broker.
 
 - **API Design**:
 
@@ -592,7 +608,7 @@ backend interface to support both single-process and distributed deployments.
     choose a timeout aligned with their backpressure strategy (e.g., smaller
     values for large rooms paired with a retry queue).
 
-  - **Async Iterators**: For bulk operations, the manager will expose async
+  - **Async Iterators**: For bulk operations, the manager exposes async
     iterators, making them highly composable.
 
     ```python
@@ -600,16 +616,80 @@ backend interface to support both single-process and distributed deployments.
         await ws.send_media(...)
     ```
 
-- Pluggable Backends for Multi-Worker Support:
+#### 3.7.1. Cluster membership and fan-out
 
-  The manager will be designed with a clear Abstract Base Class (ABC) defining
-  its interface. The initial 1.0 release will ship with a default
-  InProcessBackend suitable for single-worker deployments. However, the
-  architecture is explicitly designed to support distributed systems in the
-  future. A developer could implement a RedisBackend using Redis Pub/Sub to
-  enable broadcasting across multiple server processes. This provides a clear
-  and robust path to scalability without changing the application-level code
-  that interacts with the connection manager.
+Distributed delivery uses a separate, opt-in `ClusterFanout` coordinator and
+`FanoutTransport`. Each node retains its own live sockets in its local
+`WebSocketConnectionManager`; the transport exchanges only node and room
+identifiers, floating-point lease durations and serialized byte envelopes. A
+`FanoutMessage` is JSON encoded and carries `message_id`, `origin_node`, `room`,
+`payload` and `exclude`. The coordinator never obtains or proxies a remote
+socket. The transport's `members()` returns node identifiers and `listen()`
+yields envelopes as bytes.
+
+The coordinator acquires one lease for each node and room while that node has
+local members. It subscribes when the first local connection joins and
+unsubscribes when the last leaves. On startup and heartbeat it reacquires
+leases for occupied rooms. A graceful stop calls `release`; if a process
+crashes, the transport expires its leases after `lease_ttl` without a
+heartbeat. The default heartbeat interval is one third of `lease_ttl`. The
+in-memory test transport expires leases lazily during `publish` and `members`.
+Failed empty-room unsubscriptions are retried independently. While any such
+unsubscribe is pending, bulk refresh is skipped so an orphan lease can expire;
+occupied rooms are renewed individually. Existing local snapshots continue to
+skip stale local members.
+
+**Screen-reader caption.** Room membership is leased per node, not per
+connection: the node subscribes when its first local connection joins a room
+and unsubscribes only after its last local member leaves.
+
+```mermaid
+sequenceDiagram
+    accTitle: Leased room membership
+    accDescr {
+        A local connection joins a room and is registered in the local manager.
+        The coordinator subscribes the node, renews its lease with heartbeats,
+        and unsubscribes when the last local member leaves.
+    }
+    participant Connection
+    participant Fanout as ClusterFanout
+    participant Manager as Local connection manager
+    participant Transport as FanoutTransport
+    Connection->>Fanout: add_connection(conn_id, websocket)
+    Fanout->>Manager: add_connection(conn_id, websocket)
+    Connection->>Fanout: join_room(conn_id, room)
+    Fanout->>Manager: join_room(conn_id, room)
+    Fanout->>Transport: subscribe(room, node_id, ttl)
+    loop heartbeat
+        Fanout->>Transport: refresh(node_id, ttl)
+    end
+    Connection->>Fanout: remove_connection(conn_id)
+    Fanout->>Manager: remove_connection(conn_id)
+    Fanout->>Transport: unsubscribe(room, node_id)
+```
+
+Applications register, join, publish and remove connections through the
+coordinator. Start `fanout.run` with `WorkerController` in the application
+lifespan and mount `WebSocketRouter(receive_loop=True)` so the router owns the
+accepted connection's receive loop and disconnect cleanup. The receive loop is
+opt-in; the default `False` returns after acceptance and leaves receives and
+cleanup to the application. Node IDs and connection IDs must be unique across
+the cluster. A production Redis or RabbitMQ adapter implements only
+`FanoutTransport`; such an adapter is outside the scope of this release.
+
+Delivery is best effort and not durable. There is no replay for nodes that are
+down or have expired leases. Per-socket order is guaranteed only when the
+transport preserves per-publisher, per-node order; there is no global order.
+At-least-once transports may duplicate envelopes, and the coordinator does not
+deduplicate them. `message_id` is available in the serialized envelope to
+applications and transport middleware, but is not added to the WebSocket
+payload. Applications that need client-side deduplication can include their own
+identifier in the payload. Serialization fails before a transport call;
+transport `publish` failures propagate without retry. Local send failures,
+including those exceeding `send_timeout`, do not stop the listener, evict the
+connection or roll back publication. Startup and listener transport failures
+propagate; transient heartbeat errors are logged by exception type and retried
+at the next interval.
 
 ### 3.8. Background Worker Integration via ASGI Lifespan
 
@@ -1129,6 +1209,10 @@ helpers used by message dispatch and hooks do not belong in the matcher.
 The diagrams below illustrate the flow of a WebSocket connection through the
 router and the relationships between the main classes.
 
+The router-owned receive path shown here is enabled with
+`WebSocketRouter(receive_loop=True)`; by default, the router returns after
+acceptance and the application owns subsequent receives and cleanup.
+
 ```mermaid
 sequenceDiagram
     participant Client
@@ -1409,10 +1493,20 @@ class ChatResource(WebSocketResource):
 
 #### 5.3.2. Automated Dispatch Logic
 
-For each accepted connection, `WebSocketRouter` owns the receive loop. Its
-session driver calls `receive_media()` and passes each raw frame to
-`WebSocketResource.dispatch()` before receiving the next one. The resource's
-dispatch method performs these steps:
+With `WebSocketRouter(receive_loop=True)`, the router owns the receive loop for
+each accepted connection. Its session driver calls `receive_media()` and awaits
+`WebSocketResource.dispatch()` for each value before receiving the next one.
+With the default `False`, the router returns after acceptance and the
+application owns subsequent receives.
+
+Falcon may decode media before `receive_media()` returns it, so enabling the
+receive loop does not by itself guarantee exact raw frames. `attach()` enables
+raw input automatically. For manually mounted routers or other Falcon WebSocket
+routes, call `configure_raw_frame_media(app)` before Falcon constructs
+WebSockets. Either setup path is app-wide and preserves the configured outgoing
+serializers for both frame types.
+
+The resource's dispatch method performs these steps:
 
 1. Decode the received raw message using
    `msgspec.json.decode(message, type=self.schema)`. `msgspec`'s tagged union
@@ -1428,7 +1522,8 @@ dispatch method performs these steps:
    `await self.on_send_message(ws, msg)`.
 
 This schema-driven dispatch keeps message validation and handler selection in
-the resource, separate from the router-owned transport receive loop.
+the resource, separate from the transport receive loop used when the router's
+opt-in session is enabled.
 
 #### 5.3.3. Error Handling
 
@@ -1443,9 +1538,10 @@ trusted boundary.
 - During decoding and payload validation, the dispatcher routes
   `DecodeError` and `ValidationError` failures to `on_unhandled`. The stable
   package import `falcon_pachinko.utils.ValidationError` is the same class as
-  `msgspec.ValidationError`. The router-owned session driver delegates to that
-  dispatcher and does not translate its errors; exceptions raised by message
-  handlers therefore reach the session's 1011 close-and-propagate policy.
+  `msgspec.ValidationError`. When enabled, the router-owned session driver
+  delegates to that dispatcher and does not translate its errors; exceptions
+  raised by message handlers therefore reach the session's 1011 close-and-
+  propagate policy.
 
 - If a message has a valid tag that does not correspond to any registered
   handler, the `on_unhandled(self, req, ws, msg)` fallback method on the base
@@ -1504,14 +1600,22 @@ This provides maximum control, allowing outer layers to act as setup/teardown
 guards for inner layers. An exception in a `before_*` hook should terminate the
 connection attempt immediately.
 
-Once Falcon accepts the connection, the router owns a single inline receive
-loop. It passes each text or binary frame to the selected resource's dispatcher
-and waits for that dispatch to finish before receiving the next frame. The loop
-creates no task per frame. A normal peer close runs `before_disconnect` hooks
-and then `on_disconnect`; cancellation closes with 1001 and propagates, while
-an unexpected receive or handler exception closes with 1011, runs best-effort
-cleanup, and propagates the original exception. Returning normally from
-`on_unhandled` leaves the session open.
+With `WebSocketRouter(receive_loop=True)`, after Falcon accepts the connection,
+the router owns a single inline receive loop. It passes each text or binary
+frame to the selected resource's dispatcher and waits for that dispatch to
+finish before receiving the next frame. The loop creates no task per frame. A
+normal peer close runs `before_disconnect` hooks and attempts `on_disconnect`
+once; a missing peer close code maps to 1006. Cancellation before disconnect
+cleanup starts closes with 1001 and propagates. If cancellation interrupts a
+peer-close callback already in progress, that callback retains its peer code
+and is not retried, though the socket closes with 1001. An unexpected receive
+or handler exception closes with 1011, runs best-effort cleanup, and propagates
+the original exception. Failure during `after_connect` or `accept` uses 1006
+for cleanup. Cancellation cleanup may retry a disconnect hook interrupted
+before the callback, but interruption inside the callback does not call it
+again. With the default `receive_loop=False`, the router returns after
+acceptance and the application owns receiving and cleanup. Returning normally
+from `on_unhandled` leaves an opted-in session open.
 
 ```mermaid
 stateDiagram-v2
@@ -1796,23 +1900,69 @@ sophisticated targeting mechanisms could be added, such as:
 
 ### 6.4. Scalability for Distributed Systems
 
-The initial design of the `WebSocketConnectionManager` is for in-process
-operation, suitable for single-server deployments or those using sticky
-sessions. For applications requiring horizontal scaling across multiple server
-instances, this in-process manager becomes a limitation, as broadcasts would
-only reach clients connected to the same instance.
+`WebSocketConnectionManager` and its `ConnectionBackend` are process-local
+socket registries. Their snapshots contain live objects owned by the current
+ASGI process, so storing them in Redis or returning remote socket proxies is
+not a supported clustering design. Keep a local manager on each node and add
+`ClusterFanout` with a `FanoutTransport` when cross-node room delivery is
+needed. The transport carries serializable room and node membership plus
+JSON-encoded `FanoutMessage` envelopes as bytes; the receiving coordinator
+resolves each room against its own local registry and sends to its own sockets.
 
-A significant enhancement would be to make the `WebSocketConnectionManager`
-pluggable, allowing different backend implementations. For example:
+Membership is leased per node and room. The coordinator subscribes on the first
+local join, unsubscribes on the last local leave, and releases all node leases
+at graceful shutdown. A crashed node's membership expires after `lease_ttl`
+without a heartbeat; the default heartbeat interval is `lease_ttl / 3`. The
+in-memory test adapter expires leases lazily during `publish` and `members`.
+Failed unsubscribe cleanup is retried separately, while occupied rooms continue
+to be renewed individually. Local snapshots continue to skip stale local
+members.
 
-- An implementation using a message bus like Redis Pub/Sub (similar to Django
-  Channels' channel layer 5) would enable inter-process communication, allowing
-  a message published on one instance to be delivered to WebSockets connected
-  to other instances. Designing the `WebSocketConnectionManager` with a clear
-  interface (e.g., an Abstract Base Class) from the outset would facilitate
-  this evolution, allowing the library to start simple but provide a clear
-  upgrade path for distributed deployments without requiring a fundamental
-  rewrite of the application logic that interacts with the manager.
+Run the coordinator's receive loop through `WorkerController` in the ASGI
+lifespan. `WebSocketRouter(receive_loop=True)` keeps accepted connections open,
+dispatches received frames and calls `on_disconnect` once when that session
+ends. Single-process deployments need neither the coordinator nor a broker.
+
+**Screen-reader caption.** With `receive_loop=True`, the router accepts the
+connection after `on_connect` approves it, dispatches incoming frames in order,
+then calls `on_disconnect` once when the peer disconnects.
+
+```mermaid
+sequenceDiagram
+    accTitle: Router session cleanup
+    accDescr {
+        The client connects and receives approval from the resource. The router
+        accepts the socket, dispatches ordered frames, and calls on_disconnect
+        with the close code after WebSocketDisconnected.
+    }
+    participant Client
+    participant Router as WebSocketRouter
+    participant Resource as WebSocketResource
+    participant Socket
+    Client->>Router: WebSocket connection
+    Router->>Resource: on_connect()
+    Resource-->>Router: accepting result
+    Router->>Socket: accept()
+    loop ordered frames
+        Router->>Socket: receive_media()
+        Socket-->>Router: frame
+        Router->>Resource: dispatch(ws, raw)
+    end
+    Socket-->>Router: WebSocketDisconnected
+    Router->>Resource: on_disconnect(ws, close_code)
+    Router-->>Client: session cleanup completed
+```
+
+Fan-out is best effort and not durable, with no replay for down or expired
+nodes. Per-socket ordering depends on the transport preserving per-publisher,
+per-node order, and there is no global ordering. At-least-once transports may
+duplicate envelopes; the coordinator does not deduplicate them. The envelope's
+`message_id` is available to applications and transport middleware but is not
+added to the WebSocket payload. Publish serialization errors occur before any
+transport call; transport publish failures propagate without retry. A local
+send failure does not stop the listener, evict its connection or roll back the
+publish. Production Redis and RabbitMQ adapters implement only
+`FanoutTransport` and remain out of scope.
 
 ### 6.5. Testing Utilities
 
@@ -1940,10 +2090,11 @@ enables white-box testing of router behaviour without needing an ASGI server.
 
 - **Spying and Injection**: Tests enqueue inbound messages via
   `await simulator.push_message({...})` before driving the router-owned session
-  for the resource. Outbound frames are recorded and made available through
-  `simulator.sent_messages`, enabling assertions about order, payload, or
-  metadata. Because the simulator is dependency-injectable, resources can be
-  exercised in isolation alongside fake connection managers or hook managers.
+  for the resource with `receive_loop=True`. Outbound frames are recorded and
+  made available through `simulator.sent_messages`, enabling assertions about
+  order, payload, or metadata. Because the simulator is dependency-injectable,
+  resources can be exercised in isolation alongside fake connection managers or
+  hook managers.
 
 - **Integration with Falcon-Pachinko**: The router exposes an optional
   `simulator_factory` parameter. When supplied, `WebSocketRouter` calls this

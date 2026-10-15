@@ -125,6 +125,7 @@ def when_client_connects(
     payload = AddTask(task_id="T-42", title="Investigate event loop")
 
     async def exchange() -> None:
+        """Wait for the routed task's announcement within a bounded session."""
         async with context.harness.connect(
             "/workspaces/atlas/projects/triage/tasks",
             headers={"x-workspace-token": "seekrit", "x-user": "casey"},
@@ -132,7 +133,8 @@ def when_client_connects(
         ) as connection:
             context.connection = connection
             context.resource = _select_task_resource(context.instances)
-            context.last_event = await context.feed.next_event()
+            async with asyncio.timeout(5):
+                context.last_event = await context.feed.next_event()
 
     event_loop.run_until_complete(exchange())
     return context

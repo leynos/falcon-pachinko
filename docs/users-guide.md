@@ -40,17 +40,20 @@ class ChatResource(WebSocketResource):
 
 
 app = falcon.asgi.App()
-router = WebSocketRouter()
+router = WebSocketRouter(receive_loop=True)
 router.add_route("/chat/{room}", ChatResource)
 router.attach(app, "/ws")
 ```
 
 - `attach()` mounts the router at `/ws` and registers a Falcon catch-all route
-  for descendant paths.
+  for descendant paths. It also enables pass-through TEXT and BINARY input for
+  every WebSocket route on the app, while preserving the configured outgoing
+  serializers. It warns if custom media handlers will be replaced.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
-- After `on_connect` and the `after_connect` hooks succeed, the router accepts
-  the socket and owns the receive-and-dispatch session until it ends.
+- The example opts into a router-owned receive-and-dispatch session with
+  `receive_loop=True`. The default is `False`, which returns after acceptance
+  and leaves receives and cleanup to the application.
 
 ### The `add_route` signature
 
@@ -105,25 +108,33 @@ resource and its hooks.
 - `on_connect(req, ws, **params) -> bool | None`
   - Inspect headers and seed `self.state`; return `False` to reject the
     connection. The router runs `after_connect` hooks before it calls
-    `accept()`, then begins receiving frames when this method allows the
-    connection. If `on_connect()` sends a frame itself, call `await ws.accept()`
-    first.
+    `accept()`. With `receive_loop=True`, it then begins receiving frames; with
+    the default `False`, the application owns reception. If `on_connect()` sends
+    a frame itself, call `await ws.accept()` first.
 - `on_disconnect(ws, close_code) -> None`
-  - Clean up after an accepted session ends. The router runs
-    `before_disconnect` hooks first, then calls `on_disconnect`. The code is
-    the peer's close code (or `1000` when absent), `1001` when the server
-    cancels the session, or `1011` after an unexpected receive or handler
-    failure. Rejected connections do not run this lifecycle.
-- Session frames arrive as raw `str` or `bytes` from `ws.receive_media()` and
-  are passed to `WebSocketResource.dispatch()`. After acceptance, the router
-  receives and dispatches frames until the peer disconnects.
+  - With `WebSocketRouter(receive_loop=True)`, after `on_connect` permits the
+    session, the router runs `before_disconnect` hooks and attempts this
+    callback once, including failure in `after_connect` or `accept`. The code
+    is the peer's code, or `1006` when it is missing or setup fails. Cancellation
+    before cleanup starts closes with `1001` and propagates. If cancellation
+    interrupts a peer-disconnect callback already in progress, it is not
+    retried and retains the peer code, while the socket closes with `1001`.
+    Unexpected receive or handler failures close with `1011` and propagate the
+    original exception. Rejected connections and failed `on_connect` calls do
+    not run this lifecycle. With the default `receive_loop=False`, the
+    application owns receive and cleanup.
+- With `receive_loop=True`, the router passes values returned by
+  `ws.receive_media()` to `WebSocketResource.dispatch()` in order until the
+  peer disconnects. Falcon may decode those values unless raw-frame media is
+  enabled for the app.
 
-`router.attach()` installs pass-through TEXT and BINARY deserializers in the
-application's shared `ws_options.media_handlers` mapping while preserving its
-outbound serializers. Consequently, every Falcon WebSocket responder on that
-application receives raw frames from `receive_media()`; responders that need
-decoded objects must decode those frames themselves. `attach()` warns when it
-finds customized media handlers that it will replace.
+For an attached router, `attach()` installs pass-through TEXT and BINARY
+deserializers in the application's shared `ws_options.media_handlers` mapping.
+For a manually mounted router, call `configure_raw_frame_media(app)` before
+Falcon constructs WebSockets. Both configure all WebSocket routes on the app,
+warn when replacing customized inbound handlers, and preserve the configured
+outgoing serializers. Falcon's default handlers decode input when neither entry
+point has enabled raw-frame handling.
 
 - `self.state`
   - Dict-like proxy shared across all resources in the same connection chain.
@@ -198,15 +209,19 @@ class ChatResource(WebSocketResource):
   hide it behind a bad-frame fallback while leaving the broken schema in place.
   Fix the schema instead of handling the exception.
 - The decorator supports `strict=False` to allow extra fields when required.
-- The router dispatches frames sequentially on the accepted connection. It
-  does not start a task per frame, so one handler completes before the next
-  frame is dispatched. Returning normally from `on_unhandled` keeps the session
-  open; application code can call `await ws.close(code=...)` when its policy
-  requires closure.
+- With `receive_loop=True`, the router dispatches frames sequentially on the
+  accepted connection. It does not start a task per frame, so one handler
+  completes before the next frame is dispatched. Returning normally from
+  `on_unhandled` keeps the session open; application code can call
+  `await ws.close(code=...)` when its policy requires closure.
 
 Falcon's default WebSocket media handlers may decode frames before
-`receive_media()` returns them. When schema dispatch needs the original text or
-binary frame, configure the app before serving requests:
+`receive_media()` returns them; `receive_loop=True` alone does not guarantee
+that dispatch receives the exact raw frame. When schema dispatch needs the
+original TEXT or BINARY payload, configure the app before constructing
+WebSocket connections. `router.attach()` does this automatically; use
+`configure_raw_frame_media(app)` for manually mounted routers or other Falcon
+WebSocket routes:
 
 ```python
 from falcon_pachinko import configure_raw_frame_media
@@ -214,9 +229,12 @@ from falcon_pachinko import configure_raw_frame_media
 configure_raw_frame_media(app)
 ```
 
-The helper preserves incoming `str` and `bytes` frames and encodes outgoing
-text media as JSON. It encodes non-byte binary media as MessagePack; byte-like
-binary payloads pass through unchanged.
+This is an app-wide setting, so it also affects ordinary Falcon WebSocket
+routes in the same application. Both setup paths preserve incoming `str` and
+`bytes` payloads while retaining the app's configured outgoing TEXT and BINARY
+serializers. The standalone `RawTextMediaHandler` and `RawBinaryMediaHandler`
+continue to encode JSON and MessagePack respectively when explicitly installed
+as handlers.
 
 The stable import path is `from falcon_pachinko.utils import ValidationError`.
 It is the same class as `msgspec.ValidationError`, so existing
@@ -394,16 +412,18 @@ class Parent(WebSocketResource):
 ## 8. Custom Connection Manager Backends (How-to)
 
 `WebSocketConnectionManager` delegates storage to a `ConnectionBackend`
-implementation. Swap in your own to support clustering or observability.
+implementation. Use a custom backend for alternative local storage or
+instrumentation. The registry owns live `WebSocketLike` objects in one process;
+it never serializes, proxies or shares those sockets across processes.
 
 ```python
 from falcon_pachinko.websocket import ConnectionBackend, WebSocketConnectionManager
 
 
-class RedisBackend(ConnectionBackend): ...
+class InstrumentedBackend(ConnectionBackend): ...
 
 
-conn_mgr = WebSocketConnectionManager(backend=RedisBackend(...))
+conn_mgr = WebSocketConnectionManager(backend=InstrumentedBackend(...))
 app.ws_connection_manager = conn_mgr  # before router mounts
 ```
 
@@ -418,6 +438,56 @@ Tests illustrating this pattern live in:
 
 - `tests/test_connection_manager_unit.py::test_manager_uses_custom_backend`
 - `tests/behaviour/custom_connection_backend.feature`
+
+### Clustered deployments
+
+Clustering uses `ClusterFanout` alongside a separate local
+`WebSocketConnectionManager`. Each process keeps and sends to its own live
+sockets. A `FanoutTransport` carries room leases and serialized `FanoutMessage`
+envelopes; it never carries a socket. An envelope is JSON encoded as bytes and
+contains `message_id`, `origin_node`, `room`, `payload` and `exclude`. The
+transport exchanges string identifiers, floating-point lease durations and byte
+envelopes; `listen()` yields bytes and `members()` returns node identifiers.
+
+Give each node a cluster-unique node ID and each connection a cluster-unique
+connection ID. Register and group connections through the coordinator, then
+publish application payloads through it:
+
+```python
+await fanout.add_connection(connection_id, ws)
+await fanout.join_room(connection_id, room)
+await fanout.publish(room, {"text": "hello"})
+await fanout.remove_connection(connection_id)  # on disconnect
+```
+
+Start `fanout.run` with `WorkerController` in the application lifespan and stop
+the controller during shutdown. Mount the router with
+`WebSocketRouter(receive_loop=True)` so it keeps accepted sockets open,
+dispatches incoming frames and calls `on_disconnect` when the session ends.
+This receive loop is opt-in; the default returns after acceptance and leaves
+the session lifecycle to the application. Each node subscribes while it has
+local members in a room. It removes the subscription when the last local member
+leaves, releases its memberships on graceful shutdown, and renews leases with a
+heartbeat (by default, every third of `lease_ttl`). If a process crashes, its
+remote membership expires after `lease_ttl` without a heartbeat.
+
+Fan-out is best effort and not durable: nodes that are down or whose leases
+have expired do not receive replayed messages. Per-socket ordering depends on
+the transport preserving per-publisher, per-node order; there is no global
+ordering guarantee. At-least-once transports can deliver duplicates, and the
+coordinator does not deduplicate them. `message_id` is available in the
+serialized envelope to applications, but is not added to the WebSocket payload.
+A transport publish failure is raised without retry; individual local send
+failures do not stop the listener, remove a connection or roll back the publish.
+`send_timeout` defaults to 5.0 seconds; any numeric value must be finite and
+positive. Pass `None` explicitly for unbounded sends; a blocked send can stall
+the sequential listener and delay delivery to other rooms. Existing local
+snapshots continue to skip stale local members.
+
+`InMemoryFanoutTransport` is provided for tests. A production Redis or RabbitMQ
+adapter must implement only `FanoutTransport` and is outside the scope of this
+release. Single-process applications can use `WebSocketConnectionManager` alone
+and need no broker.
 
 ## 9. Background Workers
 

@@ -10,6 +10,11 @@ import falcon.media
 import msgspec.json as msjson
 import msgspec.msgpack as msmsgpack
 
+from ._ws_media import install_raw_websocket_media_handlers
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 __all__ = ["RawBinaryMediaHandler", "RawTextMediaHandler", "configure_raw_frame_media"]
 
 
@@ -48,11 +53,24 @@ def configure_raw_frame_media(app: falcon.asgi.App) -> None:
 
     Falcon normally decodes media before returning it from
     ``WebSocket.receive_media()``. This helper preserves TEXT and BINARY
-    payloads so the router can pass them unchanged to resource dispatch.
+    payloads so the router can pass them unchanged to resource dispatch, while
+    delegating outgoing serialization to the app's existing handlers.
+
+    Configure the app before Falcon constructs any WebSocket. The configuration
+    affects every WebSocket route on this app, including routes outside the
+    Pachinko router. Repeated setup retains the installed adapters. Neither
+    configuration nor importing this module invokes serializer callbacks.
+    Customized inbound handlers trigger the same warning as ``router.attach``.
+
+    Parameters
+    ----------
+    app : falcon.asgi.App
+        Application whose WebSocket media handlers should preserve raw input.
     """
-    app.ws_options.media_handlers[falcon.WebSocketPayloadType.TEXT] = (
-        RawTextMediaHandler()
+    # The installer validates serializer callbacks and supports the same
+    # object-valued mapping used by attach; MutableMapping is invariant.
+    handlers = typ.cast(
+        "cabc.MutableMapping[falcon.WebSocketPayloadType, object]",
+        app.ws_options.media_handlers,
     )
-    app.ws_options.media_handlers[falcon.WebSocketPayloadType.BINARY] = (
-        RawBinaryMediaHandler()
-    )
+    install_raw_websocket_media_handlers(handlers)

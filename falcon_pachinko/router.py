@@ -29,6 +29,7 @@ from ._route_support import (
     _RouteMatch,
     _RouteRegistrationService,
 )
+from ._router_session import _ConnectionSession
 from ._uri_template import _compile_prefix_template, compile_uri_template
 from ._ws_media import install_raw_websocket_media_handlers
 from .hooks import HookCollection, HookContext, HookManager
@@ -39,7 +40,6 @@ from .protocols import WebSocketLike
 # that raises NameError when introspected would be a trap for runtime
 # consumers, so the name it references has to resolve at runtime too.
 from .resource import WebSocketResource
-from .session import drive_session
 
 if typ.TYPE_CHECKING:
     import re
@@ -89,17 +89,25 @@ class WebSocketRouter:
         name: str | None = None,
         resource_factory: ResourceFactory | None = None,
         simulator_factory: SimulatorFactory | None = None,
+        receive_loop: bool = False,
     ) -> None:
-        """Initialize route state and optional factories.
+        """Create a router and configure its accepted-session receive loop.
 
         Parameters
         ----------
-        name : str or None
-            Optional name used to scope route names registered by this router.
-        resource_factory : ResourceFactory or None
-            Factory used to create resources for matched routes.
-        simulator_factory : SimulatorFactory or None
-            Optional factory used to provide a WebSocket implementation.
+        name : str or None, default=None
+            Optional router name used by route registration.
+        resource_factory : ResourceFactory or None, default=None
+            Optional factory used to create routed resources.
+        simulator_factory : SimulatorFactory or None, default=None
+            Optional factory used by simulator routing.
+        receive_loop : bool, default=False
+            If true, receive and dispatch frames in order after ``on_connect``
+            permits the session and attempt ``on_disconnect`` once, including
+            acceptance setup failure. ``attach()`` and
+            ``configure_raw_frame_media(app)`` share the User Guide's app-wide
+            raw-media setup. If false, return after acceptance; the application
+            owns receiving and cleanup.
         """
         self._raw: list[_RawRoute] = []
         self._routes: list[_CompiledRoute] = []
@@ -116,6 +124,7 @@ class WebSocketRouter:
         self._resource_factory: ResourceFactory
         self._resource_factory = resource_factory or (lambda factory: factory())
         self._simulator_factory = simulator_factory
+        self._receive_loop = receive_loop
 
     @staticmethod
     def _compile_route(
@@ -588,20 +597,18 @@ class WebSocketRouter:
         should_accept = await self._execute_resource_handler(
             resource, dispatch, context, hook_manager
         )
-        await self._finalize_connection(
+        acceptance = self._finalize_connection(
             dispatch.ws,
             should_accept=should_accept,
             context=context,
             hook_manager=hook_manager,
         )
-        if should_accept:
-            await drive_session(
-                resource,
-                dispatch.ws,
-                hook_manager,
-                on_policy_close=dispatch.mark_session_close_attempted,
+        if self._receive_loop and should_accept:
+            await _ConnectionSession(resource, dispatch.ws, hook_manager).run(
+                acceptance, on_policy_close=dispatch.mark_session_close_attempted
             )
-        return True
+            return True
+        return await acceptance
 
     @staticmethod
     async def _prepare_connection_context(

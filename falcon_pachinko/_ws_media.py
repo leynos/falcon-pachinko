@@ -115,7 +115,7 @@ def install_raw_websocket_media_handlers(
     if custom_handlers:
         names = ", ".join(custom_handlers)
         warnings.warn(
-            "attach() replaces customized app-wide WebSocket media handlers "
+            "WebSocket setup replaces customized app-wide WebSocket media handlers "
             f"for {names}; all Falcon WebSocket responders on this app will "
             "receive raw str or bytes from receive_media()",
             UserWarning,

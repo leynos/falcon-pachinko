@@ -5,15 +5,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import typing as typ
+from unittest import mock
 
+import falcon
 import msgspec as ms
 import msgspec.json as msjson
 import pytest
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-    import falcon
 
 from falcon_pachinko import (
     HookCollection,
@@ -24,6 +24,8 @@ from falcon_pachinko import (
     WebSocketRouter,
     handles_message,
 )
+from falcon_pachinko.hooks import HookManager
+from falcon_pachinko.session import drive_session
 from falcon_pachinko.unittests.helpers import RecordingWS, make_req
 
 
@@ -98,7 +100,7 @@ def _router_for(
     resource_factory: cabc.Callable[..., WebSocketResource] | None = None,
 ) -> WebSocketRouter:
     """Return a mounted router that resolves to ``resource``."""
-    router = WebSocketRouter(resource_factory=resource_factory)
+    router = WebSocketRouter(resource_factory=resource_factory, receive_loop=True)
     router.add_route("/session", lambda: resource)
     router.mount("/")
     return router
@@ -438,7 +440,9 @@ async def test_nested_session_keeps_di_hooks_and_shared_state() -> None:
     )
     container = ServiceContainer()
     container.register("dependency", dependency)
-    router = WebSocketRouter(resource_factory=container.create_resource)
+    router = WebSocketRouter(
+        resource_factory=container.create_resource, receive_loop=True
+    )
     router.add_route("/parent", ParentResource)
     router.mount("/")
     router.global_hooks.add(
@@ -481,3 +485,69 @@ async def test_session_does_not_create_tasks_per_frame() -> None:
     assert resource.calls == [str(index) for index in range(50)], (
         "all frames must still be dispatched in order"
     )
+
+
+@pytest.mark.asyncio
+async def test_missing_peer_close_code_uses_abnormal_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unavailable peer code is reported as abnormal closure, not success."""
+    resource = SessionResource()
+    ws = RecordingWS()
+    failure = falcon.WebSocketDisconnected()
+    monkeypatch.setattr(failure, "code", None)
+
+    monkeypatch.setattr(ws, "receive_media", mock.AsyncMock(side_effect=failure))
+    manager = HookManager(global_hooks=HookCollection(), resources=[resource])
+    close_attempts: list[None] = []
+    await drive_session(
+        resource, ws, manager, on_policy_close=lambda: close_attempts.append(None)
+    )
+
+    assert resource.disconnects == [1006], "missing close codes must remain abnormal"
+    assert not ws.closed, "a peer disconnect must not cause another socket close"
+    assert not close_attempts, "peer cleanup must not select a server close policy"
+
+
+@pytest.mark.asyncio
+async def test_cancellation_inside_resource_cleanup_does_not_retry_callback() -> None:
+    """Cancellation can change close policy without invoking cleanup twice."""
+    entered = asyncio.Event()
+
+    class PausingDisconnectResource(SessionResource):
+        """Pause only the first cleanup call to expose accidental retries."""
+
+        @typ.override
+        async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+            """Record the attempt before awaiting cancellation."""
+            await super().on_disconnect(ws, close_code)
+            if len(self.disconnects) == 1:
+                entered.set()
+                await asyncio.Event().wait()
+
+    resource = PausingDisconnectResource()
+    ws = RecordingWS(disconnect_code=4008)
+    manager = HookManager(global_hooks=HookCollection(), resources=[resource])
+    close_attempts: list[None] = []
+    task = asyncio.create_task(
+        drive_session(
+            resource, ws, manager, on_policy_close=lambda: close_attempts.append(None)
+        )
+    )
+    try:
+        async with asyncio.timeout(1):
+            await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            async with asyncio.timeout(1):
+                await task
+    finally:
+        task.cancel()
+        async with asyncio.timeout(1):
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert resource.disconnects == [4008], "a started cleanup callback must not retry"
+    assert ws.closed == [1001], (
+        "cleanup cancellation must apply the shared close policy"
+    )
+    assert close_attempts == [None], "the router must observe exactly one policy close"

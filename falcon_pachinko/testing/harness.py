@@ -121,12 +121,14 @@ class SimulatorRouterHarness:
         mount: str = "/",
         resource_factory: ResourceFactory | None = None,
     ) -> None:
+        """Create a mounted router whose simulated sessions own frame reception."""
         self.app = falcon.asgi.App()
         self._mount_prefix = self._normalize_mount(mount)
         self._pending_simulator: WebSocketSimulator | None = None
         self.router = WebSocketRouter(
             resource_factory=resource_factory,
             simulator_factory=self._provide_simulator,
+            receive_loop=True,
         )
         self._mounted = False
         self.mount(self._mount_prefix)

@@ -65,7 +65,7 @@ class LiveWebSocketResource(WebSocketResource):
 def build_live_app(shared: LiveAppState) -> falcon.asgi.App:
     """Build an ASGI app using Falcon-Pachinko's supported attach path."""
     app = falcon.asgi.App()
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.add_route("/socket", LiveWebSocketResource, shared=shared)
     router.attach(app, "/ws")
     return app

@@ -297,13 +297,24 @@ class WebSocketResource:
         return True
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
-        """Handle cleanup after an accepted session ends.
+        """Handle cleanup for a router-owned WebSocket session.
 
-        The router calls this after the ``before_disconnect`` hooks for a
-        peer disconnect, cancellation, or unexpected session failure. It
-        passes the peer close code when available, 1001 for cancellation, and
-        1011 when receive or handler execution fails. A rejected connection
-        never starts a session and does not call this method.
+        With ``WebSocketRouter(receive_loop=True)``, after an accepting
+        ``on_connect``, the router attempts this callback once after the
+        ``before_disconnect`` hooks. This includes cleanup when
+        ``after_connect`` or ``accept`` fails. A peer close code is passed
+        through, or 1006 when the peer code is unavailable or acceptance setup
+        does not complete. Cancellation before disconnect cleanup starts closes
+        with 1001 and passes 1001 here. If cancellation interrupts a peer-close
+        callback already in progress, the callback retains its peer code and is
+        not attempted again, though the socket closes with 1001. Unexpected
+        receive or handler failures close with 1011 and pass 1011 here. These
+        failures propagate after cleanup.
+
+        Rejected connections and failed ``on_connect`` calls do not invoke this
+        method. Cancellation inside this callback does not cause a second
+        callback attempt. With the default ``receive_loop=False``, the
+        application owns session reception and cleanup.
 
         Parameters
         ----------

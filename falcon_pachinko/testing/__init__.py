@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ._common import MissingDependencyError
 from .client import TraceEvent, WebSocketTestClient
+from .fanout import InMemoryFanoutTransport
 from .fixtures import live_websocket_server, websocket_simulator
 from .harness import SimulatorConnection, SimulatorRouterHarness
 from .live import (
@@ -16,6 +17,7 @@ from .live import (
 from .simulator import WebSocketSimulator
 
 __all__ = [
+    "InMemoryFanoutTransport",
     "LiveServerError",
     "LiveServerShutdownError",
     "LiveServerStartupError",

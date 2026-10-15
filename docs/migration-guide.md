@@ -11,7 +11,9 @@ workflow to the composable `WebSocketRouter` architecture.
 - **Schema-first dispatch** via `msgspec` tagged unions and
   `@handles_message("tag")`.
 - **Router-level dependency injection** through `resource_factory`.
-- **Pluggable connection manager backends** enable distributed storage.
+- **Pluggable connection manager backends** enable alternative local storage;
+  see [Clustered deployments](users-guide.md#clustered-deployments) for
+  distributed room fan-out.
 - **Lifespan-managed workers** supersede `add_websocket_worker`.
 
 ## Diagnostic compatibility
@@ -142,11 +144,20 @@ router.attach(app, "/ws")
   connection. Return `False` to reject it; returning `True` allows the router
   to accept it after the hook. If the hook sends a frame, call
   `await ws.accept()` first.
-- After acceptance, the router keeps a receive loop open and passes each raw
-  text or binary frame to `WebSocketResource.dispatch()`.
-- `on_disconnect(ws, close_code)` runs when that session ends. Use it to clean
-  up connection-scoped resources; the close code reflects the disconnect or
-  dispatch failure.
+- Set `receive_loop=True` for router-owned, ordered frame reception and
+  dispatch. Its default is `False`, which returns after acceptance and leaves
+  receives and cleanup to the application.
+- `on_disconnect(ws, close_code)` is attempted once after successful
+  `on_connect` only when `receive_loop=True`, including setup failure in
+  `after_connect` or `accept`. Missing peer codes and acceptance setup failures
+  use `1006`; cancellation closes with `1001`, and unexpected receive or
+  handler failures close with `1011` and propagate.
+
+`router.attach()` also enables raw TEXT and BINARY input for all WebSocket
+routes on the app, preserving its outgoing serializers. For manually mounted
+routers, call `configure_raw_frame_media(app)` before Falcon constructs any
+WebSocket. Either entry point warns when replacing customized inbound handlers;
+Falcon's default decoding remains in effect if neither is used.
 
 1) **Adopt resource composition and state sharing:**
 
@@ -160,16 +171,21 @@ router.attach(app, "/ws")
 - Register handlers with `@handles_message("tag")` or `on_tag` methods.
 - Replace legacy `on_message` fallbacks with `on_unhandled`.
 
-After connection setup succeeds, `WebSocketRouter` accepts the connection and
-owns frame reception and dispatch until disconnect. Remove application-owned
-receive loops, manual `accept()` calls, and direct calls to
-`WebSocketResource.dispatch()`, except for `await ws.accept()` before sending a
-frame inside `on_connect()`. Keep message handling in resource handlers and
-`on_unhandled`; frames are dispatched sequentially, and returning normally from
-`on_unhandled` keeps the session open. The router runs `before_disconnect`
-before `on_disconnect`. Cancellation closes with code `1001`; unexpected
+Set `WebSocketRouter(receive_loop=True)` to have the router accept the
+connection and own frame reception and dispatch until disconnect. In that mode,
+remove application-owned receive loops and direct calls to
+`WebSocketResource.dispatch()`. Call `await ws.accept()` in `on_connect()` only
+when sending a frame from that hook. Keep message handling in resource handlers
+and `on_unhandled`; frames are dispatched sequentially, and returning normally
+from `on_unhandled` keeps the session open. The router runs `before_disconnect`
+before attempting `on_disconnect` once. A missing peer close code or failure
+during `after_connect` or `accept` uses `1006` for cleanup. Cancellation before
+disconnect cleanup starts closes with `1001` and propagates. If cancellation
+interrupts a peer-disconnect callback already in progress, it is not retried
+and retains the peer code, while the socket closes with `1001`. Unexpected
 receive or handler failures close with `1011` and propagate the original
-exception.
+exception. The default `receive_loop=False` returns after acceptance, leaving
+frame reception and cleanup to the application.
 
 1) **Wire dependency injection via `resource_factory`:**
 
