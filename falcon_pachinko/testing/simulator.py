@@ -14,11 +14,11 @@ from falcon_pachinko._disconnect import _PeerDisconnectedError
 
 from ._common import (
     _BINARY_PAYLOAD_REQUIRED_MSG,
-    DisconnectSentinel,
     _EXPECTED_BYTES_MSG,
     _EXPECTED_TEXT_MSG,
     _TEXT_PAYLOAD_REQUIRED_MSG,
     _UNSUPPORTED_FRAME_KIND_MSG,
+    DisconnectSentinel,
     FrameKind,
     _decode_json,
     _LifecycleSocket,
@@ -117,7 +117,7 @@ class WebSocketSimulator(_LifecycleSocket):
         """Await the next outbound frame emitted by the simulator."""
         return await self._outbound.get()
 
-    async def wait_for_sent_count(self, count: int) -> None:
+    async def _wait_for_sent_count(self, count: int) -> None:
         """Wait until at least ``count`` outbound frames have been processed."""
         while len(self.sent_messages) < count:
             self._outbound_event.clear()

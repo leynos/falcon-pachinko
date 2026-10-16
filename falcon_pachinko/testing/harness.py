@@ -107,6 +107,10 @@ class SimulatorConnection:
         """Queue a binary frame for the resource."""
         await self.simulator.push_bytes(payload)
 
+    async def wait_for_sent_count(self, count: int) -> None:
+        """Wait until the router has processed the requested number of replies."""
+        await self.simulator._wait_for_sent_count(count)
+
     async def disconnect(self, code: int = 1000) -> None:
         """Queue a client disconnect after any pending inbound frames."""
         await self.simulator.push_disconnect(code)
@@ -295,11 +299,10 @@ class SimulatorRouterHarness:
                 raise TimeoutError(msg)
             if router_task in done:
                 router_task.result()
-            elif simulator.closed:
+            elif simulator.closed and router_task.done():
                 # A close is a readiness event too; surface any failure that
                 # followed the resource's rejection or setup rollback.
-                if router_task.done():
-                    router_task.result()
+                router_task.result()
         finally:
             readiness_task.cancel()
             with suppress(asyncio.CancelledError):

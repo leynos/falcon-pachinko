@@ -101,7 +101,10 @@ async def test_transport_without_acceptance_state(
     """Keep protocol-only transports usable and clean up observed acceptance."""
     failure = RuntimeError("accepted protocol transport setup failed")
     resource = ProtocolResource(mode, failure)
-    router = WebSocketRouter(resource_factory=lambda _factory: resource)
+    router = WebSocketRouter(
+        resource_factory=lambda _factory: resource,
+        receive_loop=True,
+    )
     router.add_route("/session", ProtocolResource)
     router.mount("/")
     frame = b'{"type":"protocol-only"}'

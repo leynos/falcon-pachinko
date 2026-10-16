@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 import types
 import typing as typ
+from collections import deque
 
 import falcon
+
 from falcon_pachinko.websocket import (
     ConnectionBackend,
     WebSocketConnectionNotFoundError,

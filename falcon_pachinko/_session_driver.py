@@ -9,17 +9,21 @@ from __future__ import annotations
 
 import abc
 import contextlib
+import logging
 import typing as typ
 
 import falcon
 
+from ._disconnect import _PeerDisconnectedError
 from ._session import ABNORMAL_CLOSURE, INTERNAL_ERROR, SessionPhase, SessionState
 from ._session_cleanup import (
     CleanupContext,
     raise_session_failures,
     run_shielded_cleanup,
 )
+from ._session_setup import ConnectionSetup
 from ._session_socket import receive_frame, track_session_socket
+from .diagnostics import _type_name
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -27,6 +31,8 @@ if typ.TYPE_CHECKING:
     from .hooks import HookContext, HookManager
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
+
+logger = logging.getLogger(__name__)
 
 
 class SessionRouteMatch(typ.Protocol):
@@ -66,18 +72,19 @@ async def run_session(
     primary_error: BaseException | None = None
 
     try:
-        context = await _prepare_connection_context(hook_manager, resource, dispatch)
-        should_accept = await _execute_resource_handler(
-            resource, dispatch, context, hook_manager
-        )
-        if should_accept or _is_websocket_accepted(dispatch.ws):
-            session.establish()
-        await _finalize_connection(
-            dispatch.ws,
-            should_accept=should_accept,
-            context=context,
+        setup = ConnectionSetup(
             hook_manager=hook_manager,
+            resource=resource,
+            req=dispatch.req,
+            ws=dispatch.ws,
+            route_params=dispatch.match.params,
+            is_accepted=_is_websocket_accepted,
+            is_unaccepted=_is_websocket_unaccepted,
+            on_approval=session.establish,
         )
+        context = await setup.prepare()
+        await setup.execute()
+        await setup.finalize()
         if session.can_receive:
             await _receive_session(resource, dispatch, session, hook_manager)
     except BaseException as exc:
@@ -89,6 +96,9 @@ async def run_session(
             primary_error = _record_session_ending(session, exc)
         else:
             raise
+
+    if isinstance(primary_error, Exception):
+        logger.error("WebSocket session failed: %s", _type_name(primary_error))
 
     if session.phase is SessionPhase.ESTABLISHED:
         params = (
@@ -125,7 +135,7 @@ async def _receive_session(
     while session.can_receive:
         try:
             raw = await receive_frame(dispatch.ws)
-        except falcon.WebSocketDisconnected as exc:
+        except (falcon.WebSocketDisconnected, _PeerDisconnectedError) as exc:
             session.close_code = _effective_disconnect_code(exc)
             return
 
@@ -140,69 +150,6 @@ async def _receive_session(
         await resource.dispatch(dispatch.ws, raw)
 
 
-async def _prepare_connection_context(
-    hook_manager: HookManager,
-    resource: WebSocketResource,
-    dispatch: SessionDispatch,
-) -> HookContext:
-    """Return the hook context with the handler parameters resolved."""
-    params_obj: dict[str, object] = dict(dispatch.match.params)
-    context = await hook_manager.notify_before_connect(
-        resource,
-        req=dispatch.req,
-        ws=dispatch.ws,
-        params=params_obj,
-    )
-    # ``before_connect`` hooks may rewrite the parameters; fall back to the
-    # route captures when they leave them untouched.
-    if context.params is None:
-        context.params = params_obj
-    return context
-
-
-async def _execute_resource_handler(
-    resource: WebSocketResource,
-    dispatch: SessionDispatch,
-    context: HookContext,
-    hook_manager: HookManager,
-) -> bool:
-    """Invoke ``resource.on_connect`` handling hook error propagation."""
-    params = context.params if context.params is not None else {}
-    try:
-        return await resource.on_connect(dispatch.req, dispatch.ws, **params)
-    except Exception as exc:
-        context.error = exc
-        context.result = False
-        try:
-            await hook_manager.notify_after_connect(context)
-        except BaseException as after_error:
-            if _is_websocket_accepted(dispatch.ws):
-                raise_session_failures(exc, (after_error,), ())
-            raise
-        raise
-
-
-async def _finalize_connection(
-    ws: WebSocketLike,
-    *,
-    should_accept: bool,
-    context: HookContext,
-    hook_manager: HookManager,
-) -> None:
-    """Complete the connection lifecycle and honour ``should_accept``."""
-    context.result = should_accept
-    await hook_manager.notify_after_connect(context)
-    session = hook_manager.session
-    has_approval = should_accept or _is_websocket_accepted(ws)
-    if session is not None and has_approval:
-        session.establish()
-    if not should_accept:
-        await ws.close()
-        return
-    if not _is_websocket_accepted(ws):
-        await ws.accept()
-
-
 def _is_websocket_accepted(ws: WebSocketLike) -> bool:
     """Probe Falcon's public acceptance state without changing the protocol."""
     try:
@@ -210,6 +157,11 @@ def _is_websocket_accepted(ws: WebSocketLike) -> bool:
     except AttributeError:
         return False
     return unaccepted is False
+
+
+def _is_websocket_unaccepted(ws: WebSocketLike) -> bool:
+    """Treat missing Falcon acceptance state as not yet accepted."""
+    return not _is_websocket_accepted(ws)
 
 
 def _effective_disconnect_code(error: BaseException) -> int:
@@ -222,7 +174,7 @@ def _record_session_ending(
     session: SessionState, error: BaseException
 ) -> BaseException | None:
     """Distinguish a transport ending from an unexpected session failure."""
-    if isinstance(error, falcon.WebSocketDisconnected):
+    if isinstance(error, (falcon.WebSocketDisconnected, _PeerDisconnectedError)):
         session.close_code = _effective_disconnect_code(error)
         return None
     session.primary_error = error

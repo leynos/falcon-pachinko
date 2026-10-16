@@ -14,6 +14,7 @@ import msgspec.json as msjson
 from ._disconnect import _PeerDisconnectedError
 from ._observability import _observe_operation
 from .diagnostics import _type_name
+from .hooks import HookContext, HookEvent
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -103,9 +104,13 @@ async def _run_disconnect_lifecycle(
     async def notify_hooks() -> None:
         """Notify the selected resource's disconnect hooks before cleanup."""
         await session.hook_manager.notify_before_disconnect(
-            session.resource,
-            ws=session.websocket,
-            close_code=close_code,
+            HookContext(
+                event=HookEvent.BEFORE_DISCONNECT,
+                target=session.resource,
+                resource=None,
+                ws=session.websocket,
+                close_code=close_code,
+            )
         )
 
     hook_error = await _attempt_cleanup(
