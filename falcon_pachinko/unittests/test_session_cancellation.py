@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import typing as typ
 
 import falcon
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from falcon_pachinko.unittests._session_fixtures import (
     RecordingResource,
@@ -19,8 +22,11 @@ _ASSERTION_FAILURE = "lifecycle expectation failed"
 
 
 @pytest.mark.asyncio
-async def test_cancellation_during_receive_closes_and_runs_cleanup() -> None:
+async def test_cancellation_during_receive_closes_and_runs_cleanup(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Cancellation closes with 1001 and is re-raised after cleanup."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
     router = make_session_router()
     socket = SessionSocket(block_receive=True)
     task = asyncio.create_task(
@@ -36,12 +42,19 @@ async def test_cancellation_during_receive_closes_and_runs_cleanup() -> None:
 
     assert socket.close_codes == [1001], _ASSERTION_FAILURE
     assert RecordingResource.instances[0].disconnect_codes == [1001], _ASSERTION_FAILURE
+    observations = [
+        record
+        for record in caplog.records
+        if record.name == "falcon_pachinko._session_driver"
+    ]
+    assert getattr(observations[-1], "outcome", None) == "cancelled", _ASSERTION_FAILURE
+    assert getattr(observations[-1], "close_code", None) == 1001, _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio
 async def test_cancellation_reports_cleanup_failure_to_loop_handler() -> None:
     """Cleanup failures are observable without replacing cancellation."""
-    cleanup = RuntimeError("disconnect failed")
+    cleanup = RuntimeError("CANARY-cleanup-secret")
     loop = asyncio.get_running_loop()
     reported: list[dict[str, object]] = []
     old_handler = loop.get_exception_handler()
@@ -72,11 +85,25 @@ async def test_cancellation_reports_cleanup_failure_to_loop_handler() -> None:
     assert "cleanup failed" in typ.cast("str", reported[0]["message"]), (
         _ASSERTION_FAILURE
     )
+    assert reported[0]["operation"] == "cleanup", _ASSERTION_FAILURE
+    assert reported[0]["phase"] == "closed", _ASSERTION_FAILURE
+    assert reported[0]["close_code"] == 1001, _ASSERTION_FAILURE
+    assert reported[0]["exception_type"] == "RuntimeError", _ASSERTION_FAILURE
+    assert "CANARY" not in typ.cast("str", reported[0]["message"]), (
+        "loop-handler context must omit exception values"
+    )
 
 
-@pytest.mark.asyncio
-async def test_repeated_cancellation_waits_for_same_cleanup_task() -> None:
-    """Repeated cancellation cannot interrupt the shielded disconnect hook."""
+@given(repetitions=st.integers(min_value=1, max_value=4))
+def test_generated_repeated_cancellation_waits_for_same_cleanup_task(
+    repetitions: int,
+) -> None:
+    """Generated repeated cancellations cannot interrupt shielded cleanup."""
+    asyncio.run(_exercise_repeated_cancellation(repetitions))
+
+
+async def _exercise_repeated_cancellation(repetitions: int) -> None:
+    """Hold disconnect cleanup while delivering a bounded cancellation burst."""
     router = make_session_router()
     socket = SessionSocket(block_receive=True)
     task = asyncio.create_task(
@@ -90,10 +117,10 @@ async def test_repeated_cancellation_waits_for_same_cleanup_task() -> None:
 
     task.cancel()
     await resource.disconnect_started.wait()
-    task.cancel()
-    task.cancel()
-    await asyncio.sleep(0)
-    assert not task.done(), _ASSERTION_FAILURE
+    for _ in range(repetitions):
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done(), _ASSERTION_FAILURE
 
     resource.finish_disconnect.set()
     with pytest.raises(asyncio.CancelledError):

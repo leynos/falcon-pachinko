@@ -109,7 +109,7 @@ class SimulatorConnection:
 
     async def wait_for_sent_count(self, count: int) -> None:
         """Wait until the router has processed the requested number of replies."""
-        await self.simulator._wait_for_sent_count(count)
+        await self.simulator.wait_for_sent_count(count)
 
     async def disconnect(self, code: int = 1000) -> None:
         """Queue a client disconnect after any pending inbound frames."""
@@ -206,9 +206,7 @@ class SimulatorRouterHarness:
             request_path, simulator, request, original, router_task
         )
         try:
-            await asyncio.wait_for(
-                self._wait_until_ready(simulator, router_task), timeout=5
-            )
+            await self._wait_until_ready(simulator, router_task)
         except (Exception, asyncio.CancelledError):
             await self._rollback_startup(session)
             raise
@@ -236,7 +234,8 @@ class SimulatorRouterHarness:
             await self._await_router_task(session.router_task)
         finally:
             if not session.websocket.closed:
-                await session.websocket.close()
+                with suppress(Exception):
+                    await session.websocket.close()
 
     @asynccontextmanager
     async def connect(

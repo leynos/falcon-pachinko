@@ -428,7 +428,11 @@ reason = "Nose reports the sequence and mapping opening-delimiter emissions as u
 
 [[tool.duplication_gate.allow]]
 members = ["falcon_pachinko/_session_cleanup.py", "falcon_pachinko/hooks.py"]
-reason = "The two TYPE_CHECKING blocks independently import shared annotation dependencies; consolidating them would add an import-only module or create runtime import coupling. Nose reports unnamed fragments, so this exception is limited to this exact file pair."
+reason = "Nose reports these TYPE_CHECKING import fragments as unnamed, so path-only keys are required. This pair covers current and future duplicate families between these files; inspect every new family rather than treating it as blanket approval. The imports are independent annotation dependencies, and factoring them would add an import-only module or runtime coupling."
+
+[[tool.duplication_gate.allow]]
+members = ["falcon_pachinko/_session_cleanup.py", "falcon_pachinko/session.py"]
+reason = "Nose reports these TYPE_CHECKING import fragments as unnamed, so path-only keys are required. This pair covers current and future duplicate families between these files; inspect every new family rather than treating it as blanket approval. session.py remains used by testing/_router_session.py and unittests/test_session.py for the in-process compatibility driver; centralising its imports would add a shared type module without sharing lifecycle behaviour."
 
 # Mutation testing. `make mutation` prints the local command; CI runs the
 # estate's reusable workflow, which injects the pinned mutmut through

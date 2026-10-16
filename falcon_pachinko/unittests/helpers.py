@@ -44,7 +44,19 @@ class DummyWS:
     """A dummy WebSocket implementation for testing purposes."""
 
     def __init__(self, *frames: object, disconnect_code: int = 1000) -> None:
-        """Initialize a socket with frames followed by a peer disconnect."""
+        """Initialize a socket with frames followed by a peer disconnect.
+
+        Parameters
+        ----------
+        *frames : object
+            Frames queued before the disconnect. If the only argument is an
+            iterable other than a frame payload such as text, bytes, or a
+            mapping, its items are expanded into separate frames. A list or
+            tuple therefore cannot be passed as one frame through this
+            constructor.
+        disconnect_code : int, optional
+            Close code reported by the queued peer disconnect, by default 1000.
+        """
         if len(frames) == 1:
             frame_batch = frames[0]
             if _is_frame_collection(frame_batch):

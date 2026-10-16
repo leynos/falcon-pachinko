@@ -172,7 +172,12 @@ class _LifecycleSocket:
         peer_is_complete: cabc.Callable[[_LifecycleSocket], bool],
         mirror_transition: cabc.Callable[[_LifecycleSocket], cabc.Awaitable[None]],
     ) -> None:
-        """Apply an idempotent local event before mirroring it to a peer."""
+        """Record local state before awaiting an optional peer transition.
+
+        Concurrent callers can return after this endpoint records its first
+        transition while the caller doing the peer mirror is still suspended.
+        A returned close therefore does not prove that the peer has closed.
+        """
         if is_complete:
             return
         record_transition()

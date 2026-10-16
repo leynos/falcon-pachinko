@@ -14,7 +14,8 @@ from falcon_pachinko import (
     WebSocketResource,
     WebSocketSimulator,
 )
-from falcon_pachinko._testing_harness import _HarnessSimulator
+from falcon_pachinko._testing_harness import _HarnessSimulator, _OriginalWebSocket
+from falcon_pachinko.testing.harness import _ConnectionSession
 
 
 def _failed_future(error: Exception) -> asyncio.Future[None]:
@@ -328,6 +329,41 @@ class TestWebSocketSimulatorFixture:
         await asyncio.gather(router_task, return_exceptions=True)
         assert caught.value.__cause__ is first_timeout, (
             "the session timeout must retain the first shutdown timeout"
+        )
+
+    async def test_retry_close_does_not_replace_teardown_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A best-effort final close cannot mask the first teardown failure."""
+        harness = SimulatorRouterHarness()
+        simulator = WebSocketSimulator()
+        await simulator.close()
+        websocket = _OriginalWebSocket()
+        primary_error = RuntimeError("initial close failed")
+        retry_error = RuntimeError("retry close failed")
+        close_errors = iter((primary_error, retry_error))
+
+        async def fail_close(code: int = 1000) -> None:
+            del code
+            await asyncio.sleep(0)
+            raise next(close_errors)
+
+        monkeypatch.setattr(websocket, "close", fail_close)
+        router_task = asyncio.create_task(asyncio.sleep(0))
+        await router_task
+        session = _ConnectionSession(
+            path="/session",
+            simulator=simulator,
+            request=object(),
+            websocket=websocket,
+            router_task=router_task,
+        )
+
+        with pytest.raises(RuntimeError) as caught:
+            await harness._finish_connection(session)
+
+        assert caught.value is primary_error, (
+            "retry cleanup must preserve the original teardown failure"
         )
 
     async def test_startup_failure_is_not_reported_as_a_second_task_error(

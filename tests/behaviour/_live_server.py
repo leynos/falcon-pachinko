@@ -27,6 +27,7 @@ if typ.TYPE_CHECKING:
 type _LoopExceptionHandler = cabc.Callable[
     [asyncio.AbstractEventLoop, dict[str, typ.Any]], None
 ]
+_SESSION_TASK_JOIN_TIMEOUT = 5
 
 
 class DisconnectRecorder:
@@ -311,6 +312,20 @@ class LiveServerTransport:
             return
         self._stopped = True
         self.server.should_exit = True
+        primary_error: BaseException | None = None
+        try:
+            try:
+                await self._stop_serving()
+            except BaseException as exc:
+                primary_error = exc
+                raise
+        finally:
+            try:
+                await self._join_sessions(preserve_primary=primary_error is not None)
+            finally:
+                self.loop.set_exception_handler(self._previous_exception_handler)
+
+    async def _stop_serving(self) -> None:
         try:
             await asyncio.wait_for(asyncio.shield(self.serve_task), timeout=5)
         except TimeoutError:
@@ -318,18 +333,19 @@ class LiveServerTransport:
             with suppress(asyncio.CancelledError):
                 await self.serve_task
             raise
-        finally:
-            try:
-                # Uvicorn's graceful timeout cancels ASGI tasks without joining
-                # them. Keep the loop alive until their shielded cleanup ends.
-                session_tasks = tuple(self.server.server_state.tasks)
-                if session_tasks:
-                    await asyncio.wait_for(
-                        asyncio.gather(*session_tasks, return_exceptions=True),
-                        timeout=5,
-                    )
-            finally:
-                self.loop.set_exception_handler(self._previous_exception_handler)
+
+    async def _join_sessions(self, *, preserve_primary: bool) -> None:
+        # Uvicorn cancels ASGI tasks without joining them after its graceful
+        # timeout, so keep the loop alive until their shielded cleanup ends.
+        session_tasks = tuple(self.server.server_state.tasks)
+        if not session_tasks:
+            return
+        joined = asyncio.gather(*session_tasks, return_exceptions=True)
+        try:
+            await asyncio.wait_for(joined, timeout=_SESSION_TASK_JOIN_TIMEOUT)
+        except TimeoutError:
+            if not preserve_primary:
+                raise
 
 
 @dc.dataclass(slots=True)
