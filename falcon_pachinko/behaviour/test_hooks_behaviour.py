@@ -181,7 +181,6 @@ def _connect_client(
     ws = DummyWS(frames)
     req = make_req("/hooks/child")
     asyncio.run(router.on_websocket(req, ws))
-
     child = HookedChild.instances[-1]
     context["child_params"] = child.params
     return child, ws
@@ -319,3 +318,27 @@ def then_error_propagates(context: dict[str, typ.Any]) -> None:
         ("parent", context["error"]),
         ("global", context["error"]),
     ], "every layer's after_receive hook should observe the same error"
+
+
+@pytest.mark.parametrize("failure_stage", ["factory", "before_connect"])
+def test_connect_client_preserves_original_setup_error(failure_stage: str) -> None:
+    """Missing observation state must never mask a router setup failure."""
+    failure = LookupError("setup failed")
+    router = WebSocketRouter()
+
+    def create_child() -> HookedChild:
+        if failure_stage == "factory":
+            raise failure
+        return HookedChild()
+
+    def fail_before_connect(context: HookContext) -> None:
+        del context
+        raise failure
+
+    router.add_route("/hooks/child", create_child)
+    router.mount("/")
+    router.global_hooks.add("before_connect", fail_before_connect)
+
+    with pytest.raises(LookupError, match="setup failed") as caught:
+        _connect_client({"router": router})
+    assert caught.value is failure, "the original setup exception must propagate"

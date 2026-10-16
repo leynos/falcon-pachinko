@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import re
 import typing as typ
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    import re
     import threading
 
     from .resource import WebSocketResource
@@ -19,10 +19,6 @@ class _RequestLike(typ.Protocol):
     @property
     def path(self) -> str:
         """The request path."""
-
-    @property
-    def path_template(self) -> str:
-        """The mount path template."""
 
 
 @dc.dataclass(slots=True)
@@ -54,12 +50,14 @@ class _RouteMatch:
 def _request_path_template(req: _RequestLike) -> str:
     """Return Falcon's selected route template, with a legacy fallback."""
     template = getattr(req, "uri_template", None)
-    if template:
+    if not template:
+        template = getattr(req, "path_template", None) or ""
+
+    # Only the router's own catch-all route represents a descendant mount.
+    match = re.fullmatch(r"(?P<prefix>.*)/\{pachinko_path:path\}", template)
+    if match is None:
         return template
-    try:
-        return req.path_template
-    except AttributeError:
-        return ""
+    return match.group("prefix") or "/"
 
 
 def _normalize_path(path: str) -> str:

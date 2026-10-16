@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import typing as typ
 from unittest import mock
 
@@ -235,19 +234,19 @@ async def test_receive_failure_closes_once_with_1011_and_reraises_original(
 
 
 @pytest.mark.asyncio
-async def test_failure_cleanup_errors_do_not_replace_handler_error(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Disconnect-hook failures are best-effort during a failed session."""
+async def test_failure_cleanup_errors_are_grouped_after_handler_error() -> None:
+    """Expose both cleanup failures after the primary handler failure."""
     events: list[str] = []
     sensitive_value = "cleanup-sensitive-canary"
+    cleanup_error = ValueError(sensitive_value)
+    hook_error = LookupError(sensitive_value)
 
     class BrokenDisconnectResource(SessionResource):
         async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
             del ws
             events.append(f"resource:{close_code}")
             await asyncio.sleep(0)
-            raise ValueError(sensitive_value)
+            raise cleanup_error
 
     resource = BrokenDisconnectResource()
     SessionResource.failures.clear()
@@ -255,29 +254,23 @@ async def test_failure_cleanup_errors_do_not_replace_handler_error(
 
     def broken_before_disconnect(context: HookContext) -> None:
         events.append(f"hook:{context.close_code}")
-        raise LookupError(sensitive_value)
+        raise hook_error
 
     router = _router_for(resource)
     router.global_hooks.add("before_disconnect", broken_before_disconnect)
 
-    with (
-        caplog.at_level(logging.ERROR, logger="falcon_pachinko.session"),
-        pytest.raises(RuntimeError, match="handler failed") as caught,
-    ):
+    with pytest.raises(ExceptionGroup, match="session") as caught:
         await router.on_websocket(make_req("/session"), ws)
 
-    assert caught.value is SessionResource.failures[-1], (
-        "cleanup failures must not replace the original handler exception"
-    )
+    assert caught.value.exceptions == (
+        SessionResource.failures[-1],
+        hook_error,
+        cleanup_error,
+    ), "the handler failure must remain first, followed by both cleanup failures"
     assert events == ["hook:1011", "resource:1011"], (
         "both failure-cleanup steps must be attempted in order"
     )
     assert ws.closed == [1011], "cleanup failures must not cause a second close"
-    assert sensitive_value not in caplog.text, (
-        "cleanup logs must not expose exception messages"
-    )
-    assert "LookupError" in caplog.text, "cleanup logs should retain exception types"
-    assert "ValueError" in caplog.text, "cleanup logs should retain exception types"
 
 
 @pytest.mark.asyncio
@@ -320,8 +313,8 @@ async def test_cancellation_closes_with_1001_and_skips_after_receive() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancellation_during_disconnect_hook_runs_remaining_cleanup() -> None:
-    """Cancellation during normal cleanup switches to best-effort 1001 cleanup."""
+async def test_cancellation_during_disconnect_hook_preserves_selected_code() -> None:
+    """Shielded cleanup finishes with the peer code after caller cancellation."""
     resource = SessionResource()
     hook_codes: list[int | None] = []
     hook_entered = asyncio.Event()
@@ -341,15 +334,18 @@ async def test_cancellation_during_disconnect_hook_runs_remaining_cleanup() -> N
     try:
         await asyncio.wait_for(hook_entered.wait(), timeout=1)
         task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done(), "cancellation must wait for shielded cleanup"
+        release_hook.set()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            await asyncio.wait_for(task, timeout=1)
     finally:
         release_hook.set()
 
-    assert ws.closed == [1001], "cleanup cancellation must close with 1001"
-    assert hook_codes == [4008, 1001], "cancellation cleanup must use code 1001"
-    assert resource.disconnects == [1001], (
-        "resource cleanup must still run after the hook is cancelled"
+    assert not ws.closed, "a peer-closed socket needs no second close"
+    assert hook_codes == [4008], "shielded cleanup must not restart its hooks"
+    assert resource.disconnects == [4008], (
+        "the effective peer close code must survive cancellation during cleanup"
     )
 
 

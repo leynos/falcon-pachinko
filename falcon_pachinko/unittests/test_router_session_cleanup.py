@@ -7,8 +7,8 @@ import typing as typ
 
 import pytest
 
-from falcon_pachinko._router_session import _ConnectionSession
 from falcon_pachinko.hooks import HookCollection, HookManager
+from falcon_pachinko.testing._router_session import _ConnectionSession
 from falcon_pachinko.unittests.helpers import make_req
 from falcon_pachinko.unittests.router_session_helpers import (
     SessionResource,
@@ -67,7 +67,7 @@ async def test_receive_loop_acceptance_failure_disconnects_once() -> None:
     router = session_router(resource, receive_loop=True)
     with pytest.raises(RuntimeError, match="accept failed"):
         await router.on_websocket(make_req("/session"), socket)
-    assert resource.disconnects == [(socket, 1006)], (
+    assert resource.disconnects == [(socket, 1011)], (
         "accept failure must clean up registered state once"
     )
     assert socket.closed, "accept failure must use the existing error close path"
@@ -88,7 +88,7 @@ async def test_receive_loop_after_connect_failure_disconnects_once() -> None:
     router.global_hooks.add("after_connect", fail_after_connect)
     with pytest.raises(RuntimeError, match="after_connect failed"):
         await router.on_websocket(make_req("/session"), socket)
-    assert resource.disconnects == [(socket, 1006)], (
+    assert resource.disconnects == [(socket, 1011)], (
         "hook failure must clean up registered state once"
     )
     assert socket.closed, "hook failure must use the existing error close path"
@@ -139,18 +139,22 @@ async def test_receive_loop_failing_disconnect_hook_cannot_skip_cleanup() -> Non
 
 
 @pytest.mark.asyncio
-async def test_receive_loop_logs_dispatch_failure_without_exception_values(
+async def test_receive_loop_propagates_dispatch_failure_without_duplicate_logging(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Failure diagnostics expose the exception type without reflecting payloads."""
-    resource = SessionResource(dispatch_error=RuntimeError("CANARY-dispatch-secret"))
+    """The router propagates failures for the outer request boundary to log."""
+    failure = RuntimeError("CANARY-dispatch-secret")
+    resource = SessionResource(dispatch_error=failure)
     socket = SessionSocket(("first",))
     router = session_router(resource, receive_loop=True)
-    with pytest.raises(RuntimeError, match="CANARY-dispatch-secret"):
+    with pytest.raises(RuntimeError, match="CANARY-dispatch-secret") as captured:
         await router.on_websocket(make_req("/session"), socket)
-    assert "RuntimeError" in caplog.text, "dispatch failures must leave a diagnostic"
+    assert captured.value is failure, "dispatch failure must propagate unchanged"
+    assert not any(
+        record.name == "falcon_pachinko._session_driver" for record in caplog.records
+    ), "the session driver must not duplicate the request boundary's error log"
     assert "CANARY-dispatch-secret" not in caplog.text, (
-        "diagnostics must omit exception values"
+        "the router must not log exception values before propagation"
     )
 
 
