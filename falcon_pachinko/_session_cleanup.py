@@ -44,26 +44,48 @@ async def run_shielded_cleanup(
 ) -> tuple[tuple[BaseException, ...], tuple[asyncio.CancelledError, ...]]:
     """Finish one cleanup task even if its caller receives more cancellation."""
     cleanup_task = asyncio.create_task(_collect_cleanup_failures(context))
+    interruptions = await _join_cleanup_task(cleanup_task)
+    return _cleanup_task_failures(cleanup_task), interruptions
+
+
+async def _join_cleanup_task(
+    cleanup_task: asyncio.Task[tuple[BaseException, ...]],
+) -> tuple[asyncio.CancelledError, ...]:
+    """Keep joining the owned cleanup task through repeated cancellation."""
     interruptions: list[asyncio.CancelledError] = []
-    while True:
+    try:
+        await asyncio.shield(cleanup_task)
+    except asyncio.CancelledError as exc:
+        interruptions.append(exc)
+        interruptions.extend(await _join_after_cancellation(cleanup_task))
+    return tuple(interruptions)
+
+
+async def _join_after_cancellation(
+    cleanup_task: asyncio.Task[tuple[BaseException, ...]],
+) -> tuple[asyncio.CancelledError, ...]:
+    """Finish the same cleanup task without swallowing later interruptions."""
+    interruptions: list[asyncio.CancelledError] = []
+    while not cleanup_task.done():
         try:
             await asyncio.shield(cleanup_task)
-            break
         except asyncio.CancelledError as exc:
             interruptions.append(exc)
-            if cleanup_task.done():
-                break
+    return tuple(interruptions)
 
+
+def _cleanup_task_failures(
+    cleanup_task: asyncio.Task[tuple[BaseException, ...]],
+) -> tuple[BaseException, ...]:
+    """Return task failures as values for the session precedence policy."""
     if cleanup_task.cancelled():
-        failures = (asyncio.CancelledError(),)
-    else:
-        try:
-            failures = cleanup_task.result()
-        except Exception as exc:  # ruff: ignore[blind-except] - retain task failures
-            failures = (exc,)
-        except asyncio.CancelledError as exc:
-            failures = (exc,)
-    return failures, tuple(interruptions)
+        return (asyncio.CancelledError(),)
+    try:
+        return cleanup_task.result()
+    except Exception as exc:  # ruff: ignore[blind-except] - retain task failures
+        return (exc,)
+    except asyncio.CancelledError as exc:
+        return (exc,)
 
 
 async def _collect_cleanup_failures(
@@ -165,29 +187,77 @@ def raise_session_failures(
     """Apply primary-first exception precedence after cleanup has completed."""
     cancellation = _session_cancellation(primary_error, cleanup_failures, interruptions)
     if cancellation is not None:
-        _report_cancelled_session_failures(
-            primary_error, cleanup_failures, cancellation
-        )
-        raise cancellation
+        _raise_cancelled_session(primary_error, cleanup_failures, cancellation)
+    failures = _combined_session_failures(primary_error, cleanup_failures)
+    _raise_session_failure_group(primary_error, cleanup_failures, failures)
 
-    failures = ([primary_error] if primary_error is not None else []) + list(
-        cleanup_failures
-    )
+
+def _combined_session_failures(
+    primary_error: BaseException | None,
+    cleanup_failures: tuple[BaseException, ...],
+) -> list[BaseException]:
+    """Preserve the primary error before every cleanup failure."""
+    primary = [primary_error] if primary_error is not None else []
+    return primary + list(cleanup_failures)
+
+
+def _raise_cancelled_session(
+    primary_error: BaseException | None,
+    cleanup_failures: tuple[BaseException, ...],
+    cancellation: asyncio.CancelledError,
+) -> typ.NoReturn:
+    """Keep cancellation bare and report failures hidden by its precedence."""
+    _report_cancelled_session_failures(primary_error, cleanup_failures, cancellation)
+    raise cancellation
+
+
+def _raise_session_failure_group(
+    primary_error: BaseException | None,
+    cleanup_failures: tuple[BaseException, ...],
+    failures: list[BaseException],
+) -> None:
+    """Raise one failure unchanged or group the ordered failure set."""
     if not failures:
         return
     if len(failures) == 1:
         raise failures[0]
-    if all(isinstance(failure, Exception) for failure in failures):
+    _raise_multiple_session_failures(primary_error, cleanup_failures, failures)
+
+
+def _raise_multiple_session_failures(
+    primary_error: BaseException | None,
+    cleanup_failures: tuple[BaseException, ...],
+    failures: list[BaseException],
+) -> typ.NoReturn:
+    """Use the narrowest exception group that preserves session precedence."""
+    if _are_ordinary_failures(failures):
         exceptions = [typ.cast("Exception", failure) for failure in failures]
         raise ExceptionGroup("session", exceptions)
-    if primary_error is not None and not isinstance(primary_error, Exception):
-        for failure in cleanup_failures:
-            _report_cleanup_failure(
-                failure,
-                "WebSocket disconnect cleanup failed after a base exception",
-            )
-        raise primary_error
+    if _preserves_primary_base_exception(primary_error):
+        _report_base_exception_cleanup_failures(cleanup_failures)
+        raise typ.cast("BaseException", primary_error)
     raise BaseExceptionGroup("session", failures)
+
+
+def _are_ordinary_failures(failures: list[BaseException]) -> bool:
+    """Check whether ordinary exception grouping preserves all members."""
+    return all(isinstance(failure, Exception) for failure in failures)
+
+
+def _preserves_primary_base_exception(
+    primary_error: BaseException | None,
+) -> bool:
+    """Keep non-cancellation base exceptions primary over cleanup failures."""
+    return primary_error is not None and not isinstance(primary_error, Exception)
+
+
+def _report_base_exception_cleanup_failures(
+    cleanup_failures: tuple[BaseException, ...],
+) -> None:
+    """Report cleanup failures when a non-ordinary primary must stay bare."""
+    message = "WebSocket disconnect cleanup failed after a base exception"
+    for failure in cleanup_failures:
+        _report_cleanup_failure(failure, message)
 
 
 def _session_cancellation(

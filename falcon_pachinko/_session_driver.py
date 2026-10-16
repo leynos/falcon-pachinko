@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import abc
 import contextlib
+import dataclasses as dc
 import logging
 import typing as typ
 
@@ -57,6 +58,18 @@ class SessionDispatch(typ.Protocol):
         """Selected route parameters consumed by the session driver."""
 
 
+@dc.dataclass(slots=True)
+class _SessionExecution:
+    """Keep the session's request, resource, and failure state together."""
+
+    resource: WebSocketResource
+    dispatch: SessionDispatch
+    session: SessionState
+    hook_manager: HookManager
+    context: HookContext | None = None
+    primary_error: BaseException | None = None
+
+
 async def run_session(
     resource: WebSocketResource,
     dispatch: SessionDispatch,
@@ -64,13 +77,31 @@ async def run_session(
     hook_manager: HookManager,
 ) -> bool:
     """Run setup, receive frames, and finish the accepted session."""
-    session = SessionState()
-    dispatch.session = session
-    dispatch.ws = track_session_socket(dispatch.ws, session)
-    hook_manager.bind_session(session)
-    context: HookContext | None = None
-    primary_error: BaseException | None = None
+    execution = _SessionExecution(resource, dispatch, SessionState(), hook_manager)
+    dispatch.session = execution.session
+    dispatch.ws = track_session_socket(dispatch.ws, execution.session)
+    hook_manager.bind_session(execution.session)
+    await _run_setup_and_receive(execution)
 
+    if isinstance(execution.primary_error, Exception):
+        logger.error(
+            "WebSocket session failed: %s", _type_name(execution.primary_error)
+        )
+
+    if execution.session.phase is SessionPhase.ESTABLISHED:
+        await _finish_established_session(execution)
+
+    return True
+
+
+async def _run_setup_and_receive(
+    execution: _SessionExecution,
+) -> None:
+    """Run ordered setup and receive work, recording only established failures."""
+    resource = execution.resource
+    dispatch = execution.dispatch
+    session = execution.session
+    hook_manager = execution.hook_manager
     try:
         setup = ConnectionSetup(
             hook_manager=hook_manager,
@@ -82,42 +113,48 @@ async def run_session(
             is_unaccepted=_is_websocket_unaccepted,
             on_approval=session.establish,
         )
-        context = await setup.prepare()
+        execution.context = await setup.prepare()
         await setup.execute()
         await setup.finalize()
         if session.can_receive:
             await _receive_session(resource, dispatch, session, hook_manager)
     except BaseException as exc:
-        if session.phase is SessionPhase.CONNECTING and _is_websocket_accepted(
-            dispatch.ws
-        ):
-            session.establish()
+        _establish_after_resource_acceptance(session, dispatch.ws)
         if session.phase is SessionPhase.ESTABLISHED:
-            primary_error = _record_session_ending(session, exc)
-        else:
-            raise
+            execution.primary_error = _record_session_ending(session, exc)
+            return
+        raise
 
-    if isinstance(primary_error, Exception):
-        logger.error("WebSocket session failed: %s", _type_name(primary_error))
 
-    if session.phase is SessionPhase.ESTABLISHED:
-        params = (
-            context.params
-            if context is not None and context.params is not None
-            else dict(dispatch.match.params)
-        )
-        cleanup_context = CleanupContext(
-            resource=resource,
-            dispatch=dispatch,
-            hook_manager=hook_manager,
-            session=session,
-            params=dict(params),
-            primary_error=primary_error,
-        )
-        cleanup_failures, interrupted = await run_shielded_cleanup(cleanup_context)
-        raise_session_failures(primary_error, cleanup_failures, interrupted)
+def _establish_after_resource_acceptance(
+    session: SessionState, ws: WebSocketLike
+) -> None:
+    """Honor resource-owned acceptance even when its setup then fails."""
+    if session.phase is SessionPhase.CONNECTING and _is_websocket_accepted(ws):
+        session.establish()
 
-    return True
+
+async def _finish_established_session(
+    execution: _SessionExecution,
+) -> None:
+    """Complete shielded cleanup with setup params and ordered failures."""
+    dispatch = execution.dispatch
+    context = execution.context
+    params = (
+        context.params
+        if context is not None and context.params is not None
+        else dict(dispatch.match.params)
+    )
+    cleanup_context = CleanupContext(
+        resource=execution.resource,
+        dispatch=dispatch,
+        hook_manager=execution.hook_manager,
+        session=execution.session,
+        params=dict(params),
+        primary_error=execution.primary_error,
+    )
+    cleanup_failures, interrupted = await run_shielded_cleanup(cleanup_context)
+    raise_session_failures(execution.primary_error, cleanup_failures, interrupted)
 
 
 async def _receive_session(
