@@ -50,6 +50,8 @@ async def test_push_disconnect_persists_code_on_later_receives() -> None:
     assert await simulator.receive_text() == "before disconnect", (
         "queued frames must be received before the disconnect marker"
     )
+    # The first sentinel preserves the simulator's peer-specific exception;
+    # later receives expose Falcon's public disconnect exception.
     with pytest.raises(_PeerDisconnectedError) as first:
         await simulator.receive_media()
     with pytest.raises(falcon.WebSocketDisconnected) as second:
@@ -76,6 +78,7 @@ async def test_send_media_records_outbound_payloads() -> None:
         {"type": "pong"},
         msjson.encode({"type": "json"}),
     ], "both raw and JSON-encoded payloads must be recorded in order"
+    await asyncio.wait_for(simulator.wait_for_sent_count(2), timeout=1)
     assert simulator.pop_sent() == {"type": "pong"}, (
         "popping the first sent message must return the raw payload"
     )

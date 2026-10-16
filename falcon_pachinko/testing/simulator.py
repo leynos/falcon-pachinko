@@ -35,8 +35,14 @@ class _DisconnectMarker:
     code: int
 
 
-class WebSocketSimulator(_LifecycleSocket):
-    """In-memory :class:`WebSocketLike` implementation for hermetic tests."""
+class WebSocketSimulator(  # ruff: ignore[too-many-public-methods] -- harness waiter
+    _LifecycleSocket,
+):
+    """In-memory :class:`WebSocketLike` implementation for hermetic tests.
+
+    Its public frame-count waiter keeps harnesses from reaching into the
+    simulator's private event state.
+    """
 
     def __init__(
         self,
@@ -117,7 +123,7 @@ class WebSocketSimulator(_LifecycleSocket):
         """Await the next outbound frame emitted by the simulator."""
         return await self._outbound.get()
 
-    async def _wait_for_sent_count(self, count: int) -> None:
+    async def wait_for_sent_count(self, count: int) -> None:
         """Wait until at least ``count`` outbound frames have been processed."""
         while len(self.sent_messages) < count:
             self._outbound_event.clear()

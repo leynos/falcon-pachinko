@@ -99,10 +99,19 @@ def then_original_handler_error(
     assert str(errors[0]) == "live WebSocket handler failed", (
         "cleanup must not replace the original handler exception"
     )
-    assert any(
-        record.exc_info is not None and record.exc_info[1] is errors[0]
+    falcon_reports = [
+        record
         for record in caplog.records
-    ), "Falcon must report the original handler exception"
+        if record.exc_info is not None and record.exc_info[1] is errors[0]
+    ]
+    assert len(falcon_reports) == 1, (
+        "Falcon must report the original handler exception exactly once"
+    )
+    assert not any(
+        record.name == "falcon_pachinko._session_driver"
+        and record.getMessage().startswith("WebSocket session failed:")
+        for record in caplog.records
+    ), "the session driver must propagate without duplicate logging"
     assert context.server.application.manager.websockets == {}, (
         "handler failure cleanup must remove the socket"
     )

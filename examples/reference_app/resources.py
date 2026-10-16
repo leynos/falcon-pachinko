@@ -268,10 +268,19 @@ class TaskStreamResource(WebSocketResource):
         is_accepted: bool,
         error: BaseException,
     ) -> None:
-        """Undo manager membership only when disconnect cleanup is unpromised."""
-        if is_accepted or getattr(ws, "unaccepted", True) is False:
+        """Roll back unless an accepted router session owns cleanup."""
+        was_accepted = is_accepted or getattr(ws, "unaccepted", True) is False
+        # The compatibility router returns after setup without a session owner.
+        if self.has_router_session and was_accepted:
             return
-        interruption = await self._rollback_connection(session.conn_id)
+        try:
+            interruption = await self._rollback_connection(session.conn_id)
+        # Backends can fail removal for any ordinary reason; retain that error.
+        except Exception as removal_error:  # ruff: ignore[blind-except] - retain both
+            if isinstance(error, Exception):
+                raise ExceptionGroup("rollback", [error, removal_error]) from None
+            error.add_note(f"Connection rollback also failed: {removal_error!r}")
+            return
         if interruption is not None and not isinstance(error, asyncio.CancelledError):
             raise interruption from error
 
@@ -287,7 +296,16 @@ class TaskStreamResource(WebSocketResource):
             except asyncio.CancelledError as exc:
                 if interruption is None:
                     interruption = exc
-        removal.result()
+            except Exception as removal_error:
+                if interruption is not None:
+                    raise interruption from removal_error
+                raise
+        try:
+            removal.result()
+        except Exception as removal_error:
+            if interruption is not None:
+                raise interruption from removal_error
+            raise
         self._conn_id = None
         return interruption
 

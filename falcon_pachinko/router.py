@@ -318,8 +318,8 @@ class WebSocketRouter:
         Falcon passes parameters captured by its path converter as keyword
         arguments. They are ignored because the router re-matches ``req.path``
         against its own route table, preserving nested-resource and hook
-        parameter handling. The selected Falcon template may be either the
-        mount itself or its descendant catch-all route.
+        parameter handling. The selected Falcon template may be the mount
+        itself or its normalized descendant catch-all route.
 
         Raises
         ------
@@ -337,12 +337,7 @@ class WebSocketRouter:
         """Reject Falcon templates that are outside this router's mount."""
         template = _request_path_template(req).rstrip("/") or "/"
         mount = self._mount_prefix.rstrip("/") or "/"
-        descendant = (
-            "/{pachinko_path:path}"
-            if mount == "/"
-            else f"{mount}/{{pachinko_path:path}}"
-        )
-        if template not in {mount, descendant}:
+        if template != mount:
             msg = f"route template '{template}' does not match router mount '{mount}'"
             raise falcon.HTTPNotFound(description=msg)
 

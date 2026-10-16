@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import typing as typ
 
 import falcon
 import pytest
 
-from falcon_pachinko._session_socket import receive_frame
-from falcon_pachinko.hooks import HookEvent
+from falcon_pachinko._session import SessionState
+from falcon_pachinko._session_socket import SessionWebSocket, receive_frame
+from falcon_pachinko.hooks import HookCollection, HookEvent, HookManager
 from falcon_pachinko.resource import WebSocketResource
 from falcon_pachinko.router import WebSocketRouter
 from falcon_pachinko.unittests._session_fixtures import (
@@ -111,6 +113,49 @@ async def test_close_during_receive_skips_later_receive_hooks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_close_guard_overrides_wrapped_is_closed_probe() -> None:
+    """A pending transport close blocks receive hooks before it completes."""
+
+    class ClosePendingSocket(SessionSocket):
+        def __init__(self) -> None:
+            super().__init__(b'{"type":"too-late"}')
+            self.close_started = asyncio.Event()
+            self.finish_close = asyncio.Event()
+
+        @property
+        def is_closed(self) -> bool:
+            return self.closed
+
+        async def close(self, code: int = 1000) -> None:
+            self.close_started.set()
+            await self.finish_close.wait()
+            await super().close(code)
+
+    session = SessionState()
+    session.establish()
+    resource = RecordingResource()
+    hook_manager = HookManager(
+        global_hooks=HookCollection(),
+        resources=[resource],
+    )
+    hook_manager.bind_session(session)
+    socket = ClosePendingSocket()
+    websocket = SessionWebSocket(typ.cast("typ.Any", socket), session)
+    close_task = asyncio.create_task(websocket.close(4001))
+
+    await asyncio.wait_for(socket.close_started.wait(), timeout=1)
+    transport_still_open = not socket.is_closed
+    receive_still_allowed = hook_manager.can_receive(typ.cast("typ.Any", websocket))
+    socket.finish_close.set()
+    await asyncio.wait_for(close_task, timeout=1)
+
+    assert transport_still_open, "the transport close must still be pending"
+    assert not receive_still_allowed, (
+        "receive eligibility must stop when the wrapper begins closing"
+    )
+
+
+@pytest.mark.asyncio
 async def test_handler_close_skips_after_receive_hooks() -> None:
     """A handler close prevents after-receive hooks from starting."""
     events: list[str] = []
@@ -208,7 +253,8 @@ async def test_receive_adapter_preserves_frames_and_encodes_other_media() -> Non
 @pytest.mark.asyncio
 async def test_path_converter_mount_and_uri_parameter_are_accepted() -> None:
     """Falcon's catch-all descendant route preserves the mounted router path."""
-    router = WebSocketRouter()
+    RecordingResource.instances.clear()
+    router = WebSocketRouter(receive_loop=True)
     router.add_route("/rooms/{room}", RecordingResource)
     router.mount("/ws")
     socket = SessionSocket(falcon.WebSocketDisconnected(4000))
@@ -222,4 +268,7 @@ async def test_path_converter_mount_and_uri_parameter_are_accepted() -> None:
         pachinko_path="rooms/blue",
     )
 
-    assert RecordingResource.instances[0].disconnect_codes == [4000], _ASSERTION_FAILURE
+    assert len(RecordingResource.instances) == 1, _ASSERTION_FAILURE
+    assert RecordingResource.instances[-1].disconnect_codes == [4000], (
+        _ASSERTION_FAILURE
+    )

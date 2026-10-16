@@ -396,15 +396,21 @@ logic.
     sends from `on_connect()` must first call `await ws.accept()`.
 
   - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: With
-    `WebSocketRouter(receive_loop=True)`, after `on_connect` permits the
-    session, the router attempts this callback once, including failure in
-    `after_connect` or `accept`. `close_code` is the peer's code or 1006 when
-    missing or setup fails. Cancellation before cleanup starts closes with
-    1001 and propagates; cancellation during an in-progress peer-close callback
-    does not retry it or replace its peer code, although the socket closes with
-    1001. Unexpected receive or handler failures close with 1011 and propagate.
-    Rejected negotiations and failed `on_connect` calls do not call it. With
-    the default `receive_loop=False`, the application owns session cleanup.
+    `WebSocketRouter(receive_loop=True)`, a truthy `on_connect` result or
+    resource-owned acceptance establishes the exactly-once cleanup promise.
+    The callback also runs if accepted setup later fails, including when
+    `on_connect` accepts and then raises. A falsey result on a socket that
+    remains unaccepted rejects the negotiation without post-accept cleanup;
+    setup that fails before approval or acceptance must roll back its own
+    partial registrations. Falcon's close code is passed through when
+    available, with `1006` for transport loss without a code, `1001` for task
+    cancellation, and `1011` for unexpected setup, receive, or handler failure.
+    Cleanup runs in a shielded task and calls this callback even if a
+    before-disconnect hook fails. Ordinary failures are grouped with the
+    primary session failure first; cancellation remains a bare
+    `CancelledError`, and suppressed failures are sent to the loop exception
+    handler. With the default `receive_loop=False`, the application owns
+    reception and session cleanup.
 
   - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str,
     bytes])`

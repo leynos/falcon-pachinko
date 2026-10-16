@@ -147,11 +147,24 @@ router.attach(app, "/ws")
 - Set `receive_loop=True` for router-owned, ordered frame reception and
   dispatch. Its default is `False`, which returns after acceptance and leaves
   receives and cleanup to the application.
-- `on_disconnect(ws, close_code)` is attempted once after successful
-  `on_connect` only when `receive_loop=True`, including setup failure in
-  `after_connect` or `accept`. Missing peer codes and acceptance setup failures
-  use `1006`; cancellation closes with `1001`, and unexpected receive or
-  handler failures close with `1011` and propagate.
+- With `receive_loop=True`, a truthy `on_connect` result or an accepted socket
+  establishes the exactly-once `on_disconnect(ws, close_code)` cleanup promise.
+  The router owns reception through disconnect; remove any application-owned
+  receive loop and cleanup for those connections. A falsey result on a socket
+  that remains unaccepted rejects the handshake without post-accept cleanup.
+- If `on_connect` accepts the socket and then fails, or setup fails after
+  approval, the router still runs cleanup. Roll back registrations made before
+  approval or acceptance inside `on_connect`; after the promise begins, use
+  `on_disconnect` to remove connection-manager membership.
+- `HookManager.notify_before_disconnect` changed from
+  `(target, *, ws, close_code) -> HookContext` to
+  `(context: HookContext) -> None`. Construct and pass a `HookContext` before
+  calling it; see [Hooks](users-guide.md#5-hooks) in the User Guide.
+- Falcon's peer close code is passed through when available; a transport ending
+  without a code uses `1006`. Cancellation selects `1001`; unexpected setup,
+  receive, or handler failures select `1011` and propagate. Cleanup still runs
+  if a before-disconnect hook fails, and ordinary primary and cleanup failures
+  are grouped with the session failure first.
 
 `router.attach()` also enables raw TEXT and BINARY input for all WebSocket
 routes on the app, preserving its outgoing serializers. For manually mounted
@@ -178,14 +191,12 @@ remove application-owned receive loops and direct calls to
 when sending a frame from that hook. Keep message handling in resource handlers
 and `on_unhandled`; frames are dispatched sequentially, and returning normally
 from `on_unhandled` keeps the session open. The router runs `before_disconnect`
-before attempting `on_disconnect` once. A missing peer close code or failure
-during `after_connect` or `accept` uses `1006` for cleanup. Cancellation before
-disconnect cleanup starts closes with `1001` and propagates. If cancellation
-interrupts a peer-disconnect callback already in progress, it is not retried
-and retains the peer code, while the socket closes with `1001`. Unexpected
-receive or handler failures close with `1011` and propagate the original
-exception. The default `receive_loop=False` returns after acceptance, leaving
-frame reception and cleanup to the application.
+before attempting `on_disconnect` once. The close-code and failure-precedence
+rules above apply to setup, receive, handler, and cancellation endings; the
+complete table is in the
+[User Guide](users-guide.md#disconnect-and-cleanup-contract). The default
+`receive_loop=False` returns after acceptance, leaving frame reception and
+cleanup to the application.
 
 1) **Wire dependency injection via `resource_factory`:**
 

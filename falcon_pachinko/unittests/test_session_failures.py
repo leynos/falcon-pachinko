@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import typing as typ
 
 import falcon
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
+from falcon_pachinko._session_cleanup import raise_session_failures
 from falcon_pachinko.hooks import HookEvent
 from falcon_pachinko.unittests._session_fixtures import (
     RecordingResource,
@@ -17,6 +21,37 @@ from falcon_pachinko.unittests._session_fixtures import (
 )
 
 _ASSERTION_FAILURE = "lifecycle expectation failed"
+_ORDINARY_FAILURE_TYPES = (ValueError, RuntimeError, LookupError)
+
+
+@given(
+    primary_type=st.one_of(st.none(), st.sampled_from(_ORDINARY_FAILURE_TYPES)),
+    cleanup_types=st.lists(st.sampled_from(_ORDINARY_FAILURE_TYPES), max_size=3),
+)
+def test_generated_ordinary_failures_preserve_primary_first_order(
+    primary_type: type[Exception] | None,
+    cleanup_types: list[type[Exception]],
+) -> None:
+    """Generated ordinary failures keep identity and primary-first precedence."""
+    primary = primary_type("primary") if primary_type is not None else None
+    cleanup_failures = tuple(
+        failure_type(f"cleanup-{index}")
+        for index, failure_type in enumerate(cleanup_types)
+    )
+    expected = ((primary,) if primary is not None else ()) + cleanup_failures
+
+    if not expected:
+        raise_session_failures(None, (), ())
+        return
+
+    if len(expected) == 1:
+        with pytest.raises(type(expected[0])) as raised:
+            raise_session_failures(primary, cleanup_failures, ())
+        assert raised.value is expected[0], _ASSERTION_FAILURE
+    else:
+        with pytest.raises(ExceptionGroup) as raised:
+            raise_session_failures(primary, cleanup_failures, ())
+        assert raised.value.exceptions == expected, _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio
@@ -97,10 +132,13 @@ async def test_after_connect_cancellation_reports_original_setup_failure() -> No
 
 
 @pytest.mark.asyncio
-async def test_session_and_disconnect_failures_are_grouped_primary_first() -> None:
+async def test_session_and_disconnect_failures_are_grouped_primary_first(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Disconnect failures are visible after the original handler failure."""
-    primary = RuntimeError("handler failed")
-    cleanup = LookupError("disconnect failed")
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
+    primary = RuntimeError("CANARY-handler-secret")
+    cleanup = LookupError("CANARY-cleanup-secret")
 
     class FailingResource(RecordingResource):
         async def dispatch(self, ws: object, raw: str | bytes) -> None:
@@ -112,7 +150,7 @@ async def test_session_and_disconnect_failures_are_grouped_primary_first() -> No
             raise cleanup
 
     router = make_session_router(FailingResource)
-    socket = SessionSocket(b'{"type":"boom"}')
+    socket = SessionSocket(b"CANARY-frame-secret")
 
     with pytest.raises(ExceptionGroup) as error:
         await router.on_websocket(
@@ -122,6 +160,28 @@ async def test_session_and_disconnect_failures_are_grouped_primary_first() -> No
     assert error.value.exceptions == (primary, cleanup), _ASSERTION_FAILURE
     assert FailingResource.instances[0].disconnect_codes == [1011], _ASSERTION_FAILURE
     assert socket.close_codes == [1011], _ASSERTION_FAILURE
+    observations = [
+        record
+        for record in caplog.records
+        if record.name == "falcon_pachinko._session_driver"
+    ]
+    cleanup_observations = [
+        record
+        for record in observations
+        if getattr(record, "operation", None) == "cleanup"
+    ]
+    cleanup_observation = cleanup_observations[-1]
+    session_observation = observations[-1]
+    assert getattr(cleanup_observation, "outcome", None) == "failed", _ASSERTION_FAILURE
+    assert getattr(cleanup_observation, "close_code", None) == 1011, _ASSERTION_FAILURE
+    assert getattr(cleanup_observation, "cleanup_failure_types", None) == (
+        "LookupError",
+    ), _ASSERTION_FAILURE
+    assert getattr(session_observation, "outcome", None) == "failed", _ASSERTION_FAILURE
+    assert getattr(session_observation, "exception_type", None) == "ExceptionGroup", (
+        _ASSERTION_FAILURE
+    )
+    assert "CANARY" not in caplog.text, "observations must omit exception values"
 
 
 @pytest.mark.asyncio

@@ -51,12 +51,13 @@ def _request_path_template(req: _RequestLike) -> str:
     """Return Falcon's selected route template, with a legacy fallback."""
     template = getattr(req, "uri_template", None)
     if not template:
-        template = getattr(req, "path_template", "")
+        template = getattr(req, "path_template", None) or ""
 
-    # Falcon reports the descendant route template, so compare its mount
-    # identity rather than the request-specific catch-all segment.
-    match = re.fullmatch(r"(?P<prefix>.*)/\{[A-Za-z_]\w*:path\}", template)
-    return match.group("prefix") or "/" if match is not None else template
+    # Only the router's own catch-all route represents a descendant mount.
+    match = re.fullmatch(r"(?P<prefix>.*)/\{pachinko_path:path\}", template)
+    if match is None:
+        return template
+    return match.group("prefix") or "/"
 
 
 def _normalize_path(path: str) -> str:

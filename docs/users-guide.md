@@ -122,6 +122,14 @@ resource and its hooks.
     must roll back its own partial setup. With the default `receive_loop=False`,
     the application owns reception and cleanup.
 
+`resource.has_router_session` reports whether the receive-loop driver owns this
+resource, from connection setup through cleanup. It remains true while the
+session is connecting so setup code can defer rollback after an acceptance
+failure; it does not itself establish the cleanup promise. That promise begins
+only after `on_connect` approves or the socket is accepted. The property is
+false when the default setup-only router mode leaves reception to the
+application.
+
 ### Disconnect and cleanup contract
 
 The disconnect callback receives Falcon's effective close code when one is
@@ -380,6 +388,30 @@ values, so omission remains the default security boundary.
 - Execution order is onion-style: global → parent → child → handler → child →
   parent → global.
 - Raise from a `before_*` hook to terminate negotiation early.
+
+`HookManager.notify_before_disconnect` now accepts a `HookContext` and returns
+`None`. Earlier versions accepted the target resource plus keyword-only `ws` and
+`close_code` arguments, and returned the context. Migrate callers by
+constructing the context first; keep that object if the caller needs to inspect
+it after notification:
+
+```python
+from falcon_pachinko import HookContext
+
+context = HookContext(
+    event="before_disconnect",
+    target=resource,
+    resource=None,
+    ws=ws,
+    close_code=close_code,
+    error=error,
+)
+await hook_manager.notify_before_disconnect(context)
+```
+
+The context carries the disconnect event data, including the effective close
+code and any primary session error. The method mutates the supplied context
+while hooks run and has no return value.
 
 ## 6. Dependency Injection (How-to)
 

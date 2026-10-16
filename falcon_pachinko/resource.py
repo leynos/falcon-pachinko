@@ -25,6 +25,7 @@ if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints
 
     from .protocols import WebSocketLike
 
+from ._session import SessionPhase
 from .dispatcher import dispatch
 from .exceptions import ReservedHandlerRegistrationError
 from .handlers import (
@@ -68,6 +69,18 @@ class WebSocketResource:
     def bind_hook_manager(self, manager: HookManager) -> None:
         """Associate ``manager`` with this resource instance."""
         self._hook_manager = manager
+
+    @property
+    def has_router_session(self) -> bool:
+        """Whether a router receive session currently owns this resource.
+
+        This is true from connection setup through disconnect cleanup, including
+        while the session is still connecting. The cleanup promise itself begins
+        only after ``on_connect`` approves or the resource accepts the socket.
+        """
+        manager = getattr(self, "_hook_manager", None)
+        session = manager.session if manager is not None else None
+        return session is not None and session.phase is not SessionPhase.CLOSED
 
     def bind_default_hook_manager(self) -> HookManager:
         """Bind a standalone manager for direct resource usage."""

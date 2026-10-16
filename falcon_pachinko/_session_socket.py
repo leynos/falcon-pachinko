@@ -48,6 +48,11 @@ class SessionWebSocket:
         """Block new receives as soon as a close operation begins."""
         return self._closing or bool(getattr(self._websocket, "closed", False))
 
+    @property
+    def is_closed(self) -> bool:
+        """Guard receive dispatch while the transport close is still pending."""
+        return self.closed
+
     def __getattr__(self, name: str) -> object:
         """Preserve the transport's additional public methods and attributes."""
         return getattr(self._websocket, name)

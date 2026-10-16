@@ -6,6 +6,7 @@ import asyncio
 import signal
 import typing as typ
 from contextlib import suppress
+from types import SimpleNamespace
 
 import pytest
 import uvicorn
@@ -138,6 +139,104 @@ async def test_readiness_rejects_listener_that_exits_before_starting() -> None:
             )
     finally:
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_stop_preserves_serve_failure_when_session_join_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cleanup join timeout must not replace the original serve failure."""
+    failure = RuntimeError("serve loop failed")
+
+    async def fail_serve() -> None:
+        await asyncio.sleep(0)
+        raise failure
+
+    serve_task = asyncio.create_task(fail_serve())
+    await asyncio.gather(serve_task, return_exceptions=True)
+    pending_session = asyncio.create_task(asyncio.Event().wait())
+    fake_server = typ.cast(
+        "Server",
+        SimpleNamespace(
+            should_exit=False,
+            server_state=SimpleNamespace(tasks={pending_session}),
+        ),
+    )
+    monkeypatch.setattr(_live_server, "_SESSION_TASK_JOIN_TIMEOUT", 0.01)
+    loop = asyncio.get_running_loop()
+    previous_handler = typ.cast(
+        "_live_server._LoopExceptionHandler | None", loop.get_exception_handler()
+    )
+    transport = _live_server.LiveServerTransport(
+        server=fake_server,
+        serve_task=serve_task,
+        loop=loop,
+        port=0,
+        loop_errors=[],
+        _previous_exception_handler=previous_handler,
+    )
+    try:
+        with pytest.raises(RuntimeError, match="serve loop failed") as raised:
+            await asyncio.wait_for(transport.stop(), timeout=1)
+        assert raised.value is failure, "stop must preserve the original server error"
+        assert pending_session.cancelled(), "the timed-out join must cancel its tasks"
+        assert loop.get_exception_handler() is previous_handler, (
+            "stop must restore the original loop exception handler"
+        )
+    finally:
+        if not pending_session.done():
+            pending_session.cancel()
+        await asyncio.gather(pending_session, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_stop_reports_session_join_timeout_inside_caller_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An outer handled error must not hide a failed session-task join."""
+    serve_task = asyncio.create_task(asyncio.sleep(0))
+    await serve_task
+    pending_session = asyncio.create_task(asyncio.Event().wait())
+    fake_server = typ.cast(
+        "Server",
+        SimpleNamespace(
+            should_exit=False,
+            server_state=SimpleNamespace(tasks={pending_session}),
+        ),
+    )
+    monkeypatch.setattr(_live_server, "_SESSION_TASK_JOIN_TIMEOUT", 0.01)
+    loop = asyncio.get_running_loop()
+    previous_handler = typ.cast(
+        "_live_server._LoopExceptionHandler | None", loop.get_exception_handler()
+    )
+    transport = _live_server.LiveServerTransport(
+        server=fake_server,
+        serve_task=serve_task,
+        loop=loop,
+        port=0,
+        loop_errors=[],
+        _previous_exception_handler=previous_handler,
+    )
+
+    caller_failure = ValueError()
+
+    def raise_caller_failure() -> None:
+        raise caller_failure
+
+    try:
+        try:
+            raise_caller_failure()
+        except ValueError:
+            with pytest.raises(TimeoutError):
+                await transport.stop()
+        assert pending_session.cancelled(), "a timed-out join must cancel its tasks"
+        assert loop.get_exception_handler() is previous_handler, (
+            "stop must restore the original loop exception handler"
+        )
+    finally:
+        if not pending_session.done():
+            pending_session.cancel()
+        await asyncio.gather(pending_session, return_exceptions=True)
 
 
 @pytest.mark.asyncio

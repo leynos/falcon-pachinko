@@ -47,7 +47,8 @@ the entire lifecycle:
 The state moves through `CONNECTING`, `ESTABLISHED`, `DISCONNECTING`, and
 `CLOSED`. A falsey `on_connect` result on a never-accepted socket is a
 rejection. If setup fails after approval or acceptance, the receive loop is
-skipped when the socket was not accepted, but disconnect cleanup still runs. An
+skipped and disconnect cleanup still runs. If approval succeeds but the socket
+is never accepted, the driver skips reception and cleans up with `1011`. An
 `on_connect` failure before approval or acceptance is outside the cleanup
 promise; resources must roll back partial registrations from that failure.
 
@@ -547,6 +548,16 @@ ownership with the test runner.
 Cleanup reports preserve the original application exception object when they
 call the loop exception handler. This keeps failures visible without replacing
 them with type-only summaries.
+
+Router-owned sessions also emit bounded DEBUG observations for session, setup,
+acceptance, receive, and cleanup. Records include the lifecycle phase,
+effective close code when known, elapsed time, resource type, and exception
+categories; they omit route parameters, frame contents, and exception messages.
+Cleanup failures reported through the loop exception handler carry the
+operation, closed phase, effective close code, and exception type while
+retaining the original exception object for the handler. These events support
+application log-to-metric or tracing adapters without adding a metrics API to
+the router.
 
 ## Lint and Typecheck Toolchain
 
