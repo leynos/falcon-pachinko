@@ -7,7 +7,14 @@ import contextlib
 import dataclasses as dc
 import typing as typ
 
-from ._session import ABNORMAL_CLOSURE, GOING_AWAY, INTERNAL_ERROR, SessionState
+from ._session import (
+    ABNORMAL_CLOSURE,
+    GOING_AWAY,
+    INTERNAL_ERROR,
+    MAX_CLOSE_CODE,
+    SessionState,
+)
+from .diagnostics import _type_name
 from .hooks import HookContext, HookEvent
 
 if typ.TYPE_CHECKING:
@@ -183,13 +190,15 @@ def raise_session_failures(
     primary_error: BaseException | None,
     cleanup_failures: tuple[BaseException, ...],
     interruptions: tuple[asyncio.CancelledError, ...],
+    *,
+    session: SessionState | None = None,
 ) -> None:
     """Apply primary-first exception precedence after cleanup has completed."""
     cancellation = _session_cancellation(primary_error, cleanup_failures, interruptions)
     if cancellation is not None:
-        _raise_cancelled_session(primary_error, cleanup_failures, cancellation)
+        _raise_cancelled_session(primary_error, cleanup_failures, cancellation, session)
     failures = _combined_session_failures(primary_error, cleanup_failures)
-    _raise_session_failure_group(primary_error, cleanup_failures, failures)
+    _raise_session_failure_group(primary_error, cleanup_failures, failures, session)
 
 
 def _combined_session_failures(
@@ -205,9 +214,12 @@ def _raise_cancelled_session(
     primary_error: BaseException | None,
     cleanup_failures: tuple[BaseException, ...],
     cancellation: asyncio.CancelledError,
+    session: SessionState | None,
 ) -> typ.NoReturn:
     """Keep cancellation bare and report failures hidden by its precedence."""
-    _report_cancelled_session_failures(primary_error, cleanup_failures, cancellation)
+    _report_cancelled_session_failures(
+        primary_error, cleanup_failures, cancellation, session
+    )
     raise cancellation
 
 
@@ -215,26 +227,28 @@ def _raise_session_failure_group(
     primary_error: BaseException | None,
     cleanup_failures: tuple[BaseException, ...],
     failures: list[BaseException],
+    session: SessionState | None,
 ) -> None:
     """Raise one failure unchanged or group the ordered failure set."""
     if not failures:
         return
     if len(failures) == 1:
         raise failures[0]
-    _raise_multiple_session_failures(primary_error, cleanup_failures, failures)
+    _raise_multiple_session_failures(primary_error, cleanup_failures, failures, session)
 
 
 def _raise_multiple_session_failures(
     primary_error: BaseException | None,
     cleanup_failures: tuple[BaseException, ...],
     failures: list[BaseException],
+    session: SessionState | None,
 ) -> typ.NoReturn:
     """Use the narrowest exception group that preserves session precedence."""
     if _are_ordinary_failures(failures):
         exceptions = [typ.cast("Exception", failure) for failure in failures]
         raise ExceptionGroup("session", exceptions)
     if _preserves_primary_base_exception(primary_error):
-        _report_base_exception_cleanup_failures(cleanup_failures)
+        _report_base_exception_cleanup_failures(cleanup_failures, session)
         raise typ.cast("BaseException", primary_error)
     raise BaseExceptionGroup("session", failures)
 
@@ -253,11 +267,12 @@ def _preserves_primary_base_exception(
 
 def _report_base_exception_cleanup_failures(
     cleanup_failures: tuple[BaseException, ...],
+    session: SessionState | None,
 ) -> None:
     """Report cleanup failures when a non-ordinary primary must stay bare."""
     message = "WebSocket disconnect cleanup failed after a base exception"
     for failure in cleanup_failures:
-        _report_cleanup_failure(failure, message)
+        _report_cleanup_failure(failure, message, session)
 
 
 def _session_cancellation(
@@ -278,27 +293,49 @@ def _report_cancelled_session_failures(
     primary_error: BaseException | None,
     cleanup_failures: tuple[BaseException, ...],
     cancellation: asyncio.CancelledError,
+    session: SessionState | None,
 ) -> None:
     """Report failures hidden by cancellation through the running loop."""
     if primary_error is not None and primary_error is not cancellation:
         _report_cleanup_failure(
             primary_error,
             "A WebSocket session failure was superseded by cancellation",
+            session,
         )
     for failure in cleanup_failures:
         if not isinstance(failure, asyncio.CancelledError):
             _report_cleanup_failure(
                 failure,
                 "WebSocket disconnect cleanup failed during cancellation",
+                session,
             )
 
 
-def _report_cleanup_failure(error: BaseException, message: str) -> None:
+def _report_cleanup_failure(
+    error: BaseException, message: str, session: SessionState | None
+) -> None:
     """Report failures that cannot be grouped with a bare cancellation."""
     # Preserve application exception objects for both custom and default loop
     # handlers: type-only logging would lose failures hidden by bare cancellation.
     with contextlib.suppress(Exception):
-        asyncio.get_running_loop().call_exception_handler({
-            "message": message,
-            "exception": error,
-        })
+        details: dict[str, object] = {"message": message, "exception": error}
+        if session is not None:
+            details.update({
+                "operation": "cleanup",
+                "phase": session.phase.value,
+                "close_code": _safe_close_code(session.close_code),
+                "exception_type": _type_name(error),
+            })
+            message = (
+                f"{message} (phase={session.phase.value}, "
+                f"close_code={_safe_close_code(session.close_code)})"
+            )
+            details["message"] = message
+        asyncio.get_running_loop().call_exception_handler(details)
+
+
+def _safe_close_code(close_code: int | None) -> int | None:
+    """Keep loop-handler metadata within the WebSocket code range."""
+    if type(close_code) is int and 0 <= close_code <= MAX_CLOSE_CODE:
+        return close_code
+    return None

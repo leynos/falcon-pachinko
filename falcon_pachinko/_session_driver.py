@@ -8,15 +8,23 @@ hook manager, while shielded cleanup preserves failure and cancellation policy.
 from __future__ import annotations
 
 import abc
+import asyncio
 import contextlib
 import dataclasses as dc
 import logging
+import time
 import typing as typ
 
 import falcon
 
 from ._disconnect import _PeerDisconnectedError
-from ._session import ABNORMAL_CLOSURE, INTERNAL_ERROR, SessionPhase, SessionState
+from ._session import (
+    ABNORMAL_CLOSURE,
+    INTERNAL_ERROR,
+    MAX_CLOSE_CODE,
+    SessionPhase,
+    SessionState,
+)
 from ._session_cleanup import (
     CleanupContext,
     raise_session_failures,
@@ -34,6 +42,21 @@ if typ.TYPE_CHECKING:
     from .resource import WebSocketResource
 
 logger = logging.getLogger(__name__)
+_OBSERVATION_OPERATIONS = frozenset({
+    "session",
+    "setup",
+    "acceptance",
+    "receive",
+    "cleanup",
+})
+_OBSERVATION_OUTCOMES = frozenset({
+    "started",
+    "completed",
+    "rejected",
+    "failed",
+    "cancelled",
+})
+_MAX_CLEANUP_FAILURE_TYPES = 3
 
 
 class SessionRouteMatch(typ.Protocol):
@@ -70,6 +93,61 @@ class _SessionExecution:
     primary_error: BaseException | None = None
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _SessionObservation:
+    """Keep bounded event metadata together at the logging boundary."""
+
+    operation: str
+    outcome: str
+    started: float
+    error: BaseException | None = None
+    cleanup_failures: tuple[BaseException, ...] = ()
+
+
+def _log_session_observation(
+    execution: _SessionExecution,
+    observation: _SessionObservation,
+) -> None:
+    """Emit bounded lifecycle metadata without reflecting caller values."""
+    operation = observation.operation
+    operation = operation if operation in _OBSERVATION_OPERATIONS else "other"
+    outcome = observation.outcome
+    outcome = outcome if outcome in _OBSERVATION_OUTCOMES else "other"
+    failure_types = tuple(
+        _type_name(failure)
+        for failure in observation.cleanup_failures[:_MAX_CLEANUP_FAILURE_TYPES]
+    )
+    close_code = execution.session.close_code
+    if type(close_code) is not int or not 0 <= close_code <= MAX_CLOSE_CODE:
+        close_code = None
+    logger.debug(
+        "WebSocket session observation",
+        extra={
+            "operation": operation,
+            "outcome": outcome,
+            "phase": execution.session.phase.value,
+            "close_code": close_code,
+            "duration_seconds": max(0.0, time.monotonic() - observation.started),
+            "resource_type": _type_name(execution.resource),
+            "exception_type": (
+                _type_name(observation.error) if observation.error is not None else None
+            ),
+            "primary_exception_type": (
+                _type_name(execution.primary_error)
+                if execution.primary_error is not None
+                else None
+            ),
+            "cleanup_failure_count": min(
+                len(observation.cleanup_failures), _MAX_CLEANUP_FAILURE_TYPES
+            ),
+            "cleanup_failures_truncated": (
+                len(observation.cleanup_failures) > _MAX_CLEANUP_FAILURE_TYPES
+            ),
+            "cleanup_failure_types": failure_types,
+        },
+    )
+
+
 async def run_session(
     resource: WebSocketResource,
     dispatch: SessionDispatch,
@@ -81,15 +159,26 @@ async def run_session(
     dispatch.session = execution.session
     dispatch.ws = track_session_socket(dispatch.ws, execution.session)
     hook_manager.bind_session(execution.session)
-    await _run_setup_and_receive(execution)
+    started = time.monotonic()
+    _log_session_observation(
+        execution, _SessionObservation("session", "started", started)
+    )
+    try:
+        await _run_setup_and_receive(execution)
 
-    if isinstance(execution.primary_error, Exception):
-        logger.error(
-            "WebSocket session failed: %s", _type_name(execution.primary_error)
-        )
-
-    if execution.session.phase is SessionPhase.ESTABLISHED:
-        await _finish_established_session(execution)
+        if execution.session.phase is SessionPhase.ESTABLISHED:
+            await _finish_established_session(execution)
+    except BaseException as exc:
+        _log_session_failure(execution, "session", started, exc)
+        raise
+    outcome = (
+        "rejected"
+        if execution.session.phase is SessionPhase.CONNECTING
+        else "completed"
+    )
+    _log_session_observation(
+        execution, _SessionObservation("session", outcome, started)
+    )
 
     return True
 
@@ -97,11 +186,21 @@ async def run_session(
 async def _run_setup_and_receive(
     execution: _SessionExecution,
 ) -> None:
-    """Run ordered setup and receive work, recording only established failures."""
+    """Run setup first, then receive only while the accepted session is live."""
+    if await _run_setup(execution) and execution.session.can_receive:
+        await _run_receive(execution)
+
+
+async def _run_setup(execution: _SessionExecution) -> bool:
+    """Run ordered setup and report whether receive processing may follow."""
     resource = execution.resource
     dispatch = execution.dispatch
     session = execution.session
     hook_manager = execution.hook_manager
+    setup_started = time.monotonic()
+    _log_session_observation(
+        execution, _SessionObservation("setup", "started", setup_started)
+    )
     try:
         setup = ConnectionSetup(
             hook_manager=hook_manager,
@@ -116,20 +215,100 @@ async def _run_setup_and_receive(
         execution.context = await setup.prepare()
         await setup.execute()
         await setup.finalize()
-        if session.can_receive:
-            await _receive_session(resource, dispatch, session, hook_manager)
-    except BaseException as exc:
-        _establish_after_resource_acceptance(session, dispatch.ws)
         if session.phase is SessionPhase.ESTABLISHED:
-            execution.primary_error = _record_session_ending(session, exc)
+            _log_session_observation(
+                execution,
+                _SessionObservation("acceptance", "completed", time.monotonic()),
+            )
+        setup_outcome = (
+            "rejected" if session.phase is SessionPhase.CONNECTING else "completed"
+        )
+        _log_session_observation(
+            execution, _SessionObservation("setup", setup_outcome, setup_started)
+        )
+    except BaseException as exc:
+        was_connecting = session.phase is SessionPhase.CONNECTING
+        _establish_after_resource_acceptance(session, dispatch.ws)
+        if was_connecting and session.phase is SessionPhase.ESTABLISHED:
+            _log_session_observation(
+                execution,
+                _SessionObservation("acceptance", "completed", time.monotonic()),
+            )
+        if session.phase is SessionPhase.ESTABLISHED:
+            _record_and_log_session_ending(execution, "setup", setup_started, exc)
+            return False
+        _log_session_failure(execution, "setup", setup_started, exc)
+        raise
+
+    return True
+
+
+async def _run_receive(execution: _SessionExecution) -> None:
+    """Drive receive processing and record its established-session ending."""
+    receive_started = time.monotonic()
+    _log_session_observation(
+        execution, _SessionObservation("receive", "started", receive_started)
+    )
+    try:
+        await _receive_session(
+            execution.resource,
+            execution.dispatch,
+            execution.session,
+            execution.hook_manager,
+        )
+    except BaseException as exc:
+        session_remains_established = _record_and_log_session_ending(
+            execution, "receive", receive_started, exc
+        )
+        if session_remains_established:
             return
         raise
+    _log_session_observation(
+        execution, _SessionObservation("receive", "completed", receive_started)
+    )
+
+
+def _log_session_failure(
+    execution: _SessionExecution,
+    operation: str,
+    started: float,
+    error: BaseException,
+) -> None:
+    """Keep failure observations consistent before their original re-raise."""
+    outcome = "cancelled" if isinstance(error, asyncio.CancelledError) else "failed"
+    _log_session_observation(
+        execution, _SessionObservation(operation, outcome, started, error=error)
+    )
+
+
+def _record_and_log_session_ending(
+    execution: _SessionExecution,
+    operation: str,
+    started: float,
+    error: BaseException,
+) -> bool:
+    """Record an established session's ending and report its effective outcome."""
+    execution.primary_error = _record_session_ending(execution.session, error)
+    outcome = (
+        "completed"
+        if execution.primary_error is None
+        else (
+            "cancelled"
+            if isinstance(execution.primary_error, asyncio.CancelledError)
+            else "failed"
+        )
+    )
+    _log_session_observation(
+        execution,
+        _SessionObservation(operation, outcome, started, error=execution.primary_error),
+    )
+    return execution.session.phase is SessionPhase.ESTABLISHED
 
 
 def _establish_after_resource_acceptance(
     session: SessionState, ws: WebSocketLike
 ) -> None:
-    """Honor resource-owned acceptance even when its setup then fails."""
+    """Honour resource-owned acceptance even when its setup then fails."""
     if session.phase is SessionPhase.CONNECTING and _is_websocket_accepted(ws):
         session.establish()
 
@@ -153,8 +332,30 @@ async def _finish_established_session(
         params=dict(params),
         primary_error=execution.primary_error,
     )
+    cleanup_started = time.monotonic()
+    _log_session_observation(
+        execution, _SessionObservation("cleanup", "started", cleanup_started)
+    )
     cleanup_failures, interrupted = await run_shielded_cleanup(cleanup_context)
-    raise_session_failures(execution.primary_error, cleanup_failures, interrupted)
+    cleanup_outcome = (
+        "failed" if cleanup_failures else "cancelled" if interrupted else "completed"
+    )
+    _log_session_observation(
+        execution,
+        _SessionObservation(
+            "cleanup",
+            cleanup_outcome,
+            cleanup_started,
+            error=cleanup_failures[0] if cleanup_failures else None,
+            cleanup_failures=cleanup_failures,
+        ),
+    )
+    raise_session_failures(
+        execution.primary_error,
+        cleanup_failures,
+        interrupted,
+        session=execution.session,
+    )
 
 
 async def _receive_session(

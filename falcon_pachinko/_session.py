@@ -8,6 +8,7 @@ import enum
 GOING_AWAY = 1001
 ABNORMAL_CLOSURE = 1006
 INTERNAL_ERROR = 1011
+MAX_CLOSE_CODE = 65535
 
 
 class SessionPhase(enum.StrEnum):

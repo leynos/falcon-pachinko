@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import typing as typ
 
 import falcon
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
-from falcon_pachinko.hooks import HookEvent
+from falcon_pachinko import WebSocketResource
+from falcon_pachinko._session import SessionPhase, SessionState
+from falcon_pachinko.hooks import HookCollection, HookEvent, HookManager
 from falcon_pachinko.unittests._session_fixtures import (
     RecordingResource,
     SessionSocket,
@@ -16,6 +21,7 @@ from falcon_pachinko.unittests._session_fixtures import (
 )
 
 _ASSERTION_FAILURE = "lifecycle expectation failed"
+_SESSION_ACTIONS = ("establish", "disconnect", "close", "receive")
 
 
 @pytest.mark.asyncio
@@ -38,8 +44,11 @@ async def test_rejected_connection_closes_without_disconnect_cleanup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_clean_client_close_runs_disconnect_once_with_received_code() -> None:
+async def test_clean_client_close_runs_disconnect_once_with_received_code(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """A client close is reported once with Falcon's disconnect code."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
     router = make_session_router()
     socket = SessionSocket(falcon.WebSocketDisconnected(4000))
 
@@ -49,11 +58,23 @@ async def test_clean_client_close_runs_disconnect_once_with_received_code() -> N
 
     assert len(RecordingResource.instances[0].disconnect_codes) == 1, _ASSERTION_FAILURE
     assert RecordingResource.instances[0].disconnect_codes == [4000], _ASSERTION_FAILURE
+    observations = [
+        record
+        for record in caplog.records
+        if record.name == "falcon_pachinko._session_driver"
+    ]
+    assert getattr(observations[-1], "outcome", None) == "completed", _ASSERTION_FAILURE
+    assert getattr(observations[-1], "phase", None) == "closed", _ASSERTION_FAILURE
+    assert getattr(observations[-1], "close_code", None) == 4000, _ASSERTION_FAILURE
+    assert getattr(observations[-1], "duration_seconds", -1) >= 0, _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio
-async def test_missing_disconnect_code_uses_abnormal_closure() -> None:
+async def test_missing_disconnect_code_uses_abnormal_closure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """A transport that omits its code reports abnormal closure to cleanup."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
     disconnect = falcon.WebSocketDisconnected(4000)
     del disconnect.code
     router = make_session_router()
@@ -64,6 +85,68 @@ async def test_missing_disconnect_code_uses_abnormal_closure() -> None:
     )
 
     assert RecordingResource.instances[0].disconnect_codes == [1006], _ASSERTION_FAILURE
+    observations = [
+        record
+        for record in caplog.records
+        if record.name == "falcon_pachinko._session_driver"
+        and getattr(record, "operation", None) == "session"
+    ]
+    assert getattr(observations[-1], "close_code", None) == 1006, _ASSERTION_FAILURE
+
+
+@given(actions=st.lists(st.sampled_from(_SESSION_ACTIONS), max_size=40))
+def test_generated_session_actions_preserve_phase_and_receive_guards(
+    actions: list[str],
+) -> None:
+    """Generated transitions preserve exactly-once ownership and receive state."""
+    session = SessionState()
+    expected_phase = SessionPhase.CONNECTING
+
+    for action in actions:
+        match action:
+            case "establish":
+                session.establish()
+                if expected_phase is SessionPhase.CONNECTING:
+                    expected_phase = SessionPhase.ESTABLISHED
+            case "disconnect":
+                should_own_cleanup = expected_phase is SessionPhase.ESTABLISHED
+                assert session.begin_disconnect() is should_own_cleanup, (
+                    _ASSERTION_FAILURE
+                )
+                if should_own_cleanup:
+                    expected_phase = SessionPhase.DISCONNECTING
+            case "close":
+                session.mark_closed()
+                expected_phase = SessionPhase.CLOSED
+            case _:
+                assert session.can_receive is (
+                    expected_phase is SessionPhase.ESTABLISHED
+                ), _ASSERTION_FAILURE
+
+        assert session.phase is expected_phase, _ASSERTION_FAILURE
+        assert session.can_receive is (expected_phase is SessionPhase.ESTABLISHED), (
+            _ASSERTION_FAILURE
+        )
+
+
+def test_has_router_session_covers_setup_and_cleanup_phases() -> None:
+    """Expose session ownership while setup still needs to observe acceptance."""
+    resource = WebSocketResource()
+    assert not resource.has_router_session, _ASSERTION_FAILURE
+
+    manager = HookManager(global_hooks=HookCollection(), resources=(resource,))
+    resource.bind_hook_manager(manager)
+    assert not resource.has_router_session, _ASSERTION_FAILURE
+
+    session = SessionState()
+    manager.bind_session(session)
+    assert resource.has_router_session, _ASSERTION_FAILURE
+    session.establish()
+    assert resource.has_router_session, _ASSERTION_FAILURE
+    assert session.begin_disconnect(), _ASSERTION_FAILURE
+    assert resource.has_router_session, _ASSERTION_FAILURE
+    session.mark_closed()
+    assert not resource.has_router_session, _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio
