@@ -7,8 +7,8 @@ import typing as typ
 
 import pytest
 
-from falcon_pachinko._router_session import _ConnectionSession
 from falcon_pachinko.hooks import HookCollection, HookManager
+from falcon_pachinko.testing._router_session import _ConnectionSession
 from falcon_pachinko.unittests.helpers import make_req
 from falcon_pachinko.unittests.router_session_helpers import (
     SessionResource,
@@ -67,7 +67,7 @@ async def test_receive_loop_acceptance_failure_disconnects_once() -> None:
     router = session_router(resource, receive_loop=True)
     with pytest.raises(RuntimeError, match="accept failed"):
         await router.on_websocket(make_req("/session"), socket)
-    assert resource.disconnects == [(socket, 1006)], (
+    assert resource.disconnects == [(socket, 1011)], (
         "accept failure must clean up registered state once"
     )
     assert socket.closed, "accept failure must use the existing error close path"
@@ -88,7 +88,7 @@ async def test_receive_loop_after_connect_failure_disconnects_once() -> None:
     router.global_hooks.add("after_connect", fail_after_connect)
     with pytest.raises(RuntimeError, match="after_connect failed"):
         await router.on_websocket(make_req("/session"), socket)
-    assert resource.disconnects == [(socket, 1006)], (
+    assert resource.disconnects == [(socket, 1011)], (
         "hook failure must clean up registered state once"
     )
     assert socket.closed, "hook failure must use the existing error close path"

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import re
 import typing as typ
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    import re
     import threading
 
     from .resource import WebSocketResource
@@ -19,10 +19,6 @@ class _RequestLike(typ.Protocol):
     @property
     def path(self) -> str:
         """The request path."""
-
-    @property
-    def path_template(self) -> str:
-        """The mount path template."""
 
 
 @dc.dataclass(slots=True)
@@ -54,12 +50,13 @@ class _RouteMatch:
 def _request_path_template(req: _RequestLike) -> str:
     """Return Falcon's selected route template, with a legacy fallback."""
     template = getattr(req, "uri_template", None)
-    if template:
-        return template
-    try:
-        return req.path_template
-    except AttributeError:
-        return ""
+    if not template:
+        template = getattr(req, "path_template", "")
+
+    # Falcon reports the descendant route template, so compare its mount
+    # identity rather than the request-specific catch-all segment.
+    match = re.fullmatch(r"(?P<prefix>.*)/\{[A-Za-z_]\w*:path\}", template)
+    return match.group("prefix") or "/" if match is not None else template
 
 
 def _normalize_path(path: str) -> str:

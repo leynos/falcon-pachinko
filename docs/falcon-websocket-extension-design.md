@@ -56,10 +56,10 @@ partial registrations.
 
 The session phases are `CONNECTING`, `ESTABLISHED`, `DISCONNECTING`, and
 `CLOSED`. The raw adapter preserves `str` and `bytes` returned by
-`receive_media()` and encodes other decoded media as JSON. Native Falcon sockets
-use the private raw receive seam; malformed media is an unexpected failure.
-Once disconnect starts, resource receive hooks and dispatch do not run for later
-frames.
+`receive_media()` and encodes other decoded media as JSON. Native Falcon
+sockets use the private raw receive seam; malformed media is an unexpected
+failure. Once disconnect starts, resource receive hooks and dispatch do not run
+for later frames.
 
 The callback receives Falcon's close code when available. A transport ending
 without a code uses `1006`; cancellation selects `1001`; unexpected setup,
@@ -1268,8 +1268,8 @@ available; otherwise the router uses `1006`. A server-requested close code is
 sent to the peer, but Falcon may report the peer's close response to cleanup.
 Task cancellation selects `1001`, and an unexpected ordinary failure selects
 `1011`. Once disconnect begins, no later frame is dispatched or receive hook
-run; a handler that closes the socket also suppresses remaining
-`after_receive` hooks for that frame.
+run; a handler that closes the socket also suppresses remaining `after_receive`
+hooks for that frame.
 
 The router runs `before_disconnect` before `on_disconnect`, even if the first
 hook fails. Cleanup uses one shielded task without a timeout, so
@@ -1633,9 +1633,9 @@ guards for inner layers. An exception in a `before_*` hook should terminate the
 connection attempt immediately.
 
 The lifecycle and failure contract for the implemented opt-in session is
-specified in [Current implementation: Falcon routing and session
-contract](#current-implementation-falcon-routing-and-session-contract). In
-particular, establishment begins at approval or observed acceptance, and
+specified in
+[Current implementation: Falcon routing and session contract](#current-implementation-falcon-routing-and-session-contract).
+In particular, establishment begins at approval or observed acceptance, and
 cleanup is shielded, exactly once, and completed before the router task exits.
 The default `receive_loop=False` leaves later receives and cleanup to the
 application. Returning normally from `on_unhandled` leaves an opted-in session
@@ -1644,7 +1644,7 @@ open.
 ```mermaid
 stateDiagram-v2
     accTitle: WebSocket session state transitions
-    accDescr: Approval or acceptance establishes cleanup. Opted-in sessions receive until disconnect, failure, or cancellation, then clean up once.
+    accDescr: Approval or acceptance promises cleanup; disconnect, failure, or cancellation ends the session.
     [*] --> Negotiating
     Negotiating --> Established: on_connect approval or resource acceptance
     Negotiating --> Rejected: false result while unaccepted

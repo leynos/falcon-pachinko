@@ -1,13 +1,9 @@
-"""Own the opt-in WebSocket acceptance phase and transfer accepted sessions.
+"""Adapt simulator connections to the shared receive and cleanup driver.
 
-``WebSocketRouter(receive_loop=True)`` enters this owner after ``on_connect``
-allows the connection and before acceptance completes. If acceptance setup
-fails, it runs disconnect hooks and attempts resource cleanup with close code
-1006. Once acceptance succeeds, it transfers frame reception and disconnect
-cleanup to the shared ``session.drive_session`` loop. During cleanup, hooks
-precede the resource callback, which is attempted once even if cancellation
-interrupts it. The shared driver may retry a hook interrupted by cancellation
-before the callback, while preventing a second callback attempt.
+This compatibility owner belongs with the in-process harness: it wraps the
+simulator's acceptance coroutine, then hands its socket to
+``session.drive_session``. Production routing uses ``_session_driver`` so its
+cleanup promise can begin as soon as resource approval or acceptance occurs.
 """
 
 from __future__ import annotations
@@ -15,17 +11,18 @@ from __future__ import annotations
 import logging
 import typing as typ
 
-from ._observability import _observe_operation
-from .diagnostics import _type_name
-from .session import drive_session
+from falcon_pachinko._observability import _observe_operation
+from falcon_pachinko.diagnostics import _type_name
+from falcon_pachinko.hooks import HookContext, HookEvent
+from falcon_pachinko.session import drive_session
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import types
 
-    from .hooks import HookManager
-    from .protocols import WebSocketLike
-    from .resource import WebSocketResource
+    from falcon_pachinko.hooks import HookManager
+    from falcon_pachinko.protocols import WebSocketLike
+    from falcon_pachinko.resource import WebSocketResource
 
 logger = logging.getLogger(__name__)
 
@@ -74,9 +71,13 @@ class _ConnectionSession:
         with _observe_operation(logger, "disconnect"):
             try:
                 await self.hook_manager.notify_before_disconnect(
-                    self.resource,
-                    ws=self.ws,
-                    close_code=self.close_code,
+                    HookContext(
+                        event=HookEvent.BEFORE_DISCONNECT,
+                        target=self.resource,
+                        resource=None,
+                        ws=self.ws,
+                        close_code=self.close_code,
+                    )
                 )
             finally:
                 await self.resource.on_disconnect(self.ws, self.close_code)

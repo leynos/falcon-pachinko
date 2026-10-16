@@ -127,13 +127,13 @@ resource and its hooks.
 The disconnect callback receives Falcon's effective close code when one is
 available. The router uses these outcomes for router-owned sessions:
 
-| Session ending | `close_code` passed to `on_disconnect` |
-| --- | --- |
-| Client sends a close frame | The code Falcon reports |
+| Session ending                                 | `close_code` passed to `on_disconnect`                                                                                       |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Client sends a close frame                     | The code Falcon reports                                                                                                      |
 | Resource, handler, or server initiates a close | Falcon's reported disconnect code, which may be the peer's close response; the requested outbound code is sent to the client |
-| Transport disappears without a close frame | `1006` (abnormal closure) |
-| The session task is cancelled | `1001` (going away); the router attempts this close |
-| Setup, receive, or handler fails unexpectedly | `1011` (internal error); the router attempts this close |
+| Transport disappears without a close frame     | `1006` (abnormal closure)                                                                                                    |
+| The session task is cancelled                  | `1001` (going away); the router attempts this close                                                                          |
+| Setup, receive, or handler fails unexpectedly  | `1011` (internal error); the router attempts this close                                                                      |
 
 An approved session is established for cleanup before router acceptance, so a
 failure in `after_connect` or `accept` still runs cleanup. A resource-owned
@@ -151,10 +151,11 @@ The router runs `before_disconnect` before `on_disconnect`, then marks the
 session closed. Once disconnect begins, later receive hooks and dispatch do not
 run. If a handler closes the socket, remaining `after_receive` hooks for that
 frame are skipped. Cleanup runs in a shielded task and has no timeout, so
-`on_disconnect` must terminate. A lone primary or cleanup failure is raised unchanged. Multiple
-ordinary failures are raised in an `ExceptionGroup`, with the session failure
-first. Cancellation remains a bare `CancelledError`; cleanup failures that
-cannot be grouped with it are reported to the event loop's exception handler.
+`on_disconnect` must terminate. A lone primary or cleanup failure is raised
+unchanged. Multiple ordinary failures are raised in an `ExceptionGroup`, with
+the session failure first. Cancellation remains a bare `CancelledError`;
+cleanup failures that cannot be grouped with it are reported to the event
+loop's exception handler.
 
 - With `receive_loop=True`, the router passes values returned by
   `ws.receive_media()` to `WebSocketResource.dispatch()` in order until the

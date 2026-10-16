@@ -31,9 +31,10 @@ from ._route_support import (
 )
 from ._session import SessionPhase, SessionState
 from ._session_driver import run_session
+from ._session_setup import ConnectionSetup
 from ._uri_template import _compile_prefix_template, compile_uri_template
 from ._ws_media import install_raw_websocket_media_handlers
-from .hooks import HookCollection, HookContext, HookManager
+from .hooks import HookCollection, HookManager
 from .protocols import WebSocketLike
 
 # Imported at runtime, not under TYPE_CHECKING: ``ResourceFactory`` below is a
@@ -595,74 +596,17 @@ class WebSocketRouter:
         if self._receive_loop:
             return await run_session(resource, dispatch, hook_manager=hook_manager)
 
-        context = await self._prepare_connection_context(
-            hook_manager, resource, dispatch
-        )
-        should_accept = await self._execute_resource_handler(
-            resource, dispatch, context, hook_manager
-        )
-        acceptance = self._finalize_connection(
-            dispatch.ws,
-            should_accept=should_accept,
-            context=context,
+        setup = ConnectionSetup(
             hook_manager=hook_manager,
-        )
-        return await acceptance
-
-    @staticmethod
-    async def _prepare_connection_context(
-        hook_manager: HookManager,
-        resource: WebSocketResource,
-        dispatch: _Dispatch,
-    ) -> HookContext:
-        """Return the hook context with the handler parameters resolved."""
-        params_obj: dict[str, object] = dict(dispatch.match.params)
-        context = await hook_manager.notify_before_connect(
-            resource,
+            resource=resource,
             req=dispatch.req,
             ws=dispatch.ws,
-            params=params_obj,
+            route_params=dispatch.match.params,
+            is_unaccepted=WebSocketRouter._is_socket_unaccepted,
         )
-        # ``before_connect`` hooks may rewrite the parameters; fall back to the
-        # route captures when they leave them untouched.
-        if context.params is None:
-            context.params = params_obj
-        return context
-
-    @staticmethod
-    async def _execute_resource_handler(
-        resource: WebSocketResource,
-        dispatch: _Dispatch,
-        context: HookContext,
-        hook_manager: HookManager,
-    ) -> bool:
-        """Invoke ``resource.on_connect`` handling hook error propagation."""
-        params = context.params if context.params is not None else {}
-        try:
-            return await resource.on_connect(dispatch.req, dispatch.ws, **params)
-        except Exception as exc:
-            context.error = exc
-            context.result = False
-            await hook_manager.notify_after_connect(context)
-            raise
-
-    @staticmethod
-    async def _finalize_connection(
-        ws: WebSocketLike,
-        *,
-        should_accept: bool,
-        context: HookContext,
-        hook_manager: HookManager,
-    ) -> bool:
-        """Complete the connection lifecycle and honour ``should_accept``."""
-        context.result = should_accept
-        await hook_manager.notify_after_connect(context)
-        if not should_accept:
-            await ws.close()
-            return True
-        if WebSocketRouter._is_socket_unaccepted(ws):
-            await ws.accept()
-        return True
+        await setup.prepare()
+        await setup.execute()
+        return await setup.finalize()
 
     @staticmethod
     def _is_socket_unaccepted(ws: WebSocketLike) -> bool:

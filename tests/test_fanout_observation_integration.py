@@ -8,9 +8,9 @@ import logging
 import pytest
 
 from falcon_pachinko import ClusterFanout, WebSocketConnectionManager
-from falcon_pachinko._router_session import _ConnectionSession
 from falcon_pachinko.hooks import HookCollection, HookManager
 from falcon_pachinko.testing import InMemoryFanoutTransport
+from falcon_pachinko.testing._router_session import _ConnectionSession
 from falcon_pachinko.unittests.router_session_helpers import (
     SessionResource,
     SessionSocket,
@@ -90,7 +90,7 @@ async def test_disconnect_cleanup_emits_one_observation(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Idempotent cleanup has one observable completion without socket details."""
-    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._router_session")
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko.testing._router_session")
     resource = SessionResource()
     socket = SessionSocket()
     hooks = HookManager(global_hooks=HookCollection(), resources=[resource])

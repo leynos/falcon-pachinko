@@ -115,7 +115,7 @@ def make_session_router(
 ) -> WebSocketRouter:
     """Mount a fresh router and clear resource observations."""
     RecordingResource.instances.clear()
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.add_route("/session", resource)
     router.mount("/")
     return router

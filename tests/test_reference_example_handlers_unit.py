@@ -79,7 +79,10 @@ async def test_accepted_setup_failure_is_removed_and_audited_by_router(
             await super().send_media(data)
 
     socket = FailingSetupSocket()
-    router = WebSocketRouter(resource_factory=lambda _factory: resource)
+    router = WebSocketRouter(
+        resource_factory=lambda _factory: resource,
+        receive_loop=True,
+    )
     router.add_route(
         "/workspaces/{workspace_id}/projects/{project_id}/tasks", TaskStreamResource
     )

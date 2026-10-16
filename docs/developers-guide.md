@@ -47,8 +47,8 @@ the entire lifecycle:
 The state moves through `CONNECTING`, `ESTABLISHED`, `DISCONNECTING`, and
 `CLOSED`. A falsey `on_connect` result on a never-accepted socket is a
 rejection. If setup fails after approval or acceptance, the receive loop is
-skipped when the socket was not accepted, but disconnect cleanup still runs.
-An `on_connect` failure before approval or acceptance is outside the cleanup
+skipped when the socket was not accepted, but disconnect cleanup still runs. An
+`on_connect` failure before approval or acceptance is outside the cleanup
 promise; resources must roll back partial registrations from that failure.
 
 The receive adapter preserves `str` and `bytes` from `receive_media()` and
@@ -58,8 +58,8 @@ receivers decode or filter frames. Malformed media or a handler failure is an
 unexpected session failure and selects close code `1011`.
 
 Falcon's `WebSocketDisconnected.code` is preserved when available; missing
-transport codes use `1006`. A clean peer close does not send a second close.
-A resource or server close uses Falcon's reported code when available.
+transport codes use `1006`. A clean peer close does not send a second close. A
+resource or server close uses Falcon's reported code when available.
 Cancellation selects `1001`; an unexpected setup, receive, or handler failure
 selects `1011`. Both policy closes are best effort and cannot replace the
 primary session error.
@@ -214,14 +214,13 @@ exposes server shutdown and active-task state for cancellation scenarios.
 Simulator scenarios remain useful for fast behavioural coverage, but they do
 not establish the production responder contract or replace live coverage.
 
-The public harness captures failures from Falcon's `Exception` handler and
-from exceptions escaping the ASGI callable. Tests can inspect the read-only
+The public harness captures failures from Falcon's `Exception` handler and from
+exceptions escaping the ASGI callable. Tests can inspect the read-only
 `server.errors` snapshot or acknowledge asserted failures with
-`server.pop_errors()`. Applications that register their own `Exception`
-handler must register it after `live_websocket_server.start(app)` and call
+`server.pop_errors()`. Applications that register their own `Exception` handler
+must register it after `live_websocket_server.start(app)` and call
 `server.record_error(ex)`; otherwise Falcon may consume the exception before
-the harness can report it. Unacknowledged server failures fail context
-teardown.
+the harness can report it. Unacknowledged server failures fail context teardown.
 
 The `testing` extra and `dev` dependency group include `uvicorn>=0.34,<1`. The
 test server imports Uvicorn lazily and uses its lifespan readiness and
@@ -237,11 +236,11 @@ router-owned lifecycle described above. The default `False` returns after
 connection setup and leaves subsequent receives and cleanup to the application.
 
 `install_raw_websocket_media_handlers()` wraps the app-wide TEXT and BINARY
-handlers once. Inbound deserialisation passes frames through as raw `str` or
+handlers once. Inbound deserialization passes frames through as raw `str` or
 `bytes` for resource dispatch; outbound serializers remain the configured
 Falcon serializers. `configure_raw_frame_media(app)` provides the same
 idempotent setup for manually mounted routers and other Falcon WebSocket
-routes. Both entry points warn when customised inbound handlers will be
+routes. Both entry points warn when customized inbound handlers will be
 replaced, and repeated installation does not wrap a handler again.
 
 The opted-in session adapter preserves `str` and `bytes` returned by
@@ -478,11 +477,11 @@ promise. If approval succeeds but setup never accepts the socket, the router
 skips frame reception and cleans up with `1011`.
 
 Setup remains ordered as `before_connect`, resource `on_connect`,
-`after_connect`, then router acceptance when the resource has not accepted.
-A resource may accept during `on_connect` when it must send setup data first;
-the router detects that state and skips duplicate acceptance. Native Falcon
-sockets use a forwarding `SessionWebSocket` adapter to preserve acceptance
-history, since Falcon's `unaccepted` property also becomes false after a rejected
+`after_connect`, then router acceptance when the resource has not accepted. A
+resource may accept during `on_connect` when it must send setup data first; the
+router detects that state and skips duplicate acceptance. Native Falcon sockets
+use a forwarding `SessionWebSocket` adapter to preserve acceptance history,
+since Falcon's `unaccepted` property also becomes false after a rejected
 handshake is closed. Custom transports with an `unaccepted` property retain
 that probe as authoritative; a transport without it is wrapped so a completed
 `accept()` call records acceptance. This keeps rejected-close and
@@ -493,19 +492,18 @@ resolved child chain and dispatches each frame through the existing resource
 and hook manager. The native adapter reads Falcon's low-level TEXT or BINARY
 event so frames reach dispatch unchanged; Falcon's public receivers otherwise
 decode media or accept only one frame type. For injected transports,
-`receive_media()` values that are already `str` or `bytes` pass through,
-while other values are encoded as JSON with `msgspec`. Values that cannot be
-encoded fail as unexpected errors. A native ASGI receive event without a TEXT
-or BINARY payload is malformed transport input; it raises
-`falcon.PayloadTypeError` and follows the unexpected-failure path with
-`1011`.
+`receive_media()` values that are already `str` or `bytes` pass through, while
+other values are encoded as JSON with `msgspec`. Values that cannot be encoded
+fail as unexpected errors. A native ASGI receive event without a TEXT or BINARY
+payload is malformed transport input; it raises `falcon.PayloadTypeError` and
+follows the unexpected-failure path with `1011`.
 
 The receive loop ends on Falcon's `WebSocketDisconnected`, retaining its code
-when present and using `1006` when it is absent. A resource- or
-server-initiated `ws.close(code)` sends the requested code to the client, but
-the code Falcon reports to the router may be the peer's close response. An
-ordinary setup, receive, or handler failure triggers a best-effort `1011` close;
-task cancellation triggers a best-effort `1001` close. `WebSocketDisconnected`
+when present and using `1006` when it is absent. A resource- or server-initiated
+`ws.close(code)` sends the requested code to the client, but the code Falcon
+reports to the router may be the peer's close response. An ordinary setup,
+receive, or handler failure triggers a best-effort `1011` close; task
+cancellation triggers a best-effort `1001` close. `WebSocketDisconnected`
 observed during accepted setup or by a resource handler is a transport ending,
 not an unexpected handler failure.
 
@@ -536,15 +534,15 @@ The simulator records its first close code and wakes pending receives.
 `SimulatorRouterHarness.connect()` runs `router.on_websocket()` as a task,
 waits for acceptance, rejection, or early failure, and joins cleanup on exit.
 
-`falcon_pachinko.testing.LiveWebSocketServer` and the
-`live_websocket_server` fixture provide reusable real-socket tests. The
-lifecycle BDD harness runs the production router under Uvicorn and waits for
-shutdown and session cleanup. It counts `on_disconnect` invocations at hook
-entry separately from completed cleanup records, so an invocation that returns
-early still counts toward the exactly-once assertion. The router-session fixture
-shares the lifecycle harness's `LiveServerTransport` for readiness, socket
-discovery, and shutdown on an ephemeral loopback port. Both use one event loop
-and leave process signal ownership with the test runner.
+`falcon_pachinko.testing.LiveWebSocketServer` and the `live_websocket_server`
+fixture provide reusable real-socket tests. The lifecycle BDD harness runs the
+production router under Uvicorn and waits for shutdown and session cleanup. It
+counts `on_disconnect` invocations at hook entry separately from completed
+cleanup records, so an invocation that returns early still counts toward the
+exactly-once assertion. The router-session fixture shares the lifecycle
+harness's `LiveServerTransport` for readiness, socket discovery, and shutdown
+on an ephemeral loopback port. Both use one event loop and leave process signal
+ownership with the test runner.
 
 Cleanup reports preserve the original application exception object when they
 call the loop exception handler. This keeps failures visible without replacing
