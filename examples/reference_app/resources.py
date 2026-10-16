@@ -85,7 +85,7 @@ _PENDING_AUDIT_RECORDS = "_reference_pending_audit_records"
 def _remember_connection_audit(
     resource: WebSocketResource, record: dict[str, object]
 ) -> None:
-    """Keep pre-accept hook records until Falcon assigns a connection ID."""
+    """Keep setup audit records until a connection ID is available."""
     pending = resource.state.setdefault(_PENDING_AUDIT_RECORDS, [])
     if isinstance(pending, list):
         pending.append(record)
@@ -154,6 +154,16 @@ class TaskOperationConfig:
     payload_builder: cabc.Callable[[Task], dict[str, object]]
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _TaskStreamSession:
+    """Carry the connection identity and workspace setup values together."""
+
+    conn_id: str
+    workspace_id: str
+    project_id: str
+    user: str
+
+
 class TaskStreamResource(WebSocketResource):
     """Final resource that handles the bidirectional task stream."""
 
@@ -197,48 +207,96 @@ class TaskStreamResource(WebSocketResource):
         workspace_id: str,
         project_id: str,
     ) -> bool:
-        """Register, accept, and announce the workspace session."""
-        user = req.get_header("X-User") or req.get_param("user", default="guest")
-        conn_id = secrets.token_hex(12)
-        await self._conn_mgr.add_connection(conn_id, ws)
-        self._conn_id = conn_id
+        """Attach the websocket to the workspace-wide room."""
+        session = _TaskStreamSession(
+            conn_id=secrets.token_hex(12),
+            workspace_id=workspace_id,
+            project_id=project_id,
+            user=req.get_header("X-User") or req.get_param("user", default="guest"),
+        )
+        await self._conn_mgr.add_connection(session.conn_id, ws)
+        self._conn_id = session.conn_id
+        await self._open_session(session, ws)
+        return True
+
+    async def _open_session(
+        self,
+        session: _TaskStreamSession,
+        ws: WebSocketLike,
+    ) -> None:
+        """Prepare the workspace, accept the socket, and publish readiness."""
         is_accepted = False
         try:
-            await self._conn_mgr.join_room(conn_id, _workspace_room(workspace_id))
-            self.state["workspace_id"] = workspace_id
-            self.state["project_id"] = project_id
-            self.state["user"] = user
-            pending_records = self.state.pop(_PENDING_AUDIT_RECORDS, [])
-            if isinstance(pending_records, list):
-                await self._audit.associate_connection(pending_records, conn_id)
-            await self._audit.record(
-                "session.open",
-                connection=conn_id,
-                workspace=workspace_id,
-                project=project_id,
-                user=user,
-            )
-            await ws.accept()
-            is_accepted = getattr(ws, "unaccepted", False) is False
-            await ws.send_media({
-                "type": "session.ready",
-                "payload": {
-                    "workspace": workspace_id,
-                    "project": project_id,
-                },
-            })
+            await self._prepare_workspace_session(session)
+            is_accepted = await self._accept_session(ws)
+            await self._associate_pending_audits(session)
+            await self._record_open_session(session)
+            await self._send_session_ready(ws, session)
         except BaseException as error:
-            # Before acceptance the resource owns rollback, including cancellation.
-            # An accept that changes state before failing still promises cleanup;
-            # retain its identity so on_disconnect can remove and audit it.
-            if not is_accepted and getattr(ws, "unaccepted", True) is not False:
-                interruption = await self._rollback_connection(conn_id)
-                if interruption is not None and not isinstance(
-                    error, asyncio.CancelledError
-                ):
-                    raise interruption from error
+            await self._rollback_unaccepted_setup(
+                session, ws, is_accepted=is_accepted, error=error
+            )
             raise
-        return True
+
+    async def _prepare_workspace_session(self, session: _TaskStreamSession) -> None:
+        """Join the workspace and audit setup before the handshake."""
+        await self._conn_mgr.join_room(
+            session.conn_id, _workspace_room(session.workspace_id)
+        )
+        self.state.setdefault("workspace_id", session.workspace_id)
+        self.state["project_id"] = session.project_id
+        self.state["user"] = session.user
+
+    async def _associate_pending_audits(self, session: _TaskStreamSession) -> None:
+        """Associate route setup records only after acceptance establishes a session."""
+        pending_records = self.state.pop(_PENDING_AUDIT_RECORDS, [])
+        if isinstance(pending_records, list):
+            await self._audit.associate_connection(pending_records, session.conn_id)
+
+    async def _record_open_session(self, session: _TaskStreamSession) -> None:
+        """Record the accepted connection after route audits are associated."""
+        await self._audit.record(
+            "session.open",
+            connection=session.conn_id,
+            workspace=session.workspace_id,
+            project=session.project_id,
+            user=self.state["user"],
+        )
+
+    @staticmethod
+    async def _accept_session(ws: WebSocketLike) -> bool:
+        """Observe acceptance before later setup can fail."""
+        await ws.accept()
+        return getattr(ws, "unaccepted", False) is False
+
+    @staticmethod
+    async def _send_session_ready(
+        ws: WebSocketLike,
+        session: _TaskStreamSession,
+    ) -> None:
+        """Publish readiness only after the websocket handshake succeeds."""
+        await ws.send_media({
+            "type": "session.ready",
+            "payload": {
+                "workspace": session.workspace_id,
+                "project": session.project_id,
+            },
+        })
+
+    async def _rollback_unaccepted_setup(
+        self,
+        session: _TaskStreamSession,
+        ws: WebSocketLike,
+        *,
+        is_accepted: bool,
+        error: BaseException,
+    ) -> None:
+        """Undo manager membership only when disconnect cleanup is unpromised."""
+        if is_accepted or getattr(ws, "unaccepted", True) is False:
+            return
+        interruption = await self._rollback_connection(session.conn_id)
+        if interruption is not None and not isinstance(error, asyncio.CancelledError):
+            raise interruption from error
 
     async def _rollback_connection(self, conn_id: str) -> asyncio.CancelledError | None:
         """Join pre-accept removal even when the session is cancelled again."""

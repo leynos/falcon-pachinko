@@ -11,6 +11,8 @@ import msgspec as ms
 from falcon_pachinko.diagnostics import _class_name, _frame_metadata, _type_name
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     import msgspec.json as msjson
 
 type Direction = typ.Literal["send", "receive", "close", "error"]
@@ -146,22 +148,45 @@ class _LifecycleSocket:
 
     async def accept(self, subprotocol: str | None = None) -> None:
         """Record handshake acceptance and mirror to any bound peer."""
-        if self._accepted:
-            return
-        self._accepted = True
-        self._subprotocol = subprotocol
-        self._lifecycle_event.set()
-        peer = self._peer
-        if peer is not None and not peer.accepted:
-            await peer.accept(subprotocol=subprotocol)
+        await self._apply_transition(
+            is_complete=self._accepted,
+            record_transition=lambda: self._record_acceptance(subprotocol),
+            peer_is_complete=lambda peer: peer.accepted,
+            mirror_transition=lambda peer: peer.accept(subprotocol=subprotocol),
+        )
 
     async def close(self, code: int = 1000) -> None:
         """Record connection closure and mirror to any bound peer."""
-        if self._closed:
+        await self._apply_transition(
+            is_complete=self._closed,
+            record_transition=lambda: self._record_closure(code),
+            peer_is_complete=lambda peer: peer.closed,
+            mirror_transition=lambda peer: peer.close(code),
+        )
+
+    async def _apply_transition(
+        self,
+        *,
+        is_complete: bool,
+        record_transition: cabc.Callable[[], None],
+        peer_is_complete: cabc.Callable[[_LifecycleSocket], bool],
+        mirror_transition: cabc.Callable[[_LifecycleSocket], cabc.Awaitable[None]],
+    ) -> None:
+        """Apply an idempotent local event before mirroring it to a peer."""
+        if is_complete:
             return
-        self._closed = True
-        self._close_code = code
+        record_transition()
         self._lifecycle_event.set()
         peer = self._peer
-        if peer is not None and not peer.closed:
-            await peer.close(code)
+        if peer is not None and not peer_is_complete(peer):
+            await mirror_transition(peer)
+
+    def _record_acceptance(self, subprotocol: str | None) -> None:
+        """Save the accepted subprotocol before a peer operation can suspend."""
+        self._accepted = True
+        self._subprotocol = subprotocol
+
+    def _record_closure(self, code: int) -> None:
+        """Save the first close code before a peer operation can suspend."""
+        self._closed = True
+        self._close_code = code
