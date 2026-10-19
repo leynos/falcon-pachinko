@@ -1034,22 +1034,28 @@ calls a reusable workflow and declares no runner of its own.
 
 A pull request from a fork cannot obtain an Ubicloud runner. `lint-test` serves
 pull requests, so a fixed `ubicloud-standard-2` would leave such a pull request
-queueing for a runner that never arrives. It resolves its label from the head
-repository instead:
+queueing for a runner that never arrives. A pull request Dependabot opened also
+takes the hosted arm: hosted minutes cost nothing on a public repository, and
+Dependabot opens many pull requests, which therefore build cold on the hosted
+pool. The guard tests the pull request's author, not `github.actor`, because
+the actor is whoever triggered the run, so a person pushing to a Dependabot
+branch would flip the runner. It resolves its label from the head repository
+and the author instead:
 
 ```yaml
 runs-on: >-
-  ${{ github.event.pull_request.head.repo.fork
+  ${{ (github.event.pull_request.head.repo.fork
+  || github.event.pull_request.user.login == 'dependabot[bot]')
   && 'ubuntu-latest' || 'ubicloud-standard-2' }}
 ```
 
-The guard reads one field, and it takes three values. A pull request from a
-fork sets it to `true` and takes the GitHub-hosted arm. A pull request from a
-branch of this repository sets it to `false`. Any other event, `push` to `main`
-included, carries no `pull_request` object at all, so the field is null.
-`false` and null are both falsy, so both reach Ubicloud; the distinction
-matters only because a reader who believed non-fork pull requests left the
-field null would conclude the expression had a case it does not handle.
+The fork field takes three values. A pull request from a fork sets it to `true`
+and takes the GitHub-hosted arm. A pull request from a branch of this
+repository sets it to `false`. Any other event, `push` to `main` included,
+carries no `pull_request` object at all, so the field is null. `false` and null
+are both falsy, so both reach Ubicloud; the distinction matters only because a
+reader who believed non-fork pull requests left the field null would conclude
+the expression had a case it does not handle.
 
 Two rules follow, and a green run demonstrates neither:
 

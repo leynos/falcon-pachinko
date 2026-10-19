@@ -22,8 +22,12 @@ jobs:
     # reach Ubicloud. Keep the continuation at this indent: a deeper one
     # keeps its line break and puts a newline inside the expression, which
     # GitHub evaluates anyway.
+    # Dependabot pull requests run on the hosted pool too (free on a public
+    # repository). The author is tested, not the actor, which changes when
+    # someone else pushes to the branch.
     runs-on: >-
-      ${{ github.event.pull_request.head.repo.fork
+      ${{ (github.event.pull_request.head.repo.fork
+      || github.event.pull_request.user.login == 'dependabot[bot]')
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     # Ubicloud runners register as just-in-time self-hosted runners, so
     # GitHub's six-hour limit does not apply and the lane needs its own

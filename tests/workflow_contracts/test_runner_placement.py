@@ -35,9 +35,11 @@ from .runner_labels import (
     runner_expression,
 )
 from .workflow_support import (
+    DEPENDABOT_FIELD,
     FORK_FIELD,
     GITHUB_HOSTED_LABELS,
     GITHUB_HOSTED_LINUX,
+    HOSTED_GUARD,
     REPOSITORY,
     ROOT,
     UBICLOUD_LINUX_LABEL,
@@ -135,12 +137,13 @@ def test_no_declared_label_spans_lines() -> None:
 
 
 def test_the_pull_request_lane_falls_back_for_forks() -> None:
-    """Send a fork's pull request to GitHub-hosted Linux, everything else to Ubicloud.
+    """Send a fork's or Dependabot's pull request to hosted Linux, the rest to Ubicloud.
 
     The guard is asserted as the whole field path. A sibling field of the same
     object, such as the head repository's ``private`` flag, reads almost
     identically and would route every fork pull request to a runner it can
-    never obtain.
+    never obtain. The Dependabot test reads the pull request's author, not
+    ``github.actor``, which is whoever triggered the run.
     """
     workflow_name, job_name = FORK_FALLBACK_LANE
     declared = _job(workflow_name, job_name).get("runs-on")
@@ -149,9 +152,9 @@ def test_the_pull_request_lane_falls_back_for_forks() -> None:
     )
     label = runner_expression(declared)
 
-    assert label.guard == FORK_FIELD, (
-        f"the lane must branch on {FORK_FIELD}, the only field that says a "
-        f"runner cannot be obtained; got {label.guard!r}"
+    assert label.guard == HOSTED_GUARD, (
+        f"the lane must branch on {HOSTED_GUARD}, the only test that says a "
+        f"runner cannot or need not be obtained; got {label.guard!r}"
     )
     assert label.when_true == GITHUB_HOSTED_LINUX, (
         f"a fork pull request must fall back to {GITHUB_HOSTED_LINUX}; got "
@@ -160,6 +163,18 @@ def test_the_pull_request_lane_falls_back_for_forks() -> None:
     assert label.when_false == UBICLOUD_LINUX_LABEL, (
         f"every other event must reach {UBICLOUD_LINUX_LABEL}; got {label.when_false!r}"
     )
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [FORK_FIELD, f"({FORK_FIELD} || github.actor == 'dependabot[bot]')"],
+    ids=["fork-only", "actor-instead-of-author"],
+)
+def test_a_guard_without_the_dependabot_author_is_refused(guard: str) -> None:
+    """Refuse the fork-only guard and the `github.actor` stand-in."""
+    label = runner_expression(f"${{{{ {guard} && 'ubuntu-latest' || 'x' }}}}")
+    assert label.guard != HOSTED_GUARD, f"{guard!r} was accepted"
+    assert DEPENDABOT_FIELD in HOSTED_GUARD
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), PUSH_ONLY_UBICLOUD_LANES)
