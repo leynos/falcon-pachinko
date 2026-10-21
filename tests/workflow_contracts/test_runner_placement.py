@@ -174,7 +174,7 @@ def test_a_guard_without_the_dependabot_author_is_refused(guard: str) -> None:
     """Refuse the fork-only guard and the `github.actor` stand-in."""
     label = runner_expression(f"${{{{ {guard} && 'ubuntu-latest' || 'x' }}}}")
     assert label.guard != HOSTED_GUARD, f"{guard!r} was accepted"
-    assert DEPENDABOT_FIELD in HOSTED_GUARD
+    assert DEPENDABOT_FIELD in HOSTED_GUARD, "the hosted guard must test the author"
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), PUSH_ONLY_UBICLOUD_LANES)
