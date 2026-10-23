@@ -1052,10 +1052,11 @@ runs-on: >-
 The fork field takes three values. A pull request from a fork sets it to `true`
 and takes the GitHub-hosted arm. A pull request from a branch of this
 repository sets it to `false`. Any other event, `push` to `main` included,
-carries no `pull_request` object at all, so the field is null. `false` and null
-are both falsy, so both reach Ubicloud; the distinction matters only because a
-reader who believed non-fork pull requests left the field null would conclude
-the expression had a case it does not handle.
+carries no `pull_request` object at all, and GitHub evaluates the missing
+property as an empty string. `false` and the empty string are both falsy, so
+both reach Ubicloud; the distinction matters only because a reader who believed
+non-fork pull requests left the field empty would conclude the expression had a
+case it does not handle.
 
 Two rules follow, and a green run demonstrates neither:
 
