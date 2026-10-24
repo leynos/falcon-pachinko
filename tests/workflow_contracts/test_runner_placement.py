@@ -24,8 +24,12 @@ Run with:
 from __future__ import annotations
 
 import re
+import typing as typ
 
 import pytest
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 from .runner_labels import (
     collapse_label_whitespace,
@@ -35,9 +39,10 @@ from .runner_labels import (
     runner_expression,
 )
 from .workflow_support import (
-    FORK_FIELD,
+    DEPENDABOT_FIELD,
     GITHUB_HOSTED_LABELS,
     GITHUB_HOSTED_LINUX,
+    HOSTED_GUARD,
     REPOSITORY,
     ROOT,
     UBICLOUD_LINUX_LABEL,
@@ -134,32 +139,63 @@ def test_no_declared_label_spans_lines() -> None:
     )
 
 
-def test_the_pull_request_lane_falls_back_for_forks() -> None:
-    """Send a fork's pull request to GitHub-hosted Linux, everything else to Ubicloud.
+def _fallback_faults(declared: str) -> list[str]:
+    """Return why a pull-request lane's `runs-on` is not the reviewed fallback."""
+    label = runner_expression(declared)
+    faults = []
+    if label.guard != HOSTED_GUARD:
+        faults.append(f"keyed on {label.guard!r}, not {HOSTED_GUARD!r}")
+    if label.when_true != GITHUB_HOSTED_LINUX:
+        faults.append(f"a fork falls back to {label.when_true!r}")
+    if label.when_false != UBICLOUD_LINUX_LABEL:
+        faults.append(f"every other event reaches {label.when_false!r}")
+    return faults
 
-    The guard is asserted as the whole field path. A sibling field of the same
-    object, such as the head repository's ``private`` flag, reads almost
-    identically and would route every fork pull request to a runner it can
-    never obtain.
-    """
+
+def _lane_declaration() -> str:
+    """Return the fork-fallback lane's `runs-on` as the workflow declares it."""
     workflow_name, job_name = FORK_FALLBACK_LANE
     declared = _job(workflow_name, job_name).get("runs-on")
     assert isinstance(declared, str), (
         f"{workflow_name}:{job_name} must declare a runs-on label"
     )
-    label = runner_expression(declared)
+    return declared
 
-    assert label.guard == FORK_FIELD, (
-        f"the lane must branch on {FORK_FIELD}, the only field that says a "
-        f"runner cannot be obtained; got {label.guard!r}"
-    )
-    assert label.when_true == GITHUB_HOSTED_LINUX, (
-        f"a fork pull request must fall back to {GITHUB_HOSTED_LINUX}; got "
-        f"{label.when_true!r}"
-    )
-    assert label.when_false == UBICLOUD_LINUX_LABEL, (
-        f"every other event must reach {UBICLOUD_LINUX_LABEL}; got {label.when_false!r}"
-    )
+
+def test_the_pull_request_lane_falls_back_for_forks() -> None:
+    """Send a fork's or Dependabot's pull request to hosted Linux, the rest to Ubicloud.
+
+    The guard is asserted as the whole field path. A sibling field of the same
+    object, such as the head repository's ``private`` flag, reads almost
+    identically and would route every fork pull request to a runner it can
+    never obtain. The Dependabot test reads the pull request's author, not
+    ``github.actor``, which is whoever triggered the run.
+    """
+    faults = _fallback_faults(_lane_declaration())
+    assert not faults, f"{FORK_FALLBACK_LANE} is not the reviewed fallback: {faults}"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda text: text.replace(f" || {DEPENDABOT_FIELD}", ""),
+        lambda text: text.replace("pull_request.user.login", "actor"),
+    ],
+    ids=["dependabot-arm-removed", "actor-instead-of-author"],
+)
+def test_the_lane_check_refuses_a_mutated_declaration(
+    mutate: cabc.Callable[[str], str],
+) -> None:
+    """Drive the same check over the real declaration, mutated.
+
+    The mutations are applied to the workflow's own `runs-on`, so the check is
+    shown to reject exactly the edits it exists to catch, not constructed
+    strings of its own.
+    """
+    real = " ".join(_lane_declaration().split())
+    mutated = mutate(real)
+    assert mutated != real, "the mutation did not change the declaration"
+    assert _fallback_faults(mutated), f"{mutated!r} was accepted"
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), PUSH_ONLY_UBICLOUD_LANES)
