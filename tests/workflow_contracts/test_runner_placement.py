@@ -24,8 +24,12 @@ Run with:
 from __future__ import annotations
 
 import re
+import typing as typ
 
 import pytest
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 from .runner_labels import (
     collapse_label_whitespace,
@@ -36,7 +40,6 @@ from .runner_labels import (
 )
 from .workflow_support import (
     DEPENDABOT_FIELD,
-    FORK_FIELD,
     GITHUB_HOSTED_LABELS,
     GITHUB_HOSTED_LINUX,
     HOSTED_GUARD,
@@ -136,6 +139,29 @@ def test_no_declared_label_spans_lines() -> None:
     )
 
 
+def _fallback_faults(declared: str) -> list[str]:
+    """Return why a pull-request lane's `runs-on` is not the reviewed fallback."""
+    label = runner_expression(declared)
+    faults = []
+    if label.guard != HOSTED_GUARD:
+        faults.append(f"keyed on {label.guard!r}, not {HOSTED_GUARD!r}")
+    if label.when_true != GITHUB_HOSTED_LINUX:
+        faults.append(f"a fork falls back to {label.when_true!r}")
+    if label.when_false != UBICLOUD_LINUX_LABEL:
+        faults.append(f"every other event reaches {label.when_false!r}")
+    return faults
+
+
+def _lane_declaration() -> str:
+    """Return the fork-fallback lane's `runs-on` as the workflow declares it."""
+    workflow_name, job_name = FORK_FALLBACK_LANE
+    declared = _job(workflow_name, job_name).get("runs-on")
+    assert isinstance(declared, str), (
+        f"{workflow_name}:{job_name} must declare a runs-on label"
+    )
+    return declared
+
+
 def test_the_pull_request_lane_falls_back_for_forks() -> None:
     """Send a fork's or Dependabot's pull request to hosted Linux, the rest to Ubicloud.
 
@@ -145,36 +171,31 @@ def test_the_pull_request_lane_falls_back_for_forks() -> None:
     never obtain. The Dependabot test reads the pull request's author, not
     ``github.actor``, which is whoever triggered the run.
     """
-    workflow_name, job_name = FORK_FALLBACK_LANE
-    declared = _job(workflow_name, job_name).get("runs-on")
-    assert isinstance(declared, str), (
-        f"{workflow_name}:{job_name} must declare a runs-on label"
-    )
-    label = runner_expression(declared)
-
-    assert label.guard == HOSTED_GUARD, (
-        f"the lane must branch on {HOSTED_GUARD}, the only test that says a "
-        f"runner cannot or need not be obtained; got {label.guard!r}"
-    )
-    assert label.when_true == GITHUB_HOSTED_LINUX, (
-        f"a fork pull request must fall back to {GITHUB_HOSTED_LINUX}; got "
-        f"{label.when_true!r}"
-    )
-    assert label.when_false == UBICLOUD_LINUX_LABEL, (
-        f"every other event must reach {UBICLOUD_LINUX_LABEL}; got {label.when_false!r}"
-    )
+    faults = _fallback_faults(_lane_declaration())
+    assert not faults, f"{FORK_FALLBACK_LANE} is not the reviewed fallback: {faults}"
 
 
 @pytest.mark.parametrize(
-    "guard",
-    [FORK_FIELD, f"({FORK_FIELD} || github.actor == 'dependabot[bot]')"],
-    ids=["fork-only", "actor-instead-of-author"],
+    "mutate",
+    [
+        lambda text: text.replace(f" || {DEPENDABOT_FIELD}", ""),
+        lambda text: text.replace("pull_request.user.login", "actor"),
+    ],
+    ids=["dependabot-arm-removed", "actor-instead-of-author"],
 )
-def test_a_guard_without_the_dependabot_author_is_refused(guard: str) -> None:
-    """Refuse the fork-only guard and the `github.actor` stand-in."""
-    label = runner_expression(f"${{{{ {guard} && 'ubuntu-latest' || 'x' }}}}")
-    assert label.guard != HOSTED_GUARD, f"{guard!r} was accepted"
-    assert DEPENDABOT_FIELD in HOSTED_GUARD, "the hosted guard must test the author"
+def test_the_lane_check_refuses_a_mutated_declaration(
+    mutate: cabc.Callable[[str], str],
+) -> None:
+    """Drive the same check over the real declaration, mutated.
+
+    The mutations are applied to the workflow's own `runs-on`, so the check is
+    shown to reject exactly the edits it exists to catch, not constructed
+    strings of its own.
+    """
+    real = " ".join(_lane_declaration().split())
+    mutated = mutate(real)
+    assert mutated != real, "the mutation did not change the declaration"
+    assert _fallback_faults(mutated), f"{mutated!r} was accepted"
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), PUSH_ONLY_UBICLOUD_LANES)
