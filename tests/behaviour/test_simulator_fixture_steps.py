@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
 import typing as typ
 
+import msgspec.json as msjson
 import pytest
 from pytest_bdd import given, scenario, then, when
 
 from falcon_pachinko import SimulatorConnection, WebSocketResource, WebSocketSimulator
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing only
-    import asyncio
     import collections.abc as cabc
 
     import falcon
@@ -49,14 +50,21 @@ class EchoResource(WebSocketResource):
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
-        """Handle the echo interaction for the simulator scenario."""
+        """Approve the session; the router owns subsequent receives."""
         assert isinstance(ws, WebSocketSimulator), (
             "the harness must inject the simulator instance"
         )
-        payload = await ws.receive_json(dict)
+        del req, params
+        return True
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record and acknowledge a message delivered by the router loop."""
+        payload = msjson.decode(message)
         self.received.append(payload)
-        await ws.send_json({"type": "ack", "payload": payload})
-        return False
+        await typ.cast("WebSocketSimulator", ws).send_json({
+            "type": "ack",
+            "payload": payload,
+        })
 
 
 @dc.dataclass(slots=True)
@@ -101,6 +109,7 @@ def when_connect(
             "/echo",
             initial_inbound=frames,
         ) as connection:
+            await asyncio.wait_for(connection.wait_for_sent_count(1), timeout=5)
             return connection
 
     connection = event_loop.run_until_complete(_open())

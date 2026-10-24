@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import typing as typ
 
 import msgspec.json as msjson
@@ -20,6 +21,7 @@ from examples.reference_app.services import (
     TaskCreationParams,
     WorkspaceRepository,
 )
+from falcon_pachinko.router import WebSocketRouter
 from falcon_pachinko.websocket import InProcessBackend, WebSocketConnectionManager
 from tests._stubs import RecordingWebSocket, RequestStub
 
@@ -30,6 +32,104 @@ if typ.TYPE_CHECKING:
 
 _WORKSPACE = "atlas"
 _PROJECT = "triage"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stage", "failure", "expected_code"),
+    [
+        pytest.param(
+            "accept", RuntimeError("accepted setup failed"), 1011, id="accept-failure"
+        ),
+        pytest.param(
+            "ready", RuntimeError("ready send failed"), 1011, id="ready-failure"
+        ),
+        pytest.param(
+            "accept",
+            asyncio.CancelledError("accepted setup cancelled"),
+            1001,
+            id="accept-cancellation",
+        ),
+        pytest.param(
+            "ready",
+            asyncio.CancelledError("ready send cancelled"),
+            1001,
+            id="ready-cancellation",
+        ),
+    ],
+)
+async def test_accepted_setup_failure_is_removed_and_audited_by_router(
+    stage: str, failure: BaseException, expected_code: int
+) -> None:
+    """Preserve accepted session identity until the framework runs cleanup."""
+    manager = WebSocketConnectionManager()
+    resource, _repo, audit, _feed = _build_resource(manager)
+
+    class FailingSetupSocket(RecordingWebSocket):
+        async def accept(self, subprotocol: str | None = None) -> None:
+            """Fail after recording transport acceptance when requested."""
+            await super().accept(subprotocol)
+            if stage == "accept":
+                raise failure
+
+        async def send_media(self, data: object) -> None:
+            """Fail the readiness send after the handshake completes."""
+            if stage == "ready":
+                raise failure
+            await super().send_media(data)
+
+    socket = FailingSetupSocket()
+    router = WebSocketRouter(
+        resource_factory=lambda _factory: resource,
+        receive_loop=True,
+    )
+    router.add_route(
+        "/workspaces/{workspace_id}/projects/{project_id}/tasks", TaskStreamResource
+    )
+    router.mount("/ws")
+    with pytest.raises(type(failure)) as raised:
+        await asyncio.wait_for(
+            router.on_websocket(_connect_request(), socket), timeout=1
+        )
+    assert raised.value is failure, "cleanup must preserve the original setup failure"
+    assert not manager.websockets, "accepted setup failures must release membership"
+    closed = [record for record in audit.records if record["event"] == "session.closed"]
+    assert len(closed) == 1, "accepted setup failure must be audited exactly once"
+    metadata = typ.cast("dict[str, object]", closed[0]["metadata"])
+    assert metadata["close_code"] == expected_code, (
+        "closure must retain the session policy code"
+    )
+
+
+@pytest.mark.asyncio
+async def test_accepted_ready_failure_rolls_back_without_router_session() -> None:
+    """Remove membership when the default router cannot own disconnect cleanup."""
+    manager = WebSocketConnectionManager()
+    resource, _repo, audit, _feed = _build_resource(manager)
+    failure = RuntimeError("ready send failed")
+
+    class FailingReadySocket(RecordingWebSocket):
+        async def send_media(self, data: object) -> None:
+            """Fail readiness after accepting under the default router mode."""
+            del data
+            raise failure
+
+    router = WebSocketRouter(resource_factory=lambda _factory: resource)
+    router.add_route(
+        "/workspaces/{workspace_id}/projects/{project_id}/tasks", TaskStreamResource
+    )
+    router.mount("/ws")
+    with pytest.raises(RuntimeError, match="ready send failed") as raised:
+        await asyncio.wait_for(
+            router.on_websocket(_connect_request(), FailingReadySocket()), timeout=1
+        )
+
+    assert raised.value is failure, "rollback must preserve the original failure"
+    assert manager.websockets == {}, "failed setup must not retain manager membership"
+    assert resource._conn_id is None, "rollback must clear the resource identity"
+    assert not any(record["event"] == "session.closed" for record in audit.records), (
+        "default mode must not run a router-owned disconnect audit"
+    )
 
 
 class FailingJoinBackend(InProcessBackend):
@@ -43,6 +143,154 @@ class FailingJoinBackend(InProcessBackend):
         """Raise, simulating a broken room-membership backend."""
         msg = f"cannot join {room!r}"
         raise RuntimeError(msg)
+
+
+class FailingRollbackBackend(FailingJoinBackend):
+    """Fail setup and removal so rollback precedence stays observable."""
+
+    def __init__(self) -> None:
+        """Keep both failures available for identity assertions."""
+        super().__init__()
+        self.setup_error = RuntimeError("cannot join workspace")
+        self.removal_error = RuntimeError("cannot remove connection")
+
+    async def join_room(self, conn_id: str, room: str) -> None:
+        """Raise the setup failure after the socket has been registered."""
+        del conn_id, room
+        raise self.setup_error
+
+    async def remove_connection(self, conn_id: str) -> None:
+        """Leave registered membership in place while surfacing rollback failure."""
+        del conn_id
+        raise self.removal_error
+
+
+class BlockingRollbackBackend(InProcessBackend):
+    """Pause setup and rollback separately to expose repeated cancellation."""
+
+    def __init__(self, *, setup_fails: bool) -> None:
+        """Expose setup and rollback intervals independently."""
+        super().__init__()
+        self.joining = asyncio.Event()
+        self.removing = asyncio.Event()
+        self.release_removal = asyncio.Event()
+        self.setup_error = RuntimeError("setup failed")
+        self.setup_fails = setup_fails
+
+    async def join_room(self, conn_id: str, room: str) -> None:
+        """Keep setup pending until its owning session is cancelled."""
+        self.joining.set()
+        if self.setup_fails:
+            raise self.setup_error
+        await asyncio.Event().wait()
+
+    async def remove_connection(self, conn_id: str) -> None:
+        """Expose the rollback interval before removing real membership."""
+        self.removing.set()
+        await self.release_removal.wait()
+        await super().remove_connection(conn_id)
+
+
+class FailingPendingRollbackBackend(BlockingRollbackBackend):
+    """Fail removal after the setup task is cancelled while joining it."""
+
+    def __init__(self) -> None:
+        """Retain the setup and rollback failures for precedence assertions."""
+        super().__init__(setup_fails=True)
+        self.removal_error = RuntimeError("removal failed after cancellation")
+
+    async def remove_connection(self, conn_id: str) -> None:
+        """Wait for the test to expose cancellation, then fail removal."""
+        del conn_id
+        self.removing.set()
+        await self.release_removal.wait()
+        raise self.removal_error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setup_fails", [False, True], ids=["cancelled", "failed"])
+async def test_pre_accept_rollback_joins_through_repeated_cancellation(
+    *, setup_fails: bool
+) -> None:
+    """Do not leave membership behind when cancellation interrupts rollback."""
+    backend = BlockingRollbackBackend(setup_fails=setup_fails)
+    manager = WebSocketConnectionManager(backend=backend)
+    resource, _repo, audit, _feed = _build_resource(manager)
+    socket = RecordingWebSocket()
+    router = WebSocketRouter(resource_factory=lambda _factory: resource)
+    router.add_route(
+        "/workspaces/{workspace_id}/projects/{project_id}/tasks", TaskStreamResource
+    )
+    router.mount("/ws")
+    task = asyncio.create_task(router.on_websocket(_connect_request(), socket))
+    try:
+        await asyncio.wait_for(backend.joining.wait(), timeout=1)
+        if not setup_fails:
+            task.cancel("setup cancelled")
+        await asyncio.wait_for(backend.removing.wait(), timeout=1)
+        for _ in range(2):
+            task.cancel("rollback interrupted")
+            await asyncio.sleep(0)
+        assert not task.done(), "the session must join rollback before exiting"
+        backend.release_removal.set()
+        expected_message = "rollback interrupted" if setup_fails else "setup cancelled"
+        with pytest.raises(asyncio.CancelledError, match=expected_message) as raised:
+            await asyncio.wait_for(task, timeout=1)
+        if setup_fails:
+            assert raised.value.__cause__ is backend.setup_error, (
+                "cancellation must retain the original setup failure as its cause"
+            )
+        assert not manager.websockets, "pre-accept rollback must remove membership"
+        assert socket.unaccepted, "this path must not establish a session"
+        assert not audit.records, "pre-accept cancellation must not audit closure"
+    finally:
+        backend.release_removal.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_pre_accept_rollback_preserves_cancellation_if_removal_fails() -> None:
+    """Cancellation remains primary when the pending removal also fails."""
+    backend = FailingPendingRollbackBackend()
+    manager = WebSocketConnectionManager(backend=backend)
+    resource, _repo, _audit, _feed = _build_resource(manager)
+    task = asyncio.create_task(
+        resource.on_connect(
+            _connect_request(),
+            RecordingWebSocket(),
+            workspace_id=_WORKSPACE,
+            project_id=_PROJECT,
+        )
+    )
+    try:
+        await asyncio.wait_for(backend.removing.wait(), timeout=1)
+        task.cancel("rollback interrupted")
+        backend.release_removal.set()
+
+        with pytest.raises(
+            asyncio.CancelledError, match="rollback interrupted"
+        ) as raised:
+            await asyncio.wait_for(task, timeout=1)
+
+        assert raised.value.__cause__ is backend.removal_error, (
+            "the failed removal must remain chained to cancellation"
+        )
+        assert raised.value.__context__ is backend.setup_error, (
+            "the original setup failure must remain in the exception context"
+        )
+        assert resource._conn_id is not None, (
+            "failed removal must retain the resource's membership identity"
+        )
+    finally:
+        backend.release_removal.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if resource._conn_id is not None:
+            await InProcessBackend.remove_connection(backend, resource._conn_id)
+            resource._conn_id = None
 
 
 def _build_resource(
@@ -107,6 +355,28 @@ async def test_on_connect_cleans_up_and_reraises_when_join_room_fails() -> None:
 
 
 @pytest.mark.asyncio
+async def test_on_connect_groups_setup_and_rollback_failures_primary_first() -> None:
+    """Keep the setup error primary when pre-accept removal also fails."""
+    backend = FailingRollbackBackend()
+    conn_mgr = WebSocketConnectionManager(backend=backend)
+    resource, _repo, _audit, _feed = _build_resource(conn_mgr)
+
+    with pytest.raises(ExceptionGroup) as raised:
+        await resource.on_connect(
+            _connect_request(),
+            RecordingWebSocket(),
+            workspace_id=_WORKSPACE,
+            project_id=_PROJECT,
+        )
+
+    assert raised.value.exceptions == (backend.setup_error, backend.removal_error), (
+        "rollback failure must be grouped after the original setup failure"
+    )
+    assert resource._conn_id is not None, "failed removal must retain its identity"
+    await InProcessBackend.remove_connection(backend, resource._conn_id)
+
+
+@pytest.mark.asyncio
 async def test_on_disconnect_is_a_noop_when_never_connected() -> None:
     """Disconnecting a resource that never connected does nothing."""
     resource, _repo, audit, _feed = _build_resource()
@@ -125,6 +395,7 @@ async def test_on_disconnect_removes_connection_and_audits_closure() -> None:
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
+    assert ws.accepted is True, "the resource must accept before its ready frame"
 
     await resource.on_disconnect(ws, close_code=1001)
 

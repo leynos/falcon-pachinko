@@ -531,6 +531,37 @@ async def test_descendant_template_and_falcon_keyword_params_are_accepted() -> N
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("uri_template", "path_template"),
+    [
+        ("/ws/{rest:path}", "/ws"),
+        (None, None),
+    ],
+    ids=("foreign_path_converter", "missing_path_template"),
+)
+async def test_unrecognized_mount_templates_are_rejected(
+    uri_template: str | None,
+    path_template: str | None,
+) -> None:
+    """Reject foreign catch-alls and absent Falcon templates as not found."""
+    router = WebSocketRouter()
+    router.add_route("/rooms/{room}", PathResource)
+    router.mount("/ws")
+    req = type(
+        "Req",
+        (),
+        {
+            "path": "/ws/rooms/42",
+            "uri_template": uri_template,
+            "path_template": path_template,
+        },
+    )()
+
+    with pytest.raises(falcon.HTTPNotFound):
+        await router.on_websocket(req, DummyWS())
+
+
+@pytest.mark.asyncio
 async def test_router_does_not_accept_an_already_accepted_socket() -> None:
     """A resource-owned accept is not repeated by the router."""
 
