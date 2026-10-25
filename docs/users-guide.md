@@ -58,8 +58,13 @@ class ChatResource(WebSocketResource):
 
 @dc.dataclass(frozen=True, slots=True)
 class _RouterRequest:
+    request: falcon.asgi.Request
     path: str
     path_template: str
+    uri_template: str
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.request, name)
 
 
 class RouterAdapter:
@@ -73,7 +78,12 @@ class RouterAdapter:
         rest: str,
     ) -> None:
         await self._router.on_websocket(
-            _RouterRequest(path=req.path, path_template="/ws"),
+            _RouterRequest(
+                request=req,
+                path=req.path,
+                path_template="/ws",
+                uri_template="/ws",
+            ),
             typ.cast("WebSocketLike", ws),
         )
 
@@ -87,9 +97,9 @@ app.add_route("/ws/{rest:path}", RouterAdapter(router))
 ```
 
 - Falcon matches `/ws/{rest:path}` and forwards the connection to
-  `RouterAdapter`. The adapter presents the request to the router with the
-  `/ws` mount template. The router then matches `/ws/chat/{room}` against its
-  mounted routes.
+  `RouterAdapter`. The adapter presents the `/ws` mount template to the router
+  and delegates other request attributes and methods to Falcon's request. The
+  router then matches `/ws/chat/{room}` against its mounted routes.
 - `configure_raw_frame_media(app)` preserves inbound TEXT and BINARY frames
   for schema dispatch when the router is mounted manually.
 - Each connection receives a **fresh resource instance** and a **shared state
@@ -98,7 +108,9 @@ app.add_route("/ws/{rest:path}", RouterAdapter(router))
   `receive_loop=True`. The default is `False`, which returns after acceptance
   and leaves receives and cleanup to the application.
 - The `ChatPayload` annotation makes the router pass a `ChatPayload` instance
-  to the handler. An unannotated handler receives a `dict`.
+  to the handler. An unannotated handler receives the decoded JSON value
+  directly, such as a `dict` for an object, a list for an array, or `None` when
+  the payload is absent.
 
 Save the Python snippet as `quickstart.py`. An ASGI server is required to serve
 the WebSocket connection; Uvicorn is included in the `examples` extra or the

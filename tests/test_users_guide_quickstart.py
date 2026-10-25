@@ -70,15 +70,37 @@ def test_quickstart_constructs_falcon_asgi_app(
 @pytest.mark.asyncio
 async def test_quickstart_echoes_a_typed_websocket_message(
     quickstart_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A live connection reaches the mounted room route and echoes its text."""
+    observed_headers: list[str | None] = []
+    original_on_connect = quickstart_module.ChatResource.on_connect
+
+    async def inspect_connection_header(
+        resource: object,
+        req: falcon.asgi.Request,
+        ws: falcon.asgi.WebSocket,
+        room: str,
+    ) -> bool:
+        """Read a handshake header before the documented connection hook."""
+        observed_headers.append(req.get_header("X-Quickstart-Test"))
+        return await original_on_connect(resource, req, ws, room)
+
+    monkeypatch.setattr(
+        quickstart_module.ChatResource, "on_connect", inspect_connection_header
+    )
     async with LiveWebSocketServer(quickstart_module.app) as server:
         client = WebSocketTestClient(server.base_url, allow_insecure=True)
-        async with client.connect("/ws/chat/lobby") as session:
+        async with client.connect(
+            "/ws/chat/lobby", headers={"X-Quickstart-Test": "preserved"}
+        ) as session:
             await session.send_json({"type": "chat.message", "payload": {"text": "hi"}})
             async with asyncio.timeout(5):
                 response = await session.receive_json()
 
+    assert observed_headers == ["preserved"], (
+        "the adapter must preserve Falcon request header access"
+    )
     assert response == {"type": "echo", "text": "hi"}, (
         "the quick-start must echo the decoded ChatPayload text"
     )
