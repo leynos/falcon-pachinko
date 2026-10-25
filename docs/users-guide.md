@@ -31,7 +31,12 @@ import typing as typ
 import falcon.asgi
 import msgspec
 
-from falcon_pachinko import WebSocketResource, WebSocketRouter, handles_message
+from falcon_pachinko import (
+    WebSocketResource,
+    WebSocketRouter,
+    configure_raw_frame_media,
+    handles_message,
+)
 
 if typ.TYPE_CHECKING:
     from falcon_pachinko.protocols import WebSocketLike
@@ -74,6 +79,7 @@ class RouterAdapter:
 
 
 app = falcon.asgi.App()
+configure_raw_frame_media(app)
 router = WebSocketRouter(receive_loop=True)
 router.add_route("/chat/{room}", ChatResource)
 router.mount("/ws")
@@ -84,6 +90,8 @@ app.add_route("/ws/{rest:path}", RouterAdapter(router))
   `RouterAdapter`. The adapter presents the request to the router with the
   `/ws` mount template. The router then matches `/ws/chat/{room}` against its
   mounted routes.
+- `configure_raw_frame_media(app)` preserves inbound TEXT and BINARY frames
+  for schema dispatch when the router is mounted manually.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
 - The example opts into a router-owned receive-and-dispatch session with
