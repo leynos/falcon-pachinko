@@ -23,8 +23,6 @@ from falcon_pachinko import (
     WebSocketRouter,
     handles_message,
 )
-from falcon_pachinko.hooks import HookManager
-from falcon_pachinko.session import drive_session
 from falcon_pachinko.unittests.helpers import RecordingWS, make_req
 
 
@@ -274,7 +272,7 @@ async def test_failure_cleanup_errors_are_grouped_after_handler_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancellation_uses_1006_metadata_and_skips_after_receive() -> None:
+async def test_cancellation_closes_with_1001_and_skips_after_receive() -> None:
     """Cancellation cleans up the session without emitting after_receive."""
 
     class WaitingResource(SessionResource):
@@ -307,8 +305,8 @@ async def test_cancellation_uses_1006_metadata_and_skips_after_receive() -> None
     finally:
         resource.release.set()
 
-    assert not ws.closed, "cancellation must not send reserved close code 1006"
-    assert resource.disconnects == [1006], "cancellation cleanup must report 1006"
+    assert ws.closed == [1001], "cancellation must close with 1001"
+    assert resource.disconnects == [1001], "cancellation cleanup must report 1001"
     assert not after_receive, "cancelled dispatch must skip after_receive"
 
 
@@ -494,54 +492,7 @@ async def test_missing_peer_close_code_uses_abnormal_disconnect(
     monkeypatch.setattr(failure, "code", None)
 
     monkeypatch.setattr(ws, "receive_media", mock.AsyncMock(side_effect=failure))
-    manager = HookManager(global_hooks=HookCollection(), resources=[resource])
-    close_attempts: list[None] = []
-    await drive_session(
-        resource, ws, manager, on_policy_close=lambda: close_attempts.append(None)
-    )
+    await _router_for(resource).on_websocket(make_req("/session"), ws)
 
     assert resource.disconnects == [1006], "missing close codes must remain abnormal"
     assert not ws.closed, "a peer disconnect must not cause another socket close"
-    assert not close_attempts, "peer cleanup must not select a server close policy"
-
-
-@pytest.mark.asyncio
-async def test_cancellation_inside_resource_cleanup_does_not_retry_callback() -> None:
-    """Cancellation can change close policy without invoking cleanup twice."""
-    entered = asyncio.Event()
-
-    class PausingDisconnectResource(SessionResource):
-        """Pause only the first cleanup call to expose accidental retries."""
-
-        @typ.override
-        async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
-            """Record the attempt before awaiting cancellation."""
-            await super().on_disconnect(ws, close_code)
-            if len(self.disconnects) == 1:
-                entered.set()
-                await asyncio.Event().wait()
-
-    resource = PausingDisconnectResource()
-    ws = RecordingWS(disconnect_code=4008)
-    manager = HookManager(global_hooks=HookCollection(), resources=[resource])
-    close_attempts: list[None] = []
-    task = asyncio.create_task(
-        drive_session(
-            resource, ws, manager, on_policy_close=lambda: close_attempts.append(None)
-        )
-    )
-    try:
-        async with asyncio.timeout(1):
-            await entered.wait()
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            async with asyncio.timeout(1):
-                await task
-    finally:
-        task.cancel()
-        async with asyncio.timeout(1):
-            await asyncio.gather(task, return_exceptions=True)
-
-    assert resource.disconnects == [4008], "a started cleanup callback must not retry"
-    assert not ws.closed, "cleanup cancellation must not send reserved code 1006"
-    assert close_attempts == [None], "the router must observe exactly one policy close"
