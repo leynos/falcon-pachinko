@@ -12,8 +12,6 @@ from hypothesis import strategies as st
 from falcon_pachinko._disconnect import _PeerDisconnectedError
 from falcon_pachinko.testing import WebSocketSimulator
 
-_ASSERTION_FAILURE = "lifecycle expectation failed"
-
 
 @pytest.mark.asyncio
 async def test_accept_and_close_record_state() -> None:
@@ -125,10 +123,14 @@ async def test_connected_context_manages_lifecycle() -> None:
 
 
 @pytest.mark.asyncio
-async def test_close_wakes_pending_receive_and_preserves_first_code() -> None:
+@pytest.mark.parametrize("receive_name", ["receive_media", "receive_text"])
+async def test_close_wakes_pending_receive_and_preserves_first_code(
+    receive_name: str,
+) -> None:
     """Closing a simulator releases receive with its first close code."""
     simulator = WebSocketSimulator()
-    receive_task = asyncio.create_task(simulator.receive_media())
+    receive = getattr(simulator, receive_name)
+    receive_task = asyncio.create_task(receive())
     await asyncio.sleep(0)
 
     await simulator.close(4001)
@@ -136,19 +138,10 @@ async def test_close_wakes_pending_receive_and_preserves_first_code() -> None:
 
     with pytest.raises(_PeerDisconnectedError) as error:
         await asyncio.wait_for(receive_task, timeout=1)
-    assert error.value.code == 4001, _ASSERTION_FAILURE
-    assert simulator.close_code == 4001, _ASSERTION_FAILURE
-
-
-@pytest.mark.asyncio
-async def test_receive_after_close_raises_with_recorded_code() -> None:
-    """A closed simulator never blocks a later receive call."""
-    simulator = WebSocketSimulator()
-    await simulator.close(4003)
-
-    with pytest.raises(_PeerDisconnectedError) as error:
-        await asyncio.wait_for(simulator.receive_media(), timeout=1)
-    assert error.value.code == 4003, _ASSERTION_FAILURE
+    assert error.value.code == 4001, (
+        f"{receive_name} must report the first close code after it is woken"
+    )
+    assert simulator.close_code == 4001, "a later close must not replace the first code"
 
 
 @pytest.mark.asyncio
@@ -164,28 +157,17 @@ async def test_pending_counts_reflect_queue_sizes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_close_wakes_a_blocked_receive_with_disconnect_code() -> None:
-    """Closing the simulator releases a task waiting for its next frame."""
-    simulator = WebSocketSimulator()
-    pending_receive = asyncio.create_task(simulator.receive_media())
-    await asyncio.sleep(0)
-
-    await simulator.close(code=4001)
-
-    with pytest.raises(_PeerDisconnectedError) as caught:
-        await asyncio.wait_for(pending_receive, timeout=1)
-    assert caught.value.code == 4001, "the wake-up must preserve the close code"
-
-
-@pytest.mark.asyncio
-async def test_receive_after_close_raises_disconnect() -> None:
+@pytest.mark.parametrize("receive_name", ["receive_media", "receive_text"])
+async def test_receive_after_close_raises_disconnect(receive_name: str) -> None:
     """Later receives report the already-recorded close code."""
     simulator = WebSocketSimulator()
     await simulator.close(code=4002)
 
     with pytest.raises(_PeerDisconnectedError) as caught:
-        await simulator.receive_text()
-    assert caught.value.code == 4002, "closed sockets must keep reporting their code"
+        await getattr(simulator, receive_name)()
+    assert caught.value.code == 4002, (
+        f"{receive_name} must keep reporting the recorded close code"
+    )
 
 
 @pytest.mark.asyncio
