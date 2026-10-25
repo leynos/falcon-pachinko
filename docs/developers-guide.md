@@ -128,13 +128,26 @@ major release out until compatibility is verified.
 The lower bound was checked on 2026-10-08 UTC (2026-10-09 in Europe/Berlin) by
 installing Falcon 4.0.0 with `uv pip install falcon==4.0.0` and running
 `uv run --no-sync pytest -v`: 770 tests passed and 2 were skipped. Run
-`make build` afterwards to restore the normal environment. The latest CI build
-checked for this change resolved Falcon 4.4.0.
+`make build` afterwards to restore the normal environment. `uv.lock` is
+committed and `.gitignore` does not exclude it. The dependency bounds above are
+deliberately wide, so the lockfile pins the Falcon release tested by
+`lint-test` and the shared coverage action; Dependabot keeps that release
+current. See "Dependency management with uv" below for how the lockfile is
+maintained.
 
-`uv.lock` is committed and `.gitignore` no longer excludes it. The dependency
-bounds above are deliberately wide, so the lockfile is what pins an actual
-release. See "Dependency management with uv" below for how it is kept current.
-Lower-bound coverage in CI stays tracked separately from this support policy.
+The `falcon-minimum` job in `.github/workflows/ci.yml` checks the lower bound
+on every push and pull request. After `make build` installs the locked
+environment, the job overrides Falcon with `FALCON_MINIMUM_VERSION`, verifies
+the installed version, and runs the full suite with
+`uv run --no-sync pytest -v`. The `--no-sync` flag keeps uv from restoring the
+locked release; `make test` would run its `build` prerequisite and restore that
+release.
+
+When the lower bound changes, update the `falcon` bound in `pyproject.toml`,
+`FALCON_MINIMUM_VERSION` in the workflow, and `EXPECTED_FALCON_VERSION` in
+`tests/workflow_contracts/falcon_minimum_fixtures.py` together. Review
+`tests/workflow_contracts/test_falcon_minimum_lane.py` as well; its workflow
+contract keeps those values aligned.
 
 ## Dependency management with uv
 
@@ -1047,6 +1060,7 @@ public-repository minutes are free and where this migration has nothing to gain.
 | Job                                   | Trigger            | Ceiling |
 | ------------------------------------- | ------------------ | ------- |
 | `ci.yml` `lint-test`                  | pull request, push | 15 min  |
+| `ci.yml` `falcon-minimum`             | pull request, push | 30 min  |
 | `coverage-main.yml` `coverage-upload` | push to `main`     | 15 min  |
 | `release.yml` `pure-wheel`            | tag push           | 30 min  |
 | `release.yml` `release`               | tag push           | 30 min  |
@@ -1059,17 +1073,17 @@ under emulation, and Ubicloud offers Linux only. `delayed-pr-comment.yml`'s
 `delay_and_comment` is dispatch-only. `dependabot-automerge.yml`'s `automerge`
 calls a reusable workflow and declares no runner of its own.
 
-### The pull-request lane's label is an expression
+### Pull-request lanes use a fork-safe runner expression
 
-A pull request from a fork cannot obtain an Ubicloud runner. `lint-test` serves
-pull requests, so a fixed `ubicloud-standard-2` would leave such a pull request
-queueing for a runner that never arrives. A pull request Dependabot opened also
-takes the hosted arm: hosted minutes cost nothing on a public repository, and
-Dependabot opens many pull requests, which therefore build cold on the hosted
-pool. The guard tests the pull request's author, not `github.actor`, because
-the actor is whoever triggered the run, so a person pushing to a Dependabot
-branch would flip the runner. It resolves its label from the head repository
-and the author instead:
+A pull request from a fork cannot obtain an Ubicloud runner. `lint-test` and
+`falcon-minimum` serve pull requests, so a fixed `ubicloud-standard-2` would
+leave such a pull request queueing for a runner that never arrives. A pull
+request Dependabot opened also takes the hosted arm: hosted minutes cost
+nothing on a public repository, and Dependabot opens many pull requests, which
+therefore build cold on the hosted pool. The guard tests the pull request's
+author, not `github.actor`, because the actor is whoever triggered the run, so
+a person pushing to a Dependabot branch would flip the runner. Both jobs
+resolve their label from the head repository and the author instead:
 
 ```yaml
 runs-on: >-
@@ -1117,10 +1131,12 @@ The two measured ceilings are sized from real runs rather than chosen:
 *Table: the runs the ceilings are sized from.*
 
 Fifteen minutes is roughly twenty-five times the longest of these, which leaves
-room for a cold cache and for Ubicloud's two vCPUs. The release lanes have no
-recorded run at all, so their thirty minutes is not measured; it is set wide on
-the principle that a release killed part-way is worse than one that runs long.
-Re-size on the third Ubicloud run of each lane.
+room for a cold cache and for Ubicloud's two vCPUs. `falcon-minimum` has no
+recorded run yet; its thirty-minute ceiling gives the uncovered full suite
+extra headroom. The release lanes have no recorded runs either, so their
+thirty-minute ceilings are not measured; they are set wide on the principle
+that a release killed part-way is worse than one that runs long. Re-size each
+lane on its third Ubicloud run.
 
 The last row is the first run on Ubicloud, and it is slower than the
 GitHub-hosted run above it: 44 s against 36 s, on an 11 s queue against 2 s.

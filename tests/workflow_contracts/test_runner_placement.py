@@ -1,7 +1,7 @@
 """Where each job runs, and what happens when it does not finish.
 
 Repository-owned Linux lanes run on Ubicloud. A pull request from a fork
-cannot obtain an Ubicloud runner, so the one lane that serves pull requests
+cannot obtain an Ubicloud runner, so each lane that serves pull requests
 resolves its label from the head repository instead of naming one. Three
 failures follow from that arrangement and none of them shows up in a green
 run:
@@ -48,9 +48,14 @@ from .workflow_support import (
     UBICLOUD_LINUX_LABEL,
 )
 
-#: The lane that serves pull requests, and so the only one that can be
-#: reached by a fork.
-FORK_FALLBACK_LANE = ("ci.yml", "lint-test")
+#: The lanes that serve pull requests, and so can be reached by a fork.
+FORK_FALLBACK_LANES = (
+    ("ci.yml", "lint-test"),
+    ("ci.yml", "falcon-minimum"),
+)
+# The trigger contract names the shared workflow trigger once; both jobs live
+# in `ci.yml` and inherit the same workflow-level events.
+FORK_FALLBACK_LANE = FORK_FALLBACK_LANES[0]
 #: Each Ubicloud lane's ceiling in minutes, as the developer guide's table
 #: publishes it. The values are restated here rather than derived, because
 #: the contract's job is to hold the guide and the workflow to one another:
@@ -58,6 +63,7 @@ FORK_FALLBACK_LANE = ("ci.yml", "lint-test")
 #: that no longer exists, and the guide is what the next re-sizing reads.
 LANE_CEILINGS = {
     ("ci.yml", "lint-test"): 15,
+    ("ci.yml", "falcon-minimum"): 30,
     ("coverage-main.yml", "coverage-upload"): 15,
     ("release.yml", "pure-wheel"): 30,
     ("release.yml", "release"): 30,
@@ -152,9 +158,8 @@ def _fallback_faults(declared: str) -> list[str]:
     return faults
 
 
-def _lane_declaration() -> str:
-    """Return the fork-fallback lane's `runs-on` as the workflow declares it."""
-    workflow_name, job_name = FORK_FALLBACK_LANE
+def _lane_declaration(workflow_name: str, job_name: str) -> str:
+    """Return one fork-fallback lane's `runs-on` declaration."""
     declared = _job(workflow_name, job_name).get("runs-on")
     assert isinstance(declared, str), (
         f"{workflow_name}:{job_name} must declare a runs-on label"
@@ -162,7 +167,10 @@ def _lane_declaration() -> str:
     return declared
 
 
-def test_the_pull_request_lane_falls_back_for_forks() -> None:
+@pytest.mark.parametrize(("workflow_name", "job_name"), FORK_FALLBACK_LANES)
+def test_pull_request_lanes_fall_back_for_forks(
+    workflow_name: str, job_name: str
+) -> None:
     """Send a fork's or Dependabot's pull request to hosted Linux, the rest to Ubicloud.
 
     The guard is asserted as the whole field path. A sibling field of the same
@@ -171,8 +179,9 @@ def test_the_pull_request_lane_falls_back_for_forks() -> None:
     never obtain. The Dependabot test reads the pull request's author, not
     ``github.actor``, which is whoever triggered the run.
     """
-    faults = _fallback_faults(_lane_declaration())
-    assert not faults, f"{FORK_FALLBACK_LANE} is not the reviewed fallback: {faults}"
+    lane = (workflow_name, job_name)
+    faults = _fallback_faults(_lane_declaration(*lane))
+    assert not faults, f"{lane} is not the reviewed fallback: {faults}"
 
 
 @pytest.mark.parametrize(
@@ -183,8 +192,9 @@ def test_the_pull_request_lane_falls_back_for_forks() -> None:
     ],
     ids=["dependabot-arm-removed", "actor-instead-of-author"],
 )
+@pytest.mark.parametrize(("workflow_name", "job_name"), FORK_FALLBACK_LANES)
 def test_the_lane_check_refuses_a_mutated_declaration(
-    mutate: cabc.Callable[[str], str],
+    mutate: cabc.Callable[[str], str], workflow_name: str, job_name: str
 ) -> None:
     """Drive the same check over the real declaration, mutated.
 
@@ -192,7 +202,7 @@ def test_the_lane_check_refuses_a_mutated_declaration(
     shown to reject exactly the edits it exists to catch, not constructed
     strings of its own.
     """
-    real = " ".join(_lane_declaration().split())
+    real = " ".join(_lane_declaration(workflow_name, job_name).split())
     mutated = mutate(real)
     assert mutated != real, "the mutation did not change the declaration"
     assert _fallback_faults(mutated), f"{mutated!r} was accepted"
@@ -278,7 +288,7 @@ def test_the_ceiling_contract_sees_the_lanes_it_guards() -> None:
         and UBICLOUD_LINUX_LABEL
         in collapse_label_whitespace(str(job_document.get("runs-on")))
     }
-    expected = {FORK_FALLBACK_LANE, *PUSH_ONLY_UBICLOUD_LANES}
+    expected = {*FORK_FALLBACK_LANES, *PUSH_ONLY_UBICLOUD_LANES}
 
     assert visited == expected, (
         "the ceiling contract must visit exactly the Ubicloud lanes; "
@@ -369,7 +379,7 @@ def test_the_ceiling_table_covers_every_ubicloud_lane() -> None:
     the guide. A lane added to the migration and not to the table would
     simply not be checked, so the two sets are compared.
     """
-    assert set(LANE_CEILINGS) == {FORK_FALLBACK_LANE, *PUSH_ONLY_UBICLOUD_LANES}, (
+    assert set(LANE_CEILINGS) == {*FORK_FALLBACK_LANES, *PUSH_ONLY_UBICLOUD_LANES}, (
         "every Ubicloud lane must carry a documented ceiling; the table names "
         f"{sorted(LANE_CEILINGS)}"
     )
