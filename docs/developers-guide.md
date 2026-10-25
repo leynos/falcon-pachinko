@@ -31,34 +31,43 @@ the lifespan owner.
 
 ## WebSocket receive-loop lifecycle
 
-`WebSocketRouter(receive_loop=True)` opts into a router-owned receive loop.
-After `on_connect` returns an accepting result and the connection hooks finish,
-the router accepts the socket and calls `on_accepted`. It then dispatches raw
-text and binary frames in order until the peer disconnects or dispatch fails.
-The default is `False`; in that mode the router returns after accepting and the
-application retains receive and cleanup ownership.
+When `receive_loop=True`, `WebSocketRouter.on_websocket()` awaits
+`_session_driver.run_session()` after route resolution. `ConnectionSetup`
+preserves the setup order: `before_connect` hooks, `on_connect`,
+`after_connect` hooks, then router acceptance or rejection. A resource may
+accept its own socket during setup; `on_accepted()` runs after acceptance. The
+selected child resource and its bound hook manager are retained for frame
+dispatch and cleanup. With the default `receive_loop=False`, the router returns
+after setup and acceptance, leaving receive and disconnect ownership to the
+application.
 
-With the loop enabled, `on_disconnect` is attempted exactly once after a
-successful `on_connect`, including peer disconnect, dispatch failure,
-cancellation, or failure in `after_connect` or `accept`. A rejected connection
-or an `on_connect` failure does not invoke it. `before_disconnect` hooks run
-before the callback; a hook interrupted before the callback may be retried
-during cancellation cleanup. A callback interrupted by cancellation is not
-invoked a second time. `WebSocketDisconnected.code` is passed through for peer
-closure, with `1006` used when that code is missing or cancellation interrupts
-the session. Cancellation propagates without sending a close frame with
-reserved code `1006`; unexpected receive or handler failures close with `1011`
-and propagate the original exception. Failure during `after_connect` or
-`accept` runs cleanup with `1006`. An ordinary exception from `on_accepted`
-occurs after acceptance, closes with `1011`, and runs cleanup with `1011`.
+`SessionState` moves through `CONNECTING`, `ESTABLISHED`, `DISCONNECTING`, and
+`CLOSED`. Approval by `on_connect()` or observed resource-owned acceptance
+establishes the cleanup boundary. A false result without acceptance remains a
+rejection and does not run post-accept cleanup. If setup exits after
+establishment, the router completes cleanup before returning in either mode.
+With `receive_loop=True`, the router retains lifecycle ownership until
+disconnect; after successful setup with `receive_loop=False`, it returns
+control and the application owns subsequent receives and disconnect cleanup.
+The receive loop dispatches frames only while the state is `ESTABLISHED`.
+Receive hooks and resource dispatch are guarded once disconnect begins, so a
+buffered frame cannot start another receive cycle during cleanup.
 
-The private `falcon_pachinko._router_session` component owns the opt-in
-acceptance phase. After acceptance, it transfers frame reception and cleanup to
-the shared `session.drive_session()` loop; `WebSocketRouter` retains route
-resolution and connection setup. If cleanup fails during incomplete acceptance
-while a primary error is active, the wrapper adds a note containing only the
-cleanup exception type. After transfer, the shared session driver logs cleanup
-failure types and preserves the primary session failure.
+The session driver performs cleanup in a separate shielded task. It first
+notifies `before_disconnect` hooks with the request, socket, route parameters,
+effective close code and primary error, then attempts `on_disconnect()` even if
+a before-disconnect hook failed. The state guard gives one task cleanup
+ownership, and the session becomes `CLOSED` after both cleanup stages have been
+attempted. Cleanup has no timeout; `on_disconnect()` must terminate.
+
+For ordinary failures, a lone primary or cleanup exception is re-raised
+unchanged. Multiple ordinary failures use an `ExceptionGroup`, with the session
+failure first. Cancellation remains a bare `CancelledError`; cleanup failures
+hidden by cancellation are sent to the running loop's exception handler. Peer
+disconnects use Falcon's reported code, with `1006` when it is missing. A
+failure after acceptance attempts close `1011`; cancellation uses `1006` as
+cleanup metadata and does not send that reserved code in a close frame. An
+already-reported close code is retained.
 
 ## Cluster fan-out maintenance
 
@@ -226,11 +235,12 @@ The Falcon composition flow is `router.mount(prefix)` followed by
 `router.attach(app)`. The compatibility form `router.attach(app, prefix)` also
 mounts and attaches in one call. Attachment registers the exact mount and
 descendant catch-all routes and installs raw-frame media handlers on the app.
-The router accepts a connection after `on_connect()` succeeds and calls
-`on_accepted()` immediately after acceptance. It starts
-`session.drive_session()` only when `receive_loop=True`; with the default
-`False`, it returns after acceptance and the application owns further receives
-and cleanup.
+The router delegates setup and session ownership to
+`_session_driver.run_session()`. With `receive_loop=True`, it receives and
+dispatches frames through the selected child until disconnect, then runs
+cleanup before its route call returns. With the default `False`, it returns
+after setup and acceptance, leaving subsequent receive and cleanup work to the
+application.
 
 `install_raw_websocket_media_handlers()` wraps the app-wide TEXT and BINARY
 handlers once. Inbound deserialization passes frames through as raw `str` or
@@ -242,18 +252,19 @@ manually mounted routers and other Falcon WebSocket routes. Either entry point
 warns when customized inbound handlers will be replaced. Repeated installation
 does not wrap a handler again.
 
-`session.drive_session()` receives one raw frame at a time and passes it to
-`WebSocketResource.dispatch()`. Falcon signals a peer disconnect with
+`run_session()` receives one raw frame at a time and dispatches it to the same
+selected `WebSocketResource`. Falcon signals a peer disconnect with
 `falcon.WebSocketDisconnected`; the simulator uses the package's internal
-peer-disconnect signal. The driver preserves the peer close code, using `1006`
-when Falcon does not provide one. A receive or dispatch failure closes an open
-socket with `1011`, runs best-effort disconnect cleanup, and re-raises the
-original failure. Local cancellation runs best-effort cleanup with close-code
-metadata `1006`, sends no close frame with that reserved code, and re-raises
-`CancelledError`. Disconnect hooks precede the single `on_disconnect()`
-attempt. For an ordinary peer disconnect, cleanup errors propagate after both
-cleanup steps have been attempted; during failure or cancellation cleanup
-errors are logged and do not replace the primary outcome.
+peer-disconnect signal. The session adapter preserves Falcon's reported close
+code, using `1006` when no code is available. On media-only transports, decoded
+`str` and `bytes` pass through, while other values are JSON-encoded with
+`msgspec`. Failures while receiving, adapting or validating a frame, including
+malformed media, are unexpected session failures; after acceptance they use the
+`1011` cleanup path unless a close code was already reported. The original
+failure is re-raised after cleanup. Multiple ordinary failures are grouped with
+the session error first. Cancellation propagates as a bare `CancelledError`;
+cleanup failures hidden by cancellation are reported to the running loop's
+exception handler.
 
 The `ServerAdapter` protocol isolates the ASGI server. Its `task` property is
 the serve-loop task, `start(app, sock)` returns only after lifespan startup and
@@ -489,16 +500,17 @@ stays legal for a distinct method; see §3.6 of the
 
 ## Opt-in router-owned WebSocket sessions
 
-With `receive_loop=True`, after route resolution, connection hooks,
-`on_connect`, and `after_connect` hooks succeed, `WebSocketRouter` accepts the
-socket and awaits the selected resource's session inline. The session
+With `receive_loop=True`, `WebSocketRouter` awaits the selected resource's
+session inline after route resolution and connection setup. Setup runs
+`before_connect`, `on_connect`, and `after_connect` in order, then accepts or
+rejects the socket; `on_accepted()` follows completed acceptance. The session
 repeatedly calls `receive_media()`, adapts decoded values to raw JSON frames
 when needed, and awaits `WebSocketResource.dispatch()` before reading the next
 frame. It creates no per-frame tasks. The selected child resource, bound hook
 manager, injected services, and connection-scoped state proxy are the same
 objects prepared for connection setup. With the default `receive_loop=False`,
-the router returns after acceptance and the application owns further receives
-and cleanup.
+the router returns after setup and acceptance, and the application owns
+subsequent receives and cleanup.
 
 Falcon may decode incoming media before `receive_media()` returns it, so
 `receive_loop=True` alone does not guarantee exact raw TEXT or BINARY input.
@@ -510,25 +522,24 @@ entry points use the same idempotent setup and warn when customized inbound
 handlers will be replaced; Falcon's default decoding applies when neither is
 used.
 
-An ordinary peer disconnect runs `before_disconnect` hooks and then attempts
-`on_disconnect(ws, peer_code)` once; a missing peer close code maps to 1006.
-Cancellation before disconnect cleanup starts uses close-code metadata 1006 and
-re-raises `CancelledError` without sending a close frame with that reserved
-code. If cancellation interrupts a peer-close callback already in progress,
-that callback is not retried; cancellation cleanup uses 1006 metadata. An
-unexpected receive or handler exception closes with 1011, runs best-effort
-disconnect cleanup, and re-raises the original exception. Failure in
-`after_connect` or `accept` before acceptance completes uses 1006 for cleanup.
-An ordinary exception from `on_accepted` happens after acceptance, closes with
-1011, and passes 1011 to cleanup even though the receive loop has not started.
-Cancellation during `on_accepted` uses 1006 as cleanup metadata and propagates
-without sending a close frame with that reserved code. Cancellation cleanup may
-retry a `before_disconnect` hook interrupted before the callback; an
-interruption inside the callback does not trigger a second attempt. A normal
-peer-cleanup lifecycle error propagates. During accepted-session failure
-cleanup, ordinary failures are grouped with the session failure first. Cleanup
-failures hidden by cancellation are reported to the event loop's exception
-handler, while cancellation remains a bare `CancelledError`.
+During an ordinary peer disconnect, `before_disconnect` hooks run before the
+single `on_disconnect(ws, peer_code)` attempt; a missing peer close code maps
+to 1006. Caller cancellation does not cancel the separate shielded cleanup
+task: it continues through both cleanup stages and attempts `on_disconnect()`
+exactly once. Receive and dispatch guards prevent a new frame from starting
+receive hooks after the session reaches `DISCONNECTING`.
+
+An unexpected receive or handler failure after acceptance attempts close 1011
+when no close code has already been reported, then re-raises the original
+failure after cleanup. Failure in `after_connect` or `accept` before acceptance
+completes uses 1006 for cleanup. An ordinary exception from `on_accepted()`
+occurs after acceptance and uses 1011 for cleanup. Cancellation uses 1006 as
+cleanup metadata without sending a close frame with that reserved code, and
+propagates as a bare `CancelledError`. A lone cleanup failure propagates
+unchanged; multiple ordinary failures are grouped, with any session failure
+first. Cleanup failures hidden by cancellation are reported to the running
+loop's exception handler. Cleanup has no timeout, so `on_disconnect()` must
+terminate.
 
 Test sockets must terminate receive loops. `DummyWS` and `RecordingWS` return
 their scripted frames in order and then signal peer disconnection. The
