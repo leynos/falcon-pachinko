@@ -1,9 +1,4 @@
-"""Track phases and failure state for one routed WebSocket session.
-
-The session driver shares this state with the socket adapter and cleanup task.
-It records the effective close code and primary error, while
-``begin_disconnect()`` grants exactly one caller cleanup ownership.
-"""
+"""Internal state and failure policy for one accepted WebSocket session."""
 
 from __future__ import annotations
 
@@ -14,20 +9,28 @@ import enum
 GOING_AWAY = 1001
 ABNORMAL_CLOSURE = 1006
 INTERNAL_ERROR = 1011
-MAX_CLOSE_CODE = 65535
 
 
 async def _wait_for_shielded_task[T](
     task: asyncio.Future[T],
+    *,
+    cancel_on_interrupt: bool = False,
 ) -> list[asyncio.CancelledError]:
-    """Wait for task completion while retaining each caller cancellation."""
+    """Wait for task completion, retaining and optionally forwarding cancellation."""
     interruptions: list[asyncio.CancelledError] = []
+    cancellation_forwarded = False
     while True:
         try:
             await asyncio.shield(task)
             break
         except asyncio.CancelledError as exc:
             interruptions.append(exc)
+            should_forward_cancellation = (
+                cancel_on_interrupt and not cancellation_forwarded and not task.done()
+            )
+            if should_forward_cancellation:
+                task.cancel()
+                cancellation_forwarded = True
             if task.done():
                 break
     return interruptions
@@ -41,10 +44,15 @@ def _report_session_failure(
 ) -> None:
     """Report a failure without changing the lifecycle's precedence policy."""
     try:
-        asyncio.get_running_loop().call_exception_handler({
-            "message": message,
-            "exception": error,
-        })
+        loop = asyncio.get_running_loop()
+        context: dict[str, object] = {"message": message}
+        if loop.get_exception_handler() is None:
+            # The default handler prints exception values, which may contain
+            # caller-controlled payloads. Keep its diagnostic type-only.
+            context["message"] = f"{message}: {type(error).__name__}"
+        else:
+            context["exception"] = error
+        loop.call_exception_handler(context)
     except Exception:
         if not suppress_handler_errors:
             raise
@@ -66,6 +74,7 @@ class SessionState:
     phase: SessionPhase = SessionPhase.CONNECTING
     close_code: int | None = None
     primary_error: BaseException | None = None
+    peer_disconnected: bool = False
     _has_established: bool = dc.field(default=False, init=False, repr=False)
 
     def establish(self) -> None:

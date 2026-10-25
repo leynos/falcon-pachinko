@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
+import logging
 import typing as typ
 
+from ._observability import _observe_operation
 from ._session import (
+    GOING_AWAY,
     SessionState,
     _report_session_failure,
     _wait_for_shielded_task,
@@ -22,6 +25,8 @@ if typ.TYPE_CHECKING:
     from .hooks import HookManager
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
+
+logger = logging.getLogger(__name__)
 
 
 class _Dispatch(typ.Protocol):
@@ -48,7 +53,9 @@ async def run_shielded_cleanup(
 ) -> tuple[tuple[BaseException, ...], tuple[asyncio.CancelledError, ...]]:
     """Finish one cleanup task even if its caller receives more cancellation."""
     cleanup_task = asyncio.create_task(_collect_cleanup_failures(context))
-    interruptions = await _wait_for_shielded_task(cleanup_task)
+    interruptions = await _wait_for_shielded_task(
+        cleanup_task, cancel_on_interrupt=True
+    )
 
     if cleanup_task.cancelled():
         failures = (asyncio.CancelledError(),)
@@ -81,11 +88,12 @@ async def _cleanup_session(context: CleanupContext) -> tuple[BaseException, ...]
         return ()
 
     failures: list[BaseException] = []
-    try:
-        close_code = await _close_failed_session(context, failures)
-        failures.extend(await _run_disconnect_hooks(context, close_code))
-    finally:
-        session.mark_closed()
+    with _observe_operation(logger, "disconnect"):
+        try:
+            close_code = await _close_failed_session(context, failures)
+            failures.extend(await _run_disconnect_hooks(context, close_code))
+        finally:
+            session.mark_closed()
 
     return tuple(failures)
 
@@ -98,7 +106,9 @@ async def _close_failed_session(
     recorded_code = getattr(context.dispatch.ws, "close_code", None)
     close_code = effective_close_code(recorded_code, context.session, primary_error)
     context.session.close_code = close_code
-    if primary_error is not None and not bool(
+    if primary_error is not None and not isinstance(
+        primary_error, asyncio.CancelledError
+    ) and not bool(
         getattr(context.dispatch.ws, "closed", False)
     ):
         try:
@@ -124,10 +134,24 @@ async def _run_disconnect_hooks(
         error=context.primary_error,
     )
     failures: list[BaseException] = []
-    await _attempt_cleanup(
-        lambda: context.hook_manager.notify_before_disconnect(hook_context),
-        failures,
-    )
+    try:
+        await context.hook_manager.notify_before_disconnect(hook_context)
+    except asyncio.CancelledError as error:
+        failures.append(error)
+        close_code = GOING_AWAY
+        context.session.close_code = close_code
+        hook_context.close_code = close_code
+        hook_context.error = error
+        try:
+            await dispatch.ws.close(close_code)
+        except BaseException as close_error:  # ruff: ignore[blind-except] - continue cleanup
+            failures.append(close_error)
+        await _attempt_cleanup(
+            lambda: context.hook_manager.notify_before_disconnect(hook_context),
+            failures,
+        )
+    except BaseException as error:  # ruff: ignore[blind-except] - preserve hook failures
+        failures.append(error)
     await _attempt_cleanup(
         lambda: context.resource.on_disconnect(dispatch.ws, close_code), failures
     )

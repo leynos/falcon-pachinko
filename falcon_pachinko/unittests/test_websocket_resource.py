@@ -731,7 +731,7 @@ def test_conventional_registry_excludes_lifecycle_names() -> None:
     assert "on_ping" in names, "an ordinary conventional handler stays registered"
     assert names.isdisjoint({
         "on_connect",
-        "on_accepted",
+        "on_session_start",
         "on_disconnect",
         "on_unhandled",
     }), f"lifecycle names must not be dispatchable: {sorted(names)}"

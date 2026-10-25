@@ -23,9 +23,9 @@ if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints
 
     import falcon
 
+    from .lifecycle import AcceptOptions
     from .protocols import WebSocketLike
 
-from ._session import SessionPhase
 from .dispatcher import dispatch
 from .exceptions import ReservedHandlerRegistrationError
 from .handlers import (
@@ -36,6 +36,7 @@ from .handlers import (
     is_lifecycle_callback,
 )
 from .hooks import HookCollection, HookManager
+from ._session import SessionPhase
 from .schema import populate_struct_handlers, validate_schema_types
 
 
@@ -51,8 +52,8 @@ class WebSocketResource:
     Message handlers are either registered explicitly with
     :func:`~falcon_pachinko.handles_message` or discovered by naming
     convention. In both cases the lifecycle callbacks ``on_connect``,
-    ``on_disconnect`` and ``on_unhandled`` are reserved: peer tags can never
-    select them, and registering one as a message handler raises
+    ``on_session_start``, ``on_disconnect`` and ``on_unhandled`` are reserved:
+    peer tags can never select them, and registering one as a message handler raises
     :class:`~falcon_pachinko.exceptions.ReservedHandlerRegistrationError`.
     """
 
@@ -72,12 +73,7 @@ class WebSocketResource:
 
     @property
     def has_router_session(self) -> bool:
-        """Whether a router receive session currently owns this resource.
-
-        This is true from connection setup through disconnect cleanup, including
-        while the session is still connecting. The cleanup promise itself begins
-        only after ``on_connect`` approves or the resource accepts the socket.
-        """
+        """Whether the router still owns this resource's session state."""
         manager = getattr(self, "_hook_manager", None)
         session = manager.session if manager is not None else None
         return session is not None and session.phase is not SessionPhase.CLOSED
@@ -287,13 +283,18 @@ class WebSocketResource:
 
     async def on_connect(  # ruff: ignore[no-self-use] - overridable hook; subclasses use ``self``
         self, req: falcon.Request, ws: WebSocketLike, **params: object
-    ) -> bool:
+    ) -> bool | AcceptOptions:
         """Decide whether the router should accept the WebSocket connection.
 
-        The router calls this during connection setup. The ``after_connect``
-        hooks run after this method and before the router calls ``accept()``.
-        Use :meth:`on_accepted` for setup that requires an accepted socket. If
-        this method sends a frame, explicitly ``await ws.accept()`` first.
+        This runs before the router accepts the handshake, so it is the place
+        to inspect request metadata or reject the connection. Return ``True``
+        to accept with defaults, ``AcceptOptions`` to select a subprotocol or
+        response headers, or a falsey value to reject. The ``after_connect``
+        hooks observe the result before the router performs acceptance.
+
+        Calling ``ws.accept()`` remains temporarily supported for migration,
+        but emits a deprecation warning. Use the return value to keep the
+        router as the sole acceptance owner.
 
         Parameters
         ----------
@@ -306,61 +307,50 @@ class WebSocketResource:
 
         Returns
         -------
-        bool
-            ``True`` to accept the WebSocket connection; ``False`` to reject it
+        bool or AcceptOptions
+            A falsey value rejects; ``True`` accepts with defaults; an
+            ``AcceptOptions`` value supplies the subprotocol and response
+            headers.
         """
         return True
 
-    async def on_accepted(self, ws: WebSocketLike) -> None:
-        """Perform connection setup after the router accepts the socket.
+    async def on_session_start(self, ws: WebSocketLike) -> None:
+        """Run application work after acceptance and before frame reception.
+
+        Use this hook for active-session operations such as sending a ready
+        frame or registering the connection with a manager. The router invokes
+        it after the handshake succeeds and before its receive loop starts.
+        Exceptions close the accepted session with code 1011 and still run
+        disconnect cleanup.
 
         Parameters
         ----------
         ws : WebSocketLike
-            The accepted WebSocket connection.
-
-        Notes
-        -----
-        The router calls this immediately after acceptance and before its
-        receive loop. Perform accept-dependent setup and initial application
-        I/O here or in message handlers. :meth:`on_connect` may send only after
-        explicitly awaiting ``ws.accept()``.
+            The accepted, lifecycle-guarded WebSocket.
         """
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Handle cleanup for a router-owned WebSocket session.
 
-        With ``WebSocketRouter(receive_loop=True)``, after an accepting
-        ``on_connect``, the router attempts this callback once after the
-        ``before_disconnect`` hooks. This includes cleanup when
-        ``after_connect`` or ``accept`` fails. A peer close code is passed
-        through, or 1006 when the peer close code is unavailable or acceptance
-        does not complete. An ordinary exception from ``on_accepted`` occurs
-        after acceptance: an open socket closes with 1011, and cleanup receives
-        1011. If the transport is already closed without a reported code,
-        cleanup uses 1006 and does not attempt another close. Cancellation as
-        the session-ending cause preserves any selected or reported code;
-        otherwise it selects 1001 and attempts a best-effort close while the
-        accepted transport remains open. If cancellation
-        arrives while peer-close cleanup is already running, the shielded task
-        keeps the selected peer code and finishes without restarting either
-        cleanup stage. Unexpected receive or handler failures use the same
-        1011-on-open, 1006-on-closed rule and propagate after cleanup.
+        The router attempts this callback once for every accepted session,
+        after the ``before_disconnect`` hooks. This includes cleanup when
+        ``on_session_start`` or message handling fails. A peer close code is
+        passed through, or 1006 when the peer code is unavailable. Cancellation
+        before disconnect cleanup starts closes with 1001 and passes 1001 here.
+        Unexpected receive or handler failures close with 1011 and pass 1011
+        here. These failures propagate after cleanup.
 
-        A falsey, unaccepted rejection and a failure before approval or
-        acceptance do not invoke this method. If ``on_connect`` accepts the
-        socket and then fails, cleanup still runs. Cancellation inside this
-        callback does not cause a second callback attempt. With the default
-        ``receive_loop=False``, the application owns reception and cleanup
-        after successful setup and observed acceptance. If approval does not
-        complete acceptance, the router runs cleanup before returning.
+        Rejected connections and failed ``on_connect`` calls do not invoke this
+        method. Cancellation inside this callback does not cause a second
+        callback attempt.
 
         Parameters
         ----------
         ws : WebSocketLike
             The WebSocket connection instance
         close_code : int
-            The close code indicating the reason for disconnection
+            The reported close code when available, or the effective fallback
+            code for transport loss, cancellation, or an unexpected failure
         """
 
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
@@ -434,6 +424,5 @@ async def _receive_hooks(
             with suppress(Exception):
                 await manager.notify_after_receive(context)
         raise
-    # Every handler above re-raises, so reaching here means the body succeeded.
     if manager.can_receive(ws):
         await manager.notify_after_receive(context)

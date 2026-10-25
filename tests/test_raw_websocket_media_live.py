@@ -61,7 +61,7 @@ async def test_live_router_dispatch_preserves_exact_raw_frames(
     """Identity media handlers preserve real TEXT and BINARY frame contents."""
     app = falcon.asgi.App()
     received = _ReceivedFrames()
-    router = WebSocketRouter(receive_loop=True)
+    router = WebSocketRouter()
     router.add_route("/", _RecordingResource, received)
     router.attach(app, "/ws")
 

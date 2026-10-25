@@ -85,16 +85,23 @@ class RecordingResource(WebSocketResource):
         ws: WebSocketLike,
         **params: object,
     ) -> bool:
-        """Register the socket; the router performs acceptance afterward."""
+        """Approve the routed connection before router-owned acceptance."""
         del req, params
-        conn_id = self._recorder.register()
-        await self._manager.add_connection(conn_id, ws)
-        self._conn_id = conn_id
         if self._close_on_connect:
+            # Keep one explicit probe of the deprecated early-accept path.
             await ws.accept()
+            conn_id = self._recorder.register()
+            await self._manager.add_connection(conn_id, ws)
+            self._conn_id = conn_id
             await ws.close(4003)
             return False
         return True
+
+    async def on_session_start(self, ws: WebSocketLike) -> None:
+        """Register accepted membership after the router completes acceptance."""
+        conn_id = self._recorder.register()
+        await self._manager.add_connection(conn_id, ws)
+        self._conn_id = conn_id
 
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Implement the small message protocol used by live scenarios."""
@@ -196,7 +203,7 @@ def create_live_application() -> LiveApplication:
     app: falcon.asgi.App[falcon.asgi.Request, falcon.asgi.Response] = falcon.asgi.App()
     manager = WebSocketConnectionManager()
     recorder = DisconnectRecorder()
-    router = WebSocketRouter(receive_loop=True)
+    router = WebSocketRouter()
     router.add_route(
         "/session",
         RecordingResource,

@@ -9,6 +9,12 @@ import pytest
 
 from falcon_pachinko import ClusterFanout, WebSocketConnectionManager
 from falcon_pachinko.testing import InMemoryFanoutTransport
+from falcon_pachinko.unittests.helpers import make_req
+from falcon_pachinko.unittests.router_session_helpers import (
+    SessionResource,
+    SessionSocket,
+    session_router,
+)
 from tests._stubs import RecordingWebSocket
 
 
@@ -77,3 +83,25 @@ async def test_coordinator_observations_are_safe_and_distinguish_failures(
     assert all("secret" not in str(record.__dict__) for record in events), (
         "operation observations must omit identifiers, payloads, and exception text"
     )
+
+
+@pytest.mark.asyncio
+async def test_disconnect_cleanup_emits_one_observation(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Idempotent cleanup has one observable completion without socket details."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_cleanup")
+    resource = SessionResource()
+    socket = SessionSocket()
+    session = await session_router(resource).negotiate(make_req("/session"), socket)
+    assert session is not None, "the registered route must return a session"
+    await session.aclose()
+    await session.aclose()
+    completed = [
+        record
+        for record in caplog.records
+        if getattr(record, "operation", None) == "disconnect"
+        and vars(record)["outcome"] == "succeeded"
+    ]
+    assert len(completed) == 1, "only the actual cleanup emits a completion"
+    assert len(resource.disconnects) == 1, "observation must retain cleanup idempotency"

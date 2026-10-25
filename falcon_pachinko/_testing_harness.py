@@ -58,13 +58,15 @@ class _HarnessSimulator(WebSocketSimulator):
         finally:
             self.ready_event.set()
 
-    async def accept(self, subprotocol: str | None = None) -> None:
+    async def accept(
+        self, subprotocol: str | None = None, headers: object = None
+    ) -> None:
         """Signal readiness after the simulator mirrors handshake acceptance."""
-        await self._signal_ready_after(super().accept(subprotocol))
+        await self._signal_ready_after(super().accept(subprotocol, headers))
 
-    async def close(self, code: int = 1000) -> None:
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Signal readiness after the simulator mirrors connection closure."""
-        await self._signal_ready_after(super().close(code))
+        await self._signal_ready_after(super().close(code, reason))
 
     # pylint: disable-next=trivial-attribute-wrapper  # deliberate seam: testing.harness binds the ASGI stub through this name to keep the intent explicit
     def bind_original(self, original: _OriginalWebSocket) -> None:

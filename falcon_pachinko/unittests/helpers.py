@@ -68,6 +68,12 @@ class DummyWS:
         self._accepted = False
         self.receive_calls = 0
         self.lifecycle_event = asyncio.Event()
+        self.accept_calls: list[
+            tuple[
+                str | None,
+                cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None,
+            ]
+        ] = []
 
     @property
     def unaccepted(self) -> bool:
@@ -84,32 +90,30 @@ class DummyWS:
         """Expose closed state without taking the recording field's name."""
         return self._closed
 
-    async def accept(self, subprotocol: str | None = None) -> None:  # pragma: no cover
-        """Accept the WebSocket handshake.
-
-        Parameters
-        ----------
-        subprotocol : str or None, optional
-            The WebSocket subprotocol to use, by default None
-        """
+    async def accept(
+        self,
+        subprotocol: str | None = None,
+        headers: cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None = None,
+    ) -> None:  # pragma: no cover
+        """Accept the WebSocket handshake and record its options."""
+        if self._accepted or self._closed:
+            return
+        self.accept_calls.append((subprotocol, headers))
         self._accepted = True
         self.lifecycle_event.set()
 
-    async def close(self, code: int = 1000) -> None:  # pragma: no cover
-        """Close the WebSocket connection.
-
-        Parameters
-        ----------
-        code : int, optional
-            The WebSocket close code, by default 1000
-        """
+    async def close(
+        self, code: int | None = 1000, reason: str | None = None
+    ) -> None:  # pragma: no cover
+        """Close once and retain the transport's effective close code."""
+        del reason
         if self._closed:
             return
         self._closed = True
-        self._close_code = code
+        self._close_code = 1000 if code is None else code
         self.lifecycle_event.set()
 
-    async def send_media(self, data: object) -> None:  # pragma: no cover
+    async def send_media(self, data: object, /) -> None:  # pragma: no cover
         """Send structured data over the connection.
 
         Parameters
@@ -129,6 +133,18 @@ class DummyWS:
         code = self._close_code if self._closed else self._disconnect_code
         raise falcon.WebSocketDisconnected(code)
 
+    async def send_text(self, message: str) -> None:  # pragma: no cover
+        """Send one text frame through the media test seam."""
+        await self.send_media(message)
+
+    async def receive_text(self) -> str:
+        """Receive one frame and require its payload to be text."""
+        message = await self.receive_media()
+        if isinstance(message, str):
+            return message
+        msg = "expected a text WebSocket frame"
+        raise TypeError(msg)
+
 
 class RecordingWS(DummyWS):
     """A dummy WebSocket that records accept and close calls for assertions."""
@@ -142,7 +158,11 @@ class RecordingWS(DummyWS):
         self.accepted_event = asyncio.Event()
 
     @typ.override
-    async def accept(self, subprotocol: str | None = None) -> None:
+    async def accept(
+        self,
+        subprotocol: str | None = None,
+        headers: cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None = None,
+    ) -> None:
         """Record the accepted subprotocol.
 
         Parameters
@@ -151,7 +171,7 @@ class RecordingWS(DummyWS):
             The WebSocket subprotocol to use, by default None
         """
         self.accepted.append(subprotocol)
-        await super().accept(subprotocol)
+        await super().accept(subprotocol, headers)
         self.accepted_event.set()
 
     @typ.override
@@ -160,7 +180,7 @@ class RecordingWS(DummyWS):
         self.sent.append(data)
 
     @typ.override
-    async def close(self, code: int = 1000) -> None:
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Record the close code.
 
         Parameters
@@ -168,6 +188,7 @@ class RecordingWS(DummyWS):
         code : int, optional
             The WebSocket close code, by default 1000
         """
+        effective_code = 1000 if code is None else code
         if not self.is_closed:
-            self.closed.append(code)
-        await super().close(code)
+            self.closed.append(effective_code)
+        await super().close(effective_code, reason)

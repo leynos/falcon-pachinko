@@ -146,22 +146,28 @@ class _LifecycleSocket:
         """Signal the first accept or close for harness readiness checks."""
         return self._lifecycle_event
 
-    async def accept(self, subprotocol: str | None = None) -> None:
+    async def accept(
+        self, subprotocol: str | None = None, headers: object = None
+    ) -> None:
         """Record handshake acceptance and mirror to any bound peer."""
         await self._apply_transition(
             is_complete=self._accepted,
             record_transition=lambda: self._record_acceptance(subprotocol),
             peer_is_complete=lambda peer: peer.accepted,
-            mirror_transition=lambda peer: peer.accept(subprotocol=subprotocol),
+            mirror_transition=lambda peer: peer.accept(
+                subprotocol=subprotocol, headers=headers
+            ),
         )
 
-    async def close(self, code: int = 1000) -> None:
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Record connection closure and mirror to any bound peer."""
+        del reason
+        close_code = 1000 if code is None else code
         await self._apply_transition(
             is_complete=self._closed,
-            record_transition=lambda: self._record_closure(code),
+            record_transition=lambda: self._record_closure(close_code),
             peer_is_complete=lambda peer: peer.closed,
-            mirror_transition=lambda peer: peer.close(code),
+            mirror_transition=lambda peer: peer.close(close_code),
         )
 
     async def _apply_transition(

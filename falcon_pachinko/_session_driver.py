@@ -10,10 +10,12 @@ from __future__ import annotations
 import abc
 import asyncio
 import dataclasses as dc
+import logging
 import typing as typ
 
 import falcon
 
+from ._disconnect import _PeerDisconnectedError
 from ._session import (
     ABNORMAL_CLOSURE,
     GOING_AWAY,
@@ -26,6 +28,7 @@ from ._session_cleanup import (
     run_shielded_cleanup,
 )
 from ._session_socket import receive_frame
+from .diagnostics import _type_name
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -35,6 +38,8 @@ if typ.TYPE_CHECKING:
     from .lifecycle import LifecycleGuard
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
+
+logger = logging.getLogger(__name__)
 
 
 class SessionRouteMatch(typ.Protocol):
@@ -112,7 +117,9 @@ async def _close_after_session_run(
     finalization_error: BaseException | None,
 ) -> BaseException | None:
     """Close an open transport and retain the first finalization failure."""
-    if bool(getattr(context.websocket, "closed", False)):
+    if isinstance(context.session_state.primary_error, asyncio.CancelledError) or bool(
+        getattr(context.websocket, "closed", False)
+    ):
         return finalization_error
     close_code = (
         context.session_state.close_code
@@ -135,9 +142,11 @@ async def _close_after_session_error(
     if error is None:
         return None
 
-    close_code = (
-        GOING_AWAY if isinstance(error, asyncio.CancelledError) else INTERNAL_ERROR
-    )
+    if isinstance(error, asyncio.CancelledError):
+        context.session_state.close_code = ABNORMAL_CLOSURE
+        return None
+
+    close_code = INTERNAL_ERROR
     if context.session_state.close_code is None:
         context.session_state.close_code = close_code
     try:
@@ -154,6 +163,10 @@ async def _handle_session_failure(
 ) -> tuple[BaseException | None, BaseException | None]:
     """Record a session failure and close using its lifecycle code."""
     primary_error = _record_session_ending(context.session_state, error)
+    if primary_error is not None and not isinstance(
+        primary_error, asyncio.CancelledError
+    ):
+        logger.error("WebSocket session failed: %s", _type_name(primary_error))
     finalization_error = await _close_after_session_error(context, primary_error)
     return primary_error, finalization_error
 
@@ -191,7 +204,8 @@ async def _receive_session(
     while hook_manager.can_receive(dispatch.ws):
         try:
             raw = await receive_frame(dispatch.ws)
-        except falcon.WebSocketDisconnected as exc:
+        except (falcon.WebSocketDisconnected, _PeerDisconnectedError) as exc:
+            session.peer_disconnected = True
             session.close_code = _effective_disconnect_code(exc)
             return
 
@@ -212,7 +226,8 @@ def _record_session_ending(
     session: SessionState, error: BaseException
 ) -> BaseException | None:
     """Distinguish a transport ending from an unexpected session failure."""
-    if isinstance(error, falcon.WebSocketDisconnected):
+    if isinstance(error, (falcon.WebSocketDisconnected, _PeerDisconnectedError)):
+        session.peer_disconnected = True
         if session.close_code is None:
             session.close_code = _effective_disconnect_code(error)
         return None

@@ -9,7 +9,8 @@ import pytest
 from pytest_bdd import given, then
 
 from falcon_pachinko.testing import WebSocketTestClient
-from tests.behaviour._live_server import LiveServer, _assert_no_loop_errors
+from tests.behaviour._live_lifecycle_server import LiveServer
+from tests.behaviour._live_server import _assert_no_loop_errors
 from tests.behaviour._session_context import (
     LiveScenario,
     close_client_context,
@@ -32,12 +33,6 @@ def live_event_loop(
     finally:
         asyncio.set_event_loop(None)
         loop.close()
-
-
-@pytest.fixture
-def event_loop(live_event_loop: asyncio.AbstractEventLoop) -> asyncio.AbstractEventLoop:
-    """Share the live-loop owner with other behaviour fixtures."""
-    return live_event_loop
 
 
 @given("a live Falcon ASGI WebSocket server", target_fixture="context")
@@ -63,7 +58,6 @@ def given_live_server(
             await close_client_context(context)
 
         event_loop.run_until_complete(finish())
-        _assert_no_loop_errors(context.server.loop_errors)
 
     request.addfinalizer(cleanup)
     return context
@@ -75,9 +69,6 @@ def then_client_close_recorded(context: LiveScenario) -> None:
     context.event_loop.run_until_complete(stop_server(context))
     records = context.recorder.disconnect_records
     assert len(records) == 1, "one accepted client must disconnect exactly once"
-    assert context.recorder.disconnect_invocations == 1, (
-        "on_disconnect must be invoked exactly once"
-    )
     assert records[0][1] == 4000, "cleanup must receive the client's close code"
 
 

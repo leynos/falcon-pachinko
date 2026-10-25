@@ -182,7 +182,7 @@ def make_node(node_id: str, transport: RecordingTransport) -> Node:
     backend = SocketRecordingBackend()
     manager = WebSocketConnectionManager(backend)
     fanout = ClusterFanout(node_id, manager, transport, lease_ttl=3.0, send_timeout=1.0)
-    router = WebSocketRouter(receive_loop=True)
+    router = WebSocketRouter()
     router.add_route("/rooms/{room}", RoomResource, fanout)
     app = falcon.asgi.App()
     router.attach(app, "/ws")
