@@ -126,19 +126,10 @@ async def _close_failed_session(
     context: CleanupContext, failures: list[BaseException]
 ) -> int:
     """Choose the effective close code and close a failed session best-effort."""
-    primary_error = context.primary_error
-    if primary_error is None:
-        close_code = context.session.close_code
-        if close_code is None:
-            close_code = ABNORMAL_CLOSURE
-        context.session.close_code = close_code
-        return close_code
-
-    is_cancelled = isinstance(primary_error, asyncio.CancelledError)
-    is_accepted = getattr(context.dispatch.ws, "unaccepted", None) is False
-    close_code = ABNORMAL_CLOSURE if is_cancelled or not is_accepted else INTERNAL_ERROR
+    should_send_close = _should_send_internal_error_close(context)
+    close_code = _effective_close_code(context)
     context.session.close_code = close_code
-    if is_cancelled or not is_accepted:
+    if not should_send_close:
         return close_code
     try:
         with contextlib.suppress(Exception):
@@ -146,6 +137,48 @@ async def _close_failed_session(
     except BaseException as exc:  # ruff: ignore[blind-except] - cleanup must continue
         failures.append(exc)
     return close_code
+
+
+def _effective_close_code(context: CleanupContext) -> int:
+    """Select cancellation, recorded, transport, or fallback close metadata."""
+    primary_error = context.primary_error
+    if isinstance(primary_error, asyncio.CancelledError):
+        return ABNORMAL_CLOSURE
+    if context.session.close_code is not None:
+        return context.session.close_code
+    if not _socket_is_accepted(context):
+        return ABNORMAL_CLOSURE
+    transport_code = _reported_transport_close_code(context)
+    if transport_code is not None:
+        # A handler may have sent a meaningful close before it failed.
+        return transport_code
+    return ABNORMAL_CLOSURE if primary_error is None else INTERNAL_ERROR
+
+
+def _reported_transport_close_code(context: CleanupContext) -> int | None:
+    """Return transport metadata only after the transport reports closure."""
+    transport_closed = getattr(context.dispatch.ws, "closed", None)
+    if transport_closed is False:
+        return None
+    transport_code = getattr(context.dispatch.ws, "close_code", None)
+    return transport_code if type(transport_code) is int else None
+
+
+def _socket_is_accepted(context: CleanupContext) -> bool:
+    """Use Falcon's public handshake state to decide whether a frame is valid."""
+    return getattr(context.dispatch.ws, "unaccepted", None) is False
+
+
+def _should_send_internal_error_close(context: CleanupContext) -> bool:
+    """Send 1011 only when no prior close or cancellation owns the ending."""
+    primary_error = context.primary_error
+    if primary_error is None or isinstance(primary_error, asyncio.CancelledError):
+        return False
+    if not _socket_is_accepted(context):
+        return False
+    if context.session.close_code is not None:
+        return False
+    return _reported_transport_close_code(context) is None
 
 
 async def _run_disconnect_hooks(

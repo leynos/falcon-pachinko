@@ -30,6 +30,11 @@ class SessionSocket:
         self._release_receive = asyncio.Event()
         self.close_codes: list[int] = []
 
+    @property
+    def close_code(self) -> int | None:
+        """Expose the transport's first close code like Falcon's socket."""
+        return self.close_codes[0] if self.close_codes else None
+
     async def accept(self, subprotocol: str | None = None) -> None:
         """Record acceptance and wake setup observers."""
         del subprotocol

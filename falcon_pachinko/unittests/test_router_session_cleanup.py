@@ -382,8 +382,8 @@ async def test_receive_loop_opt_out_cleans_up_a_setup_closed_socket() -> None:
 
     assert socket.accepted, "accepted setup must run after the handshake"
     assert socket.close_codes == [4013], "setup must retain its close operation"
-    assert resource.disconnects == [(socket, 1006)], (
-        "cleanup must use abnormal metadata when Falcon reports no close code"
+    assert resource.disconnects == [(socket, 4013)], (
+        "cleanup must retain the transport's reported close code"
     )
 
 

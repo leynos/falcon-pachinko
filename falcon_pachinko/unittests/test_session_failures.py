@@ -262,3 +262,28 @@ async def test_before_disconnect_receives_code_and_primary_error() -> None:
 
     assert await_error.value is primary, _ASSERTION_FAILURE
     assert context_values == [(1011, primary)], _ASSERTION_FAILURE
+
+
+@pytest.mark.asyncio
+async def test_handler_close_code_survives_a_later_handler_failure() -> None:
+    """Cleanup preserves an effective close already reported by the socket."""
+    primary = RuntimeError("handler failed after closing")
+
+    class CloseThenFailResource(RecordingResource):
+        async def dispatch(self, ws: object, raw: str | bytes) -> None:
+            del raw
+            await typ.cast("SessionSocket", ws).close(4004)
+            raise primary
+
+    router = make_session_router(CloseThenFailResource)
+    socket = SessionSocket(b"close-before-failure")
+
+    with pytest.raises(RuntimeError) as raised:
+        await router.on_websocket(
+            typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
+        )
+
+    resource = CloseThenFailResource.instances[0]
+    assert raised.value is primary, _ASSERTION_FAILURE
+    assert resource.disconnect_codes == [4004], _ASSERTION_FAILURE
+    assert socket.close_codes == [4004], "cleanup must not replace a sent close"

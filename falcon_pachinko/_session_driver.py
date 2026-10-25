@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import abc
 import asyncio
-import contextlib
 import dataclasses as dc
 import logging
 import time
@@ -20,7 +19,6 @@ import falcon
 from ._disconnect import _PeerDisconnectedError
 from ._session import (
     ABNORMAL_CLOSURE,
-    INTERNAL_ERROR,
     MAX_CLOSE_CODE,
     SessionPhase,
     SessionState,
@@ -431,9 +429,8 @@ async def _receive_session(
 ) -> None:
     """Receive and route frames until Falcon reports a disconnect."""
     if not _is_websocket_accepted(dispatch.ws):
-        session.close_code = INTERNAL_ERROR
-        with contextlib.suppress(Exception):
-            await dispatch.ws.close(INTERNAL_ERROR)
+        # An approved handshake that never completed has no close-frame channel.
+        session.close_code = ABNORMAL_CLOSURE
         return
     while session.can_receive:
         try:
