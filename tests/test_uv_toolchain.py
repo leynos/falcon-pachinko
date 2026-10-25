@@ -43,11 +43,80 @@ if typ.TYPE_CHECKING:
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 UV_LOCK = REPO_ROOT / "uv.lock"
 DEPENDABOT = REPO_ROOT / ".github" / "dependabot.yml"
+COVERAGE_MAIN = REPO_ROOT / ".github" / "workflows" / "coverage-main.yml"
+UV_PROJECT_COMMAND = re.compile(r"(?<![\w.-])(?:uv|\$\(UV\))[ \t]+(?:run|sync)\b")
 
 #: The package ecosystems Dependabot offers for Python dependencies. It reads
 #: `requirements*.txt` and the older `pyproject.toml` layout under `pip`, and
 #: `uv.lock` under `uv`. Only one of them can be the entry for a directory.
 PYTHON_ECOSYSTEMS = ("pip", "uv")
+
+
+def _logical_lines(text: str) -> list[tuple[int, str]]:
+    """Return source lines joined across shell or Make continuations.
+
+    The first value is the one-based line where the logical line begins. A
+    continuation matters for project commands whose flags are on the next
+    physical line, including the deliberately exempt ``--no-project`` calls.
+
+    Returns
+    -------
+    list of tuple of int and str
+        Logical lines paired with their one-based starting line numbers.
+    """
+    logical_lines: list[tuple[int, str]] = []
+    physical_lines = text.splitlines()
+    fragments: list[str] = []
+    start_line = 1
+
+    for line_number, line in enumerate(physical_lines, start=1):
+        if not fragments and line.lstrip().startswith("#"):
+            continue
+        if not fragments:
+            start_line = line_number
+        stripped = line.rstrip()
+        continues = stripped.endswith("\\")
+        fragments.append(stripped[:-1].strip() if continues else line.strip())
+        if not continues:
+            logical_lines.append((start_line, " ".join(fragments)))
+            fragments = []
+
+    if fragments:
+        logical_lines.append((start_line, " ".join(fragments)))
+    return logical_lines
+
+
+def _run_step_scripts(document: object) -> list[str]:
+    """Collect ``run:`` script values from a parsed workflow document."""
+    scripts: list[str] = []
+
+    def visit(value: object) -> None:
+        match value:
+            case dict():
+                run_script = value.get("run")
+                if isinstance(run_script, str):
+                    scripts.append(run_script)
+                for child in value.values():
+                    visit(child)
+            case list():
+                for child in value:
+                    visit(child)
+            case _:
+                return
+
+    visit(document)
+    return scripts
+
+
+def _unlocked_project_commands(text: str) -> list[tuple[int, str]]:
+    """Return project ``uv run`` or ``uv sync`` lines lacking ``--locked``."""
+    return [
+        (line_number, command)
+        for line_number, command in _logical_lines(text)
+        if UV_PROJECT_COMMAND.search(command)
+        and "--no-project" not in command
+        and "--locked" not in command
+    ]
 
 
 def _git(*arguments: str) -> CompletedRun:
@@ -155,6 +224,111 @@ def test_make_build_installs_the_locked_dependency_set() -> None:
     assert "uv.lock" in prerequisites.split(), (
         "uv.lock must be a prerequisite of build, so a lockfile change is "
         f"visible in the build graph; the rule reads:\n{_rule_declaration('build')}"
+    )
+
+
+def test_makefile_project_commands_require_the_lockfile() -> None:
+    """Project commands in Make must reject a stale dependency lock."""
+    violations = _unlocked_project_commands(MAKEFILE.read_text(encoding="utf-8"))
+
+    assert not violations, "Makefile project commands must use --locked:\n" + "\n".join(
+        f"Makefile:{line_number}: {command}" for line_number, command in violations
+    )
+
+
+def test_ci_run_steps_require_the_project_lockfile() -> None:
+    """Repository-owned CI run steps must reject stale project locks."""
+    workflow_files = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
+    action_files = sorted((REPO_ROOT / ".github" / "actions").glob("*/action.yml"))
+    violations: list[str] = []
+
+    for path in [*workflow_files, *action_files]:
+        source = path.read_text(encoding="utf-8")
+        scripts = _run_step_scripts(yaml.safe_load(source))
+        for script in scripts:
+            for _, command in _unlocked_project_commands(script):
+                violations.append(f"{path.relative_to(REPO_ROOT)}: {command}")
+
+    assert not violations, (
+        "CI project commands must use --locked (each entry names its file and "
+        "offending run line):\n" + "\n".join(violations)
+    )
+
+
+def test_main_coverage_checks_the_lock_before_the_shared_action() -> None:
+    """The external main coverage action must be preceded by a lock check."""
+    workflow = yaml.safe_load(COVERAGE_MAIN.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["coverage-upload"]["steps"]
+    step_names = [step.get("name") for step in steps]
+
+    assert "Check project lock" in step_names, (
+        ".github/workflows/coverage-main.yml must check the committed lock "
+        "before calling the pinned shared coverage action"
+    )
+    assert "Generate coverage" in step_names, (
+        ".github/workflows/coverage-main.yml must keep its coverage step"
+    )
+    lock_step_index = step_names.index("Check project lock")
+    coverage_step_index = step_names.index("Generate coverage")
+    assert steps[lock_step_index].get("run") == "uv lock --check", (
+        ".github/workflows/coverage-main.yml must use `uv lock --check` "
+        "for the external action's project sync"
+    )
+    assert lock_step_index < coverage_step_index, (
+        ".github/workflows/coverage-main.yml must check the lock before "
+        "Generate coverage"
+    )
+
+
+def test_contributor_guidance_recommends_only_locked_syncs() -> None:
+    """Contributor-facing install commands must use the reviewed lockfile."""
+    guidance_files = [
+        REPO_ROOT / "AGENTS.md",
+        REPO_ROOT / "README.md",
+        REPO_ROOT / "docs" / "developers-guide.md",
+        REPO_ROOT / "docs" / "release-workflow.md",
+        *sorted((REPO_ROOT / ".rules").glob("*.md")),
+    ]
+    violations = [
+        f"{path.relative_to(REPO_ROOT)}:{line_number}: {line.strip()}"
+        for path in guidance_files
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        )
+        if re.search(r"\buv\s+sync\b", line) and "--locked" not in line
+    ]
+
+    assert not violations, (
+        "contributor guidance must recommend `uv sync --locked`:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_developer_guide_has_the_authoritative_lock_policy() -> None:
+    """Keep the lock-file policy in one discoverable guide subsection."""
+    guide = (REPO_ROOT / "docs" / "developers-guide.md").read_text(encoding="utf-8")
+
+    assert "## Lock-file policy" in guide, (
+        "docs/developers-guide.md must contain the authoritative "
+        "`## Lock-file policy` subsection"
+    )
+
+
+def test_gitignore_does_not_name_the_committed_lockfile() -> None:
+    """No active or commented ignore rule should name ``uv.lock``."""
+    ignore_lines = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    matches = [
+        (line_number, line)
+        for line_number, line in enumerate(ignore_lines, start=1)
+        if re.search(r"\buv\.lock\b", line)
+    ]
+
+    assert not matches, (
+        ".gitignore must not mention the committed uv.lock, including in "
+        "comments:\n"
+        + "\n".join(
+            f".gitignore:{line_number}: {line}" for line_number, line in matches
+        )
     )
 
 
