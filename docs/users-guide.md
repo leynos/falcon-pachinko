@@ -30,6 +30,13 @@ uv add --prerelease allow 'falcon-pachinko[examples]'
 uv add --prerelease allow 'falcon-pachinko[testing]'
 ```
 
+## Requirements
+
+Falcon-Pachinko supports `falcon>=4,<4.5`. Falcon 4.5 is not yet supported
+because the WebSocket adapter uses Falcon's private `_receive()` method. See the
+[migration guide](migration-guide.md#what-changed) before upgrading an
+existing installation.
+
 ## 1. Core Concepts
 
 - **WebSocketRouter** – Mountable Falcon resource that owns route definitions
