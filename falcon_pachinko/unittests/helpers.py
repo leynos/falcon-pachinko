@@ -53,6 +53,8 @@ class DummyWS:
         self._close_code: int | None = None
         self.receive_calls = 0
         self.unaccepted = True
+        self.accepted: list[str | None] = []
+        self.accepted_event = asyncio.Event()
         self.accept_calls: list[
             tuple[
                 str | None,
@@ -72,8 +74,10 @@ class DummyWS:
         subprotocol : str or None, optional
             The WebSocket subprotocol to use, by default None
         """
+        self.accepted.append(subprotocol)
         self.accept_calls.append((subprotocol, headers))
         self.unaccepted = False
+        self.accepted_event.set()
 
     async def close(
         self, code: int | None = 1000, reason: str | None = None
@@ -121,7 +125,7 @@ class DummyWS:
 
 
 class RecordingWS(DummyWS):
-    """A dummy WebSocket that records accept and close calls for assertions."""
+    """A dummy WebSocket that records sent frames and close calls."""
 
     def __init__(
         self,
@@ -131,27 +135,8 @@ class RecordingWS(DummyWS):
     ) -> None:
         """Initialize scripted frames and empty call logs."""
         super().__init__(frames, disconnect_code=disconnect_code)
-        self.accepted: list[str | None] = []
         self.closed: list[int] = []
         self.sent: list[object] = []
-        self.accepted_event = asyncio.Event()
-
-    @typ.override
-    async def accept(
-        self,
-        subprotocol: str | None = None,
-        headers: cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None = None,
-    ) -> None:
-        """Record the accepted subprotocol.
-
-        Parameters
-        ----------
-        subprotocol : str or None, optional
-            The WebSocket subprotocol to use, by default None
-        """
-        self.accepted.append(subprotocol)
-        await super().accept(subprotocol, headers)
-        self.accepted_event.set()
 
     @typ.override
     async def send_media(self, data: object) -> None:
