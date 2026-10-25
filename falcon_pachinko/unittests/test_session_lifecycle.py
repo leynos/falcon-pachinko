@@ -40,7 +40,35 @@ async def test_rejected_connection_closes_without_disconnect_cleanup() -> None:
 
     assert socket.unaccepted is True, _ASSERTION_FAILURE
     assert socket.close_codes == [1000], _ASSERTION_FAILURE
-    assert RejectingResource.instances[0].disconnect_codes == [], _ASSERTION_FAILURE
+    resource = RejectingResource.instances[0]
+    assert resource.disconnect_codes == [], _ASSERTION_FAILURE
+    assert not resource.has_router_session, _ASSERTION_FAILURE
+
+
+@pytest.mark.asyncio
+async def test_pre_approval_setup_failure_releases_router_session() -> None:
+    """A failed setup leaves no router-owned session on the resource."""
+    error = RuntimeError("connect failed")
+
+    class FailingResource(RecordingResource):
+        async def on_connect(
+            self, req: falcon.Request, ws: object, **params: object
+        ) -> bool:
+            del req, ws, params
+            raise error
+
+    router = make_session_router(FailingResource)
+    socket = SessionSocket()
+
+    with pytest.raises(RuntimeError) as raised:
+        await router.on_websocket(
+            typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
+        )
+
+    resource = FailingResource.instances[0]
+    assert raised.value is error, _ASSERTION_FAILURE
+    assert resource.disconnect_codes == [], _ASSERTION_FAILURE
+    assert not resource.has_router_session, _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio
@@ -141,12 +169,15 @@ def test_has_router_session_covers_setup_and_cleanup_phases() -> None:
     session = SessionState()
     manager.bind_session(session)
     assert resource.has_router_session, _ASSERTION_FAILURE
+    assert not session.has_established, _ASSERTION_FAILURE
     session.establish()
     assert resource.has_router_session, _ASSERTION_FAILURE
+    assert session.has_established, _ASSERTION_FAILURE
     assert session.begin_disconnect(), _ASSERTION_FAILURE
     assert resource.has_router_session, _ASSERTION_FAILURE
     session.mark_closed()
     assert not resource.has_router_session, _ASSERTION_FAILURE
+    assert session.has_established, _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio

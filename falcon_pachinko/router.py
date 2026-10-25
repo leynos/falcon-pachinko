@@ -33,7 +33,6 @@ from ._route_support import (
 )
 from ._router_attachment import attach_router
 from ._router_resources import _ResourceResolver
-from ._session import SessionPhase, SessionState
 from ._session_driver import run_session
 from ._session_setup import ConnectionSetup
 from ._uri_template import _compile_prefix_template, compile_uri_template
@@ -45,6 +44,9 @@ from .protocols import WebSocketLike
 # that raises NameError when introspected would be a trap for runtime
 # consumers, so the name it references has to resolve at runtime too.
 from .resource import WebSocketResource
+
+if typ.TYPE_CHECKING:
+    from ._session import SessionState
 
 __all__ = ["ResourceFactory", "SimulatorFactory", "WebSocketRouter"]
 
@@ -382,8 +384,7 @@ class WebSocketRouter:
             return await self._process_route_resolution(dispatch)
         except Exception as exc:
             session_is_established = (
-                dispatch.session is not None
-                and dispatch.session.phase is not SessionPhase.CONNECTING
+                dispatch.session is not None and dispatch.session.has_established
             )
             factory_closed = getattr(exc, "_pachinko_factory_closed", False)
             if not session_is_established and not factory_closed:
