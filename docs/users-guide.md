@@ -25,11 +25,16 @@ workers, and testing utilities.
 ## 2. Quickstart (Composable Routing)
 
 ```python
+"""Composable Falcon ASGI WebSocket chat quick-start.
+
+Run this app with ``uvicorn quickstart:app``.
+"""
+
 import dataclasses as dc
 import typing as typ
 
 import falcon.asgi
-import msgspec
+import msgspec as ms
 
 from falcon_pachinko import (
     WebSocketResource,
@@ -42,7 +47,7 @@ if typ.TYPE_CHECKING:
     from falcon_pachinko.protocols import WebSocketLike
 
 
-class ChatPayload(msgspec.Struct):
+class ChatPayload(ms.Struct):
     text: str
 
 
