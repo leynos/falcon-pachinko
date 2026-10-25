@@ -11,7 +11,7 @@ workers, and testing utilities.
 - **WebSocketRouter** – Mountable Falcon resource that owns route definitions
   and orchestrates instantiation.
 - **WebSocketResource** – Per-connection handler exposing lifecycle hooks
-  (`on_connect`, `on_disconnect`) and message handlers.
+  (`on_connect`, `on_accepted`, `on_disconnect`) and message handlers.
 - **Composable hierarchy** – Resources can register child routes with
   `add_subroute`, passing context and shared state down the chain.
 - **Schema-driven dispatch** – Define a `msgspec` tagged union `schema` and
@@ -42,13 +42,15 @@ class ChatResource(WebSocketResource):
 app = falcon.asgi.App()
 router = WebSocketRouter(receive_loop=True)
 router.add_route("/chat/{room}", ChatResource)
-router.attach(app, "/ws")
+router.mount("/ws")
+router.attach(app)
 ```
 
-- `attach()` mounts the router at `/ws` and registers a Falcon catch-all route
-  for descendant paths. It also enables pass-through TEXT and BINARY input for
-  every WebSocket route on the app, while preserving the configured outgoing
-  serializers. It warns if custom media handlers will be replaced.
+- `mount()` compiles the router's mount prefix and routes. `attach()` then
+  registers the exact mount and a Falcon catch-all route for descendant paths.
+  It also enables pass-through TEXT and BINARY input for every WebSocket route
+  on the app, while preserving the configured outgoing serializers. It warns if
+  custom media handlers will be replaced.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
 - The example opts into a router-owned receive-and-dispatch session with
@@ -111,22 +113,27 @@ resource and its hooks.
     `accept()`. With `receive_loop=True`, it then begins receiving frames; with
     the default `False`, the application owns reception. If `on_connect()` sends
     a frame itself, call `await ws.accept()` first.
+- `on_accepted(ws) -> None`
+  - Runs immediately after Falcon accepts an allowed connection. Put
+    accept-dependent I/O here, such as registering the socket with a connection
+    manager or sending an initial frame. Disconnect cleanup also covers
+    failures in this hook. It does not add a separate hook event.
 - `on_disconnect(ws, close_code) -> None`
   - With `WebSocketRouter(receive_loop=True)`, after `on_connect` permits the
     session, the router runs `before_disconnect` hooks and attempts this
-    callback once, including failure in `after_connect` or `accept`. The code
-    is the peer's code, or `1006` when it is missing or setup fails. Cancellation
-    before cleanup starts closes with `1001` and propagates. If cancellation
-    interrupts a peer-disconnect callback already in progress, it is not
-    retried and retains the peer code, while the socket closes with `1001`.
+    callback once, including failure in `after_connect`, `accept`, or
+    `on_accepted`. The code is `WebSocketDisconnected.code` for a peer
+    disconnect, or `1006` when that code is unavailable or cancellation
+    interrupts the session. Cancellation propagates and does not send a close
+    frame with reserved code `1006`.
     Unexpected receive or handler failures close with `1011` and propagate the
     original exception. Rejected connections and failed `on_connect` calls do
     not run this lifecycle. With the default `receive_loop=False`, the
     application owns receive and cleanup.
 - With `receive_loop=True`, the router passes values returned by
   `ws.receive_media()` to `WebSocketResource.dispatch()` in order until the
-  peer disconnects. Falcon may decode those values unless raw-frame media is
-  enabled for the app.
+  peer disconnects. An attached router configures raw media handlers so the
+  dispatcher receives the original `str` or `bytes` frame.
 
 For an attached router, `attach()` installs pass-through TEXT and BINARY
 deserializers in the application's shared `ws_options.media_handlers` mapping.
@@ -368,14 +375,13 @@ container.register("db", my_db_pool)
 
 router = WebSocketRouter(resource_factory=container.create_resource)
 router.add_route("/rooms/{room}", ChatResource)
-router.attach(app, "/ws")
+router.mount("/ws")
+router.attach(app)
 ```
 
-Configure the Falcon application and any application services before calling
-`attach()`. It registers the router's exact and descendant routes and installs
-the raw-frame media handlers needed by real Falcon WebSocket responders.
-`mount()` only compiles routes for simulator-based tests; it does not register
-the router on a Falcon application.
+Configure the Falcon application and its services before calling `attach()`.
+`mount()` compiles the router's paths; `attach()` registers them on the real
+Falcon app and installs raw-frame media handlers.
 
 ### Test-friendly factories
 
@@ -492,8 +498,9 @@ and need no broker.
 ## 9. Background Workers
 
 - Use `WorkerController` to start/stop async tasks during ASGI lifespan.
-- Prefer `@app.lifespan` to wire startup/shutdown; workers can depend on the
-  same DI container used for WebSocket resources.
+- Add middleware with Falcon's `process_startup(scope, event)` and
+  `process_shutdown(scope, event)` methods to wire startup and shutdown;
+  workers can depend on the same DI container used for WebSocket resources.
 - If `start()` fails while creating or scheduling a worker, it closes any
   rejected coroutine, cancels and awaits tasks already scheduled, resets the
   controller and re-raises the original error. The same controller can then be
@@ -511,11 +518,17 @@ async def broadcaster(*, conn_mgr):
         await ws.send_media({"type": "ping"})
 
 
-@app.lifespan
-async def lifespan(app):
-    await controller.start(broadcaster, conn_mgr=app.ws_connection_manager)
-    yield
-    await controller.stop()
+class WorkerLifecycleMiddleware:
+    async def process_startup(self, scope, event):
+        del scope, event
+        await controller.start(broadcaster, conn_mgr=app.ws_connection_manager)
+
+    async def process_shutdown(self, scope, event):
+        del scope, event
+        await controller.stop()
+
+
+app.add_middleware(WorkerLifecycleMiddleware())
 ```
 
 The `@worker` decorator is optional and marks intent only.
@@ -605,13 +618,48 @@ Recommended strategy:
 
 ## 11. Reference Example
 
-`examples/reference_app` wires together:
+`examples/reference_app` is a live Falcon ASGI demonstration of nested
+workspace, project, and task resources; header authentication; schema-driven
+message handling; dependency injection; hooks; a lifespan worker; and
+connection-manager cleanup.
 
-- Router mounted at `/ws`
-- Schema-driven resources composed as parent/child/grandchild
-- Router-level DI via `ServiceContainer`
-- Connection manager usage from both resources and workers
-- Behavioural coverage via `pytest-bdd`
+Start it from the repository root on `127.0.0.1:8000` using either command:
 
-Use it as a blueprint for production deployments and adapt the patterns shown
-there to your own DI container, state store, and connection backend.
+```bash
+python -m examples.reference_app.server
+# or
+uvicorn --factory examples.reference_app.server:create_app --host 127.0.0.1 --port 8000
+```
+
+Connect to `ws://127.0.0.1:8000/ws/workspaces/atlas/projects/triage/tasks` with
+headers `x-workspace-token: seekrit` and `x-user: casey`. After Falcon accepts
+the connection, `on_accepted` registers the socket in `workspace:atlas` and
+sends `session.ready`. Send a JSON text message such as:
+
+```json
+{"type":"task.add","task_id":"T-42","title":"Investigate live WebSockets"}
+```
+
+The schema dispatcher invokes the task handler, which replies with `task.added`
+and publishes a worker-feed event. The lifespan worker broadcasts an
+`announcement` with `kind: task_added` to the workspace room. On a normal close
+with code `1000`, `before_disconnect` runs before `on_disconnect`, which
+removes the connection and records `session.closed`. The app exposes its
+container as `app.reference_services` for access to the audit trail,
+repository, and connection manager.
+
+The live pytest-bdd feature verifies the full journey, including
+`workspace.loaded`, `project.loaded`, `session.open`, `message.received`,
+`message.processed`, and `session.closed` for the same connection ID. It also
+verifies that an invalid token rejects the handshake and records
+`auth.rejected` with reason `invalid_token`. Run it with:
+
+```bash
+uv run pytest -q tests/behaviour/test_reference_example_live_steps.py
+```
+
+The example's router uses `receive_loop=True`, so the library accepts the
+socket and owns ordered frame reception and dispatch. No application receive
+loop or direct `WebSocketResource.dispatch()` call is needed. Use the example
+as a blueprint and adapt its authentication, services, and worker policy to
+your application.

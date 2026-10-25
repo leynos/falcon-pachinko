@@ -110,11 +110,11 @@ class _ConnectionSession:
             except asyncio.CancelledError:
                 if self.has_accepted:
                     self.close_code = 1006
-                    await _close_after_failure(self.ws, self.close_code)
                 raise
             except Exception:
                 if self.has_accepted:
                     self.close_code = 1011
+                    on_policy_close()
                     await _close_after_failure(self.ws, self.close_code)
                 raise
 

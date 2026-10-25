@@ -11,12 +11,12 @@ from falcon_pachinko import WebSocketResource, WebSocketRouter
 
 
 @pytest.mark.parametrize(
-    "failing_route",
-    ["/ws", "/ws/{pachinko_path:path}"],
+    "failing_route_index",
+    [0, 1],
     ids=("mount_route", "descendant_route"),
 )
 def test_attach_can_retry_after_route_registration_failure(
-    failing_route: str,
+    failing_route_index: int,
 ) -> None:
     """A failed Falcon route registration must leave the router reusable."""
     router = WebSocketRouter()
@@ -26,6 +26,7 @@ def test_attach_can_retry_after_route_registration_failure(
         def __init__(self) -> None:
             super().__init__()
             self._failed_once = False
+            self._route_registration_index = 0
 
         @typ.override
         def add_route(
@@ -34,7 +35,9 @@ def test_attach_can_retry_after_route_registration_failure(
             resource: object,
             **kwargs: object,
         ) -> None:
-            if uri_template == failing_route and not self._failed_once:
+            route_index = self._route_registration_index
+            self._route_registration_index += 1
+            if route_index == failing_route_index and not self._failed_once:
                 self._failed_once = True
                 # Rollback must recover keys removed during registration too.
                 del self.ws_options.media_handlers[falcon.WebSocketPayloadType.BINARY]

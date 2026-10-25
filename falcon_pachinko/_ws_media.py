@@ -91,12 +91,15 @@ def _matches_default_handler(handler: object, default_handler: object) -> bool:
 
 def install_raw_websocket_media_handlers(
     media_handlers: cabc.MutableMapping[falcon.WebSocketPayloadType, object],
+    *,
+    stacklevel: int = 3,
 ) -> None:
     """Wrap app-wide text and binary handlers once for raw frame dispatch.
 
     Falcon shares ``ws_options.media_handlers`` across all WebSocket routes in
     an application. Warn if those handlers have been customized because this
     wrapper replaces their inbound deserializer with pass-through behaviour.
+    ``stacklevel`` identifies the public caller that initiated the setup.
     """
     payload_types = (
         falcon.WebSocketPayloadType.TEXT,
@@ -119,7 +122,7 @@ def install_raw_websocket_media_handlers(
             f"for {names}; all Falcon WebSocket responders on this app will "
             "receive raw str or bytes from receive_media()",
             UserWarning,
-            stacklevel=3,
+            stacklevel=stacklevel,
         )
 
     for payload_type in payload_types:

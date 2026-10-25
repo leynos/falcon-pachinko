@@ -52,14 +52,21 @@ class _RouteMatch:
 
 
 def _request_path_template(req: _RequestLike) -> str:
-    """Return Falcon's selected route template, with a legacy fallback."""
-    template = getattr(req, "uri_template", None)
-    if template:
+    """Return the request path template, falling back to Falcon's URI name."""
+    template = getattr(req, "path_template", None)
+    if not template:
+        template = getattr(req, "uri_template", "")
+    return template if isinstance(template, str) else ""
+
+
+def _strip_terminal_greedy_path_field(template: str) -> str:
+    """Remove a valid terminal Falcon path converter from a route template."""
+    prefix, separator, field = template.rpartition("/")
+    if not separator or not field.startswith("{"):
         return template
-    try:
-        return req.path_template
-    except AttributeError:
-        return ""
+    if not field.endswith(":path}") or not field[1:-6].isidentifier():
+        return template
+    return prefix.rstrip("/") or "/"
 
 
 def _normalize_path(path: str) -> str:

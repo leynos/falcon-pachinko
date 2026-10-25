@@ -26,8 +26,8 @@ including the
 - `WebSocketRouter` mounts nested WebSocket routes on Falcon with
   `router.mount(prefix)` followed by `router.attach(app)`.
 - `WebSocketResource` provides `on_connect`, `on_accepted`, `on_disconnect`,
-  and `on_unhandled` lifecycle hooks. The router owns the production receive
-  loop and dispatches text frames.
+  and `on_unhandled` lifecycle hooks. With `receive_loop=True`, the router owns
+  ordered receive and dispatch for raw text and binary frames.
 - Message payloads are parsed into `msgspec.Struct` classes for speed and type
   safety.
 - Define a `schema` union of tagged `msgspec.Struct` types to enable automatic
@@ -88,14 +88,16 @@ workspace, project and task route resolves through `WorkspaceResource`,
 the token. The app emits `session.ready` and accepts a `task.add` message. The
 client receives `task.added`; the lifespan-managed announcement worker
 broadcasts an `announcement` with kind `task_added`. The router accepts the
-socket, calls `on_accepted`, and owns the text-frame receive and dispatch loop.
-Disconnect hooks run before resource cleanup, which removes the socket from the
-connection manager. The example exposes its dependency container as
+socket, calls `on_accepted`, and owns the receive and dispatch loop. Disconnect
+hooks run before resource cleanup, which removes the socket from the connection
+manager. The example exposes its dependency container as
 `app.reference_services`, including the audit trail, workspace repository, and
 connection manager.
 
 The live Falcon ASGI journey is exercised by
-`tests/behaviour/reference_example_live.feature`.
+`tests/behaviour/reference_example_live.feature`. It also checks rejection of
+an invalid workspace token during the handshake, and verifies that hooks record
+the same connection ID through normal disconnect cleanup.
 
 An end-to-end demonstration lives under `examples/random_status`. It shows how
 to:

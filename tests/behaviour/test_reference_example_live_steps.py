@@ -14,7 +14,7 @@ from websockets.exceptions import InvalidStatusCode
 from examples.reference_app.server import ReferenceApp, create_app
 from examples.reference_app.services import AuditTrail, WorkspaceRepository
 from falcon_pachinko import WebSocketConnectionManager
-from falcon_pachinko.testing import WebSocketTestClient, serve_asgi_app
+from falcon_pachinko.testing import LiveWebSocketServer, WebSocketTestClient
 
 _TASKS_PATH = "/ws/workspaces/atlas/projects/triage/tasks"
 _WAIT_TIMEOUT = 3.0
@@ -111,10 +111,9 @@ def given_live_reference_app(
 ) -> LiveReferenceContext:
     """Start the production factory and client on one managed async stack."""
     app = create_app()
-    base_url = event_loop.run_until_complete(
-        async_exit_stack.enter_async_context(serve_asgi_app(app))
-    )
-    client = WebSocketTestClient(base_url, allow_insecure=True)
+    server = LiveWebSocketServer(app)
+    event_loop.run_until_complete(async_exit_stack.enter_async_context(server))
+    client = WebSocketTestClient(server.base_url, allow_insecure=True)
     return LiveReferenceContext(
         event_loop=event_loop,
         stack=async_exit_stack,

@@ -41,6 +41,31 @@ class PeerDisconnectingAcceptedResource(SessionResource):
         raise falcon.WebSocketDisconnected(code=4007)
 
 
+class CancellingAcceptedResource(SessionResource):
+    """Cancel while performing post-acceptance setup."""
+
+    @typ.override
+    async def on_accepted(self, ws: object) -> None:
+        raise asyncio.CancelledError
+
+
+class FailingAcceptedResource(SessionResource):
+    """Fail after Falcon has accepted the connection."""
+
+    @typ.override
+    async def on_accepted(self, ws: object) -> None:
+        msg = "accepted setup failed"
+        raise RuntimeError(msg)
+
+
+class RejectingResource(SessionResource):
+    """Reject the connection before acceptance or frame reception."""
+
+    @typ.override
+    async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        return False
+
+
 @pytest.mark.parametrize(
     "resource_type",
     [SessionResource, FailingCleanupResource],
@@ -61,12 +86,73 @@ async def test_receive_loop_cancellation_disconnects_once(
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert resource.disconnects == [(socket, 1001)], (
-            "cancellation must trigger exactly one cleanup"
+        assert resource.disconnects == [(socket, 1006)], (
+            "cancellation must trigger cleanup with abnormal-close metadata"
         )
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("receive_loop", [False, True])
+@pytest.mark.asyncio
+async def test_accepted_setup_cancellation_reports_1006_without_closing(
+    *,
+    receive_loop: bool,
+) -> None:
+    """Cancellation after acceptance cleans up without sending reserved 1006."""
+    resource = CancellingAcceptedResource()
+    socket = SessionSocket()
+    router = session_router(resource, receive_loop=receive_loop)
+    observed_codes: list[int | None] = []
+    router.global_hooks.add(
+        "before_disconnect", lambda context: observed_codes.append(context.close_code)
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await router.on_websocket(make_req("/session"), socket)
+
+    assert socket.accepted, "accepted setup cancellation must follow ws.accept()"
+    assert not socket.closed, "cancellation must not send reserved close code 1006"
+    assert observed_codes == [1006], "disconnect hooks must receive code 1006"
+    assert resource.disconnects == [(socket, 1006)], (
+        "resource cleanup must receive cancellation metadata exactly once"
+    )
+
+
+@pytest.mark.parametrize("receive_loop", [False, True])
+@pytest.mark.asyncio
+async def test_accepted_setup_failure_closes_1011_and_cleans_up(
+    *,
+    receive_loop: bool,
+) -> None:
+    """Unexpected accepted-setup failures close and finalize the session."""
+    resource = FailingAcceptedResource()
+    socket = SessionSocket()
+    router = session_router(resource, receive_loop=receive_loop)
+
+    with pytest.raises(RuntimeError, match="accepted setup failed"):
+        await router.on_websocket(make_req("/session"), socket)
+
+    assert socket.accepted, "accepted setup must run after the handshake"
+    assert socket.close_codes == [1011], "accepted setup failure must close with 1011"
+    assert resource.disconnects == [(socket, 1011)], (
+        "disconnect cleanup must receive the post-accept failure code"
+    )
+
+
+@pytest.mark.asyncio
+async def test_rejection_does_not_accept_or_receive_frames() -> None:
+    """A rejected connection must return without starting the receive loop."""
+    resource = RejectingResource()
+    socket = SessionSocket(None)
+    router = session_router(resource, receive_loop=True)
+
+    await router.on_websocket(make_req("/session"), socket)
+
+    assert not socket.accepted, "rejected connections must not be accepted"
+    assert socket.receive_calls == 0, "rejection must not start frame reception"
+    assert not resource.disconnects, "rejected connections must skip disconnect hooks"
 
 
 @pytest.mark.asyncio
@@ -86,6 +172,7 @@ async def test_receive_loop_acceptance_failure_disconnects_once() -> None:
 @pytest.mark.parametrize("receive_loop", [False, True])
 @pytest.mark.asyncio
 async def test_accepted_setup_peer_disconnect_uses_peer_code_without_reclosing(
+    *,
     receive_loop: bool,
 ) -> None:
     """Peer closure during accepted setup uses normal ordered cleanup."""

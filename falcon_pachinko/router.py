@@ -28,6 +28,7 @@ from ._route_support import (
     _RequestLike,
     _RouteMatch,
     _RouteRegistrationService,
+    _strip_terminal_greedy_path_field,
 )
 from ._router_session import _ConnectionSession
 from ._uri_template import _compile_prefix_template, compile_uri_template
@@ -71,6 +72,28 @@ class _Dispatch:
     def mark_session_close_attempted(self) -> None:
         """Record when the session driver owns the policy close."""
         self.session_close_attempted = True
+
+
+@dc.dataclass(slots=True)
+class _AttachmentSnapshot:
+    """Capture router and Falcon media state for attachment rollback."""
+
+    mount_prefix: str
+    routes: list[_CompiledRoute]
+    media_handlers: cabc.MutableMapping[falcon.WebSocketPayloadType, object]
+    original_media_handlers: dict[falcon.WebSocketPayloadType, object]
+
+
+@dc.dataclass(slots=True)
+class _ConnectionFinalization:
+    """Group the state needed to complete one connection handshake."""
+
+    resource: WebSocketResource
+    ws: WebSocketLike
+    should_accept: bool
+    context: HookContext
+    hook_manager: HookManager
+    on_accept: cabc.Callable[[], None] | None = None
 
 
 class WebSocketRouter:
@@ -220,52 +243,69 @@ class WebSocketRouter:
             if self._attached:
                 msg = "router is already attached to a Falcon app"
                 raise RuntimeError(msg)
+            self._attach_locked(app, prefix)
 
-            original_prefix = self._mount_prefix
-            original_routes = list(self._routes)
-            if prefix is None:
-                if not original_prefix:
-                    msg = "router must be mounted before it can be attached"
-                    raise RuntimeError(msg)
-                canonical = original_prefix
-            else:
-                canonical = self._canonical_mount_prefix(prefix)
-                if original_prefix and canonical != original_prefix:
-                    msg = (
-                        f"router is already mounted at '{original_prefix}', "
-                        f"not '{canonical}'"
-                    )
-                    raise RuntimeError(msg)
+    def _attach_locked(self, app: falcon.asgi.App, prefix: str | None) -> None:
+        """Attach routes while holding the mount lock."""
+        canonical = self._resolve_attach_prefix(prefix)
+        media_handlers = typ.cast(
+            "cabc.MutableMapping[falcon.WebSocketPayloadType, object]",
+            app.ws_options.media_handlers,
+        )
+        snapshot = _AttachmentSnapshot(
+            mount_prefix=self._mount_prefix,
+            routes=list(self._routes),
+            media_handlers=media_handlers,
+            original_media_handlers=dict(media_handlers),
+        )
+        if not snapshot.mount_prefix:
+            self._mount_locked(canonical)
+        try:
+            self._register_attached_routes(app, canonical, media_handlers)
+        except BaseException:
+            self._restore_attachment(snapshot)
+            raise
+        self._attached = True
 
-            media_handlers = typ.cast(
-                "cabc.MutableMapping[falcon.WebSocketPayloadType, object]",
-                app.ws_options.media_handlers,
+    def _resolve_attach_prefix(self, prefix: str | None) -> str:
+        """Return the existing mount or validate a supplied prefix."""
+        if prefix is None:
+            if not self._mount_prefix:
+                msg = "router must be mounted before it can be attached"
+                raise RuntimeError(msg)
+            return self._mount_prefix
+
+        canonical = self._canonical_mount_prefix(prefix)
+        if self._mount_prefix and canonical != self._mount_prefix:
+            msg = (
+                f"router is already mounted at '{self._mount_prefix}', "
+                f"not '{canonical}'"
             )
-            original_handlers = dict(media_handlers)
-            if not original_prefix:
-                self._mount_locked(canonical)
-            try:
-                install_raw_websocket_media_handlers(media_handlers)
+            raise RuntimeError(msg)
+        return canonical
 
-                prefix_template = canonical.rstrip("/") or "/"
-                routes = (
-                    prefix_template,
-                    self._greedy_route_template(canonical),
-                )
-                for route in routes:
-                    app.add_route(route, self)
-            except BaseException:
-                # Media handlers are shared by every WebSocket route on the app.
-                media_handlers.clear()
-                media_handlers.update(original_handlers)
-                # Falcon may have accepted the first route before rejecting the
-                # second. Keep the router reusable so the caller can repair the
-                # app and retry; re-adding the same route replaces that partial
-                # registration in Falcon.
-                self._mount_prefix = original_prefix
-                self._routes[:] = original_routes
-                raise
-            self._attached = True
+    def _register_attached_routes(
+        self,
+        app: falcon.asgi.App,
+        canonical: str,
+        media_handlers: cabc.MutableMapping[falcon.WebSocketPayloadType, object],
+    ) -> None:
+        """Install raw frame handlers and register the mount routes."""
+        install_raw_websocket_media_handlers(media_handlers, stacklevel=5)
+        prefix_template = canonical.rstrip("/") or "/"
+        routes = (prefix_template, self._greedy_route_template(canonical))
+        for route in routes:
+            app.add_route(route, self)
+
+    def _restore_attachment(self, snapshot: _AttachmentSnapshot) -> None:
+        """Restore router and shared media state after a failed registration."""
+        # Media handlers are shared by every WebSocket route on the app.
+        snapshot.media_handlers.clear()
+        snapshot.media_handlers.update(snapshot.original_media_handlers)
+        # Falcon may have accepted the first route before rejecting the second.
+        # Re-adding that route on retry replaces the partial registration.
+        self._mount_prefix = snapshot.mount_prefix
+        self._routes[:] = snapshot.routes
 
     def _greedy_route_template(self, prefix: str) -> str:
         """Build the nested Falcon route with an unused capture name."""
@@ -377,14 +417,12 @@ class WebSocketRouter:
 
     def _validate_mount_template(self, req: _RequestLike) -> None:
         """Reject Falcon templates that are outside this router's mount."""
-        template = _request_path_template(req).rstrip("/") or "/"
-        mount = self._mount_prefix.rstrip("/") or "/"
-        descendant = (
-            "/{pachinko_path:path}"
-            if mount == "/"
-            else f"{mount}/{{pachinko_path:path}}"
+        template = _strip_terminal_greedy_path_field(
+            _request_path_template(req).rstrip("/") or "/"
         )
-        if template not in {mount, descendant}:
+
+        mount = self._mount_prefix.rstrip("/") or "/"
+        if template != mount:
             msg = f"route template '{template}' does not match router mount '{mount}'"
             raise falcon.HTTPNotFound(description=msg)
 
@@ -638,16 +676,16 @@ class WebSocketRouter:
             resource, dispatch, context, hook_manager
         )
         if should_accept:
-            connection_session = _ConnectionSession(
-                resource, dispatch.ws, hook_manager
-            )
+            connection_session = _ConnectionSession(resource, dispatch.ws, hook_manager)
             acceptance = self._finalize_connection(
-                resource,
-                dispatch.ws,
-                should_accept=True,
-                context=context,
-                hook_manager=hook_manager,
-                on_accept=connection_session.mark_accepted,
+                _ConnectionFinalization(
+                    resource=resource,
+                    ws=dispatch.ws,
+                    should_accept=True,
+                    context=context,
+                    hook_manager=hook_manager,
+                    on_accept=connection_session.mark_accepted,
+                )
             )
             await connection_session.run(
                 acceptance,
@@ -657,11 +695,13 @@ class WebSocketRouter:
             return True
 
         acceptance = self._finalize_connection(
-            resource,
-            dispatch.ws,
-            should_accept=False,
-            context=context,
-            hook_manager=hook_manager,
+            _ConnectionFinalization(
+                resource=resource,
+                ws=dispatch.ws,
+                should_accept=False,
+                context=context,
+                hook_manager=hook_manager,
+            )
         )
         return await acceptance
 
@@ -704,29 +744,24 @@ class WebSocketRouter:
 
     @staticmethod
     async def _finalize_connection(
-        resource: WebSocketResource,
-        ws: WebSocketLike,
-        *,
-        should_accept: bool,
-        context: HookContext,
-        hook_manager: HookManager,
-        on_accept: cabc.Callable[[], None] | None = None,
+        finalization: _ConnectionFinalization,
     ) -> bool:
         """Complete the connection lifecycle and honour ``should_accept``."""
-        context.result = should_accept
-        await hook_manager.notify_after_connect(context)
-        if not should_accept:
-            await ws.close()
+        context = finalization.context
+        context.result = finalization.should_accept
+        await finalization.hook_manager.notify_after_connect(context)
+        if not finalization.should_accept:
+            await finalization.ws.close()
             return True
-        if getattr(ws, "closed", False):
+        if getattr(finalization.ws, "closed", False):
             return True
-        if WebSocketRouter._is_socket_unaccepted(ws):
-            await ws.accept()
-        if getattr(ws, "closed", False):
+        if WebSocketRouter._is_socket_unaccepted(finalization.ws):
+            await finalization.ws.accept()
+        if getattr(finalization.ws, "closed", False):
             return True
-        if on_accept is not None:
-            on_accept()
-        await resource.on_accepted(ws)
+        if finalization.on_accept is not None:
+            finalization.on_accept()
+        await finalization.resource.on_accepted(finalization.ws)
         return True
 
     @staticmethod
