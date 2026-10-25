@@ -153,6 +153,7 @@ async def test_close_guard_overrides_wrapped_is_closed_probe() -> None:
     assert not receive_still_allowed, (
         "receive eligibility must stop when the wrapper begins closing"
     )
+    assert session.close_code == 4001, "cleanup must retain the sent close code"
 
 
 @pytest.mark.asyncio
