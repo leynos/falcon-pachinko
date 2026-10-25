@@ -20,6 +20,19 @@ _MIN_CLOSE_CODE = 1000
 _RESERVED_CLOSE_CODE_RANGES = ((1004, 1006), (1015, 1999))
 
 
+def _accept_arguments(
+    subprotocol: str | None,
+    headers: cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None,
+) -> dict[str, object]:
+    """Build only the handshake keywords supplied by the caller."""
+    kwargs: dict[str, object] = {}
+    if subprotocol is not None:
+        kwargs["subprotocol"] = subprotocol
+    if headers is not None:
+        kwargs["headers"] = headers
+    return kwargs
+
+
 class SessionWebSocket:
     """Forward socket operations while retaining observed session acceptance."""
 
@@ -59,11 +72,7 @@ class SessionWebSocket:
         headers: cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None = None,
     ) -> None:
         """Mirror Falcon's accepted state into shared session cleanup."""
-        kwargs: dict[str, object] = {}
-        if subprotocol is not None:
-            kwargs["subprotocol"] = subprotocol
-        if headers is not None:
-            kwargs["headers"] = headers
+        kwargs = _accept_arguments(subprotocol, headers)
         # Extra native keywords are outside WebSocketLike. Forward only supplied
         # options, letting each transport validate its own supported arguments.
         accept = typ.cast(

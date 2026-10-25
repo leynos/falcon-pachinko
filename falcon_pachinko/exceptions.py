@@ -33,10 +33,10 @@ class DuplicateHandlerRegistrationError(RuntimeError):
 class ReservedHandlerRegistrationError(RuntimeError):
     """Raised when a lifecycle callback is registered as a message handler.
 
-    Lifecycle callbacks such as ``on_connect``, ``on_disconnect`` and
-    ``on_unhandled`` are driven by the connection lifecycle, not by peer
-    frames. Allowing a peer tag to name one would let a remote client invoke
-    cleanup on a live connection.
+    Lifecycle callbacks such as ``on_connect``, ``on_session_start``,
+    ``on_disconnect`` and ``on_unhandled`` are driven by the connection
+    lifecycle, not by peer frames. Allowing a peer tag to name one would let a
+    remote client invoke cleanup on a live connection.
     """
 
     def __init__(self, message_type: str, func_qualname: str) -> None:

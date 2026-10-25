@@ -39,15 +39,14 @@ class EchoResource(WebSocketResource):
 
     def __init__(self) -> None:
         self.received: list[object] = []
+        self.websocket: WebSocketLike | None = None
         EchoResource.instances.append(self)
 
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
         """Approve the connection and leave receive ownership to the router."""
-        assert isinstance(ws, WebSocketSimulator), (
-            "the harness must inject the simulator instance"
-        )
+        self.websocket = ws
         del req, params
         return True
 
@@ -62,17 +61,18 @@ class EchoResource(WebSocketResource):
 
 
 class GreeterResource(WebSocketResource):
-    """Resource that accepts the connection and sends a welcome message."""
+    """Resource that sends a welcome message after router acceptance."""
 
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
-        """Greet the client and accept the simulated connection."""
-        assert isinstance(ws, WebSocketSimulator), (
-            "the harness must inject the simulator instance"
-        )
-        await ws.send_text("welcome aboard")
+        """Approve the connection for router acceptance."""
+        del req, ws, params
         return True
+
+    async def on_session_start(self, ws: WebSocketLike) -> None:
+        """Greet the accepted client before the receive loop starts."""
+        await ws.send_text("welcome aboard")
 
 
 class ChattyResource(WebSocketResource):
@@ -139,6 +139,12 @@ class TestWebSocketSimulatorFixture:
             )
             await asyncio.wait_for(connection.wait_for_sent_count(1), timeout=5)
             resource = EchoResource.instances[-1]
+            assert connection.session is not None, (
+                "accepted connections retain a session"
+            )
+            assert resource.websocket is connection.session.ws, (
+                "resources receive the guarded session socket"
+            )
             assert resource.received == [{"type": "ping"}], (
                 "the resource must have received the seeded payload"
             )
@@ -284,9 +290,10 @@ class TestWebSocketSimulatorFixture:
 
         monkeypatch.setattr(websocket_simulator, "_wait_until_ready", fail_readiness)
         monkeypatch.setattr(websocket_simulator, "_await_router_task", fail_cleanup)
+        websocket_simulator.router.add_route("/ready", ClosingResource)
 
         with pytest.raises(LookupError) as caught:
-            async with websocket_simulator.connect("/missing"):
+            async with websocket_simulator.connect("/ready"):
                 pytest.fail("connect must not yield after readiness failed")
         assert caught.value is readiness_error, (
             "cleanup timeout must not replace the readiness failure"

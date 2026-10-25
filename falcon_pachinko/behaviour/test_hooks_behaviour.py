@@ -134,7 +134,7 @@ def _assert_event_sequence(
 @given("a router with multi-tier hooks")
 def given_router(context: dict[str, typ.Any]) -> None:
     """Prepare a router with global and resource hooks."""
-    router = WebSocketRouter(receive_loop=True)
+    router = WebSocketRouter()
     router.global_hooks.add("before_connect", global_hook)
     router.global_hooks.add("after_connect", global_hook)
     router.global_hooks.add("before_receive", global_hook)
@@ -161,7 +161,7 @@ def given_router(context: dict[str, typ.Any]) -> None:
 @given("a router with only global hooks")
 def given_router_global_only(context: dict[str, typ.Any]) -> None:
     """Prepare a router that only registers global hooks."""
-    router = WebSocketRouter(receive_loop=True)
+    router = WebSocketRouter()
     router.global_hooks.add("before_connect", global_hook)
     router.global_hooks.add("after_connect", global_hook)
     router.global_hooks.add("before_receive", global_hook)

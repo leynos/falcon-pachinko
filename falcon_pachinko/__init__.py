@@ -13,6 +13,7 @@ from .diagnostics import DEFAULT_SENSITIVE_KEYS, DiagnosticSanitizer
 from .fanout import ClusterFanout, FanoutMessage, FanoutTransport
 from .handlers import handles_message
 from .hooks import HookCollection, HookContext, HookManager
+from .lifecycle import AcceptOptions, LifecycleError, WebSocketSession
 from .media import configure_raw_frame_media
 from .protocols import WebSocketLike
 from .resource import WebSocketResource
@@ -35,6 +36,7 @@ from .workers import WorkerController, worker
 
 __all__ = (
     "DEFAULT_SENSITIVE_KEYS",
+    "AcceptOptions",
     "ClusterFanout",
     "ConnectionBackend",
     "DiagnosticSanitizer",
@@ -44,6 +46,7 @@ __all__ = (
     "HookContext",
     "HookManager",
     "InProcessBackend",
+    "LifecycleError",
     "MissingDependencyError",
     "ResourceFactory",
     "ServiceContainer",
@@ -55,6 +58,7 @@ __all__ = (
     "WebSocketLike",
     "WebSocketResource",
     "WebSocketRouter",
+    "WebSocketSession",
     "WebSocketSimulator",
     "WebSocketTestClient",
     "WorkerController",

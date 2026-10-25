@@ -16,6 +16,7 @@ from falcon_pachinko import (
     WebSocketResource,
     WebSocketRouter,
 )
+from falcon_pachinko._disconnect import _PeerDisconnectedError
 from falcon_pachinko.unittests._router_test_resources import (
     AcceptingResource,
     DummyResource,
@@ -346,7 +347,7 @@ async def test_pre_accept_receive_requires_session_start(operation: str) -> None
 
 @pytest.mark.asyncio
 async def test_peer_close_code_is_retained_by_session_guard() -> None:
-    """Direct session reads preserve Falcon's peer close code for cleanup."""
+    """Direct session reads preserve the peer close code for cleanup."""
     disconnect_codes: list[int] = []
 
     class DisconnectResource(AcceptingResource):
@@ -357,11 +358,11 @@ async def test_peer_close_code_is_retained_by_session_guard() -> None:
     router = WebSocketRouter()
     router.add_route("/peer-close", DisconnectResource)
     router.mount("/")
-    ws = RecordingWS(falcon.WebSocketDisconnected(4007))
+    ws = RecordingWS(disconnect_code=4007)
     session = await router.negotiate(make_req("/peer-close"), ws)
     assert session is not None, "the router must return the accepted session"
 
-    with pytest.raises(falcon.WebSocketDisconnected):
+    with pytest.raises(_PeerDisconnectedError):
         await session.ws.receive_json()
     await session.aclose()
 
@@ -426,7 +427,7 @@ async def test_aclose_waits_for_run_completion_not_caller_completion() -> None:
     router = WebSocketRouter()
     router.add_route("/run-owner", AcceptingResource)
     router.mount("/")
-    ws = RecordingWS(falcon.WebSocketDisconnected(1000))
+    ws = RecordingWS(disconnect_code=1000)
     session = await router.negotiate(make_req("/run-owner"), ws)
     assert session is not None, "the accepted session should be returned"
 

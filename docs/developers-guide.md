@@ -29,6 +29,91 @@ remains telemetry-agnostic. It propagates the original startup exception to the
 application startup caller, leaving application-specific logging and metrics to
 the lifespan owner.
 
+The Falcon composition boundary is `WebSocketRouter.attach(app, prefix)`: it
+registers the router mount and descendant catch-all routes and installs
+raw-frame media handlers. For routers built from relative paths,
+`router.mount(prefix)` followed by `router.attach(app)` is the two-step form.
+
+## WebSocket session lifecycle
+
+`WebSocketRouter.on_websocket()` negotiates the connection, then runs the
+accepted `WebSocketSession`. `on_connect()` returns a falsey value to reject,
+`True` to accept with defaults, or `AcceptOptions` to select the subprotocol
+and response headers. The router performs acceptance after the `after_connect`
+hooks; the deprecated `ws.accept()` compatibility path accepts immediately
+inside `on_connect()` and therefore changes that hook order.
+
+After acceptance, `WebSocketSession.run()` invokes `on_session_start()` before
+it starts the sequential receive and dispatch loop. It then receives one frame
+at a time and awaits `WebSocketResource.dispatch()` before receiving another.
+`on_disconnect()` is attempted once for accepted sessions, including failures
+during session start or dispatch. A rejected connection or failed
+`on_connect()` does not invoke it. Peer close codes pass through, with `1006`
+used when the code is unavailable. Cancellation closes with `1001`; unexpected
+receive or handler failures close with `1011` and preserve the original error.
+
+Manual callers can use `await router.negotiate(req, ws)` to get an accepted
+`WebSocketSession` without starting it. The result is `None` when the selected
+resource rejects. Call `session.run()` to use the router's receiver, or
+dispatch manually and call `session.aclose()` when finished. If `run()` is
+active in another task, `aclose()` waits without a timeout; cancel and await
+that run task to bound shutdown.
+
+## Cluster fan-out maintenance
+
+Keep `ConnectionBackend` and `WebSocketConnectionManager` as process-local
+registries for live sockets. `ClusterFanout` coordinates distributed room
+membership through a `FanoutTransport` that exchanges string identifiers and
+floating-point lease durations as metadata, and serialized envelopes as bytes;
+it never transfers live sockets. A lease is per node and room: subscribe on the
+first local join, unsubscribe on the last local leave, refresh by heartbeat,
+release during graceful shutdown, and let `lease_ttl` expire membership after a
+crash. Resources should call `add_connection`, `join_room`, `publish` and
+`remove_connection` through the coordinator, with `fanout.run` started and
+stopped by `WorkerController` in the ASGI lifespan. See the
+[user guide's clustered deployment section](users-guide.md#clustered-deployments),
+the
+[fan-out design](falcon-websocket-extension-design.md#371-cluster-membership-and-fan-out),
+and the
+[scalability discussion](falcon-websocket-extension-design.md#64-scalability-for-distributed-systems).
+
+`ClusterFanout.__init__` has a method-scoped CodeScene *Excess Number of
+Function Arguments* exception because its explicit, typed collaborators and
+timing options form the public wiring contract; replacing them with a
+configuration object or opaque keyword arguments would change that contract.
+Keep this exception limited to that method, without a cohesion suppression or
+project threshold change.
+
+Delivery is best effort, with no durability or replay to down or expired nodes.
+Per-socket ordering depends on the transport preserving per-publisher, per-node
+order; there is no global ordering, and duplicates are possible with
+at-least-once transports. The coordinator does not deduplicate; `message_id` is
+available in the envelope but is not added to WebSocket payloads, so
+applications needing deduplication must supply their own payload identifier.
+Serialization failures occur before publication, transport publish failures
+propagate without retry, and local send failures do not stop the listener,
+evict connections or roll back publication. The in-memory test transport is
+`InMemoryFanoutTransport`; the real two-server BDD lives in
+`tests/behaviour/cluster_fanout.feature` and
+`tests/behaviour/test_cluster_fanout_steps.py`.
+
+`WorkerController` remains telemetry-agnostic. `ClusterFanout` and session
+cleanup may emit standard DEBUG events with fixed fields `operation`, `outcome`,
+`duration_seconds` measured with a monotonic clock, and `exception_type`; use
+fixed operation and outcome values for publication, membership maintenance,
+listener termination and disconnect cleanup. Keep successful message decoding
+and local delivery silent, distinguish decode failures from delivery failures,
+and emit no unconditional per-frame events. Exclude identifiers, payloads,
+exception values and tracebacks. Host logging handlers may aggregate metrics or
+start and end spans using task or context; broker decorators may measure queue
+waits and operations, while existing lifecycle hooks support resource
+instrumentation. Filter, sample or aggregate to bound event volume because
+publication and lease renewal are frequent and DEBUG is off by default. Metrics
+must use fixed operation and outcome dimensions, never room, message,
+connection or node IDs as labels. Keep instrumentation optional and
+host-configured, with no mandatory SDK, public constructor changes or
+`WorkerController` changes.
+
 ## Dependency bounds
 
 The package supports Falcon 4.x through `falcon>=4,<5`. Falcon follows
@@ -45,10 +130,129 @@ installing Falcon 4.0.0 with `uv pip install falcon==4.0.0` and running
 `make build` afterwards to restore the normal environment. The latest CI build
 checked for this change resolved Falcon 4.4.0.
 
-The repository has no committed lock file, and `.gitignore` excludes `uv.lock`.
-CI therefore resolves the newest release allowed by the dependency bounds on
-each build. Lower-bound coverage in CI and the decision to commit a lock file
-are tracked separately from this support policy.
+`uv.lock` is committed and `.gitignore` no longer excludes it. The dependency
+bounds above are deliberately wide, so the lockfile is what pins an actual
+release. See "Dependency management with uv" below for how it is kept current.
+Lower-bound coverage in CI stays tracked separately from this support policy.
+
+## Dependency management with uv
+
+The project is uv-managed. `pyproject.toml` declares runtime dependencies under
+`[project]`, development tooling under `[dependency-groups]`, and the
+`examples` and `testing` sets as `[project.optional-dependencies]` extras. The
+lockfile `uv.lock` resolves all three, including every interpreter version in
+`requires-python`, and is committed alongside them.
+
+`make build` runs:
+
+```sh
+uv sync --group dev --locked
+```
+
+`--locked` is what makes the committed lockfile load-bearing. A plain `uv sync`
+re-resolves whenever `pyproject.toml` and `uv.lock` disagree, so a branch that
+edited one but not the other would install a dependency set nobody reviewed and
+report success. With `--locked` the same disagreement fails the build instead,
+which is the behaviour CI needs: `ci.yml` installs the project by running
+`make build`, so the lockfile CI installs is the lockfile the branch committed.
+
+### Changing a dependency
+
+- After editing any dependency in `pyproject.toml`, run `uv lock` and commit
+  the regenerated `uv.lock` in the same change. `make build` fails until it is
+  refreshed.
+- To upgrade one dependency without disturbing the rest, use
+  `uv lock --upgrade-package <name>`. A bare `uv lock --upgrade` re-resolves
+  everything and produces a diff no reviewer can attribute to a reason.
+- Bump the `ruff` and `ty` pins in the Makefile and in `ci.yml` together, not
+  through the lockfile: they run as `uv tool run --from <tool>==<pin>` outside
+  the project environment, and `tests/test_toolchain_versions.py` holds the two
+  sites to one another.
+
+### Dependabot
+
+`.github/dependabot.yml` reads Python dependencies through the `uv` ecosystem,
+which is the ecosystem that understands `uv.lock`; `pip` reads
+`requirements*.txt` and the older `pyproject.toml` layout and would leave the
+lockfile unmaintained. Dependabot's lockfile updates and the entry's grouping,
+limits, labels and cooldown are held by `tests/test_uv_toolchain.py`, which
+also asserts that the lockfile is committed, not ignored, and that `make build`
+installs it with `--locked`.
+
+The auto-merge workflow needs no change for this: `dependabot-automerge.yml`
+keys on the actor `dependabot[bot]`, not on the ecosystem that opened the pull
+request.
+
+## WebSocket lifecycle acceptance tests
+
+Every WebSocket lifecycle feature requires a pytest-bdd scenario using
+`live_websocket_server`, `WebSocketTestClient`, and an application mounted with
+`WebSocketRouter.attach()`. The scenario must exercise real Falcon ASGI
+responders over a real socket. Simulator scenarios remain useful for fast
+behavioural coverage, but they do not establish the production responder
+contract and cannot replace the live-server suite.
+
+The live harness captures failures from Falcon's `Exception` handler and from
+exceptions escaping the ASGI callable. Tests can inspect the read-only
+`server.errors` snapshot or acknowledge asserted failures with
+`server.pop_errors()`. Applications that register their own `Exception` handler
+must register it after `live_websocket_server.start(app)` because the harness
+installs its capture handler during startup and replaces a handler registered
+earlier. The application handler must call `server.record_error(ex)`; otherwise
+Falcon may consume the exception before the harness can report it.
+Unacknowledged server failures fail context teardown, while `pop_errors()`
+marks failures that the scenario intentionally asserted.
+
+## WebSocket responder and live-harness boundaries
+
+`WebSocketRouter.attach(app, prefix)` is the Falcon composition boundary. It
+compiles the router's relative paths, registers the exact mount and descendant
+catch-all routes, and installs raw-frame media handlers on the app. The router
+accepts a connection after `on_connect()` and `after_connect` succeed, then
+`WebSocketSession.run()` invokes `on_session_start()` and owns receives,
+dispatch, and disconnect cleanup.
+
+`install_raw_websocket_media_handlers()` wraps the app-wide TEXT and BINARY
+handlers once. Inbound deserialization passes frames through as raw `str` or
+`bytes` for resource dispatch; outbound serializers remain the configured
+Falcon serializers. Attaching warns when it finds customized inbound handlers,
+because their deserializers are replaced for every WebSocket responder on that
+app. `configure_raw_frame_media(app)` provides the same idempotent setup for
+manually mounted routers and other Falcon WebSocket routes. Either entry point
+warns when customized inbound handlers will be replaced. Repeated installation
+does not wrap a handler again.
+
+The session driver receives one frame at a time and passes it to
+`WebSocketResource.dispatch()`. Falcon signals a peer disconnect with
+`falcon.WebSocketDisconnected`; the simulator uses the package's internal
+peer-disconnect signal. The driver preserves the peer close code, using `1006`
+when Falcon does not provide one. A receive or dispatch failure closes an open
+socket with `1011`, runs best-effort disconnect cleanup, and re-raises the
+original failure. Local cancellation runs best-effort cleanup with close-code
+metadata `1006`, sends no close frame with that reserved code, and re-raises
+`CancelledError`. Disconnect hooks precede the single `on_disconnect()`
+attempt. For an ordinary peer disconnect, cleanup errors propagate after both
+cleanup steps have been attempted; during failure or cancellation cleanup
+errors are logged and do not replace the primary outcome.
+
+The `ServerAdapter` protocol isolates the ASGI server. Its `task` property is
+the serve-loop task, `start(app, sock)` returns only after lifespan startup and
+listener readiness, and `stop()` requests graceful shutdown. The harness binds
+the ephemeral socket before passing it to the adapter, then joins the task
+during teardown. The default Uvicorn adapter is imported lazily and implements
+that contract using Uvicorn's lifespan and graceful-stop support.
+
+`live_websocket_server` provides a per-test runner with a fresh event loop. Its
+`run()` method executes awaitables on that loop; `start()` tracks each harness
+and `close()` exits servers in reverse order, cancels leftover tasks, shuts
+down async generators and the default executor, and closes the loop. Startup
+timeouts or failures trigger partial-startup cleanup and are reported as
+`LiveServerStartupError`. A shutdown deadline records
+`LiveServerShutdownError`. Unacknowledged captured application or server-task
+failures are grouped into `LiveServerError` at teardown; `server.pop_errors()`
+acknowledges failures a scenario has asserted. The capture handler is installed
+during startup, so a custom Falcon `Exception` handler must be registered
+afterwards and call `server.record_error(ex)`.
 
 ## Validation error import boundary
 
@@ -195,18 +399,109 @@ Receive guards are checked between individual hooks and layers. Closing from a
 before- or after-receive hook suppresses every remaining receive hook,
 including hooks in the same layer.
 
-Cleanup runs in a separate shielded task and the router keeps awaiting that
-task through repeated cancellation. There is no cleanup timeout, so
-`on_disconnect` must terminate. A single session or cleanup failure is
-re-raised unchanged. Multiple ordinary failures are raised in an
-`ExceptionGroup`, with the session failure first. Cancellation remains a bare
-`CancelledError`; failures that cannot be grouped with it are sent to the
-running loop's exception handler. Cancellation during cleanup preserves the
-already selected close code.
+The `on_connect`, `on_session_start`, `on_disconnect` and `on_unhandled`
+callbacks are driven by the connection lifecycle, never by an envelope `type`,
+so the dispatcher refuses to resolve them by convention.
 
-The same primary-first policy preserves an accepted `on_connect` failure when an
-`after_connect` hook also fails. Cancellation from that hook remains bare; the
-original setup failure is reported through the loop's exception handler.
+The conventional allowlist is `_conventional_handler_names` in
+`falcon_pachinko/resource.py`, computed once per class by
+`_init_conventional_handler_names`. Class creation inspects each `on_*`
+attribute with `inspect.getattr_static` rather than `getattr`, so a descriptor
+named `on_*` cannot run, or raise, while the class is being created; the raw
+attribute it returns means only a plain coroutine function is admitted. A
+`@staticmethod` is not: it has no `self` for the dispatcher to pass. A
+`@classmethod` is not either: it would receive the class in that position.
+`functools.partialmethod` is excluded explicitly, because from Python 3.13
+`inspect.iscoroutinefunction` unwraps it, so the raw descriptor would be
+admitted on some interpreters and not others, and because class access yields a
+generated wrapper rather than the function the test saw. The predicate still
+unwraps it for the reserved-name check, so a callback cannot hide behind one.
+
+`LIFECYCLE_CALLBACK_NAMES` and `is_lifecycle_callback`, both in
+`falcon_pachinko/handlers.py`, are the single source of truth: registration
+(`WebSocketResource.add_handler`, `@handles_message`) calls the predicate
+directly, and the conventional allowlist that
+`dispatcher.find_conventional_handler` consults is built from it, so the two
+paths cannot drift. `is_lifecycle_callback` unwraps both sides of every
+comparison with `_unwrap_handler`, then checks the callable's own `__name__`
+and, failing that, identity against the reserved entries in the owner's MRO,
+which is what catches a neutral alias such as `on_bye = on_disconnect` or a
+function copied from a parent resource under a new name.
+
+`_unwrap_handler` peels `functools.partial`, a `_HandlesMessageDescriptor` (the
+object `@handles_message` returns), the standard-library descriptor families
+(`functools.partialmethod`, `functools.singledispatchmethod`,
+`functools.cached_property`, `property`), `classmethod` and `staticmethod`
+objects, and bound methods. For the generated class-view of a `partialmethod` or
+`singledispatchmethod`, `_descriptor_view_owner` follows the descriptor
+backlink the view carries. A `functools.wraps` wrapper is deliberately *not*
+unwrapped: it is a distinct function that only borrows metadata, so following
+`__wrapped__` would over-reject an unrelated handler.
+
+Explicit registration takes precedence: dispatch looks up the exact envelope
+`type` first and falls back to convention only on a miss, so a reserved tag
+stays legal for a distinct method; see §3.6 of the
+[design document](falcon-websocket-extension-design.md).
+
+## Router-owned WebSocket sessions
+
+After route resolution and connection hooks, `WebSocketRouter` calls
+`on_connect()` and `after_connect`, accepts the connection, then awaits the
+selected session inline. `WebSocketSession.run()` calls `on_session_start()`
+and repeatedly receives one frame, adapts decoded values to raw JSON frames
+when needed, and awaits `WebSocketResource.dispatch()` before reading the next
+frame. It creates no per-frame tasks. The selected child resource, bound hook
+manager, injected services, and connection-scoped state proxy are the same
+objects prepared for connection setup. The router owns this lifecycle for
+ordinary Falcon routing; manual callers can use `negotiate()` and retain the
+session handle themselves.
+
+Falcon may decode incoming media before `receive_media()` returns it, so The
+receive loop does not itself guarantee exact raw TEXT or BINARY input.
+`router.attach()` enables raw input for all WebSocket routes on the app while
+preserving the configured outgoing TEXT and BINARY serializers. For a manually
+mounted router or another Falcon WebSocket route, call
+`configure_raw_frame_media(app)` before Falcon constructs WebSockets. Both
+entry points use the same idempotent setup and warn when customized inbound
+handlers will be replaced; Falcon's default decoding applies when neither is
+used.
+
+An ordinary peer disconnect runs `before_disconnect` hooks and then attempts
+`on_disconnect(ws, peer_code)` once; a missing peer close code maps to 1006.
+Cancellation before disconnect cleanup starts uses close-code metadata 1006 and
+re-raises `CancelledError` without sending a close frame with that reserved
+code. If cancellation interrupts a peer-close callback already in progress,
+that callback is not retried; cancellation cleanup uses 1006 metadata. An
+unexpected receive or handler exception closes with 1011, runs best-effort
+disconnect cleanup, and re-raises the original exception. Failure in
+`after_connect` or `accept` before acceptance completes uses 1006 for cleanup.
+An ordinary exception from `on_session_start` happens after acceptance, closes
+with 1011, and passes 1011 to cleanup even though the receive loop has not
+started. Cancellation during `on_session_start` uses 1006 as cleanup metadata
+and propagates without sending a close frame with that reserved code.
+Cancellation cleanup may retry a `before_disconnect` hook interrupted before
+the callback; an interruption inside the callback does not trigger a second
+attempt. A normal peer-cleanup lifecycle error propagates. During
+accepted-session failure cleanup, errors are logged by exception type and do
+not replace the session failure.
+
+Test sockets must terminate receive loops. `DummyWS` and `RecordingWS` return
+their scripted frames in order and then signal peer disconnection. The
+simulator drains queued frames before reporting closure; `close(code)` wakes a
+pending receive. `SimulatorRouterHarness.connect()` starts
+`router.on_websocket()` as a task, waits for accept/close/readiness, and on
+exit closes the simulator and awaits the router task. Unit and simulator tests
+use this harness for fast lifecycle coverage.
+
+The public `LiveWebSocketServer` harness and `live_websocket_server` fixture
+run real Falcon ASGI apps under Uvicorn on ephemeral loopback ports. The
+two-node fan-out scenario uses a dedicated event loop and an `AsyncExitStack`
+for both servers, their workers, and real `WebSocketTestClient` sessions. Its
+stack closes sessions before workers and servers, then closes the loop. The
+real router-session scenarios prove frame order, binary handling, fallback
+continuation, replies, failure close codes, and peer disconnect callbacks over
+network sockets. Run those scenarios with `make test`; run the documentation
+gates with `make markdownlint` and `make spelling`.
 
 ## Lint and Typecheck Toolchain
 

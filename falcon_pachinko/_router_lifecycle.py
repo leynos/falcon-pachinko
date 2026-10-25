@@ -10,6 +10,7 @@ import typing as typ
 
 import falcon
 
+from ._router_resources import _ResourceResolver
 from ._session import SessionPhase, SessionState
 from ._session_driver import SessionDriverContext
 from ._session_socket import track_session_socket
@@ -19,6 +20,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import re
 
+    from ._route_support import _RouteMatch
     from .hooks import HookContext, HookManager
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
@@ -29,14 +31,6 @@ class _RouteSpec(typ.Protocol):
 
     pattern: re.Pattern[str]
     factory: cabc.Callable[..., WebSocketResource]
-
-
-@dc.dataclass(slots=True)
-class _RouteMatch:
-    """Captured route parameters plus the path segment still to be consumed."""
-
-    params: dict[str, str]
-    remaining: str
 
 
 @dc.dataclass(slots=True)
@@ -170,7 +164,9 @@ async def _process_route_resolution(
     router: _RouterServices, dispatch: _Dispatch
 ) -> WebSocketSession | None:
     """Resolve the final resource and negotiate the connection."""
-    base_resource = router._resource_factory(dispatch.route.factory)
+    base_resource = await _ResourceResolver(router._resource_factory).instantiate(
+        dispatch.route.factory, dispatch.ws
+    )
     chain = [base_resource]
     resource = await router._resolve_resource_and_path(
         base_resource, dispatch.match, chain, dispatch.ws

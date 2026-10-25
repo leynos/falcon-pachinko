@@ -8,7 +8,7 @@ from contextlib import suppress
 
 import pytest
 
-from tests.behaviour import _live_server
+from tests.behaviour import _live_lifecycle_server as _live_server
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc

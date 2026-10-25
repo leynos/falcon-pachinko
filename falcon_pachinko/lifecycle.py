@@ -11,8 +11,10 @@ import warnings
 
 import falcon
 
+from ._disconnect import _PeerDisconnectedError
 from ._session import _report_session_failure, _wait_for_shielded_task
 from ._session_driver import SessionDriverContext, finalize_session, run_session
+from ._session_socket import _accept_arguments
 
 if typ.TYPE_CHECKING:
     from ._session import SessionState
@@ -61,13 +63,22 @@ class AcceptOptions:
 class LifecycleGuard:
     """Enforce pre-accept, accepted, and closed operations on one transport."""
 
-    __slots__ = ("_close_code", "_phase", "_session", "_websocket")
+    __slots__ = (
+        "_accepting",
+        "_close_code",
+        "_close_started",
+        "_phase",
+        "_session",
+        "_websocket",
+    )
 
     def __init__(self, websocket: WebSocketLike, session: SessionState) -> None:
         self._websocket = websocket
         self._session = session
         self._phase = ConnectionPhase.PRE_ACCEPT
+        self._accepting = False
         self._close_code: int | None = None
+        self._close_started = False
 
         if bool(getattr(websocket, "closed", False)):
             self._phase = ConnectionPhase.CLOSED
@@ -78,6 +89,8 @@ class LifecycleGuard:
     @property
     def phase(self) -> ConnectionPhase:
         """Current connection phase; callers cannot modify it directly."""
+        if self._session.peer_disconnected:
+            return ConnectionPhase.CLOSED
         return self._phase
 
     @property
@@ -88,7 +101,7 @@ class LifecycleGuard:
     @property
     def closed(self) -> bool:
         """Whether the lifecycle or its underlying transport is closed."""
-        return self._phase is ConnectionPhase.CLOSED or bool(
+        return self.phase is ConnectionPhase.CLOSED or bool(
             getattr(self._websocket, "closed", False)
         )
 
@@ -115,30 +128,37 @@ class LifecycleGuard:
         if self._phase is not ConnectionPhase.PRE_ACCEPT:
             msg = f"cannot accept a WebSocket in phase {self._phase.value!r}"
             raise LifecycleError(msg)
-
-        kwargs: dict[str, object] = {}
-        if options is not None:
-            if options.subprotocol is not None:
-                kwargs["subprotocol"] = options.subprotocol
-            if options.headers is not None:
-                kwargs["headers"] = options.headers
-        accept = typ.cast(
-            "cabc.Callable[..., cabc.Awaitable[None]]", self._websocket.accept
-        )
-        try:
-            await accept(**kwargs)
-        except (Exception, asyncio.CancelledError):
-            if getattr(self._websocket, "unaccepted", True) is False:
-                self._mark_accepted()
-            raise
-        if getattr(self._websocket, "unaccepted", None) is True:
-            msg = "WebSocket transport returned from accept() without accepting"
+        if self._accepting:
+            msg = "cannot accept a WebSocket while acceptance is already in progress"
             raise LifecycleError(msg)
-        self._mark_accepted()
+
+        # Set this before the transport await: concurrent callers must not both
+        # pass the phase check while the first handshake is still in flight.
+        self._accepting = True
+        try:
+            kwargs = _accept_arguments(
+                options.subprotocol if options is not None else None,
+                options.headers if options is not None else None,
+            )
+            accept = typ.cast(
+                "cabc.Callable[..., cabc.Awaitable[None]]", self._websocket.accept
+            )
+            try:
+                await accept(**kwargs)
+            except (Exception, asyncio.CancelledError):
+                if getattr(self._websocket, "unaccepted", True) is False:
+                    self._mark_accepted()
+                raise
+            if getattr(self._websocket, "unaccepted", None) is True:
+                msg = "WebSocket transport returned from accept() without accepting"
+                raise LifecycleError(msg)
+            self._mark_accepted()
+        finally:
+            self._accepting = False
 
     async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Reject before acceptance or close an accepted connection once."""
-        if self._phase is ConnectionPhase.CLOSED:
+        if self._close_started or bool(getattr(self._websocket, "closed", False)):
             return
 
         effective_code = 1000 if code is None else code
@@ -148,36 +168,31 @@ class LifecycleGuard:
         kwargs: dict[str, object] = {"code": effective_code}
         if reason is not None:
             kwargs["reason"] = reason
+        self._close_started = True
         try:
             await close(**kwargs)
         except (Exception, asyncio.CancelledError):
             if bool(getattr(self._websocket, "closed", False)):
                 self._mark_closed(effective_code)
+            else:
+                self._close_started = False
             raise
         self._mark_closed(effective_code)
 
-    async def send_media(self, media: object, **kwargs: object) -> None:
+    async def send_media(self, media: object, *args: object, **kwargs: object) -> None:
         """Send structured media after acceptance."""
         self._require_accepted("send_media")
-        await self._run_transport("send_media", media, **kwargs)
+        await self._run_transport("send_media", media, *args, **kwargs)
 
     async def send_text(self, message: str) -> None:
         """Send a text frame after acceptance when the transport supports it."""
         self._require_accepted("send_text")
-        if callable(method := getattr(self._websocket, "send_text", None)):
-            await typ.cast("cabc.Callable[[str], cabc.Awaitable[None]]", method)(
-                message
-            )
-        else:
-            await self.send_media(message)
+        await self._send_with_media_fallback("send_text", message)
 
     async def send_bytes(self, payload: bytes) -> None:
         """Send a binary frame after acceptance when the transport supports it."""
         self._require_accepted("send_bytes")
-        method = getattr(self._websocket, "send_bytes", None)
-        if not callable(method):
-            method = getattr(self._websocket, "send_data", None)
-        if callable(method):
+        if (method := self._transport_method("send_bytes", "send_data")) is not None:
             await typ.cast("cabc.Callable[[bytes], cabc.Awaitable[None]]", method)(
                 payload
             )
@@ -187,85 +202,92 @@ class LifecycleGuard:
     async def send_json(self, payload: object) -> None:
         """Send JSON after acceptance when the transport supports it."""
         self._require_accepted("send_json")
-        if callable(method := getattr(self._websocket, "send_json", None)):
+        await self._send_with_media_fallback("send_json", payload)
+
+    async def _send_with_media_fallback(
+        self, method_name: str, payload: object
+    ) -> None:
+        """Use a typed transport method when available, else send media."""
+        if (method := self._transport_method(method_name)) is not None:
             await typ.cast("cabc.Callable[[object], cabc.Awaitable[None]]", method)(
                 payload
             )
         else:
             await self.send_media(payload)
 
+    def _transport_method(self, *names: str) -> object | None:
+        """Return the first callable transport method in preference order."""
+        for name in names:
+            if callable(method := getattr(self._websocket, name, None)):
+                return method
+        return None
+
     async def receive_media(self) -> object:
         """Receive structured media after acceptance."""
         self._require_accepted("receive_media")
-        try:
-            return await self._run_transport("receive_media")
-        except falcon.WebSocketDisconnected as exc:
-            self._record_disconnect(exc)
-            raise
+        return await self._receive_with_disconnect_recording(
+            self._run_transport("receive_media")
+        )
 
     async def _receive_payload(self) -> object:
         """Read one raw frame for router dispatch without changing media APIs."""
         self._require_accepted("receive_media")
-        try:
-            receive_payload = getattr(self._websocket, "receive_payload", None)
-            if callable(receive_payload):
-                return await typ.cast(
-                    "cabc.Callable[[], cabc.Awaitable[object]]", receive_payload
-                )()
-            return await self._run_transport("receive_media")
-        except falcon.WebSocketDisconnected as exc:
-            self._record_disconnect(exc)
-            raise
+        if (receive_payload := self._transport_method("receive_payload")) is not None:
+            operation = typ.cast(
+                "cabc.Callable[[], cabc.Awaitable[object]]", receive_payload
+            )()
+        else:
+            operation = self._run_transport("receive_media")
+        return await self._receive_with_disconnect_recording(operation)
 
     async def receive_text(self) -> str:
         """Receive a text frame after acceptance."""
-        self._require_accepted("receive_text")
-        try:
-            if callable(method := getattr(self._websocket, "receive_text", None)):
-                message = await typ.cast(
-                    "cabc.Callable[[], cabc.Awaitable[object]]", method
-                )()
-            else:
-                message = await self._run_transport("receive_media")
-        except falcon.WebSocketDisconnected as exc:
-            self._record_disconnect(exc)
-            raise
-        if not isinstance(message, str):
-            msg = "expected a text WebSocket frame"
-            raise TypeError(msg)
-        return message
+        return await self._receive_typed_frame(
+            "receive_text", ("receive_text",), str, "text"
+        )
 
     async def receive_bytes(self) -> bytes:
         """Receive a binary frame after acceptance when the transport supports it."""
-        self._require_accepted("receive_bytes")
-        try:
-            method = getattr(self._websocket, "receive_bytes", None)
-            if not callable(method):
-                method = getattr(self._websocket, "receive_data", None)
-            if callable(method):
-                message = await typ.cast(
-                    "cabc.Callable[[], cabc.Awaitable[object]]", method
-                )()
-            else:
-                message = await self._run_transport("receive_media")
-        except falcon.WebSocketDisconnected as exc:
-            self._record_disconnect(exc)
-            raise
-        if not isinstance(message, bytes):
-            msg = "expected a binary WebSocket frame"
+        return await self._receive_typed_frame(
+            "receive_bytes", ("receive_bytes", "receive_data"), bytes, "binary"
+        )
+
+    async def _receive_typed_frame[FrameT: str | bytes](
+        self,
+        operation_name: str,
+        method_names: tuple[str, ...],
+        expected_type: type[FrameT],
+        frame_name: str,
+    ) -> FrameT:
+        """Receive and validate one typed frame with media fallback."""
+        self._require_accepted(operation_name)
+        if (method := self._transport_method(*method_names)) is not None:
+            operation = typ.cast("cabc.Callable[[], cabc.Awaitable[object]]", method)()
+        else:
+            operation = self._run_transport("receive_media")
+        message = await self._receive_with_disconnect_recording(operation)
+        if not isinstance(message, expected_type):
+            msg = f"expected a {frame_name} WebSocket frame"
             raise TypeError(msg)
         return message
 
     async def receive_json(self, payload_type: type[object] | None = None) -> object:
         """Receive JSON after acceptance when the transport supports it."""
         self._require_accepted("receive_json")
+        if callable(method := getattr(self._websocket, "receive_json", None)):
+            operation = typ.cast("cabc.Callable[..., cabc.Awaitable[object]]", method)(
+                payload_type
+            )
+            return await self._receive_with_disconnect_recording(operation)
+        return await self.receive_media()
+
+    async def _receive_with_disconnect_recording(
+        self, operation: cabc.Awaitable[object]
+    ) -> object:
+        """Record the peer close state when a receive operation disconnects."""
         try:
-            if callable(method := getattr(self._websocket, "receive_json", None)):
-                return await typ.cast(
-                    "cabc.Callable[..., cabc.Awaitable[object]]", method
-                )(payload_type)
-            return await self.receive_media()
-        except falcon.WebSocketDisconnected as exc:
+            return await operation
+        except (falcon.WebSocketDisconnected, _PeerDisconnectedError) as exc:
             self._record_disconnect(exc)
             raise
 
@@ -280,9 +302,9 @@ class LifecycleGuard:
 
     def _require_accepted(self, operation: str) -> None:
         """Reject data operations before setup has accepted the connection."""
-        if self._phase is ConnectionPhase.ACCEPTED:
+        if self.phase is ConnectionPhase.ACCEPTED:
             return
-        if self._phase is ConnectionPhase.PRE_ACCEPT:
+        if self.phase is ConnectionPhase.PRE_ACCEPT:
             msg = (
                 f"{operation}() is unavailable before WebSocket acceptance; "
                 "move active-session work to on_session_start()"
@@ -298,21 +320,23 @@ class LifecycleGuard:
 
     def _mark_closed(self, code: int | None) -> None:
         """Record closure and preserve the first close code."""
+        self._close_started = True
+        self._record_close_code_and_phase(code)
+
+    def _record_close_code_and_phase(self, code: int | None) -> None:
+        """Keep the first observed close code and mark the lifecycle closed."""
         if self._close_code is None:
             self._close_code = code
         if self._session.close_code is None:
             self._session.close_code = self._close_code
         self._phase = ConnectionPhase.CLOSED
 
-    def _record_disconnect(self, error: falcon.WebSocketDisconnected) -> None:
+    def _record_disconnect(self, error: BaseException) -> None:
         """Record the peer code when the receive API reports a disconnect."""
+        self._session.peer_disconnected = True
         code = getattr(error, "code", None)
         code = code if isinstance(code, int) else None
-        if self._close_code is None:
-            self._close_code = code
-        if self._session.close_code is None:
-            self._session.close_code = self._close_code
-        self._phase = ConnectionPhase.CLOSED
+        self._record_close_code_and_phase(code)
 
 
 class WebSocketSession:
@@ -364,15 +388,7 @@ class WebSocketSession:
             asyncio.get_running_loop().create_future()
         )
         self._run_completion = run_completion
-        context = SessionDriverContext(
-            resource=self._resource,
-            resources=self._resources,
-            websocket=self._websocket,
-            dispatch=self._dispatch,
-            session_state=self._session_state,
-            hook_manager=self._hook_manager,
-            params=self._params,
-        )
+        context = self._driver_context()
         run_error: BaseException | None = None
         try:
             await run_session(context, self._finalize)
@@ -428,17 +444,7 @@ class WebSocketSession:
     ) -> None:
         """Share one cleanup task across the session loop and explicit close."""
         if self._finalization_task is None:
-            context = SessionDriverContext(
-                resource=self._resource,
-                resources=self._resources,
-                websocket=self._websocket,
-                dispatch=self._dispatch,
-                session_state=self._session_state,
-                hook_manager=self._hook_manager,
-                params=self._params,
-                primary_error=error,
-                finalization_error=finalization_error,
-            )
+            context = self._driver_context(error, finalization_error)
             self._finalization_task = asyncio.create_task(finalize_session(context))
         interruptions = await self._wait_for_finalization()
         try:
@@ -449,13 +455,31 @@ class WebSocketSession:
             self._handle_finalization_task_error(task_error, error, interruptions)
         self._handle_finalization_interruptions(error, interruptions)
 
+    def _driver_context(
+        self,
+        primary_error: BaseException | None = None,
+        finalization_error: BaseException | None = None,
+    ) -> SessionDriverContext:
+        """Create a driver view with this session's retained lifecycle state."""
+        return SessionDriverContext(
+            resource=self._resource,
+            resources=self._resources,
+            websocket=self._websocket,
+            dispatch=self._dispatch,
+            session_state=self._session_state,
+            hook_manager=self._hook_manager,
+            params=self._params,
+            primary_error=primary_error,
+            finalization_error=finalization_error,
+        )
+
     async def _wait_for_finalization(self) -> list[asyncio.CancelledError]:
         """Wait for shared cleanup despite repeated cancellation requests."""
         task = self._finalization_task
         if task is None:
             msg = "WebSocket finalization has not started"
             raise LifecycleError(msg)
-        return await _wait_for_shielded_task(task)
+        return await _wait_for_shielded_task(task, cancel_on_interrupt=True)
 
     @staticmethod
     def _handle_finalization_task_error(

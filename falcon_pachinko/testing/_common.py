@@ -145,8 +145,11 @@ class _LifecycleSocket:
         """Signal the first accept or close for harness readiness checks."""
         return self._lifecycle_event
 
-    async def accept(self, subprotocol: str | None = None) -> None:
+    async def accept(
+        self, subprotocol: str | None = None, headers: object = None
+    ) -> None:
         """Record handshake acceptance and mirror to any bound peer."""
+        del headers
         if self._accepted:
             return
         self._accepted = True
@@ -156,13 +159,15 @@ class _LifecycleSocket:
         if peer is not None and not peer.accepted:
             await peer.accept(subprotocol=subprotocol)
 
-    async def close(self, code: int = 1000) -> None:
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Record connection closure and mirror to any bound peer."""
         if self._closed:
             return
+        del reason
         self._closed = True
-        self._close_code = code
+        close_code = 1000 if code is None else code
+        self._close_code = close_code
         self._lifecycle_event.set()
         peer = self._peer
         if peer is not None and not peer.closed:
-            await peer.close(code)
+            await peer.close(close_code)

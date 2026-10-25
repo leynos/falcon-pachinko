@@ -8,6 +8,7 @@ import types
 import typing as typ
 
 import falcon
+
 from falcon_pachinko.websocket import (
     ConnectionBackend,
     WebSocketConnectionNotFoundError,
@@ -32,9 +33,11 @@ class RecordingWebSocket:
         self.lifecycle_event = asyncio.Event()
         self._frames: cl.deque[object] = cl.deque(frames)
 
-    async def accept(self, subprotocol: str | None = None) -> None:
+    async def accept(
+        self, subprotocol: str | None = None, headers: object = None
+    ) -> None:
         """Record that the handshake was accepted."""
-        del subprotocol
+        del subprotocol, headers
         if self.accepted:
             return
         self.accepted = True
@@ -46,13 +49,18 @@ class RecordingWebSocket:
         """Record data sent through the stub."""
         self.messages.append(data)
 
-    async def close(self, code: int = 1000) -> None:
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Record closure metadata."""
+        del reason
         if self.closed:
             return
         self.closed = True
-        self.close_code = code
+        self.close_code = 1000 if code is None else code
         self.lifecycle_event.set()
+
+    async def send_text(self, message: str) -> None:
+        """Record one text frame through the shared media path."""
+        await self.send_media(message)
 
     async def receive_media(self) -> object:
         """Return a seeded frame or raise Falcon's disconnect exception."""
@@ -65,6 +73,14 @@ class RecordingWebSocket:
         self.closed = True
         self.close_code = self.close_code or 1000
         raise falcon.WebSocketDisconnected(self.close_code)
+
+    async def receive_text(self) -> str:
+        """Receive one frame and require it to be text."""
+        message = await self.receive_media()
+        if not isinstance(message, str):
+            msg = "expected a text WebSocket frame"
+            raise TypeError(msg)
+        return message
 
 
 class RequestStub:

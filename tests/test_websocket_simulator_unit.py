@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 
-import falcon
 import msgspec.json as msjson
 import pytest
 from hypothesis import example, given
@@ -135,7 +134,7 @@ async def test_close_wakes_pending_receive_and_preserves_first_code() -> None:
     await simulator.close(4001)
     await simulator.close(4002)
 
-    with pytest.raises(falcon.WebSocketDisconnected) as error:
+    with pytest.raises(_PeerDisconnectedError) as error:
         await asyncio.wait_for(receive_task, timeout=1)
     assert error.value.code == 4001, _ASSERTION_FAILURE
     assert simulator.close_code == 4001, _ASSERTION_FAILURE
@@ -147,7 +146,7 @@ async def test_receive_after_close_raises_with_recorded_code() -> None:
     simulator = WebSocketSimulator()
     await simulator.close(4003)
 
-    with pytest.raises(falcon.WebSocketDisconnected) as error:
+    with pytest.raises(_PeerDisconnectedError) as error:
         await asyncio.wait_for(simulator.receive_media(), timeout=1)
     assert error.value.code == 4003, _ASSERTION_FAILURE
 
@@ -161,7 +160,7 @@ async def test_pending_counts_reflect_queue_sizes() -> None:
     await simulator.send_media("sent")
 
     assert simulator.pending_inbound() == 1, "one inbound frame must be queued"
-    assert simulator.pending_outbound() == 1, "one outbound frame must be queued"
+    assert len(simulator.sent_messages) == 1, "one outbound frame must be queued"
 
 
 @pytest.mark.asyncio

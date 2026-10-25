@@ -52,8 +52,19 @@ class DummyWS:
         self._closed = False
         self._close_code: int | None = None
         self.receive_calls = 0
+        self.unaccepted = True
+        self.accept_calls: list[
+            tuple[
+                str | None,
+                cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None,
+            ]
+        ] = []
 
-    async def accept(self, subprotocol: str | None = None) -> None:  # pragma: no cover
+    async def accept(
+        self,
+        subprotocol: str | None = None,
+        headers: cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None = None,
+    ) -> None:  # pragma: no cover
         """Accept the WebSocket handshake.
 
         Parameters
@@ -61,9 +72,12 @@ class DummyWS:
         subprotocol : str or None, optional
             The WebSocket subprotocol to use, by default None
         """
+        self.accept_calls.append((subprotocol, headers))
         self.unaccepted = False
 
-    async def close(self, code: int = 1000) -> None:  # pragma: no cover
+    async def close(
+        self, code: int | None = 1000, reason: str | None = None
+    ) -> None:  # pragma: no cover
         """Close the WebSocket connection.
 
         Parameters
@@ -71,10 +85,11 @@ class DummyWS:
         code : int, optional
             The WebSocket close code, by default 1000
         """
+        del reason
         self._closed = True
-        self._close_code = code
+        self._close_code = 1000 if code is None else code
 
-    async def send_media(self, data: object) -> None:  # pragma: no cover
+    async def send_media(self, data: object, /) -> None:  # pragma: no cover
         """Send structured data over the connection.
 
         Parameters
@@ -91,6 +106,18 @@ class DummyWS:
         if self._frames:
             return self._frames.popleft()
         raise _PeerDisconnectedError(self._disconnect_code)
+
+    async def send_text(self, message: str) -> None:  # pragma: no cover
+        """Send one text frame through the media test seam."""
+        await self.send_media(message)
+
+    async def receive_text(self) -> str:
+        """Receive one frame and require its payload to be text."""
+        message = await self.receive_media()
+        if isinstance(message, str):
+            return message
+        msg = "expected a text WebSocket frame"
+        raise TypeError(msg)
 
 
 class RecordingWS(DummyWS):
@@ -110,7 +137,11 @@ class RecordingWS(DummyWS):
         self.accepted_event = asyncio.Event()
 
     @typ.override
-    async def accept(self, subprotocol: str | None = None) -> None:
+    async def accept(
+        self,
+        subprotocol: str | None = None,
+        headers: cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None = None,
+    ) -> None:
         """Record the accepted subprotocol.
 
         Parameters
@@ -119,6 +150,7 @@ class RecordingWS(DummyWS):
             The WebSocket subprotocol to use, by default None
         """
         self.accepted.append(subprotocol)
+        self.accept_calls.append((subprotocol, headers))
         self.unaccepted = False
         self.accepted_event.set()
 
@@ -128,7 +160,7 @@ class RecordingWS(DummyWS):
         self.sent.append(data)
 
     @typ.override
-    async def close(self, code: int = 1000) -> None:
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Record the close code.
 
         Parameters
@@ -136,5 +168,6 @@ class RecordingWS(DummyWS):
         code : int, optional
             The WebSocket close code, by default 1000
         """
-        self.closed.append(code)
+        del reason
+        self.closed.append(1000 if code is None else code)
         await super().close(code)
