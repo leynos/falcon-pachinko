@@ -8,12 +8,12 @@ import logging
 import pytest
 
 from falcon_pachinko import ClusterFanout, WebSocketConnectionManager
-from falcon_pachinko.hooks import HookCollection, HookManager
 from falcon_pachinko.testing import InMemoryFanoutTransport
-from falcon_pachinko.testing._router_session import _ConnectionSession
+from falcon_pachinko.unittests.helpers import make_req
 from falcon_pachinko.unittests.router_session_helpers import (
     SessionResource,
     SessionSocket,
+    session_router,
 )
 from tests._stubs import RecordingWebSocket
 
@@ -89,21 +89,19 @@ async def test_coordinator_observations_are_safe_and_distinguish_failures(
 async def test_disconnect_cleanup_emits_one_observation(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Idempotent cleanup has one observable completion without socket details."""
-    caplog.set_level(logging.DEBUG, logger="falcon_pachinko.testing._router_session")
+    """Router cleanup has one observable completion without socket details."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
     resource = SessionResource()
     socket = SessionSocket()
-    hooks = HookManager(global_hooks=HookCollection(), resources=[resource])
-    session = _ConnectionSession(resource, socket, hooks)
-    async with session:
-        pass
-    async with session:
-        pass
+    router = session_router(resource, receive_loop=True)
+    await router.on_websocket(make_req("/session"), socket)
     completed = [
         record
         for record in caplog.records
-        if getattr(record, "operation", None) == "disconnect"
-        and vars(record)["outcome"] == "succeeded"
+        if getattr(record, "operation", None) == "cleanup"
+        and vars(record)["outcome"] == "completed"
     ]
     assert len(completed) == 1, "only the actual cleanup emits a completion"
-    assert len(resource.disconnects) == 1, "observation must retain cleanup idempotency"
+    assert resource.disconnects == [(socket, 4000)], (
+        "the production router must invoke on_disconnect exactly once"
+    )

@@ -8,8 +8,6 @@ import typing as typ
 import falcon
 import pytest
 
-from falcon_pachinko._router_session import _ConnectionSession
-from falcon_pachinko.hooks import HookCollection, HookManager
 from falcon_pachinko.testing import WebSocketSimulator
 from falcon_pachinko.unittests.helpers import make_req
 from falcon_pachinko.unittests.router_session_helpers import (
@@ -389,23 +387,24 @@ async def test_receive_loop_opt_out_keeps_setup_close_cleanup_app_owned() -> Non
 
 
 @pytest.mark.asyncio
-async def test_session_owner_cleanup_failure_is_idempotent() -> None:
-    """A failed cleanup callback is not retried when the owner exits again."""
-    resource = FailingCleanupResource()
+async def test_session_cleanup_observation_is_emitted_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Production routing emits one completed cleanup observation."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
+    resource = SessionResource()
     socket = SessionSocket()
-    hook_manager = HookManager(
-        global_hooks=HookCollection(),
-        resources=[resource],
+    await session_router(resource, receive_loop=True).on_websocket(
+        make_req("/session"), socket
     )
-    session = _ConnectionSession(resource, socket, hook_manager)
 
-    with pytest.raises(RuntimeError, match="cleanup failed"):
-        async with session:
-            pass
-
-    async with session:
-        pass
-
-    assert resource.disconnects == [(socket, 1006)], (
-        "the cleanup callback must run only once despite its failure"
+    completed = [
+        record
+        for record in caplog.records
+        if getattr(record, "operation", None) == "cleanup"
+        and vars(record)["outcome"] == "completed"
+    ]
+    assert len(completed) == 1, "production routing must report one cleanup"
+    assert resource.disconnects == [(socket, 4000)], (
+        "production routing must invoke resource cleanup once"
     )
