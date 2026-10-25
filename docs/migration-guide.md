@@ -11,6 +11,11 @@ workflow to the composable `WebSocketRouter` architecture.
 - **Schema-first dispatch** via `msgspec` tagged unions and
   `@handles_message("tag")`.
 - **Router-level dependency injection** through `resource_factory`.
+- **Falcon support range:** The requirement changes from `falcon>=4,<5` to
+  `falcon>=4,<4.5`. Falcon 4.5 is unsupported until compatibility is verified
+  because the WebSocket adapter uses Falcon's private `_receive()` method. Pin
+  Falcon below 4.5 or downgrade an existing installation before resolving
+  dependencies.
 - **Pluggable connection manager backends** enable alternative local storage;
   see [Clustered deployments](users-guide.md#clustered-deployments) for
   distributed room fan-out.
