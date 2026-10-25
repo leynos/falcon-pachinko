@@ -181,7 +181,9 @@ uv sync --group dev --extra testing --locked
 `--locked` requires the lockfile to match `pyproject.toml`; a stale or missing
 lockfile makes the command fail rather than silently resolving a different
 release set. CI uses `--locked` for project-environment commands, fails when
-the lock is stale and never regenerates it.
+the lock is stale and never regenerates it. The main coverage lane runs
+`uv lock --check` before its pinned shared coverage action, whose project sync
+is maintained outside this repository.
 
 ### Refreshing the lockfile
 
