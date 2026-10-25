@@ -116,7 +116,7 @@ sequenceDiagram
     WebSocketRouter->>WebSocketResource: on_connect(req, ws, params)
     WebSocketResource-->>WebSocketRouter: approval or resource acceptance
     WebSocketRouter->>WebSocketRouter: after_connect hooks
-    opt Socket is not already accepted
+    opt Socket remains unaccepted after setup hooks
         WebSocketRouter->>WebSocket: accept()
     end
     WebSocketRouter->>WebSocketResource: on_accepted(ws)
