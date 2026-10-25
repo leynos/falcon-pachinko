@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - runs trusted repo tooling, never outside input
 import tomllib
@@ -94,8 +95,11 @@ def _run_step_scripts(document: object) -> list[str]:
         match value:
             case dict():
                 run_script = value.get("run")
-                if isinstance(run_script, str):
-                    scripts.append(run_script)
+                match run_script:
+                    case str() as script:
+                        scripts.append(script)
+                    case _:
+                        pass
                 for child in value.values():
                     visit(child)
             case list():
@@ -108,14 +112,47 @@ def _run_step_scripts(document: object) -> list[str]:
     return scripts
 
 
+def _shell_commands(line: str) -> list[str]:
+    """Split a logical shell line at command separators.
+
+    Returns
+    -------
+    list of str
+        Shell command segments, without the separators between them.
+    """
+    lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|")
+    lexer.whitespace_split = True
+    commands: list[str] = []
+    current: list[str] = []
+
+    for token in lexer:
+        if token and all(character in ";&|" for character in token):
+            if current:
+                commands.append(" ".join(current))
+                current = []
+        else:
+            current.append(token)
+
+    if current:
+        commands.append(" ".join(current))
+    return commands
+
+
+def _is_unlocked_project_command(command: str) -> bool:
+    """Return whether one project invocation omits its lock enforcement."""
+    if UV_PROJECT_COMMAND.search(command) is None:
+        return False
+    return all(flag not in command for flag in ("--no-project", "--locked"))
+
+
 def _unlocked_project_commands(text: str) -> list[tuple[int, str]]:
     """Return project ``uv run`` or ``uv sync`` lines lacking ``--locked``."""
     return [
         (line_number, command)
-        for line_number, command in _logical_lines(text)
-        if UV_PROJECT_COMMAND.search(command)
-        and "--no-project" not in command
-        and "--locked" not in command
+        for line_number, line in _logical_lines(text)
+        if UV_PROJECT_COMMAND.search(line)
+        for command in _shell_commands(line)
+        if _is_unlocked_project_command(command)
     ]
 
 
@@ -252,6 +289,31 @@ def test_ci_run_steps_require_the_project_lockfile() -> None:
     assert not violations, (
         "CI project commands must use --locked (each entry names its file and "
         "offending run line):\n" + "\n".join(violations)
+    )
+
+
+@pytest.mark.parametrize(
+    ("script", "expected"),
+    [
+        ("uv run --locked pytest && uv sync", [(1, "uv sync")]),
+        (
+            "uv run --no-project install.py && uv run pytest",
+            [(1, "uv run pytest")],
+        ),
+        ("uv tool run ruff && uvx ruff && uv build", []),
+        ("echo ready # uv sync", []),
+    ],
+)
+def test_ci_command_contract_checks_each_shell_invocation(
+    script: str, expected: list[tuple[int, str]]
+) -> None:
+    """Check project locks per invocation while exempting tool environments."""
+    violations = _unlocked_project_commands(script)
+
+    assert violations == expected, (
+        "each project command must independently use --locked, while "
+        "tooling and no-project calls stay outside the project lock; "
+        f"expected {expected!r}, got {violations!r}"
     )
 
 
