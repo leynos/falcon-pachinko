@@ -22,6 +22,7 @@ class SessionSocket(WebSocketLike):
     ) -> None:
         self.accepted = False
         self.closed = False
+        self.close_codes: list[int] = []
         self.receive_calls = 0
         self.frames = None if frames is None else collections.deque(frames)
         self.accept_error = accept_error
@@ -36,6 +37,7 @@ class SessionSocket(WebSocketLike):
     async def close(self, code: int = 1000) -> None:
         """Record session closure."""
         self.closed = True
+        self.close_codes.append(code)
 
     async def send_media(self, data: object) -> None:
         """Reject sends; these router tests record dispatch directly."""

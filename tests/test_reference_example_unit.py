@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import re
 import typing as typ
 
+import falcon.asgi
 import pytest
 from falcon import HTTPUnauthorized
 
@@ -53,7 +55,7 @@ async def test_router_rejects_missing_token() -> None:
 @pytest.mark.asyncio
 async def test_router_accepts_with_valid_token() -> None:
     """Connections presenting the correct headers are accepted."""
-    router, _ = _build_router()
+    router, container = _build_router()
     req = RequestStub(
         _TASKS_PATH,
         headers={"x-workspace-token": "seekrit", "x-user": "riley"},
@@ -66,6 +68,27 @@ async def test_router_accepts_with_valid_token() -> None:
     assert isinstance(first, dict), "the first outbound message must be a mapping"
     assert first["type"] == "session.ready", (
         "the first outbound message must be a session.ready event"
+    )
+    audit = container.resolve("audit_trail")
+    assert isinstance(audit, AuditTrail), "the container must expose the audit trail"
+    connection_records = [
+        record
+        for record in audit.records
+        if record["event"] in {"workspace.loaded", "project.loaded", "session.open"}
+    ]
+    assert len(connection_records) == 3, (
+        "acceptance must preserve both load hooks and the session-open event"
+    )
+    metadata = [record["metadata"] for record in connection_records]
+    assert all(isinstance(item, dict) for item in metadata), (
+        "connection lifecycle metadata must be mappings"
+    )
+    connection_ids = {
+        item.get("connection") for item in metadata if isinstance(item, dict)
+    }
+    assert len(connection_ids) == 1, "all connection events must share an ID"
+    assert None not in connection_ids, (
+        "pre-accept load hooks must be associated with the accepted connection"
     )
 
 
@@ -259,6 +282,34 @@ def test_resolve_as_returns_the_service_when_the_type_matches(
 
     assert resolved is authenticator, (
         f"{resolver_owner} must return the registered instance unchanged"
+    )
+
+
+def test_create_app_attaches_router_and_falcon_lifecycle_middleware() -> None:
+    """The reference factory uses Falcon routes and production lifespan hooks."""
+    module = _import_example_server("examples.reference_app.server")
+    app = module.create_app()
+
+    assert isinstance(app, falcon.asgi.App), "the reference app must be Falcon ASGI"
+    services = app.reference_services
+    assert isinstance(services, ServiceContainerImpl), (
+        "the app must expose its service container for example inspection"
+    )
+    conn_mgr = services.resolve("conn_mgr")
+    assert isinstance(conn_mgr, WebSocketConnectionManager), (
+        "the container must expose the manager installed for this app"
+    )
+    route = app._router.find(_TASKS_PATH)
+    assert route is not None, "router.attach must register the nested task route"
+    assert not hasattr(app, "add_websocket_route"), (
+        "the reference app must not install deprecated websocket registration"
+    )
+    assert any(
+        isinstance(component, module._WorkerLifecycleMiddleware)
+        for component in app._unprepared_middleware
+    ), "worker startup and shutdown must use Falcon middleware"
+    assert "tests.behaviour._lifespan" not in inspect.getsource(module), (
+        "production reference wiring must not import test lifespan helpers"
     )
 
 

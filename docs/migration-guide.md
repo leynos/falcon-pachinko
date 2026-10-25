@@ -107,12 +107,14 @@ import falcon.asgi
 from falcon_pachinko import websocket
 
 app = falcon.asgi.App()
-websocket.install(app)
+conn_mgr = websocket.install(app)
 ```
 
 `websocket.install(app)` initializes the app's connection manager and legacy
-WebSocket compatibility helpers. `router.attach()` registers the composable
-router with Falcon. Use a Falcon ASGI application for WebSocket routes.
+WebSocket compatibility helpers. Keep the returned manager in application
+state: Falcon's slotted ASGI app does not expose it as
+`app.ws_connection_manager`. `router.attach()` registers the composable router
+with Falcon. Use a Falcon ASGI application for WebSocket routes.
 
 1) **Replace `add_websocket_route` with a router:**
 
@@ -126,12 +128,14 @@ class ChatResource(WebSocketResource):
 
 router = WebSocketRouter()
 router.add_route("/chat/{room}", ChatResource, history_size=100)
-router.attach(app, "/ws")
+router.mount("/ws")
+router.attach(app)
 ```
 
-- Route paths are **relative to the router mount point**. `attach()` mounts
-  the router and registers the Falcon routes; do not call `mount()` or
-  `app.add_route()` separately.
+- Route paths are **relative to the router mount point**. `mount()` compiles
+  the prefix and `attach()` registers the exact and descendant Falcon routes.
+  The compatibility form `router.attach(app, "/ws")` also mounts and registers
+  the router.
 - Resource initializer arguments moved from `args=`/`kwargs=` parameters to
   `*init_args`/`**init_kwargs` positional and keyword capture. Before:
   `router.add_route(path, Resource, args=(1,), kwargs={"n": 2})`; after:
@@ -144,14 +148,23 @@ router.attach(app, "/ws")
   connection. Return `False` to reject it; returning `True` allows the router
   to accept it after the hook. If the hook sends a frame, call
   `await ws.accept()` first.
+- `on_accepted(ws)` runs immediately after acceptance. Move I/O that requires an
+  accepted connection, such as connection-manager registration or an initial
+  send, out of `on_connect()` and into this hook.
+- Rename any existing `on_accepted` message handler before upgrading. This name
+  is reserved for the lifecycle callback, so handler registration will reject
+  it and the router would call a legacy handler with an incompatible signature.
 - Set `receive_loop=True` for router-owned, ordered frame reception and
-  dispatch. Its default is `False`, which returns after acceptance and leaves
-  receives and cleanup to the application.
-- `on_disconnect(ws, close_code)` is attempted once after successful
-  `on_connect` only when `receive_loop=True`, including setup failure in
-  `after_connect` or `accept`. Missing peer codes and acceptance setup failures
-  use `1006`; cancellation closes with `1001`, and unexpected receive or
-  handler failures close with `1011` and propagate.
+  dispatch. Its default is `False`, which returns after successful acceptance
+  and leaves subsequent receives and cleanup to the application.
+- `on_disconnect(ws, close_code)` runs once when the router owns cleanup after
+  `on_connect` permits the connection. With `receive_loop=True`, the router
+  owns cleanup after peer disconnect, cancellation, and receive failure.
+  Failures in `after_connect`, `accept`, or `on_accepted` are cleaned up even
+  when `receive_loop=False`. Peer closure uses `WebSocketDisconnected.code`; a
+  missing code and cancellation use `1006` as callback metadata. Cancellation
+  propagates without sending a close frame with reserved code `1006`.
+  Unexpected receive or handler failures close with `1011` and propagate.
 
 `router.attach()` also enables raw TEXT and BINARY input for all WebSocket
 routes on the app, preserving its outgoing serializers. For manually mounted
@@ -172,28 +185,30 @@ Falcon's default decoding remains in effect if neither is used.
 - Replace legacy `on_message` fallbacks with `on_unhandled`.
 
 Set `WebSocketRouter(receive_loop=True)` to have the router accept the
-connection and own frame reception and dispatch until disconnect. In that mode,
-remove application-owned receive loops and direct calls to
-`WebSocketResource.dispatch()`. Call `await ws.accept()` in `on_connect()` only
-when sending a frame from that hook. Keep message handling in resource handlers
-and `on_unhandled`; frames are dispatched sequentially, and returning normally
-from `on_unhandled` keeps the session open. The router runs `before_disconnect`
-before attempting `on_disconnect` once. A missing peer close code or failure
-during `after_connect` or `accept` uses `1006` for cleanup. Cancellation before
-disconnect cleanup starts closes with `1001` and propagates. If cancellation
-interrupts a peer-disconnect callback already in progress, it is not retried
-and retains the peer code, while the socket closes with `1001`. Unexpected
-receive or handler failures close with `1011` and propagate the original
-exception. The default `receive_loop=False` returns after acceptance, leaving
-frame reception and cleanup to the application.
+connection, call `on_accepted`, and own ordered frame reception and dispatch
+until disconnect. In that mode, remove application-owned receive loops and
+direct calls to `WebSocketResource.dispatch()`. Call `await ws.accept()` in
+`on_connect()` only when sending a frame from that hook. Keep message handling
+in resource handlers and `on_unhandled`; frames are dispatched sequentially,
+and returning normally from `on_unhandled` keeps the session open. The router
+runs `before_disconnect` before attempting `on_disconnect` once. A missing peer
+close code or failure during `after_connect` or `accept` uses `1006` for
+cleanup. An ordinary exception from `on_accepted` occurs after acceptance,
+closes with `1011`, and runs cleanup with `1011`. Cancellation uses `1006` as
+cleanup metadata and propagates without sending a close frame with the reserved
+code. Unexpected receive or handler failures close with `1011` and propagate
+the original exception. The default `receive_loop=False` returns after
+successful acceptance, leaving subsequent frame reception and cleanup to the
+application.
 
 1) **Wire dependency injection via `resource_factory`:**
 
 ```python
-from falcon_pachinko import ServiceContainer
+from falcon_pachinko import ServiceContainer, WebSocketRouter, install
 
 container = ServiceContainer()
-container.register("conn_mgr", app.ws_connection_manager)
+conn_mgr = install(app)
+container.register("conn_mgr", conn_mgr)
 router = WebSocketRouter(resource_factory=container.create_resource)
 ```
 
@@ -205,18 +220,27 @@ router = WebSocketRouter(resource_factory=container.create_resource)
 - Instantiate `WebSocketConnectionManager` with a backend when needed:
 
 ```python
+from falcon_pachinko import ServiceContainer, WebSocketRouter
 from falcon_pachinko.websocket import WebSocketConnectionManager, MyBackend
 
-app.ws_connection_manager = WebSocketConnectionManager(backend=MyBackend(...))
+conn_mgr = WebSocketConnectionManager(backend=MyBackend(...))
+container = ServiceContainer()
+container.register("conn_mgr", conn_mgr)
+router = WebSocketRouter(resource_factory=container.create_resource)
 ```
+
+Use a custom manager through resource injection. `install(app)` creates and
+returns the default manager; Falcon's slotted ASGI app does not expose it as
+`app.ws_connection_manager`.
 
 - `broadcast_to_room`, `connections`, and `send_to_connection` are now `async`
   and propagate errors directly.
 
 1) **Move background tasks to lifespan workers:**
 
-- Replace `add_websocket_worker` with `WorkerController` and `@app.lifespan`
-  hooks to start/stop workers.
+- Replace `add_websocket_worker` with `WorkerController` and Falcon middleware
+  `process_startup(scope, event)` / `process_shutdown(scope, event)` methods to
+  start and stop workers.
 
 ### Route Template Compatibility
 
@@ -253,8 +277,8 @@ registration or mounting, before the route can handle a connection.
 ## Common Pitfalls
 
 - Calling `router.mount(prefix)` without registering the router on the Falcon
-  app leaves requests unrouted. Use `router.attach(app, prefix)`, which mounts
-  the router and registers the exact and descendant paths.
+  app leaves requests unrouted. Follow it with `router.attach(app)` to register
+  the exact and descendant paths.
 - Custom backends must implement *all* methods from `ConnectionBackend`,
   raising `ValueError` on duplicate IDs and ignoring stale room entries in
   `snapshot` or documenting alternative semantics.

@@ -6,10 +6,10 @@ is the single source of truth for the callbacks peers must never select, and
 dispatch use. ``dispatcher.py`` and ``resource.py`` import both from here.
 
 Registration rejects a handler that implements a reserved lifecycle callback
-so that a peer-chosen tag can never reach ``on_connect``, ``on_disconnect`` or
-``on_unhandled``. The check recognises a lifecycle callback by its name and by
-identity against the class it was defined on. Both sides of that comparison
-are first reduced to the function they ultimately invoke, so a callback
+so that a peer-chosen tag can never reach ``on_connect``, ``on_accepted``,
+``on_disconnect`` or ``on_unhandled``. The check recognizes callbacks by name
+or identity against their defining class. Both sides of that comparison are
+reduced to the function they ultimately invoke, so a callback
 cannot hide behind a ``functools.partial``, a ``handles_message`` descriptor,
 a standard-library descriptor family (``functools.partialmethod``,
 ``functools.singledispatchmethod``, ``functools.cached_property`` or
@@ -67,6 +67,7 @@ _MIN_HANDLER_PARAMS = 3
 #: from here, so no circular import appears.
 LIFECYCLE_CALLBACK_NAMES: frozenset[str] = frozenset({
     "on_connect",
+    "on_accepted",
     "on_disconnect",
     "on_unhandled",
 })

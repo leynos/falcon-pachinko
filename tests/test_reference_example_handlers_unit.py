@@ -91,15 +91,20 @@ async def _dispatch(
 
 @pytest.mark.asyncio
 async def test_on_connect_cleans_up_and_reraises_when_join_room_fails() -> None:
-    """A failed room join removes the connection and re-raises the error."""
+    """A failed accepted room join removes and rejects the connection."""
     conn_mgr = WebSocketConnectionManager(backend=FailingJoinBackend())
     resource, _repo, _audit, _feed = _build_resource(conn_mgr)
     ws = RecordingWebSocket()
 
+    accepted = await resource.on_connect(
+        _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
+    )
+    assert accepted, "valid resource state must proceed to the accepted lifecycle"
+    assert conn_mgr.websockets == {}, "on_connect must not register before acceptance"
+    assert not ws.messages, "on_connect must not send before acceptance"
+
     with pytest.raises(RuntimeError, match="cannot join"):
-        await resource.on_connect(
-            _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
-        )
+        await resource.on_accepted(ws)
 
     remaining = conn_mgr.websockets
     assert remaining == {}, f"the failed connection must be removed: {remaining}"
@@ -120,22 +125,46 @@ async def test_on_disconnect_is_a_noop_when_never_connected() -> None:
 async def test_on_disconnect_removes_connection_and_audits_closure() -> None:
     """Disconnecting a connected resource removes it and audits the closure."""
     conn_mgr = WebSocketConnectionManager()
-    resource, _repo, audit, _feed = _build_resource(conn_mgr)
+    resource, _, audit, _ = _build_resource(conn_mgr)
     ws = RecordingWebSocket()
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
+    assert resource._conn_id is None, "on_connect must defer IDs until acceptance"
+    assert conn_mgr.websockets == {}, "on_connect must defer registration"
+    assert not ws.messages, "on_connect must defer session.ready"
+
+    await resource.on_accepted(ws)
+    conn_id = resource._conn_id
+    assert conn_id is not None, "acceptance must assign a connection ID"
+    assert conn_mgr.websockets == {conn_id: ws}, (
+        "acceptance must register the effective socket"
+    )
+    assert ws.messages == [
+        {
+            "type": "session.ready",
+            "payload": {"workspace": _WORKSPACE, "project": _PROJECT},
+        }
+    ], "acceptance must send the session-ready event"
+    opened = [record for record in audit.records if record["event"] == "session.open"]
+    assert len(opened) == 1, "acceptance must record exactly one session.open event"
+    opened_metadata = opened[0]["metadata"]
+    assert isinstance(opened_metadata, dict), "open metadata must be a mapping"
+    assert opened_metadata["connection"] == conn_id, "open must carry this connection"
 
     await resource.on_disconnect(ws, close_code=1001)
 
     assert conn_mgr.websockets == {}, "the connection must be removed on disconnect"
     closed = [r for r in audit.records if r["event"] == "session.closed"]
     assert len(closed) == 1, f"exactly one session.closed record is expected: {closed}"
-    metadata = closed[0]["metadata"]
-    assert isinstance(metadata, dict), "audit metadata must be a mapping"
-    assert metadata["close_code"] == 1001, "close_code must match"
-    assert metadata["workspace"] == _WORKSPACE, "workspace must match"
-    assert metadata["project"] == _PROJECT, "project must match"
+    closed_metadata = closed[0]["metadata"]
+    assert isinstance(closed_metadata, dict), "audit metadata must be a mapping"
+    assert closed_metadata["connection"] == conn_id, (
+        "close must carry the same connection"
+    )
+    assert closed_metadata["close_code"] == 1001, "close_code must match"
+    assert closed_metadata["workspace"] == _WORKSPACE, "workspace must match"
+    assert closed_metadata["project"] == _PROJECT, "project must match"
 
 
 class EnvelopeTaskStreamResource(TaskStreamResource):
@@ -178,6 +207,7 @@ async def test_reserved_envelope_tag_leaves_live_membership_intact(tag: str) -> 
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
+    await resource.on_accepted(ws)
 
     await _dispatch(resource, ws, {"type": tag, "payload": 1000})
 
@@ -210,6 +240,7 @@ async def test_reserved_envelope_cannot_evict_through_real_lifecycle() -> None:
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
+    await resource.on_accepted(ws)
     conn_id = resource._conn_id
 
     await _dispatch(resource, ws, {"type": "disconnect", "payload": 1000})
@@ -246,6 +277,7 @@ async def test_connect_envelope_tag_does_not_reconnect() -> None:
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
+    await resource.on_accepted(ws)
     ready_count = len(ws.messages)
 
     await _dispatch(resource, ws, {"type": "connect", "payload": True})

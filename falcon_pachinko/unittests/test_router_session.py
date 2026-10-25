@@ -81,6 +81,13 @@ class AttachedPathResource(WebSocketResource):
         self.received_event.set()
 
 
+class NestedAttachedPathResource(WebSocketResource):
+    """Mount a final responder below a workspace path parameter."""
+
+    def __init__(self) -> None:
+        self.add_subroute("projects/{project_id}/tasks", AttachedPathResource)
+
+
 class _QueuedWebSocket(RecordingWS):
     """Recording socket that returns queued frames, then a disconnect."""
 
@@ -128,9 +135,9 @@ def test_router_attach_registers_asgi_routes_and_wraps_media_once() -> None:
 
     assert app.registered_routes == [
         "/ws",
-        "/ws/{pachinko_path:path}",
+        "/ws/{_falcon_pachinko_path:path}",
         "/events",
-        "/events/{pachinko_path:path}",
+        "/events/{_falcon_pachinko_path:path}",
     ], "attach should register an exact mount and a descendant catch-all"
     assert (
         app.ws_options.media_handlers[falcon.WebSocketPayloadType.TEXT] is text_handler
@@ -175,9 +182,24 @@ def test_root_router_attach_registers_exact_and_descendant_routes() -> None:
     router = WebSocketRouter()
     router.add_route("/rooms/{room}", PathResource)
     router.attach(app, "/")
-    assert app.registered_routes == ["/", "/{pachinko_path:path}"], (
+    assert app.registered_routes == ["/", "/{_falcon_pachinko_path:path}"], (
         "a root-mounted router must register its exact and descendant routes"
     )
+
+
+def test_router_attach_requires_a_mount_and_rejects_repeated_attachment() -> None:
+    """A router must be mounted and can be attached to Falcon only once."""
+    router = WebSocketRouter()
+    app = falcon.asgi.App()
+
+    with pytest.raises(RuntimeError, match="mounted"):
+        router.attach(app)
+
+    router.mount("/ws")
+    router.attach(app)
+
+    with pytest.raises(RuntimeError, match="already attached"):
+        router.attach(app)
 
 
 @pytest.mark.asyncio
@@ -187,7 +209,8 @@ async def test_router_attach_dispatches_parameterized_route_through_falcon() -> 
     app = falcon.asgi.App()
     router = WebSocketRouter(receive_loop=True)
     router.add_route("/rooms/{room}", AttachedPathResource)
-    router.attach(app, "/ws")
+    router.mount("/ws")
+    router.attach(app)
     conductor = falcon.testing.ASGIConductor(app)
 
     async with conductor.simulate_ws("/ws/rooms/atlas") as websocket:
@@ -200,6 +223,53 @@ async def test_router_attach_dispatches_parameterized_route_through_falcon() -> 
     )
     assert resource.received == ["ping"], (
         "the attached app must route raw frames to the parameterized resource"
+    )
+
+
+@pytest.mark.asyncio
+async def test_attached_router_resolves_nested_resources_through_falcon() -> None:
+    """Falcon's descendant route preserves nested path parameters and frames."""
+    AttachedPathResource.instances.clear()
+    app = falcon.asgi.App()
+    router = WebSocketRouter(receive_loop=True)
+    router.add_route("/workspaces/{workspace_id}", NestedAttachedPathResource)
+    router.mount("/ws")
+    router.attach(app)
+    conductor = falcon.testing.ASGIConductor(app)
+
+    async with conductor.simulate_ws(
+        "/ws/workspaces/atlas/projects/triage/tasks"
+    ) as websocket:
+        resource = AttachedPathResource.instances[-1]
+        await websocket.send_text("task.add")
+        await asyncio.wait_for(resource.received_event.wait(), timeout=1.0)
+
+    assert resource.params == {"workspace_id": "atlas", "project_id": "triage"}, (
+        "Falcon routing must preserve parameters across the nested resource chain"
+    )
+    assert resource.received == ["task.add"], (
+        "the final nested resource must receive frames from Falcon's responder"
+    )
+
+
+@pytest.mark.asyncio
+async def test_attached_router_avoids_mount_parameter_capture_collision() -> None:
+    """The generated descendant field stays unique from mount parameters."""
+    AttachedPathResource.instances.clear()
+    app = falcon.asgi.App()
+    router = WebSocketRouter(receive_loop=True)
+    router.add_route("/rooms", AttachedPathResource)
+    router.mount("/{_falcon_pachinko_path}")
+    router.attach(app)
+    conductor = falcon.testing.ASGIConductor(app)
+
+    async with conductor.simulate_ws("/tenant/rooms") as websocket:
+        resource = AttachedPathResource.instances[-1]
+        await websocket.send_text("ping")
+        await asyncio.wait_for(resource.received_event.wait(), timeout=1.0)
+
+    assert resource.received == ["ping"], (
+        "a private Falcon capture must not shadow a mounted route parameter"
     )
 
 
@@ -358,8 +428,22 @@ async def test_on_websocket_rejects_unregistered_descendant_template() -> None:
 async def test_on_websocket_dispatches_multiple_frames_and_cleans_once() -> None:
     """A session dispatches every raw frame and keeps the disconnect code."""
     SessionResource.instances.clear()
+    events: list[str] = []
+
+    class OrderedSessionResource(SessionResource):
+        async def on_unhandled(self, ws: object, message: str | bytes) -> None:
+            events.append("dispatch")
+            await super().on_unhandled(ws, message)
+
+        async def on_disconnect(self, ws: object, close_code: int) -> None:
+            events.append("resource.disconnect")
+            await super().on_disconnect(ws, close_code)
+
     router = WebSocketRouter(receive_loop=True)
-    router.add_route("/session", SessionResource)
+    router.global_hooks.add(
+        "before_disconnect", lambda _context: events.append("hook.disconnect")
+    )
+    router.add_route("/session", OrderedSessionResource)
     router.mount("/")
     frames = ['{"type":"first"}', b'{"type":"second"}']
     ws = _QueuedWebSocket(frames, close_code=1001)
@@ -369,6 +453,12 @@ async def test_on_websocket_dispatches_multiple_frames_and_cleans_once() -> None
     resource = SessionResource.instances[-1]
     assert resource.frames == frames, "each raw frame must reach dispatch"
     assert resource.disconnect_codes == [1001], "disconnect cleanup runs once"
+    assert events == [
+        "dispatch",
+        "dispatch",
+        "hook.disconnect",
+        "resource.disconnect",
+    ], "message dispatch must precede hooks and resource disconnect cleanup"
 
 
 @given(
@@ -418,7 +508,7 @@ def test_generated_session_frames_preserve_order_and_disconnect_code(
 
 @pytest.mark.asyncio
 async def test_cancelled_session_runs_cleanup_then_reraises() -> None:
-    """Cancellation reports 1001 to cleanup and remains visible to the caller."""
+    """Cancellation reports 1006 to cleanup and remains visible to the caller."""
     SessionResource.instances.clear()
 
     class BlockingWebSocket(RecordingWS):
@@ -442,8 +532,9 @@ async def test_cancelled_session_runs_cleanup_then_reraises() -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert SessionResource.instances[-1].disconnect_codes == [1001], (
-        "server cancellation must reach disconnect cleanup as going away"
+    assert not ws.closed, "cancellation must not send reserved close code 1006"
+    assert SessionResource.instances[-1].disconnect_codes == [1006], (
+        "server cancellation must reach disconnect cleanup as abnormal closure"
     )
 
 
@@ -491,8 +582,8 @@ async def test_disconnect_raised_during_dispatch_is_a_normal_disconnect() -> Non
 
 
 @pytest.mark.asyncio
-async def test_uri_template_takes_precedence_over_path_template() -> None:
-    """Falcon's selected uri_template is preferred when routing a request."""
+async def test_path_template_strips_a_terminal_greedy_capture() -> None:
+    """The selected path template is normalized before mount validation."""
     PathResource.instances.clear()
     router = WebSocketRouter()
     router.add_route("/rooms/{room}", PathResource)
@@ -502,15 +593,39 @@ async def test_uri_template_takes_precedence_over_path_template() -> None:
         (),
         {
             "path": "/ws/rooms/42",
-            "uri_template": "/ws/{pachinko_path:path}",
-            "path_template": "/wrong",
+            "path_template": "/ws/{_private_path:path}",
+            "uri_template": "/wrong",
         },
     )()
 
     await router.on_websocket(req, DummyWS())
 
     assert PathResource.instances[-1].params == {"room": "42"}, (
-        "the router must prefer Falcon's selected URI template"
+        "path_template must take precedence and drop its terminal path capture"
+    )
+
+
+@pytest.mark.asyncio
+async def test_uri_template_fallback_strips_a_terminal_greedy_capture() -> None:
+    """The router uses uri_template when path_template is absent."""
+    PathResource.instances.clear()
+    router = WebSocketRouter()
+    router.add_route("/rooms/{room}", PathResource)
+    router.mount("/ws")
+    req = type(
+        "Req",
+        (),
+        {
+            "path": "/ws/rooms/42",
+            "path_template": "",
+            "uri_template": "/ws/{_private_path:path}",
+        },
+    )()
+
+    await router.on_websocket(req, DummyWS())
+
+    assert PathResource.instances[-1].params == {"room": "42"}, (
+        "uri_template fallback must strip its terminal greedy path field"
     )
 
 

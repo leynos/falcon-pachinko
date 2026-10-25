@@ -136,8 +136,7 @@ async def _complete_peer_disconnect(
         # are awaiting. Switch to the cancellation policy and still attempt
         # resource cleanup if a hook was interrupted.
         on_policy_close()
-        await _close_after_failure(session.websocket, 1001)
-        await _run_disconnect_lifecycle(session, 1001, suppress_errors=True)
+        await _run_disconnect_lifecycle(session, 1006, suppress_errors=True)
         raise
 
 
@@ -151,9 +150,10 @@ async def drive_session(
     """Receive and dispatch frames inline until the WebSocket session ends.
 
     Peer disconnection runs the disconnect lifecycle with the peer's close
-    code (or 1006 if Falcon does not provide one). Cancellation closes with
-    1001 and is re-raised. Any other receive or handler failure closes with
-    1011, runs best-effort cleanup, and is re-raised unchanged.
+    code (or 1006 if Falcon does not provide one). Cancellation reports 1006 to
+    cleanup without sending that reserved WebSocket close code, then propagates.
+    Any other receive or handler failure closes with 1011, runs best-effort
+    cleanup, and is re-raised unchanged.
 
     Parameters
     ----------
@@ -170,7 +170,7 @@ async def drive_session(
     Raises
     ------
     asyncio.CancelledError
-        After best-effort closure and disconnect cleanup.
+        After best-effort disconnect cleanup.
     """
     session = _SessionContext(resource, ws, hook_manager)
     close_code = 1000
@@ -185,8 +185,7 @@ async def drive_session(
                 break
     except asyncio.CancelledError:
         on_policy_close()
-        await _close_after_failure(session.websocket, 1001)
-        await _run_disconnect_lifecycle(session, 1001, suppress_errors=True)
+        await _run_disconnect_lifecycle(session, 1006, suppress_errors=True)
         raise
     except Exception as exc:
         # Record the attempt first so the router wrapper never closes twice.

@@ -32,10 +32,11 @@ the lifespan owner.
 ## WebSocket receive-loop lifecycle
 
 `WebSocketRouter(receive_loop=True)` opts into a router-owned receive loop.
-After `on_connect` returns an accepting result, the router accepts the socket
-and dispatches incoming frames in order until the peer disconnects or dispatch
-fails. The default is `False`; in that mode the router returns after accepting
-and the application retains lifecycle ownership.
+After `on_connect` returns an accepting result and the connection hooks finish,
+the router accepts the socket and calls `on_accepted`. It then dispatches raw
+text and binary frames in order until the peer disconnects or dispatch fails.
+The default is `False`; in that mode the router returns after accepting and the
+application retains receive and cleanup ownership.
 
 With the loop enabled, `on_disconnect` is attempted exactly once after a
 successful `on_connect`, including peer disconnect, dispatch failure,
@@ -43,11 +44,13 @@ cancellation, or failure in `after_connect` or `accept`. A rejected connection
 or an `on_connect` failure does not invoke it. `before_disconnect` hooks run
 before the callback; a hook interrupted before the callback may be retried
 during cancellation cleanup. A callback interrupted by cancellation is not
-invoked a second time. Peer close codes are passed through, with `1006` used
-when the peer code is missing. Cancellation after acceptance closes with `1001`
-and propagates `CancelledError`; unexpected receive or handler failures close
-with `1011` and propagate the original exception. Failure during
-`after_connect` or `accept` runs cleanup with `1006`.
+invoked a second time. `WebSocketDisconnected.code` is passed through for peer
+closure, with `1006` used when that code is missing or cancellation interrupts
+the session. Cancellation propagates without sending a close frame with
+reserved code `1006`; unexpected receive or handler failures close with `1011`
+and propagate the original exception. Failure during `after_connect` or
+`accept` runs cleanup with `1006`. An ordinary exception from `on_accepted`
+occurs after acceptance, closes with `1011`, and runs cleanup with `1011`.
 
 The private `falcon_pachinko._router_session` component owns the opt-in
 acceptance phase. After acceptance, it transfers frame reception and cleanup to
@@ -201,17 +204,14 @@ Falcon may consume the exception before the harness can report it.
 Unacknowledged server failures fail context teardown, while `pop_errors()`
 marks failures that the scenario intentionally asserted.
 
-The `testing` extra and `dev` dependency group include `uvicorn>=0.34,<1`. The
-test server imports Uvicorn lazily and uses its lifespan readiness and
-graceful-shutdown APIs; the behavioural contract belongs to Falcon-Pachinko's
-adapter protocol, not to Uvicorn.
-
 ## WebSocket responder and live-harness boundaries
 
-`WebSocketRouter.attach(app, prefix)` is the Falcon composition boundary. It
-compiles the router's relative paths, registers the exact mount and descendant
-catch-all routes, and installs raw-frame media handlers on the app. The router
-accepts a connection after `on_connect()` succeeds. It starts
+The Falcon composition flow is `router.mount(prefix)` followed by
+`router.attach(app)`. The compatibility form `router.attach(app, prefix)` also
+mounts and attaches in one call. Attachment registers the exact mount and
+descendant catch-all routes and installs raw-frame media handlers on the app.
+The router accepts a connection after `on_connect()` succeeds and calls
+`on_accepted()` immediately after acceptance. It starts
 `session.drive_session()` only when `receive_loop=True`; with the default
 `False`, it returns after acceptance and the application owns further receives
 and cleanup.
@@ -226,17 +226,18 @@ manually mounted routers and other Falcon WebSocket routes. Either entry point
 warns when customized inbound handlers will be replaced. Repeated installation
 does not wrap a handler again.
 
-`session.drive_session()` receives one frame at a time and passes it to
+`session.drive_session()` receives one raw frame at a time and passes it to
 `WebSocketResource.dispatch()`. Falcon signals a peer disconnect with
 `falcon.WebSocketDisconnected`; the simulator uses the package's internal
 peer-disconnect signal. The driver preserves the peer close code, using `1006`
 when Falcon does not provide one. A receive or dispatch failure closes an open
 socket with `1011`, runs best-effort disconnect cleanup, and re-raises the
-original failure. Local cancellation closes with `1001`, runs best-effort
-cleanup, and re-raises `CancelledError`. Disconnect hooks precede the single
-`on_disconnect()` attempt. For an ordinary peer disconnect, cleanup errors
-propagate after both cleanup steps have been attempted; during failure or
-cancellation cleanup errors are logged and do not replace the primary outcome.
+original failure. Local cancellation runs best-effort cleanup with close-code
+metadata `1006`, sends no close frame with that reserved code, and re-raises
+`CancelledError`. Disconnect hooks precede the single `on_disconnect()`
+attempt. For an ordinary peer disconnect, cleanup errors propagate after both
+cleanup steps have been attempted; during failure or cancellation cleanup
+errors are logged and do not replace the primary outcome.
 
 The `ServerAdapter` protocol isolates the ASGI server. Its `task` property is
 the serve-loop task, `start(app, sock)` returns only after lifespan startup and
@@ -331,9 +332,10 @@ where practical rather than adding broad word-level exceptions.
 
 ## Router Request Boundary
 
-`WebSocketRouter` is mounted as a Falcon resource, but its internal dispatch
-pipeline only needs a small request surface before handing control to resource
-callbacks:
+`WebSocketRouter` installs a private Falcon responder adapter with
+`router.attach(app)` after `router.mount(prefix)`. Falcon routes the mounted
+prefix and nested paths to that adapter; resource dispatch still needs only a
+small request surface:
 
 - `path`: the concrete request path used for route matching.
 - `path_template`: the Falcon mount template used to verify that the request
@@ -351,10 +353,6 @@ public contract is Falcon-specific, such as hook notification and
 `falcon.Request` unless those internals start depending on Falcon-only
 attributes.
 
-Test request doubles should expose both `path` and `path_template`. Use an empty
-`path_template` for root-mounted router tests, matching the runtime default
-used by Falcon-style request objects that do not provide a template.
-
 ### URI-template compiler boundary
 
 `falcon_pachinko/_uri_template.py` is the private shared compiler for full-path
@@ -367,10 +365,6 @@ terminal adjacent pair, while other multi-placeholder layouts are ambiguous.
 Compilation happens before router registration state is mutated, so invalid
 templates fail at registration or mount time with `ValueError` rather than
 being deferred to connection dispatch.
-
-`uvicorn>=0.34,<1` is in the development dependency group for
-`tests/test_live_routing.py`, which exercises the router through a live Falcon
-ASGI server and real WebSocket connections.
 
 ### `_RouteMatch` and `_Dispatch`
 
@@ -395,11 +389,40 @@ threaded positionally through each helper.
 `req` is cast to `falcon.Request` at the point `_Dispatch` is constructed in
 `_try_route`, consistent with the cast-at-the-edge policy described above.
 
+## Live WebSocket acceptance tests
+
+Use the public `LiveWebSocketServer` harness from `falcon_pachinko.testing`
+when a test must exercise Falcon's real responder lifecycle, including
+acceptance, middleware, message reception, and shutdown. It runs Uvicorn on an
+ephemeral loopback port with ASGI lifespan enabled. The `live_websocket_server`
+fixture provides loop-bound helpers for synchronous tests;
+`WebSocketTestClient` can also be managed directly with an `AsyncExitStack`. The
+`testing` extra and `dev` dependency group include `uvicorn>=0.34,<1` for this
+harness and the live routing tests. The test server imports Uvicorn lazily and
+uses its lifespan readiness and graceful-shutdown APIs; the behavioural
+contract belongs to Falcon-Pachinko's adapter protocol, not to Uvicorn.
+
+Run the reference application's live pytest-bdd scenarios with:
+
+```bash
+uv run pytest -q tests/behaviour/test_reference_example_live_steps.py
+```
+
+The feature covers the nested authenticated reference route, schema-decoded
+message dispatch, worker broadcast, connection cleanup, and a rejected
+handshake. Simulator tests remain useful supplementary coverage for isolated
+resource and routing behaviour. They do not prove Falcon's actual ASGI
+responder or lifespan behaviour.
+
+Test request doubles should expose both `path` and `path_template`. Use an empty
+`path_template` for root-mounted router tests, matching the runtime default
+used by Falcon-style request objects that do not provide a template.
+
 ## Reserved lifecycle dispatch
 
-The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are driven by
-the connection lifecycle, never by an envelope `type`, so the dispatcher
-refuses to resolve them by convention.
+The `on_connect`, `on_accepted`, `on_disconnect` and `on_unhandled` callbacks
+are driven by the connection lifecycle, never by an envelope `type`, so the
+dispatcher refuses to resolve them by convention.
 
 The conventional allowlist is `_conventional_handler_names` in
 `falcon_pachinko/resource.py`, computed once per class by
@@ -466,17 +489,22 @@ used.
 
 An ordinary peer disconnect runs `before_disconnect` hooks and then attempts
 `on_disconnect(ws, peer_code)` once; a missing peer close code maps to 1006.
-Cancellation before disconnect cleanup starts closes with 1001 and re-raises
-`CancelledError`. If cancellation interrupts a peer-close callback already in
-progress, that callback retains its peer code and is not retried, though the
-socket closes with 1001. An unexpected receive or handler exception closes with
-1011, runs best-effort disconnect cleanup, and re-raises the original
-exception. If `after_connect` or `accept` fails before the receive loop starts,
-cleanup uses 1006. Cancellation cleanup may retry a `before_disconnect` hook
-interrupted before the callback; an interruption inside the callback does not
-trigger a second attempt. A normal peer-cleanup lifecycle error propagates.
-During accepted-session failure cleanup, errors are logged by exception type
-and do not replace the session failure.
+Cancellation before disconnect cleanup starts uses close-code metadata 1006 and
+re-raises `CancelledError` without sending a close frame with that reserved
+code. If cancellation interrupts a peer-close callback already in progress,
+that callback is not retried; cancellation cleanup uses 1006 metadata. An
+unexpected receive or handler exception closes with 1011, runs best-effort
+disconnect cleanup, and re-raises the original exception. Failure in
+`after_connect` or `accept` before acceptance completes uses 1006 for cleanup.
+An ordinary exception from `on_accepted` happens after acceptance, closes with
+1011, and passes 1011 to cleanup even though the receive loop has not started.
+Cancellation during `on_accepted` uses 1006 as cleanup metadata and propagates
+without sending a close frame with that reserved code. Cancellation cleanup may
+retry a `before_disconnect` hook interrupted before the callback; an
+interruption inside the callback does not trigger a second attempt. A normal
+peer-cleanup lifecycle error propagates. During accepted-session failure
+cleanup, errors are logged by exception type and do not replace the session
+failure.
 
 Test sockets must terminate receive loops. `DummyWS` and `RecordingWS` return
 their scripted frames in order and then signal peer disconnection. The
