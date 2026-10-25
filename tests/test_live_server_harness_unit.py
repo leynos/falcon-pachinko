@@ -38,6 +38,46 @@ class _UnreadyServer:
             self.stopped.set()
 
 
+class _StartedWithoutSocketServer:
+    """Announce readiness without a listener and expose shutdown ordering."""
+
+    def __init__(
+        self,
+        *,
+        fail_during_shutdown: bool = False,
+        wait_during_shutdown: bool = False,
+    ) -> None:
+        self.started = False
+        self.servers: list[object] = []
+        self.stop_requested = asyncio.Event()
+        self.stopped = asyncio.Event()
+        self.release_stop = asyncio.Event()
+        self.fail_during_shutdown = fail_during_shutdown
+        self.wait_during_shutdown = wait_during_shutdown
+        self.task: asyncio.Task[None] | None = None
+
+    async def serve(self) -> None:
+        """Stay alive after readiness until startup cleanup cancels the task."""
+        self.task = asyncio.current_task()
+        self.started = True
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError as cancellation_error:
+            self.stop_requested.set()
+            if self.wait_during_shutdown:
+                try:
+                    await self.release_stop.wait()
+                except asyncio.CancelledError:
+                    self.stopped.set()
+                    raise
+            if self.fail_during_shutdown:
+                msg = "serve task failed while stopping"
+                raise RuntimeError(msg) from cancellation_error
+            raise
+        finally:
+            self.stopped.set()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "startup_error",
@@ -78,6 +118,59 @@ async def test_startup_failure_joins_owned_serving_task(
             server.task.cancel()
             with suppress(asyncio.CancelledError):
                 await server.task
+
+
+@pytest.mark.asyncio
+async def test_missing_listener_preserves_startup_error_and_joins_server() -> None:
+    """A serving-task failure during cancellation cannot replace startup error."""
+    server = _StartedWithoutSocketServer(fail_during_shutdown=True)
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+
+    with pytest.raises(RuntimeError, match="without a listening socket"):
+        await _live_server.LiveServer.start(
+            loop,
+            server_factory=lambda _config: typ.cast("Server", server),
+        )
+
+    assert server.stopped.is_set(), "startup must join the serving task"
+    assert loop.get_exception_handler() is previous_handler, (
+        "startup failure must restore the previous loop exception handler"
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_listener_does_not_swallow_caller_cancellation() -> None:
+    """Cancellation while joining a listener must remain visible to the caller."""
+    server = _StartedWithoutSocketServer(wait_during_shutdown=True)
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    startup = asyncio.create_task(
+        _live_server.LiveServer.start(
+            loop,
+            server_factory=lambda _config: typ.cast("Server", server),
+        )
+    )
+    try:
+        await asyncio.wait_for(server.stop_requested.wait(), timeout=1)
+        startup.cancel("caller stopped startup")
+        with pytest.raises(asyncio.CancelledError, match="caller stopped startup"):
+            await asyncio.wait_for(startup, timeout=1)
+        assert server.stopped.is_set(), (
+            "startup cancellation must join the serving task"
+        )
+        assert loop.get_exception_handler() is previous_handler, (
+            "caller cancellation must restore the previous loop handler"
+        )
+    finally:
+        server.release_stop.set()
+        if not startup.done():
+            startup.cancel()
+        if server.task is not None:
+            server.task.cancel()
+            await asyncio.gather(startup, server.task, return_exceptions=True)
+        else:
+            await asyncio.gather(startup, return_exceptions=True)
 
 
 @pytest.mark.asyncio

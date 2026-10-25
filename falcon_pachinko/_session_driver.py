@@ -277,10 +277,31 @@ def _log_session_failure(
     error: BaseException,
 ) -> None:
     """Keep failure observations consistent before their original re-raise."""
-    outcome = "cancelled" if isinstance(error, asyncio.CancelledError) else "failed"
     _log_session_observation(
-        execution, _SessionObservation(operation, outcome, started, error=error)
+        execution,
+        _SessionObservation(operation, _outcome_for_error(error), started, error=error),
     )
+
+
+def _outcome_for_error(error: BaseException | None) -> str:
+    """Map a session error to a bounded lifecycle outcome."""
+    if error is None:
+        return "completed"
+    if isinstance(error, asyncio.CancelledError):
+        return "cancelled"
+    return "failed"
+
+
+def _cleanup_outcome(
+    failures: tuple[BaseException, ...],
+    interruptions: tuple[asyncio.CancelledError, ...],
+) -> str:
+    """Map cleanup failures and interruptions to a bounded outcome."""
+    if failures:
+        return "failed"
+    if interruptions:
+        return "cancelled"
+    return "completed"
 
 
 def _record_and_log_session_ending(
@@ -291,18 +312,14 @@ def _record_and_log_session_ending(
 ) -> bool:
     """Record an established session's ending and report its effective outcome."""
     execution.primary_error = _record_session_ending(execution.session, error)
-    outcome = (
-        "completed"
-        if execution.primary_error is None
-        else (
-            "cancelled"
-            if isinstance(execution.primary_error, asyncio.CancelledError)
-            else "failed"
-        )
-    )
     _log_session_observation(
         execution,
-        _SessionObservation(operation, outcome, started, error=execution.primary_error),
+        _SessionObservation(
+            operation,
+            _outcome_for_error(execution.primary_error),
+            started,
+            error=execution.primary_error,
+        ),
     )
     return execution.session.phase is SessionPhase.ESTABLISHED
 
@@ -339,14 +356,11 @@ async def _finish_established_session(
         execution, _SessionObservation("cleanup", "started", cleanup_started)
     )
     cleanup_failures, interrupted = await run_shielded_cleanup(cleanup_context)
-    cleanup_outcome = (
-        "failed" if cleanup_failures else "cancelled" if interrupted else "completed"
-    )
     _log_session_observation(
         execution,
         _SessionObservation(
             "cleanup",
-            cleanup_outcome,
+            _cleanup_outcome(cleanup_failures, interrupted),
             cleanup_started,
             error=cleanup_failures[0] if cleanup_failures else None,
             cleanup_failures=cleanup_failures,
