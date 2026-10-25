@@ -1,9 +1,7 @@
-"""Adapt simulator connections to the shared receive and cleanup driver.
+"""Test direct session-lifecycle cleanup with ``session.drive_session``.
 
-This compatibility owner belongs with the in-process harness: it wraps the
-simulator's acceptance coroutine, then hands its socket to
-``session.drive_session``. Production routing uses ``_session_driver`` so its
-cleanup promise can begin as soon as resource approval or acceptance occurs.
+``SimulatorRouterHarness`` owns simulator connections separately, while
+production routing uses ``_session_driver``.
 """
 
 from __future__ import annotations

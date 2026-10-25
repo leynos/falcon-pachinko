@@ -10,8 +10,6 @@ from contextlib import asynccontextmanager
 import falcon
 import msgspec.json as msjson
 
-from falcon_pachinko._disconnect import _PeerDisconnectedError
-
 from ._common import (
     _BINARY_PAYLOAD_REQUIRED_MSG,
     _EXPECTED_BYTES_MSG,
@@ -114,7 +112,10 @@ class WebSocketSimulator(  # ruff: ignore[too-many-public-methods] -- harness wa
                 raise falcon.WebSocketDisconnected(code)
             case _DisconnectMarker(code=code):
                 await self.close(code=code)
-                raise _PeerDisconnectedError(code=code)
+                effective_code = (
+                    self.close_code if self.close_code is not None else code
+                )
+                raise falcon.WebSocketDisconnected(effective_code)
             case _:
                 self.received_messages.append(message)
                 return message
@@ -191,6 +192,8 @@ class WebSocketSimulator(  # ruff: ignore[too-many-public-methods] -- harness wa
 
     async def push_disconnect(self, code: int = 1000) -> None:
         """Queue a peer disconnect after any frames already in the queue."""
+        if self.closed:
+            raise falcon.WebSocketDisconnected(self.close_code)
         await self._inbound.put(_DisconnectMarker(code))
 
     def _prepare_inbound_payload(self, payload: object, kind: FrameKind) -> object:

@@ -11,7 +11,6 @@ import pytest
 from hypothesis import example, given
 from hypothesis import strategies as st
 
-from falcon_pachinko._disconnect import _PeerDisconnectedError
 from falcon_pachinko.testing import WebSocketSimulator
 
 if typ.TYPE_CHECKING:
@@ -50,9 +49,7 @@ async def test_push_disconnect_persists_code_on_later_receives() -> None:
     assert await simulator.receive_text() == "before disconnect", (
         "queued frames must be received before the disconnect marker"
     )
-    # The first sentinel preserves the simulator's peer-specific exception;
-    # later receives expose Falcon's public disconnect exception.
-    with pytest.raises(_PeerDisconnectedError) as first:
+    with pytest.raises(falcon.WebSocketDisconnected) as first:
         await simulator.receive_media()
     with pytest.raises(falcon.WebSocketDisconnected) as second:
         await simulator.receive_media()
@@ -149,6 +146,39 @@ async def test_close_wakes_pending_receive_and_preserves_first_code() -> None:
         await asyncio.wait_for(receive_task, timeout=1)
     assert error.value.code == 4001, _ASSERTION_FAILURE
     assert simulator.close_code == 4001, _ASSERTION_FAILURE
+
+
+@pytest.mark.asyncio
+async def test_queued_disconnect_race_preserves_first_close_code() -> None:
+    """A disconnect marker queued during close cannot replace its code."""
+    inbound: asyncio.Queue[object] = asyncio.Queue(maxsize=1)
+    simulator = WebSocketSimulator(inbound=inbound)
+    await simulator.push_text("queued before close")
+    pending_disconnect = asyncio.create_task(simulator.push_disconnect(4002))
+    await asyncio.sleep(0)
+
+    await simulator.close(4001)
+    assert await simulator.receive_text() == "queued before close", _ASSERTION_FAILURE
+    await asyncio.wait_for(pending_disconnect, timeout=1)
+
+    with pytest.raises(falcon.WebSocketDisconnected) as error:
+        await asyncio.wait_for(simulator.receive_media(), timeout=1)
+    assert error.value.code == 4001, _ASSERTION_FAILURE
+
+
+@pytest.mark.asyncio
+async def test_push_disconnect_after_close_reports_first_code() -> None:
+    """A closed simulator rejects later peer-disconnect requests."""
+    simulator = WebSocketSimulator()
+    await simulator.close(4003)
+
+    with pytest.raises(falcon.WebSocketDisconnected) as error:
+        await simulator.push_disconnect(4004)
+    assert error.value.code == 4003, _ASSERTION_FAILURE
+
+    with pytest.raises(falcon.WebSocketDisconnected) as later_receive:
+        await asyncio.wait_for(simulator.receive_media(), timeout=1)
+    assert later_receive.value.code == 4003, _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio

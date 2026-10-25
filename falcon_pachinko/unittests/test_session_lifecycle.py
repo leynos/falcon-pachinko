@@ -254,8 +254,11 @@ async def test_after_connect_failure_after_approval_runs_cleanup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_approval_without_acceptance_skips_receive_and_cleans_up() -> None:
+async def test_approval_without_acceptance_skips_receive_and_cleans_up(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Approval promises cleanup even if a transport never becomes accepted."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
 
     class UnacceptedSocket(SessionSocket):
         async def accept(self, subprotocol: str | None = None) -> None:
@@ -271,6 +274,12 @@ async def test_approval_without_acceptance_skips_receive_and_cleans_up() -> None
     assert RecordingResource.instances[0].disconnect_codes == [1011], (
         "approval must still promise cleanup with the setup-failure code"
     )
+    assert not any(
+        record.name == "falcon_pachinko._session_driver"
+        and getattr(record, "operation", None) == "acceptance"
+        and getattr(record, "outcome", None) == "completed"
+        for record in caplog.records
+    ), "approval alone must not be logged as observed transport acceptance"
 
 
 @pytest.mark.asyncio
