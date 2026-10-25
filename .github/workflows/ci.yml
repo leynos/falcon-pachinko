@@ -118,7 +118,7 @@ jobs:
       # tests never skip, so an unprovisioned interpreter fails this step
       # instead of passing it silently.
       - name: Test lint toolchain
-        run: uv run pytest -m lint_toolchain -p no:cacheprovider
+        run: uv run --locked pytest -m lint_toolchain -p no:cacheprovider
 
       - name: Run typechecker
         run: make typecheck

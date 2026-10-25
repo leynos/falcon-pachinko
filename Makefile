@@ -164,7 +164,7 @@ define ensure_tool
 endef
 
 define ensure_tool_venv
-	@uv run which $(1) >/dev/null 2>&1 || { \
+	@uv run --locked which $(1) >/dev/null 2>&1 || { \
 	  printf "Error: '%s' is required in the virtualenv, but is not installed\n" "$(1)" >&2; \
 	  exit 1; \
 	}
@@ -254,7 +254,7 @@ nixie: $(NIXIE) ## Validate Mermaid diagrams
 	  -print0 | xargs -0 $(NIXIE)
 
 test: build uv pytest ## Run tests
-	uv run pytest -v
+	uv run --locked pytest -v
 
 # Mutation testing is not a commit gate: it is slow and it is informational.
 # `.github/workflows/mutation.yml` calls the estate's reusable workflow, which
@@ -265,7 +265,7 @@ test: build uv pytest ## Run tests
 # `[tool.mutmut]` has no key for one.
 MUTMUT_VERSION ?= 3.6.0
 MUTMUT_PYTHON ?= 3.13
-MUTMUT = UV_PYTHON=$(MUTMUT_PYTHON) $(UV_ENV) $(UV) run --with mutmut==$(MUTMUT_VERSION) mutmut
+MUTMUT = UV_PYTHON=$(MUTMUT_PYTHON) $(UV_ENV) $(UV) run --locked --with mutmut==$(MUTMUT_VERSION) mutmut
 
 mutation: build uv ## Run mutation testing locally (slow)
 	$(MUTMUT) run
@@ -294,7 +294,7 @@ check-cv005: ## Check the shared CV-005 CodeScene workflow contracts
 # source, so they are fast and worth running on their own while editing a
 # workflow. `test` collects them too, which is what makes them a gate.
 test-workflow-contracts: check-cv005 build uv pytest ## Check the CI workflows' shape
-	uv run pytest tests/workflow_contracts -v
+	uv run --locked pytest tests/workflow_contracts -v
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | \
