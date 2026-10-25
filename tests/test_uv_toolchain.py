@@ -36,7 +36,6 @@ from tests._makefile import (
     run_command,
     tool_environment,
 )
-from tests._uv_command_contracts import _run_step_scripts, _unlocked_project_commands
 
 if typ.TYPE_CHECKING:
     import pathlib
@@ -172,87 +171,6 @@ def test_make_build_installs_the_locked_dependency_set() -> None:
     assert "uv.lock" in prerequisites.split(), (
         "uv.lock must be a prerequisite of build, so a lockfile change is "
         f"visible in the build graph; the rule reads:\n{_rule_declaration('build')}"
-    )
-
-
-def test_makefile_project_commands_require_the_lockfile() -> None:
-    """Project commands in Make must reject a stale dependency lock."""
-    violations = _unlocked_project_commands(
-        MAKEFILE.read_text(encoding="utf-8"), is_makefile=True
-    )
-
-    assert not violations, "Makefile project commands must use --locked:\n" + "\n".join(
-        f"Makefile:{line_number}: {command}" for line_number, command in violations
-    )
-
-
-def test_makefile_uv_command_variables_require_the_lockfile() -> None:
-    """Make variable recipes must not hide an unlocked uv invocation."""
-    source = "MUTMUT = UV_PYTHON=3.13 $(UV_ENV) $(UV) run --with mutmut mutmut"
-    violations = _unlocked_project_commands(source, is_makefile=True)
-
-    assert violations == [(1, source)], (
-        "Make variable command definitions must enforce the project lock; "
-        f"found {violations!r}"
-    )
-
-
-def test_ci_run_steps_require_the_project_lockfile() -> None:
-    """Repository-owned CI run steps must reject stale project locks."""
-    workflow_files = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
-    action_files = sorted((REPO_ROOT / ".github" / "actions").glob("*/action.yml"))
-    violations: list[str] = []
-
-    for path in [*workflow_files, *action_files]:
-        source = path.read_text(encoding="utf-8")
-        scripts = _run_step_scripts(yaml.safe_load(source))
-        for script in scripts:
-            for _, command in _unlocked_project_commands(script):
-                violations.append(f"{path.relative_to(REPO_ROOT)}: {command}")
-
-    assert not violations, (
-        "CI project commands must use --locked (each entry names its file and "
-        "offending run line):\n" + "\n".join(violations)
-    )
-
-
-@pytest.mark.parametrize(
-    ("script", "expected"),
-    [
-        ("uv run --locked pytest && uv sync", [(1, "uv sync")]),
-        (
-            "uv run --no-project install.py && uv run pytest",
-            [(1, "uv run pytest")],
-        ),
-        ("uv run --with mutmut --locked mutmut", []),
-        ("uv run custom-cli --locked", [(1, "uv run custom-cli --locked")]),
-        (
-            "uv run custom-cli --no-project",
-            [(1, "uv run custom-cli --no-project")],
-        ),
-        ("uv run --python 3.14 --no-project install.py", []),
-        ("uv sync --group dev --locked", []),
-        ("uv sync --group dev", [(1, "uv sync --group dev")]),
-        ("@uv run pytest", [(1, "@uv run pytest")]),
-        ("$(UV) run pytest", [(1, "$(UV) run pytest")]),
-        ("@$(UV) run --locked pytest", []),
-        ("env UV_PYTHON=3.13 uv run pytest", [(1, "env UV_PYTHON=3.13 uv run pytest")]),
-        ("env UV_PYTHON=3.13 uv run --locked pytest", []),
-        ("uv tool run ruff && uvx ruff && uv build", []),
-        ("echo ready # uv sync", []),
-        ('echo "uv sync"', []),
-    ],
-)
-def test_ci_command_contract_checks_each_shell_invocation(
-    script: str, expected: list[tuple[int, str]]
-) -> None:
-    """Check project locks per invocation while exempting tool environments."""
-    violations = _unlocked_project_commands(script)
-
-    assert violations == expected, (
-        "each project command must independently use --locked, while "
-        "tooling and no-project calls stay outside the project lock; "
-        f"expected {expected!r}, got {violations!r}"
     )
 
 
