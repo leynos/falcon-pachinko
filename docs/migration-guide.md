@@ -192,12 +192,14 @@ direct calls to `WebSocketResource.dispatch()`. Call `await ws.accept()` in
 in resource handlers and `on_unhandled`; frames are dispatched sequentially,
 and returning normally from `on_unhandled` keeps the session open. The router
 runs `before_disconnect` before attempting `on_disconnect` once. A missing peer
-close code or failure during `after_connect`, `accept`, or `on_accepted` uses
-`1006` for cleanup. Cancellation uses `1006` as cleanup metadata and propagates
-without sending a close frame with the reserved code. Unexpected receive or
-handler failures close with `1011` and propagate the original exception. The
-default `receive_loop=False` returns after successful acceptance, leaving
-subsequent frame reception and cleanup to the application.
+close code or failure during `after_connect` or `accept` uses `1006` for
+cleanup. An ordinary exception from `on_accepted` occurs after acceptance,
+closes with `1011`, and runs cleanup with `1011`. Cancellation uses `1006` as
+cleanup metadata and propagates without sending a close frame with the reserved
+code. Unexpected receive or handler failures close with `1011` and propagate
+the original exception. The default `receive_loop=False` returns after
+successful acceptance, leaving subsequent frame reception and cleanup to the
+application.
 
 1) **Wire dependency injection via `resource_factory`:**
 

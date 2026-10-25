@@ -321,13 +321,15 @@ class WebSocketResource:
         ``on_connect``, the router attempts this callback once after the
         ``before_disconnect`` hooks. This includes cleanup when
         ``after_connect`` or ``accept`` fails. A peer close code is passed
-        through, or 1006 when the peer code is unavailable or acceptance setup
-        does not complete. Cancellation before disconnect cleanup starts closes
-        with 1001 and passes 1001 here. If cancellation interrupts a peer-close
-        callback already in progress, the callback retains its peer code and is
-        not attempted again, though the socket closes with 1001. Unexpected
-        receive or handler failures close with 1011 and pass 1011 here. These
-        failures propagate after cleanup.
+        through, or 1006 when the peer close code is unavailable or acceptance
+        does not complete. An ordinary exception from ``on_accepted`` occurs
+        after acceptance: the socket closes with 1011, and cleanup receives
+        1011. Cancellation uses 1006 as cleanup metadata and propagates without
+        sending a close frame with that reserved code. If cancellation
+        interrupts peer-close cleanup, remaining cleanup switches to 1006; a
+        callback already invoked is not attempted again. Unexpected receive or
+        handler failures close with 1011 and pass 1011 here. These failures
+        propagate after cleanup.
 
         Rejected connections and failed ``on_connect`` calls do not invoke this
         method. Cancellation inside this callback does not cause a second

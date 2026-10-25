@@ -1636,13 +1636,16 @@ once with `WebSocketDisconnected.code`; a missing peer close code maps to 1006.
 Cancellation propagates after cleanup with 1006 as callback metadata and does
 not send a close frame with reserved code 1006. An unexpected receive or
 handler exception closes with 1011, runs best-effort cleanup, and propagates
-the original exception. Failure during `after_connect`, `accept`, or
-`on_accepted` uses 1006 for cleanup, including when `receive_loop=False`.
-Cancellation cleanup may retry a disconnect hook interrupted before the
-callback, but interruption inside the callback does not call it again. After
-successful setup with the default `receive_loop=False`, the router returns and
-the application owns receiving and cleanup. Returning normally from
-`on_unhandled` leaves an opted-in session open.
+the original exception. Failure during `after_connect` or `accept` uses 1006
+for cleanup. An ordinary exception from `on_accepted` occurs after acceptance,
+so the router closes with 1011 and passes 1011 to cleanup, including when
+`receive_loop=False`. Cancellation during `on_accepted` uses 1006 as cleanup
+metadata and does not send a close frame with that reserved code. Cancellation
+cleanup may retry a disconnect hook interrupted before the callback, but
+interruption inside the callback does not call it again. After successful setup
+with the default `receive_loop=False`, the router returns and the application
+owns receiving and cleanup. Returning normally from `on_unhandled` leaves an
+opted-in session open.
 
 ```mermaid
 stateDiagram-v2

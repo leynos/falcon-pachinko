@@ -127,7 +127,9 @@ resource and its hooks.
     `WebSocketDisconnected.code`; an unavailable code and cancellation use
     `1006` as cleanup metadata. Cancellation propagates without sending a close
     frame with reserved code `1006`. Unexpected receive or handler failures
-    close with `1011` and propagate the original exception. Rejected
+    close with `1011` and propagate the original exception. An ordinary
+    exception from `on_accepted` closes with `1011` and runs cleanup with
+    `1011`. Rejected
     connections and failed `on_connect` calls do not run this lifecycle. With
     successful setup and `receive_loop=False`, the application owns receive
     and cleanup.

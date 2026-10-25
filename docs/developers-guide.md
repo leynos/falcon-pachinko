@@ -48,8 +48,9 @@ invoked a second time. `WebSocketDisconnected.code` is passed through for peer
 closure, with `1006` used when that code is missing or cancellation interrupts
 the session. Cancellation propagates without sending a close frame with
 reserved code `1006`; unexpected receive or handler failures close with `1011`
-and propagate the original exception. Failure during `after_connect`, `accept`,
-or `on_accepted` runs cleanup with `1006`.
+and propagate the original exception. Failure during `after_connect` or
+`accept` runs cleanup with `1006`. An ordinary exception from `on_accepted`
+occurs after acceptance, closes with `1011`, and runs cleanup with `1011`.
 
 The private `falcon_pachinko._router_session` component owns the opt-in
 acceptance phase. After acceptance, it transfers frame reception and cleanup to
