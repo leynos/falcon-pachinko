@@ -302,9 +302,10 @@ async def test_approval_without_acceptance_skips_receive_and_cleans_up(
     )
 
     assert not socket.receive_started.is_set(), "unaccepted sockets cannot receive"
-    assert RecordingResource.instances[0].disconnect_codes == [1011], (
-        "approval must still promise cleanup with the setup-failure code"
+    assert RecordingResource.instances[0].disconnect_codes == [1006], (
+        "an incomplete handshake uses abnormal-closure metadata"
     )
+    assert not socket.close_codes, "the router cannot close an unaccepted socket"
     assert not any(
         record.name == "falcon_pachinko._session_driver"
         and getattr(record, "operation", None) == "acceptance"

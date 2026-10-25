@@ -280,19 +280,23 @@ not define are forwarded to Falcon's socket.
 
 The effective close code passed to `on_disconnect` follows this table:
 
-| Session ending                                | Code passed to `on_disconnect`                         |
-| --------------------------------------------- | ------------------------------------------------------ |
-| Client sends a close frame                    | Falcon's code, or `1006` if unavailable                |
-| Handler or server calls `close(code)`         | `code` to client; Falcon's code or `1006` for cleanup  |
-| Transport loss without a close frame          | `1006`                                                 |
-| Task cancellation                             | `1006`; no close frame with this reserved code is sent |
-| Unexpected setup, receive, or handler failure | `1011`; the router attempts a close                    |
+| Session ending                            | Code passed to `on_disconnect`                         |
+| ----------------------------------------- | ------------------------------------------------------ |
+| Client sends a close frame                | Falcon's code, or `1006` if unavailable                |
+| Handler or server calls `close(code)`     | `code` to client; Falcon's code or `1006` for cleanup  |
+| Transport loss without a close frame      | `1006`                                                 |
+| Task cancellation                         | `1006`; no close frame with this reserved code is sent |
+| Approval succeeds but acceptance does not | `1006`; no WebSocket close frame can be sent           |
+| Failure after acceptance                  | `1011`; the router attempts a close                    |
 
 When Falcon has no reported code, cleanup uses `1006`. Setup failures before
 the cleanup promise point do not run `on_disconnect`; failures after approval
-or acceptance do. The router runs `before_disconnect` before the callback and
-guards both against later receive dispatch. Cleanup runs in a shielded task and
-has no timeout, so `on_disconnect` must terminate. A lone failure propagates
+or acceptance do. An approved but unaccepted connection is cleaned up with
+`1006`, since the handshake has no established WebSocket on which to send a
+close frame. A previously reported socket close code is retained if the handler
+then fails. The router runs `before_disconnect` before the callback and guards
+both against later receive dispatch. Cleanup runs in a shielded task and has no
+timeout, so `on_disconnect` must terminate. A lone failure propagates
 unchanged; multiple ordinary failures form a primary-first `ExceptionGroup`.
 Cancellation remains a bare `CancelledError`, and cleanup errors suppressed by
 cancellation are sent to the event loop's exception handler.
