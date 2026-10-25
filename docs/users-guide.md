@@ -267,6 +267,104 @@ can therefore reach `on_unhandled(self, ws, raw)` without Falcon's media
 decoder ending the connection first. Falcon's public media sending methods
 retain their usual arguments, including `send_media(media=...)`.
 
+### Reserved lifecycle names
+
+A peer chooses the envelope `type`, so the set of method names the dispatcher
+is willing to resolve from that choice is fixed when the resource class is
+created. The `on_connect`, `on_session_start`, `on_disconnect` and
+`on_unhandled` callbacks are driven by the connection lifecycle and are
+**never** dispatchable. An alias such as `on_bye = on_disconnect`, and a copy
+inherited from a parent resource, are excluded on the same terms. The same
+applies to the coroutine behind a descriptor — `@classmethod`, `@staticmethod`,
+`functools.partialmethod`, `functools.singledispatchmethod`,
+`functools.cached_property` or `property` — when the same function is also
+aliased under a neutral name, and to the bound method or generated wrapper that
+reading such an entry through the class yields, which explicit registration
+passes to `add_handler`.
+
+A tag that normalizes to a reserved name — `disconnect`, `Disconnect` and
+`DISCONNECT` all reduce to `on_disconnect` — cannot select the lifecycle
+callback. The explicit registry is consulted first, by exact tag string; if it
+holds no handler for that string, conventional lookup is refused because the
+name is reserved, so the envelope reaches `on_unhandled(self, ws, raw)` with
+the original frame. So `{"type": "disconnect", "payload": 1000}` cannot invoke
+`on_disconnect` — and therefore cannot unregister a socket or release
+connection-scoped state — while the transport is still connected. A misspelt
+tag such as `dis_connect` is not a reserved name at all: it normalizes to
+`on_dis_connect`, so it is unhandled only because no handler claims that
+spelling.
+
+Registration is closed on the same terms. Registering a lifecycle callback as a
+message handler, whether by `@handles_message` or `add_handler`, raises
+`ReservedHandlerRegistrationError`. The decorator refuses a reserved method
+name as soon as it is applied, before it validates the handler's signature, so
+the error names the reserved callback rather than reporting a shape problem. An
+alias or an inherited copy cannot be judged until the class exists, so those
+are refused when the class is created. The reserved *tag* string itself stays
+legal: a distinct method may handle `"disconnect"` provided it is not the
+lifecycle callback:
+
+```python
+class ChatResource(WebSocketResource):
+    @handles_message("disconnect")
+    async def handle_disconnect(
+        self, ws, payload: object
+    ) -> None: ...  # runs for {"type": "disconnect"}; on_disconnect does not
+
+    async def on_disconnect(
+        self, ws, close_code: int
+    ) -> None: ...  # connection lifecycle only
+```
+
+Schema-backed dispatch restricts tags to declared `Struct` types, but a struct
+may be tagged with a reserved name; the conventional fallback refuses it there
+too, so an unregistered struct tagged `"disconnect"` falls back rather than
+calling through.
+
+### Diagnostic output and raw payloads
+
+Framework-generated validation errors, logs, trace summaries and object
+representations omit payload values by default. They may include bounded
+structural metadata such as field or handler names, expected types, frame kind
+and length, exception class, and lifecycle phase. This keeps a malformed
+authentication frame from placing a token or other payload value in ordinary
+diagnostic output.
+
+The raw values remain available to explicitly registered application hooks and
+handlers. For example, `HookContext.raw` and the `on_unhandled` fallback
+argument retain the original frame. `TraceEvent.payload` retains the value
+recorded by the trace; a JSON receive records the decoded object, not
+necessarily the original frame. Treat raw access as a trusted boundary: the
+framework cannot prevent application hook or handler code from explicitly
+logging raw payloads, which can disclose secrets. Decoding bytes as UTF-8 does
+not sanitize the resulting text.
+
+For trusted local debugging, opt in to a bounded sample formatter:
+
+```python
+from falcon_pachinko import DiagnosticSanitizer
+
+sanitizer = DiagnosticSanitizer(
+    extra_sensitive_keys=frozenset({"session_id", "client_secret"})
+)
+sample = sanitizer.format_sample({"status": "rejected", "access_token": "local-token"})
+```
+
+The sanitizer traverses only exact built-in dictionaries, lists, tuples and
+scalar types. Configure `max_depth`, `max_items`, `max_string_length`, and
+`max_output_length` to bound samples. Integer magnitudes are also bounded. It
+detects cycles and describes bytes without decoding them. Unsupported objects
+are described by safe type name without their value; non-string or unusable
+mapping keys are omitted. If a value cannot be inspected safely, it is omitted.
+`format_sample()` also enforces a total output-length limit, while `sanitize()`
+returns a bounded tree. If its complete JSON-serialized result would exceed
+`max_output_length`, `sanitize()` returns the `<budget>` omission marker.
+Sensitive-key matching normalizes case and common separators, then matches
+configured fragments within the key. `DEFAULT_SENSITIVE_KEYS` provides common
+credential names, and `extra_sensitive_keys` extends that set. Redaction is a
+defence-in-depth aid: applications may use unfamiliar names or positional
+values, so omission remains the default security boundary.
+
 ## 5. Hooks
 
 - Register global hooks on the router or per-resource hooks (`before_connect`,

@@ -70,11 +70,11 @@ fallback, which would disguise a broken schema as a malformed message.
 
 ## Reserved lifecycle handlers
 
-The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are reserved:
-they are driven by the connection lifecycle, and a peer-chosen envelope `type`
-can no longer select them — not an alias of one, not a copy inherited from a
-parent resource, and not the coroutine behind a descriptor such as
-`@classmethod`, `@staticmethod`, `functools.partialmethod`,
+The `on_connect`, `on_session_start`, `on_disconnect` and `on_unhandled`
+callbacks are reserved: they are driven by the connection lifecycle, and a
+peer-chosen envelope `type` can no longer select them — not an alias of one,
+not a copy inherited from a parent resource, and not the coroutine behind a
+descriptor such as `@classmethod`, `@staticmethod`, `functools.partialmethod`,
 `functools.singledispatchmethod`, `functools.cached_property` or `property`. A
 tag that normalizes to a reserved name, such as `disconnect`, no longer
 resolves; the frame reaches `on_unhandled` with the original frame — its
@@ -322,6 +322,10 @@ registration or mounting, before the route can handle a connection.
   behavioural checks of routing, hooks, dependency injection, and resource
   logic. Simulator tests complement the live acceptance path; they do not
   replace it.
+- `WebSocketSimulator.pending_outbound()` was removed. Use
+  `len(simulator.sent_messages)` for an immediate count, or
+  `await connection.wait_for_sent_count(count)` to wait for the connection to
+  record that many outbound frames.
 
 ## Common Pitfalls
 
