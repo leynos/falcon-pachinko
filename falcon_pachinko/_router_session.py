@@ -20,6 +20,7 @@ import typing as typ
 
 import falcon
 
+from ._disconnect import _PeerDisconnectedError
 from ._observability import _observe_operation
 from .diagnostics import _type_name
 from .session import _close_after_failure, drive_session
@@ -115,7 +116,7 @@ class _ConnectionSession:
         """Apply disconnect and failure policy while acceptance is in flight."""
         try:
             await acceptance
-        except falcon.WebSocketDisconnected as disconnected:
+        except (falcon.WebSocketDisconnected, _PeerDisconnectedError) as disconnected:
             self.close_code = (
                 disconnected.code if disconnected.code is not None else 1006
             )
@@ -139,12 +140,12 @@ class _ConnectionSession:
         on_policy_close: cabc.Callable[[], None],
     ) -> None:
         """Hand accepted sockets to the shared driver when it is enabled."""
-        if getattr(self.ws, "closed", False):
-            self.close_code = 1006
-            return
         if not receive_loop:
             # Explicit opt-out preserves application-owned receive and cleanup.
             self.has_disconnected = True
+            return
+        if getattr(self.ws, "closed", False):
+            self.close_code = 1006
             return
 
         # The driver's protected receive await owns cancellation and cleanup.

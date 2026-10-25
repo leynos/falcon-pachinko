@@ -52,10 +52,11 @@ place for accept-dependent I/O, such as registering the socket or sending an
 initial event. With `receive_loop=True`, the router owns ordered
 `receive_media()` calls and invokes `WebSocketResource.dispatch()` for each raw
 `str` or `bytes` frame; the default `False` returns after acceptance and leaves
-receives and cleanup to the application. The live reference app opts into the
-router-owned path. It uses the same session driver and the public
-`LiveWebSocketServer` harness introduced on `main`, rather than a private test
-adapter.
+receives and cleanup to the application after successful setup. Failures in
+`after_connect`, acceptance, or `on_accepted` still run disconnect cleanup
+before the router returns or propagates the error. The live reference app opts
+into the router-owned path. It uses the shared session driver and public
+`LiveWebSocketServer` harness, rather than a private test adapter.
 
 For an accepted session, `before_disconnect` hooks run before `on_disconnect`.
 Normal peer closure uses Falcon's `WebSocketDisconnected.code`; an unavailable
@@ -288,18 +289,16 @@ required, typically during application initialization:
 
 ```python
 import falcon.asgi
-import falcon_pachinko  # The proposed extension library
+import falcon_pachinko
 
 app = falcon.asgi.App()
-falcon_pachinko.install(
-    app
-)  # This would initialize and attach app.ws_connection_manager
+conn_mgr = falcon_pachinko.install(app)
 ```
 
-This `install` function would instantiate the `WebSocketConnectionManager` and
-make it accessible via the application instance (e.g.,
-`app.ws_connection_manager`), allowing other parts of the application,
-including background workers, to access it.
+`install()` creates and returns the `WebSocketConnectionManager`. Falcon's
+slotted ASGI app does not expose it as `app.ws_connection_manager`, so retain
+the return value and inject it into resources or workers. Apps that support
+instance attributes also receive the legacy compatibility helpers.
 
 ### 3.4. Routing WebSocket Connections
 
@@ -311,11 +310,12 @@ originally provided `app.add_websocket_route()` to associate a URL path with a
 > instead.
 
 ```python
-app.add_websocket_route(
-    "/ws/chat/{room_name}",
-    ChatRoomResource,
-    history_size=100,
-)
+from falcon_pachinko import WebSocketRouter
+
+router = WebSocketRouter(receive_loop=True)
+router.add_route("/chat/{room_name}", ChatRoomResource, history_size=100)
+router.mount("/ws")
+router.attach(app)
 ```
 
 When a WebSocket upgrade request matches this path, Falcon-Pachinko will
@@ -394,16 +394,18 @@ logic.
     sending an initial event. Failures are covered by disconnect cleanup; this
     override point does not add a hook event.
 
-  - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: With
-    `WebSocketRouter(receive_loop=True)`, after `on_connect` permits the
-    session, the router runs `before_disconnect` hooks before attempting this
-    callback once, including failure in `after_connect`, `accept`, or
-    `on_accepted`. `close_code` is `WebSocketDisconnected.code` for normal peer
-    closure, or 1006 when the code is missing or cancellation interrupts the
-    session. Cancellation propagates without sending a close frame with
-    reserved code 1006. Unexpected receive or handler failures close with 1011
-    and propagate. Rejected negotiations and failed `on_connect` calls do not
-    call it. With the default `receive_loop=False`, the application owns
+  - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: After
+    `on_connect` permits the session, the router runs `before_disconnect`
+    hooks before attempting this callback once. With
+    `WebSocketRouter(receive_loop=True)`, the router owns cleanup after peer
+    closure, cancellation, or receive failure. Failures in `after_connect`,
+    `accept`, or `on_accepted` are cleaned up even when `receive_loop=False`.
+    `close_code` is `WebSocketDisconnected.code` for normal peer closure, or
+    1006 when the code is missing or cancellation interrupts the session.
+    Cancellation propagates without sending a close frame with reserved code
+    1006. Unexpected receive or handler failures close with 1011 and
+    propagate. Rejected negotiations and failed `on_connect` calls do not call
+    it. After successful setup with `receive_loop=False`, the application owns
     session cleanup.
 
   - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str,
@@ -761,14 +763,11 @@ works with the production reference app.
 ```python
 # app.py
 import falcon.asgi
-import pachinko
-from pachinko.workers import WorkerController, worker
+import falcon_pachinko as pachinko
+from falcon_pachinko import WorkerController, worker
 
-# Assume conn_mgr is created via falcon_pachinko.install(app)
-# and is available as app.ws_connection_manager
 app = falcon.asgi.App()
-pachinko.install(app)
-conn_mgr = app.ws_connection_manager
+conn_mgr = pachinko.install(app)
 
 
 # 1. Define workers as ordinary async functions with explicit dependencies
@@ -824,8 +823,8 @@ accustomed to Falcon.
 
 - **Route Definition**
 
-  - Key elements: `app.add_websocket_route()` and
-    `WebSocketRouter.add_route()`
+  - Key elements: `WebSocketRouter.mount()`, `WebSocketRouter.add_route()` and
+    `WebSocketRouter.attach()`
   - Purpose: maps a URI path to a `WebSocketResource`.
   - Falcon analogy: `app.add_route()`.
 
@@ -862,7 +861,7 @@ accustomed to Falcon.
 
 - **Connection Management (Global)**
 
-  - Key elements: `app.ws_connection_manager`
+  - Key elements: `WebSocketConnectionManager` returned by `install()`
   - Purpose: tracks connections and enables broadcasting.
   - Falcon analogy: N/A.
 
@@ -1030,11 +1029,13 @@ from falcon_pachinko.workers import WorkerController
 # Assuming an authentication middleware `AuthMiddleware` that sets `req.context.user`
 
 app = falcon.asgi.App(middleware=[AuthMiddleware()])
-falcon_pachinko.install(app)
-conn_mgr = app.ws_connection_manager
+conn_mgr = falcon_pachinko.install(app)
 
-# Add the WebSocket route
-app.add_websocket_route("/ws/chat/{room_name}", ChatRoomResource)
+# Mount and attach the WebSocket router
+router = falcon_pachinko.WebSocketRouter(receive_loop=True)
+router.add_route("/chat/{room_name}", ChatRoomResource)
+router.mount("/ws")
+router.attach(app)
 
 
 # Define a background worker
@@ -1636,11 +1637,12 @@ Cancellation propagates after cleanup with 1006 as callback metadata and does
 not send a close frame with reserved code 1006. An unexpected receive or
 handler exception closes with 1011, runs best-effort cleanup, and propagates
 the original exception. Failure during `after_connect`, `accept`, or
-`on_accepted` uses 1006 for cleanup. Cancellation cleanup may retry a
-disconnect hook interrupted before the callback, but interruption inside the
-callback does not call it again. With the default `receive_loop=False`, the
-router returns after acceptance and the application owns receiving and cleanup.
-Returning normally from `on_unhandled` leaves an opted-in session open.
+`on_accepted` uses 1006 for cleanup, including when `receive_loop=False`.
+Cancellation cleanup may retry a disconnect hook interrupted before the
+callback, but interruption inside the callback does not call it again. After
+successful setup with the default `receive_loop=False`, the router returns and
+the application owns receiving and cleanup. Returning normally from
+`on_unhandled` leaves an opted-in session open.
 
 ```mermaid
 stateDiagram-v2
@@ -1836,26 +1838,22 @@ the shared `ServiceContainer`. `on_accepted()` registers the accepted socket
 and sends `session.ready`; the router's shared session driver receives and
 dispatches the subsequent frames. The `LiveWebSocketServer` acceptance scenario
 verifies the nested authenticated `task.add` journey, worker broadcast, audit
-events, and cleanup through a real WebSocket client. The implementation retains
-`main`'s shared session driver and public `LiveWebSocketServer` instead of
-adding a second private responder adapter or test harness.
+events, and cleanup through a real WebSocket client. The implementation uses
+the shared session driver and public `LiveWebSocketServer` harness.
 
 ##### Usage Patterns
 
 Practical usage of the resource-factory pattern falls into two complementary
 scenarios:
 
-1. **Application wiring.** The `examples/random_status/server.py` module now
-   demonstrates the shared `ServiceContainer` that registers process-wide
-   dependencies at startup and exposes a `create_resource()` hook to the
-   router. The container mirrors the behaviour described above—capturing the
-   target callable from the route's partial, merging static kwargs with
-   registered services, reusing cached signatures, and returning the final
-   resource instance. A lightweight `RouterEndpoint` adapter wraps the router
-   so it can be registered via `app.add_websocket_route()` while still
-   delegating connection handling to the router itself. Both WebSocket
-   resources and regular HTTP endpoints resolve dependencies from the same
-   container, ensuring a single source of truth for shared services.
+1. **Application wiring.** The `examples/random_status/server.py` module keeps
+   its compatibility API and remains unchanged. For current applications, the
+   reference app demonstrates a shared `ServiceContainer` that registers
+   process-wide dependencies and supplies resources through
+   `WebSocketRouter(resource_factory=...)`. Mount the router with
+   `router.mount(prefix)` and attach it with `router.attach(app)`; no endpoint
+   wrapper is needed. Both WebSocket resources and regular HTTP endpoints can
+   resolve dependencies from the same container.
 
 2. **Test-specific factories.** Behavioural and unit tests use lightweight
    factories to inject fakes without bootstrapping the full container. The

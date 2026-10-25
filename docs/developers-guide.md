@@ -203,11 +203,6 @@ Falcon may consume the exception before the harness can report it.
 Unacknowledged server failures fail context teardown, while `pop_errors()`
 marks failures that the scenario intentionally asserted.
 
-The `testing` extra and `dev` dependency group include `uvicorn>=0.34,<1`. The
-test server imports Uvicorn lazily and uses its lifespan readiness and
-graceful-shutdown APIs; the behavioural contract belongs to Falcon-Pachinko's
-adapter protocol, not to Uvicorn.
-
 ## WebSocket responder and live-harness boundaries
 
 The Falcon composition flow is `router.mount(prefix)` followed by
@@ -357,33 +352,6 @@ public contract is Falcon-specific, such as hook notification and
 `falcon.Request` unless those internals start depending on Falcon-only
 attributes.
 
-## Live WebSocket acceptance tests
-
-Use the public `LiveWebSocketServer` harness from `falcon_pachinko.testing`
-when a test must exercise Falcon's real responder lifecycle, including
-acceptance, middleware, message reception, and shutdown. It runs Uvicorn on an
-ephemeral loopback port with ASGI lifespan enabled. The `live_websocket_server`
-fixture provides loop-bound helpers for synchronous tests;
-`WebSocketTestClient` can also be managed directly with an `AsyncExitStack`.
-Uvicorn is declared in the `dev` dependency group for this harness and the live
-routing tests.
-
-Run the reference application's live pytest-bdd scenarios with:
-
-```bash
-uv run pytest -q tests/behaviour/test_reference_example_live_steps.py
-```
-
-The feature covers the nested authenticated reference route, schema-decoded
-message dispatch, worker broadcast, connection cleanup, and a rejected
-handshake. Simulator tests remain useful supplementary coverage for isolated
-resource and routing behaviour. They do not prove Falcon's actual ASGI
-responder or lifespan behaviour.
-
-Test request doubles should expose both `path` and `path_template`. Use an empty
-`path_template` for root-mounted router tests, matching the runtime default
-used by Falcon-style request objects that do not provide a template.
-
 ### URI-template compiler boundary
 
 `falcon_pachinko/_uri_template.py` is the private shared compiler for full-path
@@ -396,10 +364,6 @@ terminal adjacent pair, while other multi-placeholder layouts are ambiguous.
 Compilation happens before router registration state is mutated, so invalid
 templates fail at registration or mount time with `ValueError` rather than
 being deferred to connection dispatch.
-
-`uvicorn>=0.34,<1` is in the development dependency group for
-`tests/test_live_routing.py`, which exercises the router through a live Falcon
-ASGI server and real WebSocket connections.
 
 ### `_RouteMatch` and `_Dispatch`
 
@@ -423,6 +387,35 @@ threaded positionally through each helper.
 
 `req` is cast to `falcon.Request` at the point `_Dispatch` is constructed in
 `_try_route`, consistent with the cast-at-the-edge policy described above.
+
+## Live WebSocket acceptance tests
+
+Use the public `LiveWebSocketServer` harness from `falcon_pachinko.testing`
+when a test must exercise Falcon's real responder lifecycle, including
+acceptance, middleware, message reception, and shutdown. It runs Uvicorn on an
+ephemeral loopback port with ASGI lifespan enabled. The `live_websocket_server`
+fixture provides loop-bound helpers for synchronous tests;
+`WebSocketTestClient` can also be managed directly with an `AsyncExitStack`. The
+`testing` extra and `dev` dependency group include `uvicorn>=0.34,<1` for this
+harness and the live routing tests. The test server imports Uvicorn lazily and
+uses its lifespan readiness and graceful-shutdown APIs; the behavioural
+contract belongs to Falcon-Pachinko's adapter protocol, not to Uvicorn.
+
+Run the reference application's live pytest-bdd scenarios with:
+
+```bash
+uv run pytest -q tests/behaviour/test_reference_example_live_steps.py
+```
+
+The feature covers the nested authenticated reference route, schema-decoded
+message dispatch, worker broadcast, connection cleanup, and a rejected
+handshake. Simulator tests remain useful supplementary coverage for isolated
+resource and routing behaviour. They do not prove Falcon's actual ASGI
+responder or lifespan behaviour.
+
+Test request doubles should expose both `path` and `path_template`. Use an empty
+`path_template` for root-mounted router tests, matching the runtime default
+used by Falcon-style request objects that do not provide a template.
 
 ## Reserved lifecycle dispatch
 

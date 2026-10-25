@@ -10,6 +10,7 @@ import pytest
 
 from falcon_pachinko._router_session import _ConnectionSession
 from falcon_pachinko.hooks import HookCollection, HookManager
+from falcon_pachinko.testing import WebSocketSimulator
 from falcon_pachinko.unittests.helpers import make_req
 from falcon_pachinko.unittests.router_session_helpers import (
     SessionResource,
@@ -18,7 +19,7 @@ from falcon_pachinko.unittests.router_session_helpers import (
 )
 
 if typ.TYPE_CHECKING:
-    from falcon_pachinko import HookContext
+    from falcon_pachinko import HookContext, WebSocketLike
 
 
 class FailingCleanupResource(SessionResource):
@@ -39,6 +40,24 @@ class PeerDisconnectingAcceptedResource(SessionResource):
     async def on_accepted(self, ws: object) -> None:
         """Simulate the peer closing during post-acceptance setup."""
         raise falcon.WebSocketDisconnected(code=4007)
+
+
+class SimulatorDisconnectingAcceptedResource(SessionResource):
+    """Read an initial frame during accepted setup, as supported simulators do."""
+
+    @typ.override
+    async def on_accepted(self, ws: WebSocketLike) -> None:
+        """Wait for the initial frame, propagating a simulator peer close."""
+        await ws.receive_media()
+
+
+class ClosingAcceptedResource(SessionResource):
+    """Close the socket during accepted setup before receive ownership transfers."""
+
+    @typ.override
+    async def on_accepted(self, ws: WebSocketLike) -> None:
+        """Close the accepted socket while the application owns cleanup."""
+        await ws.close(code=4013)
 
 
 class CancellingAcceptedResource(SessionResource):
@@ -194,6 +213,32 @@ async def test_accepted_setup_peer_disconnect_uses_peer_code_without_reclosing(
     )
 
 
+@pytest.mark.parametrize("receive_loop", [False, True])
+@pytest.mark.asyncio
+async def test_simulator_peer_disconnect_during_accepted_setup_uses_peer_code(
+    *,
+    receive_loop: bool,
+) -> None:
+    """Simulator disconnects during accepted setup retain normal close metadata."""
+    resource = SimulatorDisconnectingAcceptedResource()
+    socket = WebSocketSimulator()
+    await socket.push_disconnect(4012)
+    router = session_router(resource, receive_loop=receive_loop)
+    observed_codes: list[int | None] = []
+    router.global_hooks.add(
+        "before_disconnect", lambda context: observed_codes.append(context.close_code)
+    )
+
+    await router.on_websocket(make_req("/session"), socket)
+
+    assert socket.accepted, "accepted setup must start after the handshake"
+    assert socket.close_code == 4012, "the simulator must keep the peer close code"
+    assert observed_codes == [4012], "disconnect hooks must receive the peer close code"
+    assert resource.disconnects == [(socket, 4012)], (
+        "resource cleanup must receive the peer code exactly once"
+    )
+
+
 @pytest.mark.asyncio
 async def test_receive_loop_after_connect_failure_disconnects_once() -> None:
     """Post-connect hook errors release state acquired by on_connect."""
@@ -320,6 +365,22 @@ async def test_disabled_receive_loop_preserves_immediate_return() -> None:
     assert socket.receive_calls == 0, "the default path must not receive frames"
     assert not resource.disconnects, (
         "the default path must retain existing lifecycle ownership"
+    )
+
+
+@pytest.mark.asyncio
+async def test_receive_loop_opt_out_keeps_setup_close_cleanup_app_owned() -> None:
+    """A setup-time close does not transfer cleanup to the router opt-out path."""
+    resource = ClosingAcceptedResource()
+    socket = SessionSocket()
+    router = session_router(resource, receive_loop=False)
+
+    await router.on_websocket(make_req("/session"), socket)
+
+    assert socket.accepted, "accepted setup must run after the handshake"
+    assert socket.close_codes == [4013], "setup must retain its close operation"
+    assert not resource.disconnects, (
+        "the application must retain cleanup ownership with receive_loop disabled"
     )
 
 

@@ -119,17 +119,18 @@ resource and its hooks.
     manager or sending an initial frame. Disconnect cleanup also covers
     failures in this hook. It does not add a separate hook event.
 - `on_disconnect(ws, close_code) -> None`
-  - With `WebSocketRouter(receive_loop=True)`, after `on_connect` permits the
-    session, the router runs `before_disconnect` hooks and attempts this
-    callback once, including failure in `after_connect`, `accept`, or
-    `on_accepted`. The code is `WebSocketDisconnected.code` for a peer
-    disconnect, or `1006` when that code is unavailable or cancellation
-    interrupts the session. Cancellation propagates and does not send a close
-    frame with reserved code `1006`.
-    Unexpected receive or handler failures close with `1011` and propagate the
-    original exception. Rejected connections and failed `on_connect` calls do
-    not run this lifecycle. With the default `receive_loop=False`, the
-    application owns receive and cleanup.
+  - The router attempts this callback once when it owns cleanup after
+    `on_connect` permits the connection. With `receive_loop=True`, it also
+    owns cleanup after peer disconnect, cancellation, or receive failure. A
+    failure during `after_connect`, `accept`, or `on_accepted` is cleaned up
+    even when `receive_loop=False`. Peer disconnects use
+    `WebSocketDisconnected.code`; an unavailable code and cancellation use
+    `1006` as cleanup metadata. Cancellation propagates without sending a close
+    frame with reserved code `1006`. Unexpected receive or handler failures
+    close with `1011` and propagate the original exception. Rejected
+    connections and failed `on_connect` calls do not run this lifecycle. With
+    successful setup and `receive_loop=False`, the application owns receive
+    and cleanup.
 - With `receive_loop=True`, the router passes values returned by
   `ws.receive_media()` to `WebSocketResource.dispatch()` in order until the
   peer disconnects. An attached router configures raw media handlers so the
@@ -367,8 +368,7 @@ import falcon.asgi
 from falcon_pachinko import ServiceContainer, WebSocketRouter, install
 
 app = falcon.asgi.App()
-install(app)
-conn_mgr = app.ws_connection_manager
+conn_mgr = install(app)
 container = ServiceContainer()
 container.register("conn_mgr", conn_mgr)
 container.register("db", my_db_pool)
@@ -424,14 +424,21 @@ it never serializes, proxies or shares those sockets across processes.
 
 ```python
 from falcon_pachinko.websocket import ConnectionBackend, WebSocketConnectionManager
+from falcon_pachinko import ServiceContainer, WebSocketRouter
 
 
 class InstrumentedBackend(ConnectionBackend): ...
 
 
 conn_mgr = WebSocketConnectionManager(backend=InstrumentedBackend(...))
-app.ws_connection_manager = conn_mgr  # before router mounts
+container = ServiceContainer()
+container.register("conn_mgr", conn_mgr)
+router = WebSocketRouter(resource_factory=container.create_resource)
 ```
+
+Pass a custom manager through the resource factory. `install(app)` creates a
+default manager and returns it; Falcon's slotted ASGI app does not expose it as
+`app.ws_connection_manager`.
 
 Backend requirements (see `ConnectionBackend` ABC):
 
@@ -471,11 +478,12 @@ the controller during shutdown. Mount the router with
 `WebSocketRouter(receive_loop=True)` so it keeps accepted sockets open,
 dispatches incoming frames and calls `on_disconnect` when the session ends.
 This receive loop is opt-in; the default returns after acceptance and leaves
-the session lifecycle to the application. Each node subscribes while it has
-local members in a room. It removes the subscription when the last local member
-leaves, releases its memberships on graceful shutdown, and renews leases with a
-heartbeat (by default, every third of `lease_ttl`). If a process crashes, its
-remote membership expires after `lease_ttl` without a heartbeat.
+subsequent receives and cleanup to the application after successful setup. Each
+node subscribes while it has local members in a room. It removes the
+subscription when the last local member leaves, releases its memberships on
+graceful shutdown, and renews leases with a heartbeat (by default, every third
+of `lease_ttl`). If a process crashes, its remote membership expires after
+`lease_ttl` without a heartbeat.
 
 Fan-out is best effort and not durable: nodes that are down or whose leases
 have expired do not receive replayed messages. Per-socket ordering depends on
@@ -507,7 +515,12 @@ and need no broker.
   started again. Rollback failures are attached to the original error as notes.
 
 ```python
-from falcon_pachinko import WorkerController, worker
+import falcon.asgi
+
+from falcon_pachinko import WorkerController, install, worker
+
+app = falcon.asgi.App()
+conn_mgr = install(app)
 
 controller = WorkerController()
 
@@ -521,7 +534,7 @@ async def broadcaster(*, conn_mgr):
 class WorkerLifecycleMiddleware:
     async def process_startup(self, scope, event):
         del scope, event
-        await controller.start(broadcaster, conn_mgr=app.ws_connection_manager)
+        await controller.start(broadcaster, conn_mgr=conn_mgr)
 
     async def process_shutdown(self, scope, event):
         del scope, event
@@ -661,5 +674,5 @@ uv run pytest -q tests/behaviour/test_reference_example_live_steps.py
 The example's router uses `receive_loop=True`, so the library accepts the
 socket and owns ordered frame reception and dispatch. No application receive
 loop or direct `WebSocketResource.dispatch()` call is needed. Use the example
-as a blueprint and adapt its authentication, services, and worker policy to
-your application.
+as a blueprint. Adapt its authentication, services, and worker policy to the
+target application.

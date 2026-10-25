@@ -81,23 +81,9 @@ python -m examples.reference_app.server
 uvicorn --factory examples.reference_app.server:create_app --host 127.0.0.1 --port 8000
 ```
 
-Connect to `ws://127.0.0.1:8000/ws/workspaces/atlas/projects/triage/tasks` with
-the headers `x-workspace-token: seekrit` and `x-user: casey`. The nested
-workspace, project and task route resolves through `WorkspaceResource`,
-`ProjectResource`, and `TaskStreamResource`; the `before_connect` hook checks
-the token. The app emits `session.ready` and accepts a `task.add` message. The
-client receives `task.added`; the lifespan-managed announcement worker
-broadcasts an `announcement` with kind `task_added`. The router accepts the
-socket, calls `on_accepted`, and owns the receive and dispatch loop. Disconnect
-hooks run before resource cleanup, which removes the socket from the connection
-manager. The example exposes its dependency container as
-`app.reference_services`, including the audit trail, workspace repository, and
-connection manager.
-
-The live Falcon ASGI journey is exercised by
-`tests/behaviour/reference_example_live.feature`. It also checks rejection of
-an invalid workspace token during the handshake, and verifies that hooks record
-the same connection ID through normal disconnect cleanup.
+Connect to `ws://127.0.0.1:8000/ws/workspaces/atlas/projects/triage/tasks`. The
+tested authentication, messages, and lifecycle are documented in the
+[User Guide's reference example](docs/users-guide.md#11-reference-example).
 
 An end-to-end demonstration lives under `examples/random_status`. It shows how
 to:

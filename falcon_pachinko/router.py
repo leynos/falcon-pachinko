@@ -216,15 +216,21 @@ class WebSocketRouter:
         configures Falcon's raw text and binary media handlers so
         ``receive_media()`` returns frames for :meth:`WebSocketResource.dispatch`.
 
-        A ``TypeError`` is raised if ``app`` is not a Falcon ASGI application.
-        A ``RuntimeError`` is raised when the router is not mounted, is already
-        attached, or is mounted at a different prefix.
+        Parameters
+        ----------
+        app : object
+            The Falcon ASGI application to attach to.
+        prefix : str or None, default=None
+            Optional mount prefix. If omitted, call :meth:`mount` first.
 
         Raises
         ------
         TypeError
             If ``app`` is not a Falcon ASGI application.
-        """
+        RuntimeError
+            If the router is not mounted, is already attached, or is mounted
+            at a different prefix.
+        """  # ruff: ignore[docstring-extraneous-exception] - delegated
         if not isinstance(app, falcon.asgi.App):
             msg = "attach() requires a falcon.asgi.App instance"
             raise TypeError(msg)

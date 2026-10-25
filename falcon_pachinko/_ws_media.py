@@ -99,7 +99,14 @@ def install_raw_websocket_media_handlers(
     Falcon shares ``ws_options.media_handlers`` across all WebSocket routes in
     an application. Warn if those handlers have been customized because this
     wrapper replaces their inbound deserializer with pass-through behaviour.
-    ``stacklevel`` identifies the public caller that initiated the setup.
+
+    Parameters
+    ----------
+    media_handlers : collections.abc.MutableMapping
+        Falcon's app-wide WebSocket media-handler mapping.
+    stacklevel : int, default=3
+        Stack level passed to ``warnings.warn`` so the warning identifies the
+        public caller that initiated the setup.
     """
     payload_types = (
         falcon.WebSocketPayloadType.TEXT,

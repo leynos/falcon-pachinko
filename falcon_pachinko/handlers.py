@@ -7,7 +7,7 @@ dispatch use. ``dispatcher.py`` and ``resource.py`` import both from here.
 
 Registration rejects a handler that implements a reserved lifecycle callback
 so that a peer-chosen tag can never reach ``on_connect``, ``on_accepted``,
-``on_disconnect`` or ``on_unhandled``. The check recognises callbacks by name
+``on_disconnect`` or ``on_unhandled``. The check recognizes callbacks by name
 or identity against their defining class. Both sides of that comparison are
 reduced to the function they ultimately invoke, so a callback
 cannot hide behind a ``functools.partial``, a ``handles_message`` descriptor,

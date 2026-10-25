@@ -10,6 +10,10 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from falcon_pachinko._route_support import (
+    _normalize_path_remaining,
+    _strip_terminal_greedy_path_field,
+)
 from falcon_pachinko._uri_template import (
     _compile_prefix_template,
     compile_uri_template,
@@ -17,6 +21,20 @@ from falcon_pachinko._uri_template import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+
+_PATH_COMPONENT = st.text(
+    alphabet=string.ascii_lowercase + string.digits,
+    min_size=1,
+    max_size=10,
+)
+_PATH_PREFIX = st.lists(_PATH_COMPONENT, max_size=4).map(
+    lambda components: "/" + "/".join(components)
+)
+_IDENTIFIER = st.tuples(
+    st.sampled_from(string.ascii_letters + "_"),
+    st.text(alphabet=string.ascii_letters + string.digits + "_", max_size=10),
+).map("".join)
 
 
 @pytest.mark.parametrize(
@@ -179,6 +197,77 @@ def test_root_patterns_preserve_existing_slash_semantics() -> None:
     assert _compile_prefix_template("/").pattern == r"^(?:/|$)", (
         "root prefix matching should accept the empty and slash paths"
     )
+
+
+@given(prefix=_PATH_PREFIX, parameter_name=_IDENTIFIER)
+def test_generated_terminal_falcon_path_fields_are_removed(
+    prefix: str, parameter_name: str
+) -> None:
+    """Valid terminal Falcon path captures leave their mount prefix intact."""
+    normalized_prefix = prefix.rstrip("/")
+    template = f"{normalized_prefix}/{{{parameter_name}:path}}"
+
+    assert _strip_terminal_greedy_path_field(template) == (normalized_prefix or "/"), (
+        "valid terminal path converters must leave the normalized route prefix"
+    )
+
+
+@given(
+    prefix=_PATH_PREFIX,
+    parameter_name=_IDENTIFIER,
+    form=st.sampled_from((
+        "missing-converter",
+        "wrong-case",
+        "invalid-name",
+        "trailing-slash",
+    )),
+)
+def test_generated_invalid_terminal_falcon_path_fields_are_preserved(
+    prefix: str, parameter_name: str, form: str
+) -> None:
+    """Malformed or nonterminal Falcon path fields are not stripped."""
+    normalized_prefix = prefix.rstrip("/")
+    field = {
+        "missing-converter": f"{{{parameter_name}}}",
+        "wrong-case": f"{{{parameter_name}:Path}}",
+        "invalid-name": f"{{{parameter_name}-suffix:path}}",
+        "trailing-slash": f"{{{parameter_name}:path}}/",
+    }[form]
+    template = f"{normalized_prefix}/{field}"
+
+    assert _strip_terminal_greedy_path_field(template) == template, (
+        "only a valid terminal path converter may be removed"
+    )
+
+
+@given(
+    component=_PATH_COMPONENT,
+    remainder=st.text(alphabet=string.ascii_lowercase + "/", max_size=12),
+)
+def test_generated_remainder_requires_a_consumed_trailing_separator(
+    component: str, remainder: str
+) -> None:
+    """A non-slash remainder needs the route match to consume its separator."""
+    prefix = f"/{component}"
+    exact_match = re.match(re.escape(prefix), prefix)
+    separator_match = re.match(re.escape(prefix) + "/", prefix + "/")
+    assert exact_match is not None, "the route prefix must match without a separator"
+    assert separator_match is not None, "the route prefix must match its separator"
+
+    if not remainder or remainder.startswith("/"):
+        assert _normalize_path_remaining(remainder, exact_match) == remainder, (
+            "empty and slash-prefixed remainders must keep their spelling"
+        )
+        assert _normalize_path_remaining(remainder, separator_match) == remainder, (
+            "the consumed separator must not be duplicated"
+        )
+    else:
+        assert _normalize_path_remaining(remainder, exact_match) is None, (
+            "a non-slash remainder cannot follow an unseparated route match"
+        )
+        assert _normalize_path_remaining(remainder, separator_match) == (
+            f"/{remainder}"
+        ), "a consumed trailing separator must normalize the remaining path"
 
 
 @pytest.mark.parametrize("compiler", [compile_uri_template, _compile_prefix_template])
