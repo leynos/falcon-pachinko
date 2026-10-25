@@ -91,8 +91,8 @@ def _rule_declaration(target: str) -> str:
     return match.group(0)
 
 
-def test_uv_lock_is_committed_and_not_ignored() -> None:
-    """The lockfile must be a tracked file, not a local convenience.
+def test_uv_lock_is_committed_and_gitignore_does_not_name_it() -> None:
+    """The lockfile must be tracked without an ignore rule naming it.
 
     A lockfile that exists but is ignored is worse than none: it pins the
     author's environment while every other checkout keeps resolving freely,
@@ -115,6 +115,21 @@ def test_uv_lock_is_committed_and_not_ignored() -> None:
     assert tracked.returncode == 0, (
         "uv.lock must be committed; `git ls-files --error-unmatch uv.lock` "
         f"failed: {tracked.stderr.strip()}"
+    )
+
+    ignore_lines = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    matches = [
+        (line_number, line)
+        for line_number, line in enumerate(ignore_lines, start=1)
+        if re.search(r"\buv\.lock\b", line)
+    ]
+
+    assert not matches, (
+        ".gitignore must not mention the committed uv.lock, including in "
+        "comments:\n"
+        + "\n".join(
+            f".gitignore:{line_number}: {line}" for line_number, line in matches
+        )
     )
 
 
@@ -221,6 +236,8 @@ def test_ci_run_steps_require_the_project_lockfile() -> None:
         ("@uv run pytest", [(1, "@uv run pytest")]),
         ("$(UV) run pytest", [(1, "$(UV) run pytest")]),
         ("@$(UV) run --locked pytest", []),
+        ("env UV_PYTHON=3.13 uv run pytest", [(1, "env UV_PYTHON=3.13 uv run pytest")]),
+        ("env UV_PYTHON=3.13 uv run --locked pytest", []),
         ("uv tool run ruff && uvx ruff && uv build", []),
         ("echo ready # uv sync", []),
         ('echo "uv sync"', []),
@@ -295,24 +312,6 @@ def test_developer_guide_has_the_authoritative_lock_policy() -> None:
     assert "## Lock-file policy" in guide, (
         "docs/developers-guide.md must contain the authoritative "
         "`## Lock-file policy` subsection"
-    )
-
-
-def test_gitignore_does_not_name_the_committed_lockfile() -> None:
-    """No active or commented ignore rule should name ``uv.lock``."""
-    ignore_lines = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-    matches = [
-        (line_number, line)
-        for line_number, line in enumerate(ignore_lines, start=1)
-        if re.search(r"\buv\.lock\b", line)
-    ]
-
-    assert not matches, (
-        ".gitignore must not mention the committed uv.lock, including in "
-        "comments:\n"
-        + "\n".join(
-            f".gitignore:{line_number}: {line}" for line_number, line in matches
-        )
     )
 
 

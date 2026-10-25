@@ -9,7 +9,16 @@ UV_PROJECT_COMMAND = re.compile(r"(?<![\w.-])(?:uv|\$\(UV\))[ \t]+(?:run|sync)\b
 MAKE_VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 MAKE_VARIABLE_EXPANSION = re.compile(r"\$\((?!UV\))[A-Za-z_][A-Za-z0-9_]*\)")
 SHELL_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-SHELL_COMMAND_PREFIXES = frozenset({"command", "do", "else", "exec", "if", "then", "!"})
+SHELL_COMMAND_PREFIXES = frozenset({
+    "command",
+    "do",
+    "else",
+    "env",
+    "exec",
+    "if",
+    "then",
+    "!",
+})
 MAKE_ASSIGNMENT_OPERATORS = frozenset({"=", "?=", ":=", "+=", "!=", "::="})
 SUBCOMMAND_OFFSET = 1
 COMMAND_ARGUMENTS_OFFSET = 2
