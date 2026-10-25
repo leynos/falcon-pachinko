@@ -439,7 +439,7 @@ def _ci_step(name: str) -> str:
     ("step", "command"),
     [
         ("Run linters", "make lint"),
-        ("Test lint toolchain", "uv run pytest -m lint_toolchain"),
+        ("Test lint toolchain", "uv run --locked pytest -m lint_toolchain"),
     ],
 )
 def test_ci_requires_the_lint_toolchain(step: str, command: str) -> None:
