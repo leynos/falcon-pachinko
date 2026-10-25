@@ -100,41 +100,59 @@ class _ConnectionSession:
     ) -> None:
         """Protect acceptance, then transfer to the configured session owner."""
         async with self:
-            try:
-                await acceptance
-            except falcon.WebSocketDisconnected as disconnected:
-                self.close_code = (
-                    disconnected.code if disconnected.code is not None else 1006
+            accepted = await self._complete_acceptance(acceptance, on_policy_close)
+            if accepted:
+                await self._transfer_to_driver(
+                    receive_loop=receive_loop,
+                    on_policy_close=on_policy_close,
                 )
-                return
-            except asyncio.CancelledError:
-                if self.has_accepted:
-                    self.close_code = 1006
-                raise
-            except Exception:
-                if self.has_accepted:
-                    self.close_code = 1011
-                    on_policy_close()
-                    await _close_after_failure(self.ws, self.close_code)
-                raise
 
-            if getattr(self.ws, "closed", False):
-                self.close_code = 1006
-                return
-            if not receive_loop:
-                # Explicit opt-out preserves the application's receive and
-                # disconnect ownership after setup has succeeded.
-                self.has_disconnected = True
-                return
-
-            resource, ws, hook_manager = self.resource, self.ws, self.hook_manager
-            # There is no suspension between transfer and entering the driver.
-            # Its protected receive await owns cancellation and cleanup; this
-            # context retains cleanup only for incomplete acceptance.
-            self.has_disconnected = True
-            await drive_session(
-                resource,
-                ws,
-                hook_manager,
-                on_policy_close=on_policy_close,
+    async def _complete_acceptance(
+        self,
+        acceptance: cabc.Awaitable[bool],
+        on_policy_close: cabc.Callable[[], None],
+    ) -> bool:
+        """Apply disconnect and failure policy while acceptance is in flight."""
+        try:
+            await acceptance
+        except falcon.WebSocketDisconnected as disconnected:
+            self.close_code = (
+                disconnected.code if disconnected.code is not None else 1006
             )
+            return False
+        except asyncio.CancelledError:
+            if self.has_accepted:
+                self.close_code = 1006
+            raise
+        except Exception:
+            if self.has_accepted:
+                self.close_code = 1011
+                on_policy_close()
+                await _close_after_failure(self.ws, self.close_code)
+            raise
+        return True
+
+    async def _transfer_to_driver(
+        self,
+        *,
+        receive_loop: bool,
+        on_policy_close: cabc.Callable[[], None],
+    ) -> None:
+        """Hand accepted sockets to the shared driver when it is enabled."""
+        if getattr(self.ws, "closed", False):
+            self.close_code = 1006
+            return
+        if not receive_loop:
+            # Explicit opt-out preserves application-owned receive and cleanup.
+            self.has_disconnected = True
+            return
+
+        # The driver's protected receive await owns cancellation and cleanup.
+        # This context retains cleanup only for incomplete acceptance.
+        self.has_disconnected = True
+        await drive_session(
+            self.resource,
+            self.ws,
+            self.hook_manager,
+            on_policy_close=on_policy_close,
+        )

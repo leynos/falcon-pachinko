@@ -69,6 +69,13 @@ def _strip_terminal_greedy_path_field(template: str) -> str:
     return prefix.rstrip("/") or "/"
 
 
+def _normalize_path_remaining(remaining: str, match: re.Match[str]) -> str | None:
+    """Normalize a consumed path suffix or return ``None`` if it is invalid."""
+    if not remaining or remaining.startswith("/"):
+        return remaining
+    return f"/{remaining}" if match.group(0).endswith("/") else None
+
+
 def _normalize_path(path: str) -> str:
     """Ensure the path has a leading slash."""
     return path if path.startswith("/") else f"/{path}"
