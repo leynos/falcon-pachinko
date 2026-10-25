@@ -25,8 +25,20 @@ workers, and testing utilities.
 ## 2. Quickstart (Composable Routing)
 
 ```python
+import dataclasses as dc
+import typing as typ
+
 import falcon.asgi
+import msgspec
+
 from falcon_pachinko import WebSocketResource, WebSocketRouter, handles_message
+
+if typ.TYPE_CHECKING:
+    from falcon_pachinko.protocols import WebSocketLike
+
+
+class ChatPayload(msgspec.Struct):
+    text: str
 
 
 class ChatResource(WebSocketResource):
@@ -35,27 +47,58 @@ class ChatResource(WebSocketResource):
         return True  # continue to message handling
 
     @handles_message("chat.message")
-    async def handle_message(self, ws, payload):
+    async def handle_message(self, ws, payload: ChatPayload) -> None:
         await ws.send_media({"type": "echo", "text": payload.text})
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _RouterRequest:
+    path: str
+    path_template: str
+
+
+class RouterAdapter:
+    def __init__(self, router: WebSocketRouter) -> None:
+        self._router = router
+
+    async def on_websocket(
+        self,
+        req: falcon.asgi.Request,
+        ws: falcon.asgi.WebSocket,
+        rest: str,
+    ) -> None:
+        await self._router.on_websocket(
+            _RouterRequest(path=req.path, path_template="/ws"),
+            typ.cast("WebSocketLike", ws),
+        )
 
 
 app = falcon.asgi.App()
 router = WebSocketRouter(receive_loop=True)
 router.add_route("/chat/{room}", ChatResource)
 router.mount("/ws")
-router.attach(app)
+app.add_route("/ws/{rest:path}", RouterAdapter(router))
 ```
 
-- `mount()` compiles the router's mount prefix and routes. `attach()` then
-  registers the exact mount and a Falcon catch-all route for descendant paths.
-  It also enables pass-through TEXT and BINARY input for every WebSocket route
-  on the app, while preserving the configured outgoing serializers. It warns if
-  custom media handlers will be replaced.
+- Falcon matches `/ws/{rest:path}` and forwards the connection to
+  `RouterAdapter`. The adapter presents the request to the router with the
+  `/ws` mount template. The router then matches `/ws/chat/{room}` against its
+  mounted routes.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
 - The example opts into a router-owned receive-and-dispatch session with
   `receive_loop=True`. The default is `False`, which returns after acceptance
   and leaves receives and cleanup to the application.
+- The `ChatPayload` annotation makes the router pass a `ChatPayload` instance
+  to the handler. An unannotated handler receives a `dict`.
+
+Save the Python snippet as `quickstart.py`. An ASGI server is required to serve
+the WebSocket connection; Uvicorn is included in the `examples` extra or the
+`dev` dependency group.
+
+```sh
+uvicorn quickstart:app
+```
 
 ### The `add_route` signature
 
