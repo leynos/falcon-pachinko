@@ -1,8 +1,13 @@
 # 1. Overview of `uv` and `pyproject.toml`
 
 Astral's `uv` is a Rust-based project and package manager that uses
-`pyproject.toml` as its central configuration file. When commands like
-`uv init`, `uv sync --locked` or `uv run --locked` are run, `uv` will:
+`pyproject.toml` as its central configuration file. `uv init` creates a new
+project and its `pyproject.toml`. For this repository, use `uv lock` to create
+or refresh `uv.lock`, then `uv sync --locked` to install the reviewed
+environment. `uv run --locked` applies the same lock check before running a
+project command.
+
+After a project has been initialized, project environment commands will:
 
 1. Look for a `pyproject.toml` in the project root and check or update its
    lockfile as required by the command and its flags.
