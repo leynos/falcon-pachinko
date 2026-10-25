@@ -494,13 +494,17 @@ re-raises `CancelledError` without sending a close frame with that reserved
 code. If cancellation interrupts a peer-close callback already in progress,
 that callback is not retried; cancellation cleanup uses 1006 metadata. An
 unexpected receive or handler exception closes with 1011, runs best-effort
-disconnect cleanup, and re-raises the original exception. If `after_connect`,
-`accept`, or `on_accepted` fails before the receive loop starts, cleanup uses
-1006. Cancellation cleanup may retry a `before_disconnect` hook
-interrupted before the callback; an interruption inside the callback does not
-trigger a second attempt. A normal peer-cleanup lifecycle error propagates.
-During accepted-session failure cleanup, errors are logged by exception type
-and do not replace the session failure.
+disconnect cleanup, and re-raises the original exception. Failure in
+`after_connect` or `accept` before acceptance completes uses 1006 for cleanup.
+An ordinary exception from `on_accepted` happens after acceptance, closes with
+1011, and passes 1011 to cleanup even though the receive loop has not started.
+Cancellation during `on_accepted` uses 1006 as cleanup metadata and propagates
+without sending a close frame with that reserved code. Cancellation cleanup may
+retry a `before_disconnect` hook interrupted before the callback; an
+interruption inside the callback does not trigger a second attempt. A normal
+peer-cleanup lifecycle error propagates. During accepted-session failure
+cleanup, errors are logged by exception type and do not replace the session
+failure.
 
 Test sockets must terminate receive loops. `DummyWS` and `RecordingWS` return
 their scripted frames in order and then signal peer disconnection. The
