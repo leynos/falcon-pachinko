@@ -149,49 +149,74 @@ When the lower bound changes, update the `falcon` bound in `pyproject.toml`,
 `tests/workflow_contracts/test_falcon_minimum_lane.py` as well; its workflow
 contract keeps those values aligned.
 
-## Dependency management with uv
+The dependency bounds above are deliberately wide. See the
+[lock-file policy](#lock-file-policy) for how project environments are pinned
+and updated. Lower-bound coverage in CI stays tracked separately from this
+support policy.
 
-The project is uv-managed. `pyproject.toml` declares runtime dependencies under
-`[project]`, development tooling under `[dependency-groups]`, and the
-`examples` and `testing` sets as `[project.optional-dependencies]` extras. The
-lockfile `uv.lock` resolves all three, including every interpreter version in
-`requires-python`, and is committed alongside them.
+## Lock-file policy
 
-`make build` runs:
+This repository commits `uv.lock` to pin one reviewed dependency release set
+for development and CI, despite the wide runtime bounds declared in
+`pyproject.toml`. This decision supersedes the floating-resolution behaviour
+recorded in issue [#83](https://github.com/leynos/falcon-pachinko/issues/83).
+The lockfile resolves the runtime dependencies, development group and
+`examples` and `testing` extras across the declared `requires-python` range.
+
+Use `make build` to install the development environment. Its equivalent direct
+command is:
 
 ```sh
 uv sync --group dev --locked
 ```
 
-`--locked` is what makes the committed lockfile load-bearing. A plain `uv sync`
-re-resolves whenever `pyproject.toml` and `uv.lock` disagree, so a branch that
-edited one but not the other would install a dependency set nobody reviewed and
-report success. With `--locked` the same disagreement fails the build instead,
-which is the behaviour CI needs: `ci.yml` installs the project by running
-`make build`, so the lockfile CI installs is the lockfile the branch committed.
+When an optional extra is needed, install it with the development group and the
+lockfile:
 
-### Changing a dependency
+```sh
+uv sync --group dev --extra examples --locked
+uv sync --group dev --extra testing --locked
+```
 
-- After editing any dependency in `pyproject.toml`, run `uv lock` and commit
-  the regenerated `uv.lock` in the same change. `make build` fails until it is
-  refreshed.
-- To upgrade one dependency without disturbing the rest, use
-  `uv lock --upgrade-package <name>`. A bare `uv lock --upgrade` re-resolves
-  everything and produces a diff no reviewer can attribute to a reason.
+`--locked` requires the lockfile to match `pyproject.toml`; a stale or missing
+lockfile makes the command fail rather than silently resolving a different
+release set. CI uses `--locked` for project-environment commands, fails when
+the lock is stale and never regenerates it.
+
+### Refreshing the lockfile
+
+- After changing dependency declarations in `pyproject.toml`, run `uv lock`,
+  review the resulting changes, and commit the regenerated lockfile in the same
+  change.
+- For a targeted upgrade, use `uv lock --upgrade-package <name>` and review
+  the lockfile diff.
+- Do not run the broad `uv lock --upgrade` without reviewing the full set of
+  package changes; it can update every compatible dependency.
 - Bump the `ruff` and `ty` pins in the Makefile and in `ci.yml` together, not
   through the lockfile: they run as `uv tool run --from <tool>==<pin>` outside
   the project environment, and `tests/test_toolchain_versions.py` holds the two
   sites to one another.
 
+### Scope and build environments
+
+This lockfile governs only the development and CI project environments.
+Published wheels and source distributions retain the dependency ranges from
+`pyproject.toml`; consumers resolve those ranges for their own environments.
+The release build uses `uv build` and the isolated backend declared in
+`[build-system]`, which is outside the project lock.
+
+Tool environments are separate as well. `uv tool run`, `uv run --no-project` and
+`uvx cibuildwheel` do not use the project lock. Tool commands and any existing
+pins or constraints remain at their Makefile and CI call sites; this policy
+adds no pins for `mbake`, `cibuildwheel` or the build backend.
+
 ### Dependabot
 
-`.github/dependabot.yml` reads Python dependencies through the `uv` ecosystem,
-which is the ecosystem that understands `uv.lock`; `pip` reads
-`requirements*.txt` and the older `pyproject.toml` layout and would leave the
-lockfile unmaintained. Dependabot's lockfile updates and the entry's grouping,
-limits, labels and cooldown are held by `tests/test_uv_toolchain.py`, which
-also asserts that the lockfile is committed, not ignored, and that `make build`
-installs it with `--locked`.
+Dependabot's root `uv` entry in `.github/dependabot.yml` is the only automated
+lockfile refresh path. It groups minor and patch updates into pull requests; CI
+validates each candidate against the committed lock with `--locked`.
+`tests/test_uv_toolchain.py` holds the updater configuration and the lockfile
+contract in place.
 
 The auto-merge workflow needs no change for this: `dependabot-automerge.yml`
 keys on the actor `dependabot[bot]`, not on the ecosystem that opened the pull
@@ -739,10 +764,12 @@ configured roots are passed together in one detector invocation so cross-root
 families remain visible. The initial report selected only `__init__.py`,
 `exceptions.py`, `router.py`, and `websocket.py`, with no excluded paths.
 
-`make build` installs the `dev` dependency group with `uv sync --group dev`; it
-does not install the optional `examples` extra. Run
-`uv sync --group dev --extra examples` before running example programs or tests
-that require example-only dependencies such as `aiosqlite`.
+`make build` installs the `dev` dependency group with
+`uv sync --group dev --locked`; it does not install the optional `examples`
+extra. Run `uv sync --group dev --extra examples --locked` before running
+example programs or tests that require example-only dependencies such as
+`aiosqlite`. See the [lock-file policy](#lock-file-policy) for the installation
+and refresh rules.
 
 The detector runs `syntax,semantic,near`, with a minimum of 24 intermediate-
 language tokens, `surface = "all"`, and a top-30 ranked-family limit. `all`
@@ -854,13 +881,13 @@ make mutation           # mutate the package against the whole suite
 make mutation-results   # list the last run's mutants and their statuses
 ```
 
-`make mutation` runs `mutmut` through `uv run --with mutmut==3.6.0`, so the
-tool is injected at call time and is deliberately not a project dependency.
-`make mutation-results` prints one line per mutant, grouped by status. To see
-what a surviving mutant actually changed, ask mutmut directly:
+`make mutation` runs `mutmut` through `uv run --locked --with mutmut==3.6.0`,
+so the tool is injected at call time and is deliberately not a project
+dependency. `make mutation-results` prints one line per mutant, grouped by
+status. To see what a surviving mutant actually changed, ask mutmut directly:
 
 ```sh
-UV_PYTHON=3.13 uv run --with mutmut==3.6.0 mutmut show <mutant-name>
+UV_PYTHON=3.13 uv run --locked --with mutmut==3.6.0 mutmut show <mutant-name>
 ```
 
 A run leaves a generated `mutants/` tree in the working directory. It is
@@ -983,8 +1010,8 @@ repository keeps no copy of the readers or the refusal cases. What it holds:
 require `UV_PYTHON: '3.13'` on every `generate-coverage` step, set on the job
 in both lanes, and hold that version inside `requires-python` (`>=3.12`),
 because generate-coverage otherwise takes the `python3` that the latest
-`setup-python` put on `PATH`, and `uv sync` refuses an interpreter outside the
-range. The ratchet baseline key carries the interpreter
+`setup-python` put on `PATH`, and a locked project sync refuses an interpreter
+outside the range. The ratchet baseline key carries the interpreter
 (`ratchet-baseline-<os>-py<major.minor>-`), so a lane on another Python would
 miss its baseline rather than compare against the wrong one.
 
@@ -1011,11 +1038,11 @@ no coverage until the next push or a dispatch on main.
 itself does not. **PyYAML** (`pyyaml>=6.0.3`) parses the GitHub Actions
 documents and **Hypothesis** (`hypothesis>=6.168.0`) generates the documents
 the label readers are held to. Both are in the `dev` dependency group, so
-`make build`, which runs `uv sync --group dev`, installs them;
-`uv sync --group dev` on its own does as well. `make test` collects the
-contracts, which is what makes them a gate rather than a convenience, and
-`uv run pytest tests/workflow_contracts` runs them alone. Running them without
-those dependencies fails at import.
+`make build`, which runs `uv sync --group dev --locked`, installs them;
+`uv sync --group dev --locked` on its own does as well. `make test` collects
+the contracts, which is what makes them a gate rather than a convenience, and
+`uv run --locked pytest tests/workflow_contracts` runs them alone. Running them
+without those dependencies fails at import.
 
 ## Markdown formatting and linting
 
@@ -1167,8 +1194,8 @@ them too, which is what makes them a gate rather than a convenience.
 They need two development dependencies that the library itself does not.
 **PyYAML** parses the GitHub Actions documents, and **Hypothesis** generates
 the declarations the label readers are held to. Both are in the `dev`
-dependency group, so `make build`, which runs `uv sync --group dev`, installs
-them; `uv sync --group dev` on its own does as well. Running
+dependency group, so `make build`, which runs `uv sync --group dev --locked`,
+installs them; `uv sync --group dev --locked` on its own does as well. Running
 `make test-workflow-contracts` or `make all` without them fails at import.
 
 The readers take the directory they read rather than reaching for a module

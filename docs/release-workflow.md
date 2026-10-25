@@ -7,6 +7,13 @@ uses the same sdist-first build as pull-request CI: plain
 sdist. The attested files are carried between jobs; publication jobs do not
 rebuild them.
 
+`uv build` uses an isolated environment for the backend declared in
+`[build-system]`; that backend environment is outside the project's
+lock-file policy. Published wheels and source distributions retain the
+dependency ranges declared in `pyproject.toml`, so consumers resolve
+those ranges in their own environments. See the Developer Guide's
+[lock-file policy](developers-guide.md#lock-file-policy).
+
 ## Release jobs
 
 A push of a tag matching `v*.*.*` starts these jobs:
