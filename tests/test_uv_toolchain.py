@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import re
-import shlex
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - runs trusted repo tooling, never outside input
 import tomllib
@@ -37,6 +36,7 @@ from tests._makefile import (
     run_command,
     tool_environment,
 )
+from tests._uv_command_contracts import _run_step_scripts, _unlocked_project_commands
 
 if typ.TYPE_CHECKING:
     import pathlib
@@ -45,115 +45,11 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 UV_LOCK = REPO_ROOT / "uv.lock"
 DEPENDABOT = REPO_ROOT / ".github" / "dependabot.yml"
 COVERAGE_MAIN = REPO_ROOT / ".github" / "workflows" / "coverage-main.yml"
-UV_PROJECT_COMMAND = re.compile(r"(?<![\w.-])(?:uv|\$\(UV\))[ \t]+(?:run|sync)\b")
 
 #: The package ecosystems Dependabot offers for Python dependencies. It reads
 #: `requirements*.txt` and the older `pyproject.toml` layout under `pip`, and
 #: `uv.lock` under `uv`. Only one of them can be the entry for a directory.
 PYTHON_ECOSYSTEMS = ("pip", "uv")
-
-
-def _logical_lines(text: str) -> list[tuple[int, str]]:
-    """Return source lines joined across shell or Make continuations.
-
-    The first value is the one-based line where the logical line begins. A
-    continuation matters for project commands whose flags are on the next
-    physical line, including the deliberately exempt ``--no-project`` calls.
-
-    Returns
-    -------
-    list of tuple of int and str
-        Logical lines paired with their one-based starting line numbers.
-    """
-    logical_lines: list[tuple[int, str]] = []
-    physical_lines = text.splitlines()
-    fragments: list[str] = []
-    start_line = 1
-
-    for line_number, line in enumerate(physical_lines, start=1):
-        if not fragments and line.lstrip().startswith("#"):
-            continue
-        if not fragments:
-            start_line = line_number
-        stripped = line.rstrip()
-        continues = stripped.endswith("\\")
-        fragments.append(stripped[:-1].strip() if continues else line.strip())
-        if not continues:
-            logical_lines.append((start_line, " ".join(fragments)))
-            fragments = []
-
-    if fragments:
-        logical_lines.append((start_line, " ".join(fragments)))
-    return logical_lines
-
-
-def _run_step_scripts(document: object) -> list[str]:
-    """Collect ``run:`` script values from a parsed workflow document."""
-    scripts: list[str] = []
-
-    def visit(value: object) -> None:
-        match value:
-            case dict():
-                run_script = value.get("run")
-                match run_script:
-                    case str() as script:
-                        scripts.append(script)
-                    case _:
-                        pass
-                for child in value.values():
-                    visit(child)
-            case list():
-                for child in value:
-                    visit(child)
-            case _:
-                return
-
-    visit(document)
-    return scripts
-
-
-def _shell_commands(line: str) -> list[str]:
-    """Split a logical shell line at command separators.
-
-    Returns
-    -------
-    list of str
-        Shell command segments, without the separators between them.
-    """
-    lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|")
-    lexer.whitespace_split = True
-    commands: list[str] = []
-    current: list[str] = []
-
-    for token in lexer:
-        if token and all(character in ";&|" for character in token):
-            if current:
-                commands.append(" ".join(current))
-                current = []
-        else:
-            current.append(token)
-
-    if current:
-        commands.append(" ".join(current))
-    return commands
-
-
-def _is_unlocked_project_command(command: str) -> bool:
-    """Return whether one project invocation omits its lock enforcement."""
-    if UV_PROJECT_COMMAND.search(command) is None:
-        return False
-    return all(flag not in command for flag in ("--no-project", "--locked"))
-
-
-def _unlocked_project_commands(text: str) -> list[tuple[int, str]]:
-    """Return project ``uv run`` or ``uv sync`` lines lacking ``--locked``."""
-    return [
-        (line_number, command)
-        for line_number, line in _logical_lines(text)
-        if UV_PROJECT_COMMAND.search(line)
-        for command in _shell_commands(line)
-        if _is_unlocked_project_command(command)
-    ]
 
 
 def _git(*arguments: str) -> CompletedRun:
@@ -300,6 +196,15 @@ def test_ci_run_steps_require_the_project_lockfile() -> None:
             "uv run --no-project install.py && uv run pytest",
             [(1, "uv run pytest")],
         ),
+        ("uv run --with mutmut --locked mutmut", []),
+        ("uv run custom-cli --locked", [(1, "uv run custom-cli --locked")]),
+        (
+            "uv run custom-cli --no-project",
+            [(1, "uv run custom-cli --no-project")],
+        ),
+        ("uv run --python 3.14 --no-project install.py", []),
+        ("uv sync --group dev --locked", []),
+        ("uv sync --group dev", [(1, "uv sync --group dev")]),
         ("uv tool run ruff && uvx ruff && uv build", []),
         ("echo ready # uv sync", []),
     ],
