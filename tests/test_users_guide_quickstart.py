@@ -15,6 +15,7 @@ import pytest
 from falcon_pachinko.testing import LiveWebSocketServer, WebSocketTestClient
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from types import ModuleType
 
 
@@ -41,7 +42,7 @@ def _extract_quickstart_source(guide: str) -> str:
 
 
 @pytest.fixture
-def quickstart_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+def quickstart_module(tmp_path: Path) -> cabc.Iterator[ModuleType]:
     """Load the first Python example in the composable-routing quick-start."""
     guide_path = Path(__file__).resolve().parents[1] / "docs" / "users-guide.md"
     guide = guide_path.read_text(encoding="utf-8")
@@ -53,9 +54,16 @@ def quickstart_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Module
         pytest.fail(f"could not create an import spec for {quickstart_path}")
 
     module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, module_name, module)
-    spec.loader.exec_module(module)
-    return module
+    previous_module = sys.modules.get(module_name)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+        yield module
+    finally:
+        if previous_module is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous_module
 
 
 def test_quickstart_constructs_falcon_asgi_app(
@@ -71,30 +79,43 @@ def test_quickstart_constructs_falcon_asgi_app(
 @pytest.mark.parametrize("path", ["/ws/chat/lobby", "/ws"])
 async def test_quickstart_echoes_a_typed_websocket_message(
     quickstart_module: ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
     path: str,
 ) -> None:
     """A live connection reaches the mounted room route and echoes its text."""
-    observed_headers: list[str | None] = []
-    original_on_connect = quickstart_module.ChatResource.on_connect
+    async with LiveWebSocketServer(quickstart_module.app) as server:
+        client = WebSocketTestClient(server.base_url, allow_insecure=True)
+        async with client.connect(path) as session:
+            await session.send_json({"type": "chat.message", "payload": {"text": "hi"}})
+            async with asyncio.timeout(5):
+                response = await session.receive_json()
 
-    async def inspect_connection_header(
-        resource: object,
-        req: falcon.asgi.Request,
-        ws: falcon.asgi.WebSocket,
-        room: str = "lobby",
-    ) -> bool:
-        """Read a handshake header before the documented connection hook."""
-        observed_headers.append(req.get_header("X-Quickstart-Test"))
-        return await original_on_connect(resource, req, ws, room)
-
-    monkeypatch.setattr(
-        quickstart_module.ChatResource, "on_connect", inspect_connection_header
+    assert response == {"type": "echo", "text": "hi"}, (
+        "the quick-start must echo the decoded ChatPayload text"
     )
+
+
+@pytest.mark.asyncio
+async def test_quickstart_adapter_preserves_request_headers(
+    quickstart_module: ModuleType,
+) -> None:
+    """A lifecycle hook can read headers from Falcon's routed request."""
+    observed_headers: list[str | None] = []
+
+    class HeaderProbeResource(quickstart_module.ChatResource):
+        async def on_connect(
+            self,
+            req: falcon.asgi.Request,
+            ws: falcon.asgi.WebSocket,
+            room: str = "lobby",
+        ) -> bool:
+            observed_headers.append(req.get_header("X-Quickstart-Test"))
+            return await super().on_connect(req, ws, room)
+
+    quickstart_module.router.add_route("/header-probe", HeaderProbeResource)
     async with LiveWebSocketServer(quickstart_module.app) as server:
         client = WebSocketTestClient(server.base_url, allow_insecure=True)
         async with client.connect(
-            path, headers={"X-Quickstart-Test": "preserved"}
+            "/ws/header-probe", headers={"X-Quickstart-Test": "preserved"}
         ) as session:
             await session.send_json({"type": "chat.message", "payload": {"text": "hi"}})
             async with asyncio.timeout(5):
