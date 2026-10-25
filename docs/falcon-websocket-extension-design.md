@@ -90,8 +90,8 @@ stateDiagram-v2
     Disconnected --> [*]
 ```
 
-**Figure: Opted-in WebSocket session states from connection through acceptance,
-frame dispatch and disconnect cleanup.**
+**Figure: Router-owned WebSocket session states from connection through
+acceptance, frame dispatch and disconnect cleanup.**
 
 ```mermaid
 sequenceDiagram
@@ -472,10 +472,11 @@ driver controls frame reception and dispatch order.
      saw. Only the conventional path narrows this way; explicit registration
      with `@handles_message` or `add_handler` is unaffected.
 
-     The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are
-     reserved and are never admitted to the allowlist, along with any alias or
-     inherited copy of them. They are lifecycle-driven, so a peer-chosen tag
-     that names one would let a remote client drive cleanup for a live socket.
+     The callbacks `on_connect()`, `on_session_start()`, `on_disconnect()` and
+     `on_unhandled()` are reserved and never admitted to the allowlist, along
+     with any alias or inherited copy of them. They are lifecycle-driven, so a
+     peer-chosen tag that names one would let a remote client drive cleanup for
+     a live socket.
      The wrappers that hide the underlying function are unwrapped before
      identity is compared: a `functools.partial`, a `@handles_message`
      descriptor, a standard-library descriptor family
@@ -1647,7 +1648,7 @@ This provides maximum control, allowing outer layers to act as setup/teardown
 guards for inner layers. An exception in a `before_*` hook should terminate the
 connection attempt immediately.
 
-After Falcon accepts the connection, the router owns a single inline receive
+The router accepts the connection before starting its single inline receive
 loop. It passes each text or binary frame to the selected resource's dispatcher
 and waits for that dispatch to finish before receiving the next frame. The loop
 creates no task per frame. A normal peer close runs `before_disconnect` hooks

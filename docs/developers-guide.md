@@ -116,23 +116,20 @@ host-configured, with no mandatory SDK, public constructor changes or
 
 ## Dependency bounds
 
-The package supports Falcon 4.x through `falcon>=4,<5`. Falcon follows
+The package supports Falcon releases from 4.0 up to, but not including, 4.5, as
+declared by `falcon>=4,<4.5`. This upper bound excludes Falcon 4.5 until
+compatibility is verified: `falcon_pachinko/_session_socket.py` uses Falcon's
+private `_receive()` method because there is no public raw receiver. Falcon
+documents
 [semantic versioning](https://falcon.readthedocs.io/en/stable/community/releases.html#semantic-versioning),
-so an incompatible API change can arrive with a new major release. This
-package uses Falcon's ASGI application and WebSocket APIs in
-`falcon_pachinko/router.py`, `falcon_pachinko/websocket.py`, and
-`falcon_pachinko/testing/harness.py`; the exclusive upper bound keeps a future
-major release out until compatibility is verified.
+so an incompatible API change can arrive with a new major release. This bound
+keeps unverified releases outside the supported range.
 
 The lower bound was checked on 2026-10-08 UTC (2026-10-09 in Europe/Berlin) by
 installing Falcon 4.0.0 with `uv pip install falcon==4.0.0` and running
-`uv run --no-sync pytest -v`: 770 tests passed and 2 were skipped. Run
-`make build` afterwards to restore the normal environment. `uv.lock` is
-committed and `.gitignore` does not exclude it. The dependency bounds above are
-deliberately wide, so the lockfile pins the Falcon release tested by
-`lint-test` and the shared coverage action; Dependabot keeps that release
-current. See "Dependency management with uv" below for how the lockfile is
-maintained.
+`uv run --no-sync pytest -v`: 770 tests passed and 2 were skipped. This records
+validation at the declared lower bound. Run `make build` afterwards to restore
+the normal environment.
 
 The `falcon-minimum` job in `.github/workflows/ci.yml` checks the lower bound
 on every pull request and every push to `main`. After `make build` installs the
@@ -148,9 +145,10 @@ When the lower bound changes, update the `falcon` bound in `pyproject.toml`,
 `tests/workflow_contracts/test_falcon_minimum_lane.py` as well; its workflow
 contract keeps those values aligned.
 
-`uv.lock` is committed and `.gitignore` no longer excludes it. The dependency
-bounds above are deliberately wide, so the lockfile is what pins an actual
-release. See "Dependency management with uv" below for how it is kept current.
+`uv.lock` is committed and `.gitignore` no longer excludes it. It selects a
+concrete resolution within the supported range; it currently resolves Falcon
+4.4.0. That selection does not expand the `pyproject.toml` support bound. See
+"Dependency management with uv" below for how the lockfile is kept current.
 Lower-bound coverage in CI stays tracked separately from this support policy.
 
 ## Dependency management with uv
@@ -500,7 +498,7 @@ objects prepared for connection setup. The router owns this lifecycle for
 ordinary Falcon routing; manual callers can use `negotiate()` and retain the
 session handle themselves.
 
-Falcon may decode incoming media before `receive_media()` returns it, so The
+Falcon may decode incoming media before `receive_media()` returns it, so the
 receive loop does not itself guarantee exact raw TEXT or BINARY input.
 `router.attach()` enables raw input for all WebSocket routes on the app while
 preserving the configured outgoing TEXT and BINARY serializers. For a manually
