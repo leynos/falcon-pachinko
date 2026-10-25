@@ -94,16 +94,22 @@ class RecordingResource(WebSocketResource):
         try:
             payload = msjson.decode(message)
         except ms.DecodeError:
-            if not isinstance(message, str):
-                raise
-            await ws.send_media({"type": "raw", "message": message})
-            return
-        if not isinstance(payload, dict):
-            msg = "live test messages must be JSON objects"
-            raise TypeError(msg)
+            match message:
+                case str():
+                    await ws.send_media({"type": "raw", "message": message})
+                    return
+                case _:
+                    raise
 
-        # JSON object keys are strings; decoded values can be any JSON value.
-        await self._respond_to_payload(ws, typ.cast("dict[str, object]", payload))
+        match payload:
+            case dict():
+                # JSON object keys are strings; values can be any JSON value.
+                await self._respond_to_payload(
+                    ws, typ.cast("dict[str, object]", payload)
+                )
+            case _:
+                msg = "live test messages must be JSON objects"
+                raise TypeError(msg)
 
     async def _respond_to_payload(
         self, ws: WebSocketLike, payload: dict[str, object]
@@ -285,10 +291,11 @@ class LiveServerTransport:
 
         sockets = server.servers
         if not sockets or not sockets[0].sockets:
-            loop.set_exception_handler(previous_handler)
             serve_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await serve_task
+            try:
+                await asyncio.gather(serve_task, return_exceptions=True)
+            finally:
+                loop.set_exception_handler(previous_handler)
             msg = "Uvicorn reported started without a listening socket"
             raise RuntimeError(msg)
         port = sockets[0].sockets[0].getsockname()[1]

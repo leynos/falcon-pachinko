@@ -8,6 +8,7 @@ import typing as typ
 import msgspec.json as msjson
 import pytest
 
+import falcon_pachinko.testing.harness as harness_module
 from falcon_pachinko import (
     SimulatorConnection,
     SimulatorRouterHarness,
@@ -334,14 +335,15 @@ class TestWebSocketSimulatorFixture:
     async def test_retry_close_does_not_replace_teardown_error(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A best-effort final close cannot mask the first teardown failure."""
+        """Teardown preserves its first error and joins the router task."""
         harness = SimulatorRouterHarness()
         simulator = WebSocketSimulator()
         await simulator.close()
         websocket = _OriginalWebSocket()
         primary_error = RuntimeError("initial close failed")
         retry_error = RuntimeError("retry close failed")
-        close_errors = iter((primary_error, retry_error))
+        rollback_error = RuntimeError("rollback close failed")
+        close_errors = iter((primary_error, retry_error, rollback_error))
 
         async def fail_close(code: int = 1000) -> None:
             del code
@@ -349,8 +351,13 @@ class TestWebSocketSimulatorFixture:
             raise next(close_errors)
 
         monkeypatch.setattr(websocket, "close", fail_close)
-        router_task = asyncio.create_task(asyncio.sleep(0))
-        await router_task
+        router_finished = asyncio.Event()
+
+        async def finish_router_task() -> None:
+            await asyncio.sleep(0.02)
+            router_finished.set()
+
+        router_task = asyncio.create_task(finish_router_task())
         session = _ConnectionSession(
             path="/session",
             simulator=simulator,
@@ -365,6 +372,35 @@ class TestWebSocketSimulatorFixture:
         assert caught.value is primary_error, (
             "retry cleanup must preserve the original teardown failure"
         )
+        assert router_task.done(), "failed teardown must still join the router task"
+        assert router_finished.is_set(), "the router task must finish before teardown"
+
+    async def test_closed_simulator_does_not_wait_unbounded_for_router_readiness(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A closed socket bounds the final readiness wait without cancelling."""
+        simulator = _HarnessSimulator()
+        await simulator.close()
+        monkeypatch.setattr(
+            harness_module, "_STARTUP_READY_TIMEOUT", 0.01, raising=False
+        )
+
+        async def remain_pending() -> None:
+            await asyncio.Event().wait()
+
+        router_task = asyncio.create_task(remain_pending())
+        try:
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(
+                    SimulatorRouterHarness._wait_until_ready(simulator, router_task),
+                    timeout=0.1,
+                )
+            assert not router_task.done(), (
+                "the shielded timeout must leave task ownership intact"
+            )
+        finally:
+            router_task.cancel()
+            await asyncio.gather(router_task, return_exceptions=True)
 
     async def test_startup_failure_is_not_reported_as_a_second_task_error(
         self,

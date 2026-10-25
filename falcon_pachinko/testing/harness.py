@@ -19,6 +19,8 @@ from falcon_pachinko.router import WebSocketRouter
 
 from ._common import FrameKind, _decode_json
 
+_STARTUP_READY_TIMEOUT = 5
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
@@ -232,10 +234,9 @@ class SimulatorRouterHarness:
             if not session.websocket.closed:
                 await session.websocket.close()
             await self._await_router_task(session.router_task)
-        finally:
-            if not session.websocket.closed:
-                with suppress(Exception):
-                    await session.websocket.close()
+        except BaseException:
+            await self._rollback_startup(session)
+            raise
 
     @asynccontextmanager
     async def connect(
@@ -290,7 +291,7 @@ class SimulatorRouterHarness:
         try:
             done, _ = await asyncio.wait(
                 (router_task, readiness_task),
-                timeout=5,
+                timeout=_STARTUP_READY_TIMEOUT,
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if not done:
@@ -307,7 +308,9 @@ class SimulatorRouterHarness:
             with suppress(asyncio.CancelledError):
                 await readiness_task
         if simulator.closed or router_task.done():
-            await router_task
+            await asyncio.wait_for(
+                asyncio.shield(router_task), timeout=_STARTUP_READY_TIMEOUT
+            )
 
     @staticmethod
     async def _await_router_task(router_task: asyncio.Task[None]) -> None:
