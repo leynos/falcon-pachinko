@@ -272,15 +272,21 @@ warn when replacing customized inbound handlers, and preserve the configured
 outgoing serializers. Falcon's default handlers decode input when neither entry
 point has enabled raw-frame handling.
 
+In `receive_loop=True` sessions, native Falcon sockets passed to lifecycle
+hooks, message hooks, and handlers such as `on_unhandled` use a forwarding
+adapter that implements `WebSocketLike`. This means
+`isinstance(ws, falcon.asgi.WebSocket)` is false; attributes the adapter does
+not define are forwarded to Falcon's socket.
+
 The effective close code passed to `on_disconnect` follows this table:
 
-| Session ending                               | Cleanup code                                                    |
-| -------------------------------------------- | --------------------------------------------------------------- |
-| Client sends a close frame                   | The code Falcon reports, if available                           |
-| Handler or server sends `close(code)`        | Client sees `code`; cleanup uses Falcon's reported code          |
-| Transport loss without a close frame        | `1006`                                                          |
-| Task cancellation                           | `1006`; no close frame with this reserved code is sent           |
-| Unexpected setup, receive, or handler failure | `1011`; the router attempts a close                           |
+| Session ending                                | Code passed to `on_disconnect`                                  |
+| --------------------------------------------- | --------------------------------------------------------------- |
+| Client sends a close frame                    | Falcon's code, or `1006` if unavailable                         |
+| Handler or server calls `close(code)`         | `code` to client; Falcon's code or `1006` for cleanup           |
+| Transport loss without a close frame         | `1006`                                                          |
+| Task cancellation                            | `1006`; no close frame with this reserved code is sent           |
+| Unexpected setup, receive, or handler failure | `1011`; the router attempts a close                             |
 
 When Falcon has no reported code, cleanup uses `1006`. Setup failures before
 the cleanup promise point do not run `on_disconnect`; failures after approval

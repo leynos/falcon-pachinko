@@ -27,10 +27,12 @@ class SessionState:
     phase: SessionPhase = SessionPhase.CONNECTING
     close_code: int | None = None
     primary_error: BaseException | None = None
+    _has_established: bool = dc.field(default=False, init=False, repr=False)
 
     def establish(self) -> None:
         """Record that this connection has crossed the cleanup promise point."""
         if self.phase is SessionPhase.CONNECTING:
+            self._has_established = True
             self.phase = SessionPhase.ESTABLISHED
 
     def begin_disconnect(self) -> bool:
@@ -43,6 +45,11 @@ class SessionState:
     def mark_closed(self) -> None:
         """Complete the session after all resource cleanup has been attempted."""
         self.phase = SessionPhase.CLOSED
+
+    @property
+    def has_established(self) -> bool:
+        """Whether this session ever crossed its cleanup-promise point."""
+        return self._has_established
 
     @property
     def can_receive(self) -> bool:

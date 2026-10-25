@@ -171,16 +171,20 @@ async def run_session(
     except BaseException as exc:
         _log_session_failure(execution, "session", started, exc)
         raise
-    outcome = (
-        "rejected"
-        if execution.session.phase is SessionPhase.CONNECTING
-        else "completed"
-    )
-    _log_session_observation(
-        execution, _SessionObservation("session", outcome, started)
-    )
-
-    return True
+    else:
+        outcome = (
+            "rejected"
+            if execution.session.phase is SessionPhase.CONNECTING
+            else "completed"
+        )
+        _log_session_observation(
+            execution, _SessionObservation("session", outcome, started)
+        )
+        return True
+    finally:
+        # Rejections and pre-approval failures must not leave stale ownership.
+        if execution.session.phase is SessionPhase.CONNECTING:
+            execution.session.mark_closed()
 
 
 async def _run_setup_and_receive(

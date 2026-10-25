@@ -355,14 +355,20 @@ prefix and nested paths to that adapter; resource dispatch still needs only a
 small request surface:
 
 - `path`: the concrete request path used for route matching.
-- `path_template`: the Falcon mount template used to verify that the request
-  belongs to the mounted router prefix.
+- `path_template`: Falcon's selected route template, read first to verify that
+  the request belongs to the mounted router prefix.
+- `uri_template`: the fallback when `path_template` is absent or empty.
 
-The router models that surface with the private `_RequestLike` protocol in
-`falcon_pachinko/router.py`. Internal routing helpers should accept
-`_RequestLike` instead of broad `object` parameters. This keeps request-shaped
-test doubles type-checkable while documenting the attributes the router
-actually consumes.
+The router models `path` and `path_template` with the private `_RequestLike`
+protocol in `falcon_pachinko/router.py`; it probes `uri_template` structurally.
+Internal routing helpers should accept `_RequestLike` instead of broad
+`object` parameters. This keeps request-shaped test doubles type-checkable
+while documenting the attributes the router actually consumes.
+
+A valid terminal Falcon `{name:path}` converter is normalized to its mount
+prefix. Its field name may vary. Test doubles should expose `path` and
+`path_template`; use an empty `path_template` for root-mounted requests, and
+provide `uri_template` to exercise the fallback.
 
 Keep casts to `falcon.Request` at the edge where the router calls APIs whose
 public contract is Falcon-specific, such as hook notification and
