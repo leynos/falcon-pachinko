@@ -10,7 +10,6 @@ import yaml
 
 from tests._makefile import MAKEFILE, REPO_ROOT
 
-UV_PROJECT_COMMAND = re.compile(r"(?<![\w.-])(?:uv|\$\(UV\))[ \t]+(?:run|sync)\b")
 MAKE_VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 MAKE_VARIABLE_EXPANSION = re.compile(r"\$\((?!UV\))[A-Za-z_][A-Za-z0-9_]*\)")
 SHELL_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
@@ -25,8 +24,30 @@ SHELL_COMMAND_PREFIXES = frozenset({
     "!",
 })
 MAKE_ASSIGNMENT_OPERATORS = frozenset({"=", "?=", ":=", "+=", "!=", "::="})
-SUBCOMMAND_OFFSET = 1
-COMMAND_ARGUMENTS_OFFSET = 2
+# Keep global option arity aligned with `uv --help`; their values must not be
+# mistaken for the command whose arguments no longer belong to uv.
+UV_GLOBAL_OPTIONS_WITH_VALUES = frozenset({
+    "--allow-insecure-host",
+    "--cache-dir",
+    "--color",
+    "--config-file",
+    "--directory",
+    "--project",
+})
+UV_GLOBAL_FLAGS = frozenset({
+    "--managed-python",
+    "--no-cache",
+    "--no-config",
+    "--no-managed-python",
+    "--no-progress",
+    "--no-python-downloads",
+    "--offline",
+    "--quiet",
+    "--system-certs",
+    "--verbose",
+    "-n",
+})
+UV_REPEATED_OUTPUT_OPTIONS = re.compile(r"^-(?:q+|v+)$")
 # Keep option arity aligned with `uv run --help`: their values must not be
 # mistaken for the command whose arguments no longer belong to uv.
 UV_RUN_OPTIONS_WITH_VALUES = frozenset({
@@ -178,22 +199,53 @@ def _normalise_make_command(command: list[str], *, is_makefile: bool) -> list[st
     return tokens
 
 
-def _uv_invocation_index(tokens: list[str], *, is_makefile: bool) -> int | None:
-    """Return the token index of uv when it is the invoked executable."""
+def _uv_subcommand_index(tokens: list[str], *, is_makefile: bool) -> int | None:
+    """Return the run or sync index after uv and its global options."""
+    invocation = _uv_executable_index(tokens, is_makefile=is_makefile)
+    if invocation is None:
+        return None
+    return _uv_project_subcommand_index(tokens, invocation + 1)
+
+
+def _uv_executable_index(tokens: list[str], *, is_makefile: bool) -> int | None:
+    """Return the uv token after shell prefixes, if present."""
     invocation = 0
     while invocation < len(tokens) and _is_command_prefix(
         tokens[invocation], is_makefile=is_makefile
     ):
         invocation += 1
+    if invocation < len(tokens) and tokens[invocation] in {"uv", "$(UV)"}:
+        return invocation
+    return None
 
-    subcommand_index = invocation + SUBCOMMAND_OFFSET
-    if subcommand_index >= len(tokens):
-        return None
-    if tokens[invocation] not in {"uv", "$(UV)"}:
-        return None
-    if tokens[subcommand_index] not in {"run", "sync"}:
-        return None
-    return invocation
+
+def _uv_project_subcommand_index(tokens: list[str], index: int) -> int | None:
+    """Return the project subcommand after recognized uv global options."""
+    subcommand_index = index
+    while subcommand_index < len(tokens):
+        option = tokens[subcommand_index]
+        if not option.startswith("-"):
+            break
+        option_arity = _uv_global_option_arity(option)
+        if option_arity is None:
+            return None
+        subcommand_index += option_arity
+
+    if subcommand_index < len(tokens) and tokens[subcommand_index] in {"run", "sync"}:
+        return subcommand_index
+    return None
+
+
+def _uv_global_option_arity(option: str) -> int | None:
+    """Return how many tokens a recognized global option consumes."""
+    name, separator, _ = option.partition("=")
+    if name in UV_GLOBAL_OPTIONS_WITH_VALUES:
+        return 1 if separator else 2
+    if not separator and name in UV_GLOBAL_FLAGS:
+        return 1
+    if UV_REPEATED_OUTPUT_OPTIONS.fullmatch(option):
+        return 1
+    return None
 
 
 def _is_command_prefix(token: str, *, is_makefile: bool) -> bool:
@@ -214,12 +266,12 @@ def _is_unlocked_project_command(command: list[str], *, is_makefile: bool) -> bo
         Whether the project command's uv option prefix omits ``--locked``.
     """
     tokens = _normalise_make_command(command, is_makefile=is_makefile)
-    invocation = _uv_invocation_index(tokens, is_makefile=is_makefile)
-    if invocation is None:
+    subcommand_index = _uv_subcommand_index(tokens, is_makefile=is_makefile)
+    if subcommand_index is None:
         return False
 
-    subcommand = tokens[invocation + SUBCOMMAND_OFFSET]
-    arguments = tokens[invocation + COMMAND_ARGUMENTS_OFFSET :]
+    subcommand = tokens[subcommand_index]
+    arguments = tokens[subcommand_index + 1 :]
     match subcommand:
         case "sync":
             return "--locked" not in arguments
@@ -262,7 +314,6 @@ def _unlocked_project_commands(
     return [
         (line_number, " ".join(command))
         for line_number, line in _logical_lines(text)
-        if UV_PROJECT_COMMAND.search(line)
         for command in _shell_commands(line)
         if _is_unlocked_project_command(command, is_makefile=is_makefile)
     ]
@@ -326,6 +377,10 @@ def test_ci_run_steps_require_the_project_lockfile() -> None:
         ("uv run --python 3.14 --no-project install.py", []),
         ("uv sync --group dev --locked", []),
         ("uv sync --group dev", [(1, "uv sync --group dev")]),
+        ("uv --verbose run pytest", [(1, "uv --verbose run pytest")]),
+        ("uv -vv run --locked pytest", []),
+        ("uv --color never sync", [(1, "uv --color never sync")]),
+        ("uv --project . sync --locked", []),
         ("@uv run pytest", [(1, "@uv run pytest")]),
         ("$(UV) run pytest", [(1, "$(UV) run pytest")]),
         ("@$(UV) run --locked pytest", []),
