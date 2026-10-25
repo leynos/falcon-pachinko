@@ -152,6 +152,8 @@ def _is_unlocked_project_command(command: str) -> bool:
         return False
 
     tokens = shlex.split(command)
+    if tokens:
+        tokens[0] = tokens[0].removeprefix("@")
     invocation = next(
         (
             index
