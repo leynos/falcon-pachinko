@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import typing as typ
 
 import falcon
@@ -183,7 +184,7 @@ async def test_receive_loop_acceptance_failure_disconnects_once() -> None:
     assert resource.disconnects == [(socket, 1006)], (
         "accept failure must clean up registered state once"
     )
-    assert socket.closed, "accept failure must use the existing error close path"
+    assert not socket.closed, "an unaccepted socket cannot send a close frame"
 
 
 @pytest.mark.parametrize("receive_loop", [False, True])
@@ -255,7 +256,7 @@ async def test_receive_loop_after_connect_failure_disconnects_once() -> None:
     assert resource.disconnects == [(socket, 1006)], (
         "hook failure must clean up registered state once"
     )
-    assert socket.closed, "hook failure must use the existing error close path"
+    assert not socket.closed, "an unaccepted socket cannot send a close frame"
 
 
 @pytest.mark.asyncio
@@ -371,8 +372,8 @@ async def test_disabled_receive_loop_preserves_immediate_return() -> None:
 
 
 @pytest.mark.asyncio
-async def test_receive_loop_opt_out_keeps_setup_close_cleanup_app_owned() -> None:
-    """A setup-time close does not transfer cleanup to the router opt-out path."""
+async def test_receive_loop_opt_out_cleans_up_a_setup_closed_socket() -> None:
+    """A setup-time close ends router-owned setup and requires cleanup."""
     resource = ClosingAcceptedResource()
     socket = SessionSocket()
     router = session_router(resource, receive_loop=False)
@@ -381,8 +382,8 @@ async def test_receive_loop_opt_out_keeps_setup_close_cleanup_app_owned() -> Non
 
     assert socket.accepted, "accepted setup must run after the handshake"
     assert socket.close_codes == [4013], "setup must retain its close operation"
-    assert not resource.disconnects, (
-        "the application must retain cleanup ownership with receive_loop disabled"
+    assert resource.disconnects == [(socket, 1006)], (
+        "cleanup must use abnormal metadata when Falcon reports no close code"
     )
 
 

@@ -46,7 +46,7 @@ Feature: WebSocket session disconnect lifecycle
   Scenario: Stopping the server cancels a blocked handler safely
     Given a live Falcon ASGI WebSocket server
     When the server stops while a handler is blocked
-    Then disconnect cleanup is recorded once with code 1001
+    Then disconnect cleanup is recorded once with code 1006
     And the manager has no connection
 
   Scenario: A rejected handshake does not run disconnect cleanup

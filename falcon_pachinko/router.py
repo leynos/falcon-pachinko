@@ -34,7 +34,6 @@ from ._route_support import (
 from ._router_attachment import attach_router
 from ._router_resources import _ResourceResolver
 from ._session_driver import run_session
-from ._session_setup import ConnectionSetup
 from ._uri_template import _compile_prefix_template, compile_uri_template
 from .hooks import HookCollection, HookManager
 from .protocols import WebSocketLike
@@ -499,31 +498,9 @@ class WebSocketRouter:
         hook_manager: HookManager,
     ) -> bool:
         """Run connection setup, then own the accepted session until closure."""
-        if self._receive_loop:
-            return await run_session(resource, dispatch, hook_manager=hook_manager)
-
-        setup = ConnectionSetup(
+        return await run_session(
+            resource,
+            dispatch,
             hook_manager=hook_manager,
-            resource=resource,
-            req=dispatch.req,
-            ws=dispatch.ws,
-            route_params=dispatch.match.params,
-            is_unaccepted=WebSocketRouter._is_socket_unaccepted,
-            is_accepted=WebSocketRouter._is_socket_accepted,
+            receive_loop=self._receive_loop,
         )
-        await setup.prepare()
-        await setup.execute()
-        return await setup.finalize()
-
-    @staticmethod
-    def _is_socket_unaccepted(ws: WebSocketLike) -> bool:
-        """Return whether the handshake still needs router-owned acceptance."""
-        unaccepted = getattr(ws, "unaccepted", None)
-        if isinstance(unaccepted, bool):
-            return unaccepted
-        return not bool(getattr(ws, "accepted", False))
-
-    @staticmethod
-    def _is_socket_accepted(ws: WebSocketLike) -> bool:
-        """Only Falcon's explicit public state confirms resource acceptance."""
-        return getattr(ws, "unaccepted", None) is False

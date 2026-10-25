@@ -25,7 +25,7 @@ _ASSERTION_FAILURE = "lifecycle expectation failed"
 async def test_cancellation_during_receive_closes_and_runs_cleanup(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Cancellation closes with 1001 and is re-raised after cleanup."""
+    """Cancellation uses abnormal-close metadata without a close frame."""
     caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
     router = make_session_router()
     socket = SessionSocket(block_receive=True)
@@ -40,15 +40,15 @@ async def test_cancellation_during_receive_closes_and_runs_cleanup(
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert socket.close_codes == [1001], _ASSERTION_FAILURE
-    assert RecordingResource.instances[0].disconnect_codes == [1001], _ASSERTION_FAILURE
+    assert not socket.close_codes, _ASSERTION_FAILURE
+    assert RecordingResource.instances[0].disconnect_codes == [1006], _ASSERTION_FAILURE
     observations = [
         record
         for record in caplog.records
         if record.name == "falcon_pachinko._session_driver"
     ]
     assert getattr(observations[-1], "outcome", None) == "cancelled", _ASSERTION_FAILURE
-    assert getattr(observations[-1], "close_code", None) == 1001, _ASSERTION_FAILURE
+    assert getattr(observations[-1], "close_code", None) == 1006, _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio
@@ -87,7 +87,7 @@ async def test_cancellation_reports_cleanup_failure_to_loop_handler() -> None:
     )
     assert reported[0]["operation"] == "cleanup", _ASSERTION_FAILURE
     assert reported[0]["phase"] == "closed", _ASSERTION_FAILURE
-    assert reported[0]["close_code"] == 1001, _ASSERTION_FAILURE
+    assert reported[0]["close_code"] == 1006, _ASSERTION_FAILURE
     assert reported[0]["exception_type"] == "RuntimeError", _ASSERTION_FAILURE
     assert "CANARY" not in typ.cast("str", reported[0]["message"]), (
         "loop-handler context must omit exception values"
@@ -125,7 +125,7 @@ async def _exercise_repeated_cancellation(repetitions: int) -> None:
     resource.finish_disconnect.set()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert resource.disconnect_codes == [1001], _ASSERTION_FAILURE
+    assert resource.disconnect_codes == [1006], _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio

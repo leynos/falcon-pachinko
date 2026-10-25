@@ -280,8 +280,8 @@ async def test_after_connect_failure_after_approval_runs_cleanup() -> None:
         )
 
     assert raised.value is error, _ASSERTION_FAILURE
-    assert RecordingResource.instances[0].disconnect_codes == [1011], _ASSERTION_FAILURE
-    assert socket.close_codes == [1011], _ASSERTION_FAILURE
+    assert RecordingResource.instances[0].disconnect_codes == [1006], _ASSERTION_FAILURE
+    assert not socket.close_codes, _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio

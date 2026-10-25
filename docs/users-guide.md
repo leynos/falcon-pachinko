@@ -280,13 +280,13 @@ not define are forwarded to Falcon's socket.
 
 The effective close code passed to `on_disconnect` follows this table:
 
-| Session ending                                | Code passed to `on_disconnect`                                  |
-| --------------------------------------------- | --------------------------------------------------------------- |
-| Client sends a close frame                    | Falcon's code, or `1006` if unavailable                         |
-| Handler or server calls `close(code)`         | `code` to client; Falcon's code or `1006` for cleanup           |
-| Transport loss without a close frame         | `1006`                                                          |
-| Task cancellation                            | `1006`; no close frame with this reserved code is sent           |
-| Unexpected setup, receive, or handler failure | `1011`; the router attempts a close                             |
+| Session ending                                | Code passed to `on_disconnect`                         |
+| --------------------------------------------- | ------------------------------------------------------ |
+| Client sends a close frame                    | Falcon's code, or `1006` if unavailable                |
+| Handler or server calls `close(code)`         | `code` to client; Falcon's code or `1006` for cleanup  |
+| Transport loss without a close frame          | `1006`                                                 |
+| Task cancellation                             | `1006`; no close frame with this reserved code is sent |
+| Unexpected setup, receive, or handler failure | `1011`; the router attempts a close                    |
 
 When Falcon has no reported code, cleanup uses `1006`. Setup failures before
 the cleanup promise point do not run `on_disconnect`; failures after approval
@@ -298,9 +298,9 @@ Cancellation remains a bare `CancelledError`, and cleanup errors suppressed by
 cancellation are sent to the event loop's exception handler.
 
 `resource.has_router_session` is true while the router owns lifecycle work,
-including connection setup. Use it to leave accepted-session membership
-removal to `on_disconnect`; it does not itself establish the cleanup promise.
-That promise begins only after `on_connect` approves or the socket is accepted.
+including connection setup. Use it to leave accepted-session membership removal
+to `on_disconnect`; it does not itself establish the cleanup promise. That
+promise begins only after `on_connect` approves or the socket is accepted.
 
 - `self.state`
   - Dict-like proxy shared across all resources in the same connection chain.

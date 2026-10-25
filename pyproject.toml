@@ -433,6 +433,9 @@ reason = "Nose reports these TYPE_CHECKING import fragments as unnamed, so path-
 # Mutation testing. `make mutation` prints the local command; CI runs the
 # estate's reusable workflow, which injects the pinned mutmut through
 # `uv run --with` rather than declaring it as a project dependency.
+[[tool.duplication_gate.allow]]
+members = ["falcon_pachinko/_router_attachment.py", "falcon_pachinko/_session_setup.py"]
+reason = "Nose reports these TYPE_CHECKING imports as unnamed fragments; each module needs independent annotation dependencies, and extracting them would add import-only coupling. Keep this exact pair reviewed rather than sharing runtime behavior."
 [tool.mutmut]
 # Only the package is mutated. `tests/`, `tools/` and `examples/` would
 # produce mutants of the suite's own assertions and of lint tooling, and a

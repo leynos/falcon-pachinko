@@ -105,6 +105,14 @@ class SessionWebSocket:
         self._closing = True
         try:
             await close(**kwargs)
+            if self._session.close_code is None:
+                reported_code = getattr(
+                    self._websocket,
+                    "close_code",
+                    1000 if code is None else code,
+                )
+                if isinstance(reported_code, int):
+                    self._session.close_code = reported_code
         except (TypeError, ValueError):
             if not is_native:
                 self._closing = was_closing or bool(
