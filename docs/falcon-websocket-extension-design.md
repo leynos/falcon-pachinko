@@ -58,8 +58,8 @@ before the router returns or propagates the error. The live reference app opts
 into the router-owned path. It uses the shared session driver and public
 `LiveWebSocketServer` harness, rather than a private test adapter.
 
-Once `on_connect()` approves or the resource accepts, `before_disconnect`
-hooks run before `on_disconnect`. Normal peer closure uses Falcon's
+Once `on_connect()` approves or the resource accepts, `before_disconnect` hooks
+run before `on_disconnect`. Normal peer closure uses Falcon's
 `WebSocketDisconnected.code`; an unavailable code and cancellation cleanup use
 1006 as callback metadata. Cancellation propagates without sending a close
 frame with reserved code 1006. Unexpected receive or handler failures close

@@ -153,8 +153,9 @@ async def run_session(
     dispatch: SessionDispatch,
     *,
     hook_manager: HookManager,
+    receive_loop: bool = True,
 ) -> bool:
-    """Run setup, receive frames, and finish the accepted session."""
+    """Run setup and, when enabled, receive frames and finish the session."""
     execution = _SessionExecution(resource, dispatch, SessionState(), hook_manager)
     dispatch.session = execution.session
     dispatch.ws = track_session_socket(dispatch.ws, execution.session)
@@ -164,9 +165,15 @@ async def run_session(
         execution, _SessionObservation("session", "started", started)
     )
     try:
-        await _run_setup_and_receive(execution)
+        setup_completed = await _run_setup_and_receive(
+            execution, receive_loop=receive_loop
+        )
 
-        if execution.session.phase is SessionPhase.ESTABLISHED:
+        if _should_finish_established_session(
+            execution,
+            receive_loop=receive_loop,
+            setup_completed=setup_completed,
+        ):
             await _finish_established_session(execution)
     except BaseException as exc:
         _log_session_failure(execution, "session", started, exc)
@@ -183,16 +190,54 @@ async def run_session(
         return True
     finally:
         # Rejections and pre-approval failures must not leave stale ownership.
-        if execution.session.phase is SessionPhase.CONNECTING:
+        if _should_release_setup_session(execution, receive_loop=receive_loop):
             execution.session.mark_closed()
+
+
+def _should_finish_established_session(
+    execution: _SessionExecution,
+    *,
+    receive_loop: bool,
+    setup_completed: bool,
+) -> bool:
+    """Finish approved sessions when setup cannot hand off a live loop."""
+    session = execution.session
+    if session.phase is not SessionPhase.ESTABLISHED:
+        return False
+    if receive_loop or not setup_completed:
+        return True
+    return bool(getattr(execution.dispatch.ws, "closed", False))
+
+
+def _should_release_setup_session(
+    execution: _SessionExecution,
+    *,
+    receive_loop: bool,
+) -> bool:
+    """Release ownership for rejected or setup-only router calls."""
+    phase = execution.session.phase
+    if phase is SessionPhase.CONNECTING:
+        return True
+    if receive_loop:
+        return False
+    return phase is SessionPhase.ESTABLISHED
 
 
 async def _run_setup_and_receive(
     execution: _SessionExecution,
-) -> None:
-    """Run setup first, then receive only while the accepted session is live."""
-    if await _run_setup(execution) and execution.session.can_receive:
-        await _run_receive(execution)
+    *,
+    receive_loop: bool,
+) -> bool:
+    """Run setup, receiving only when configured, and report setup completion."""
+    setup_completed = await _run_setup(execution)
+    if not setup_completed:
+        return setup_completed
+    if not receive_loop:
+        return setup_completed
+    if not execution.session.can_receive:
+        return setup_completed
+    await _run_receive(execution)
+    return setup_completed
 
 
 async def _run_setup(execution: _SessionExecution) -> bool:

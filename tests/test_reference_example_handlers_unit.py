@@ -47,13 +47,13 @@ _PROJECT = "triage"
         pytest.param(
             "accept",
             asyncio.CancelledError("accepted setup cancelled"),
-            1001,
+            1006,
             id="accept-cancellation",
         ),
         pytest.param(
             "ready",
             asyncio.CancelledError("ready send cancelled"),
-            1001,
+            1006,
             id="ready-cancellation",
         ),
     ],
@@ -102,8 +102,8 @@ async def test_accepted_setup_failure_is_removed_and_audited_by_router(
 
 
 @pytest.mark.asyncio
-async def test_accepted_ready_failure_rolls_back_without_router_session() -> None:
-    """Remove membership when the default router cannot own disconnect cleanup."""
+async def test_accepted_ready_failure_is_removed_and_audited_by_router() -> None:
+    """An accepted setup failure reaches router-owned disconnect cleanup."""
     manager = WebSocketConnectionManager()
     resource, _repo, audit, _feed = _build_resource(manager)
     failure = RuntimeError("ready send failed")
@@ -127,9 +127,10 @@ async def test_accepted_ready_failure_rolls_back_without_router_session() -> Non
     assert raised.value is failure, "rollback must preserve the original failure"
     assert manager.websockets == {}, "failed setup must not retain manager membership"
     assert resource._conn_id is None, "rollback must clear the resource identity"
-    assert not any(record["event"] == "session.closed" for record in audit.records), (
-        "default mode must not run a router-owned disconnect audit"
-    )
+    closed = [record for record in audit.records if record["event"] == "session.closed"]
+    assert len(closed) == 1, "accepted setup failure must be audited exactly once"
+    metadata = typ.cast("dict[str, object]", closed[0]["metadata"])
+    assert metadata["close_code"] == 1011, "setup failure must use code 1011"
 
 
 class FailingJoinBackend(InProcessBackend):
@@ -339,23 +340,20 @@ async def _dispatch(
 
 @pytest.mark.asyncio
 async def test_on_connect_cleans_up_and_reraises_when_join_room_fails() -> None:
-    """A failed accepted room join removes and rejects the connection."""
+    """A pre-accept room-join failure rolls back on_connect membership."""
     conn_mgr = WebSocketConnectionManager(backend=FailingJoinBackend())
     resource, _repo, _audit, _feed = _build_resource(conn_mgr)
     ws = RecordingWebSocket()
 
-    accepted = await resource.on_connect(
-        _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
-    )
-    assert accepted, "valid resource state must proceed to the accepted lifecycle"
-    assert conn_mgr.websockets == {}, "on_connect must not register before acceptance"
-    assert not ws.messages, "on_connect must not send before acceptance"
-
     with pytest.raises(RuntimeError, match="cannot join"):
-        await resource.on_accepted(ws)
+        await resource.on_connect(
+            _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
+        )
 
     remaining = conn_mgr.websockets
     assert remaining == {}, f"the failed connection must be removed: {remaining}"
+    assert resource._conn_id is None, "pre-accept rollback must clear the identity"
+    assert ws.unaccepted, "setup failure must happen before websocket acceptance"
     assert not ws.messages, "no session.ready message is sent on failure"
 
 
@@ -400,31 +398,29 @@ async def test_on_disconnect_removes_connection_and_audits_closure() -> None:
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
-    assert resource._conn_id is None, "on_connect must defer IDs until acceptance"
-    assert conn_mgr.websockets == {}, "on_connect must defer registration"
-    assert not ws.messages, "on_connect must defer session.ready"
-
-    await resource.on_accepted(ws)
     conn_id = resource._conn_id
-    assert conn_id is not None, "acceptance must assign a connection ID"
+    assert conn_id is not None, "on_connect must assign a connection ID"
     assert conn_mgr.websockets == {conn_id: ws}, (
-        "acceptance must register the effective socket"
+        "on_connect must register the effective socket"
     )
+    assert not ws.unaccepted, "on_connect must accept before readiness"
     assert ws.messages == [
         {
             "type": "session.ready",
             "payload": {"workspace": _WORKSPACE, "project": _PROJECT},
         }
-    ], "acceptance must send the session-ready event"
+    ], "on_connect must send the session-ready event after acceptance"
     opened = [record for record in audit.records if record["event"] == "session.open"]
-    assert len(opened) == 1, "acceptance must record exactly one session.open event"
+    assert len(opened) == 1, "on_connect must record exactly one session.open event"
     opened_metadata = opened[0]["metadata"]
     assert isinstance(opened_metadata, dict), "open metadata must be a mapping"
     assert opened_metadata["connection"] == conn_id, "open must carry this connection"
 
     await resource.on_disconnect(ws, close_code=1001)
+    await resource.on_disconnect(ws, close_code=1001)
 
     assert conn_mgr.websockets == {}, "the connection must be removed on disconnect"
+    assert resource._conn_id is None, "disconnect must clear the resource identity"
     closed = [r for r in audit.records if r["event"] == "session.closed"]
     assert len(closed) == 1, f"exactly one session.closed record is expected: {closed}"
     closed_metadata = closed[0]["metadata"]

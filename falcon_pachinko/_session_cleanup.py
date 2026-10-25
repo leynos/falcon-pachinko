@@ -9,7 +9,6 @@ import typing as typ
 
 from ._session import (
     ABNORMAL_CLOSURE,
-    GOING_AWAY,
     INTERNAL_ERROR,
     MAX_CLOSE_CODE,
     SessionState,
@@ -135,12 +134,12 @@ async def _close_failed_session(
         context.session.close_code = close_code
         return close_code
 
-    close_code = (
-        GOING_AWAY
-        if isinstance(primary_error, asyncio.CancelledError)
-        else INTERNAL_ERROR
-    )
+    is_cancelled = isinstance(primary_error, asyncio.CancelledError)
+    is_accepted = getattr(context.dispatch.ws, "unaccepted", None) is False
+    close_code = ABNORMAL_CLOSURE if is_cancelled or not is_accepted else INTERNAL_ERROR
     context.session.close_code = close_code
+    if is_cancelled or not is_accepted:
+        return close_code
     try:
         with contextlib.suppress(Exception):
             await context.dispatch.ws.close(close_code)

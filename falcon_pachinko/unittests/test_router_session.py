@@ -649,7 +649,7 @@ async def test_descendant_template_and_falcon_keyword_params_are_accepted() -> N
 @pytest.mark.parametrize(
     ("uri_template", "path_template"),
     [
-        ("/ws/{rest:path}", "/ws"),
+        ("/elsewhere/{rest:path}", "/elsewhere"),
         (None, None),
     ],
     ids=("foreign_path_converter", "missing_path_template"),
@@ -658,7 +658,7 @@ async def test_unrecognized_mount_templates_are_rejected(
     uri_template: str | None,
     path_template: str | None,
 ) -> None:
-    """Reject foreign catch-alls and absent Falcon templates as not found."""
+    """Reject unrelated mount templates and absent Falcon templates."""
     router = WebSocketRouter()
     router.add_route("/rooms/{room}", PathResource)
     router.mount("/ws")
