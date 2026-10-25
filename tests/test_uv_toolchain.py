@@ -162,10 +162,23 @@ def test_make_build_installs_the_locked_dependency_set() -> None:
 
 def test_makefile_project_commands_require_the_lockfile() -> None:
     """Project commands in Make must reject a stale dependency lock."""
-    violations = _unlocked_project_commands(MAKEFILE.read_text(encoding="utf-8"))
+    violations = _unlocked_project_commands(
+        MAKEFILE.read_text(encoding="utf-8"), is_makefile=True
+    )
 
     assert not violations, "Makefile project commands must use --locked:\n" + "\n".join(
         f"Makefile:{line_number}: {command}" for line_number, command in violations
+    )
+
+
+def test_makefile_uv_command_variables_require_the_lockfile() -> None:
+    """Make variable recipes must not hide an unlocked uv invocation."""
+    source = "MUTMUT = UV_PYTHON=3.13 $(UV_ENV) $(UV) run --with mutmut mutmut"
+    violations = _unlocked_project_commands(source, is_makefile=True)
+
+    assert violations == [(1, source)], (
+        "Make variable command definitions must enforce the project lock; "
+        f"found {violations!r}"
     )
 
 
@@ -210,6 +223,7 @@ def test_ci_run_steps_require_the_project_lockfile() -> None:
         ("@$(UV) run --locked pytest", []),
         ("uv tool run ruff && uvx ruff && uv build", []),
         ("echo ready # uv sync", []),
+        ('echo "uv sync"', []),
     ],
 )
 def test_ci_command_contract_checks_each_shell_invocation(
