@@ -217,6 +217,10 @@ Falcon may consume the exception before the harness can report it.
 Unacknowledged server failures fail context teardown, while `pop_errors()`
 marks failures that the scenario intentionally asserted.
 
+Shutdown and cancellation scenarios also use
+`tests/behaviour/_live_server.py`, a focused Uvicorn harness that can stop while
+an accepted socket is active.
+
 ## WebSocket responder and live-harness boundaries
 
 The Falcon composition flow is `router.mount(prefix)` followed by
@@ -516,8 +520,9 @@ without sending a close frame with that reserved code. Cancellation cleanup may
 retry a `before_disconnect` hook interrupted before the callback; an
 interruption inside the callback does not trigger a second attempt. A normal
 peer-cleanup lifecycle error propagates. During accepted-session failure
-cleanup, errors are logged by exception type and do not replace the session
-failure.
+cleanup, ordinary failures are grouped with the session failure first. Cleanup
+failures hidden by cancellation are reported to the event loop's exception
+handler, while cancellation remains a bare `CancelledError`.
 
 Test sockets must terminate receive loops. `DummyWS` and `RecordingWS` return
 their scripted frames in order and then signal peer disconnection. The

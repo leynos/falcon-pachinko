@@ -279,6 +279,9 @@ registration or mounting, before the route can handle a connection.
 - Calling `router.mount(prefix)` without registering the router on the Falcon
   app leaves requests unrouted. Follow it with `router.attach(app)` to register
   the exact and descendant paths.
+- When registering Falcon routes manually, use a terminal `{name:path}` route
+  for descendants. The converter name may be any valid field name; prefer
+  `router.attach(app, prefix)` when manual registration is not required.
 - Custom backends must implement *all* methods from `ConnectionBackend`,
   raising `ValueError` on duplicate IDs and ignoring stale room entries in
   `snapshot` or documenting alternative semantics.

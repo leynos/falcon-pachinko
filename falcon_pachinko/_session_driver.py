@@ -215,7 +215,9 @@ async def _run_setup(execution: _SessionExecution) -> bool:
         execution.context = await setup.prepare()
         await setup.execute()
         await setup.finalize()
-        if session.phase is SessionPhase.ESTABLISHED:
+        if session.phase is SessionPhase.ESTABLISHED and _is_websocket_accepted(
+            dispatch.ws
+        ):
             _log_session_observation(
                 execution,
                 _SessionObservation("acceptance", "completed", time.monotonic()),

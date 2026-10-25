@@ -300,18 +300,44 @@ class TaskStreamResource(WebSocketResource):
             interruption = await self._rollback_connection(session.conn_id)
         # Backends can fail removal for any ordinary reason; retain that error.
         except Exception as removal_error:  # ruff: ignore[blind-except] - retain both
-            if isinstance(error, Exception):
-                raise ExceptionGroup("rollback", [error, removal_error]) from None
-            error.add_note(f"Connection rollback also failed: {removal_error!r}")
+            self._preserve_setup_failure(error, removal_error)
             return
         if interruption is not None and not isinstance(error, asyncio.CancelledError):
             raise interruption from error
+
+    @staticmethod
+    def _preserve_setup_failure(
+        error: BaseException,
+        removal_error: Exception,
+    ) -> None:
+        """Keep setup primary while exposing a failed membership rollback."""
+        if isinstance(error, Exception):
+            raise ExceptionGroup("rollback", [error, removal_error]) from None
+        error.add_note(f"Connection rollback also failed: {removal_error!r}")
 
     async def _rollback_connection(self, conn_id: str) -> asyncio.CancelledError | None:
         """Join pre-accept removal even when the session is cancelled again."""
         # No framework disconnect is promised yet; rollback must finish before
         # the owning task exits, rather than merely outliving it under a shield.
         removal = asyncio.create_task(self._conn_mgr.remove_connection(conn_id))
+        interruption = await self._join_connection_removal(removal)
+        self._conn_id = None
+        return interruption
+
+    async def _join_connection_removal(
+        self,
+        removal: asyncio.Task[None],
+    ) -> asyncio.CancelledError | None:
+        """Join rollback despite cancellation, preserving its first signal."""
+        interruption = await self._wait_for_connection_removal(removal)
+        self._check_connection_removal_result(removal, interruption)
+        return interruption
+
+    async def _wait_for_connection_removal(
+        self,
+        removal: asyncio.Task[None],
+    ) -> asyncio.CancelledError | None:
+        """Shield removal from repeated cancellation of the setup task."""
         interruption: asyncio.CancelledError | None = None
         while not removal.done():
             try:
@@ -319,18 +345,30 @@ class TaskStreamResource(WebSocketResource):
             except asyncio.CancelledError as exc:
                 if interruption is None:
                     interruption = exc
-            except Exception as removal_error:
-                if interruption is not None:
-                    raise interruption from removal_error
-                raise
+            except Exception as removal_error:  # ruff: ignore[blind-except] - preserve cancellation precedence
+                self._raise_removal_failure(interruption, removal_error)
+        return interruption
+
+    def _check_connection_removal_result(
+        self,
+        removal: asyncio.Task[None],
+        interruption: asyncio.CancelledError | None,
+    ) -> None:
+        """Surface removal failure without replacing an earlier cancellation."""
         try:
             removal.result()
-        except Exception as removal_error:
-            if interruption is not None:
-                raise interruption from removal_error
-            raise
-        self._conn_id = None
-        return interruption
+        except Exception as removal_error:  # ruff: ignore[blind-except] - preserve cancellation precedence
+            self._raise_removal_failure(interruption, removal_error)
+
+    @staticmethod
+    def _raise_removal_failure(
+        interruption: asyncio.CancelledError | None,
+        removal_error: Exception,
+    ) -> typ.NoReturn:
+        """Preserve cancellation as primary when rollback also fails."""
+        if interruption is not None:
+            raise interruption from removal_error
+        raise removal_error
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Remove the websocket from the connection manager on disconnect."""
