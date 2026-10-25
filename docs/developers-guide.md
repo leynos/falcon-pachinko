@@ -136,9 +136,9 @@ current. See "Dependency management with uv" below for how the lockfile is
 maintained.
 
 The `falcon-minimum` job in `.github/workflows/ci.yml` checks the lower bound
-on every push and pull request. After `make build` installs the locked
-environment, the job overrides Falcon with `FALCON_MINIMUM_VERSION`, verifies
-the installed version, and runs the full suite with
+on every pull request and every push to `main`. After `make build` installs the
+locked environment, the job overrides Falcon with `FALCON_MINIMUM_VERSION`,
+verifies the installed version, and runs the full suite with
 `uv run --no-sync pytest -v`. The `--no-sync` flag keeps uv from restoring the
 locked release; `make test` would run its `build` prerequisite and restore that
 release.
