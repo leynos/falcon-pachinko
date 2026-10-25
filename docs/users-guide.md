@@ -48,6 +48,8 @@ if typ.TYPE_CHECKING:
 
 
 class ChatPayload(ms.Struct):
+    """Typed message body for a chat message."""
+
     text: str
 
 
@@ -63,17 +65,29 @@ class ChatResource(WebSocketResource):
 
 @dc.dataclass(frozen=True, slots=True)
 class _RouterRequest:
+    """Present the mount template while delegating to Falcon's request."""
+
     request: falcon.asgi.Request
     path: str
     path_template: str
     uri_template: str
 
     def __getattr__(self, name: str) -> object:
+        """Delegate access to the original Falcon request."""
         return getattr(self.request, name)
 
 
 class RouterAdapter:
+    """Route Falcon WebSocket connections to a mounted router.
+
+    Parameters
+    ----------
+    router : WebSocketRouter
+        Router that matches paths beneath its mount point.
+    """
+
     def __init__(self, router: WebSocketRouter) -> None:
+        """Retain the router for incoming connections."""
         self._router = router
 
     async def on_websocket(
@@ -82,6 +96,17 @@ class RouterAdapter:
         ws: falcon.asgi.WebSocket,
         rest: str,
     ) -> None:
+        """Forward one handshake using the router's mount template.
+
+        Parameters
+        ----------
+        req : falcon.asgi.Request
+            Falcon request for the incoming WebSocket handshake.
+        ws : falcon.asgi.WebSocket
+            Falcon WebSocket for the incoming connection.
+        rest : str
+            Path captured below the ``/ws`` route prefix.
+        """
         await self._router.on_websocket(
             _RouterRequest(
                 request=req,
