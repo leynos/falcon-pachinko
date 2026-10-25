@@ -136,25 +136,33 @@ class LifecycleGuard:
         # pass the phase check while the first handshake is still in flight.
         self._accepting = True
         try:
-            kwargs = _accept_arguments(
-                options.subprotocol if options is not None else None,
-                options.headers if options is not None else None,
-            )
-            accept = typ.cast(
-                "cabc.Callable[..., cabc.Awaitable[None]]", self._websocket.accept
-            )
-            try:
-                await accept(**kwargs)
-            except (Exception, asyncio.CancelledError):
-                if getattr(self._websocket, "unaccepted", True) is False:
-                    self._mark_accepted()
-                raise
-            if getattr(self._websocket, "unaccepted", None) is True:
-                msg = "WebSocket transport returned from accept() without accepting"
-                raise LifecycleError(msg)
-            self._mark_accepted()
+            await self._accept_transport(options)
         finally:
             self._accepting = False
+
+    async def _accept_transport(self, options: AcceptOptions | None) -> None:
+        """Complete transport acceptance and preserve partial transitions."""
+        kwargs = _accept_arguments(
+            options.subprotocol if options is not None else None,
+            options.headers if options is not None else None,
+        )
+        accept = typ.cast(
+            "cabc.Callable[..., cabc.Awaitable[None]]", self._websocket.accept
+        )
+        try:
+            await accept(**kwargs)
+        except (Exception, asyncio.CancelledError):
+            self._record_partial_acceptance()
+            raise
+        if getattr(self._websocket, "unaccepted", None) is True:
+            msg = "WebSocket transport returned from accept() without accepting"
+            raise LifecycleError(msg)
+        self._mark_accepted()
+
+    def _record_partial_acceptance(self) -> None:
+        """Record a transport that accepted before failing or cancellation."""
+        if getattr(self._websocket, "unaccepted", True) is False:
+            self._mark_accepted()
 
     async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Reject before acceptance or close an accepted connection once."""
@@ -407,26 +415,32 @@ class WebSocketSession:
         code : int
             Close code sent when the transport remains open.
 
-        Raises
-        ------
-        asyncio.CancelledError
-            Cancellation received while waiting for the session to finish.
-
         Notes
         -----
         If ``run()`` is active in another task, this method closes the
         transport and waits for that task to finish without a timeout.
         Closing the socket does not interrupt unrelated work in
         ``on_session_start()``. To bound shutdown, cancel and await the run
-        task before or concurrently with calling ``aclose()``.
+        task before or concurrently with calling ``aclose()``. Cancellation
+        while waiting for the run task propagates to the caller.
         """
         close_error = await _capture_error(self._websocket.close(code))
-        run_error: BaseException | None = None
+        run_error = await self._wait_for_run_completion()
+        await self._finish_aclose(run_error, close_error)
 
-        run_completion = self._run_completion
-        if run_completion is not None and self._run_task is not asyncio.current_task():
-            run_error = await asyncio.shield(run_completion)
+    async def _wait_for_run_completion(self) -> BaseException | None:
+        """Wait for another task's active run without cancelling that run."""
+        completion = self._run_completion
+        if completion is None or self._run_task is asyncio.current_task():
+            return None
+        return await asyncio.shield(completion)
 
+    async def _finish_aclose(
+        self,
+        run_error: BaseException | None,
+        close_error: BaseException | None,
+    ) -> None:
+        """Finalize after close and preserve the session error precedence."""
         try:
             await self._finalize(run_error, close_error)
         except (Exception, asyncio.CancelledError):

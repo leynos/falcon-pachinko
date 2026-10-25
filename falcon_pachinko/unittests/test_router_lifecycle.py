@@ -115,25 +115,32 @@ async def test_deprecated_resource_accept_is_not_repeated() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pre_accept_send_names_session_start_as_supported_phase() -> None:
-    """Pre-accept sends fail with a migration hint and close the request."""
+@pytest.mark.parametrize("operation", ["send_media", "receive_media", "receive_text"])
+async def test_pre_accept_io_names_session_start_as_supported_phase(
+    operation: str,
+) -> None:
+    """Pre-accept data operations fail with migration guidance and close."""
 
-    class SendingResource(WebSocketResource):
+    class PrematureIoResource(WebSocketResource):
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
             del req, params
-            await typ.cast("RecordingWS", ws).send_media("too early")
+            socket = typ.cast("RecordingWS", ws)
+            if operation == "send_media":
+                await socket.send_media("too early")
+            else:
+                await getattr(socket, operation)()
             return True
 
     router = WebSocketRouter()
-    router.add_route("/too-early", SendingResource)
+    router.add_route("/too-early", PrematureIoResource)
     router.mount("/")
     ws = RecordingWS()
 
     with pytest.raises(LifecycleError, match="on_session_start"):
         await router.negotiate(make_req("/too-early"), ws)
 
-    assert not ws.accept_calls, "a failed pre-accept send must not accept"
-    assert ws.closed == [1000], "a pre-accept failure must close once"
+    assert not ws.accept_calls, "a failed pre-accept operation must not accept"
+    assert ws.closed == [1000], "a pre-accept operation failure must close once"
 
 
 @pytest.mark.asyncio
@@ -319,30 +326,6 @@ async def test_guard_rejects_reaccept_and_close_is_idempotent() -> None:
     assert len(ws.accept_calls) == 1, "re-acceptance must never reach the transport"
     assert ws.closed == [4001], "close is idempotent and retains its first code"
     assert session.ws.close_code == 4001, "the guard must retain the first close code"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["receive_media", "receive_text"])
-async def test_pre_accept_receive_requires_session_start(operation: str) -> None:
-    """Receiving frames before the upgrade fails with migration guidance."""
-
-    class ReceivingResource(WebSocketResource):
-        async def on_connect(self, req: object, ws: object, **params: object) -> bool:
-            del req, params
-            receive = getattr(typ.cast("typ.Any", ws), operation)
-            await receive()
-            return True
-
-    router = WebSocketRouter()
-    router.add_route("/too-early", ReceivingResource)
-    router.mount("/")
-    ws = RecordingWS()
-
-    with pytest.raises(LifecycleError, match="on_session_start"):
-        await router.negotiate(make_req("/too-early"), ws)
-
-    assert not ws.accept_calls, "pre-accept receive must not accept the socket"
-    assert ws.closed == [1000], "pre-accept receive failure must close the request"
 
 
 @pytest.mark.asyncio

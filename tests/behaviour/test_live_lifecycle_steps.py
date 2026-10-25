@@ -15,6 +15,24 @@ from tests.behaviour._session_context import LiveScenario, connect
 _ASSERTION_FAILURE = "live lifecycle expectation failed"
 
 
+def _open_and_close_session(
+    context: LiveScenario,
+    path: str = "/ws/session",
+    headers: dict[str, str] | None = None,
+) -> LiveScenario:
+    """Complete a successful live connection and wait for disconnect cleanup."""
+
+    async def exercise() -> None:
+        await connect(context, path, headers=headers)
+        await asyncio.wait_for(context.recorder.connection_ready.wait(), timeout=5)
+        assert context.session is not None, _ASSERTION_FAILURE
+        await asyncio.wait_for(context.session.close(1000), timeout=5)
+        await context.recorder.wait_for_disconnect(context.recorder.connection_ids[-1])
+
+    context.event_loop.run_until_complete(exercise())
+    return context
+
+
 @scenario(
     "live_lifecycle.feature",
     "Missing request metadata rejects before acceptance",
@@ -98,20 +116,11 @@ def when_missing_header(context: LiveScenario) -> LiveScenario:
 @when("the client provides the required request metadata", target_fixture="context")
 def when_request_metadata_approves(context: LiveScenario) -> LiveScenario:
     """Accept only when the real request carries its required token header."""
-
-    async def exercise() -> None:
-        await connect(
-            context,
-            "/ws/reject",
-            headers={"x-session-token": "live-token"},
-        )
-        await asyncio.wait_for(context.recorder.connection_ready.wait(), timeout=5)
-        assert context.session is not None, _ASSERTION_FAILURE
-        await asyncio.wait_for(context.session.close(1000), timeout=5)
-        await context.recorder.wait_for_disconnect(context.recorder.connection_ids[-1])
-
-    context.event_loop.run_until_complete(exercise())
-    return context
+    return _open_and_close_session(
+        context,
+        "/ws/reject",
+        headers={"x-session-token": "live-token"},
+    )
 
 
 @then("the upgrade is rejected without an accepted session")
@@ -130,31 +139,13 @@ def then_rejected_before_accept(context: LiveScenario) -> None:
 @when("the client opens and closes an accepted session", target_fixture="context")
 def when_successful_session(context: LiveScenario) -> LiveScenario:
     """Open a live accepted connection and finish its normal lifecycle."""
-
-    async def exercise() -> None:
-        await connect(context)
-        await asyncio.wait_for(context.recorder.connection_ready.wait(), timeout=5)
-        assert context.session is not None, _ASSERTION_FAILURE
-        await asyncio.wait_for(context.session.close(1000), timeout=5)
-        await context.recorder.wait_for_disconnect(context.recorder.connection_ids[-1])
-
-    context.event_loop.run_until_complete(exercise())
-    return context
+    return _open_and_close_session(context)
 
 
 @when("the client opens a deprecated-accept session", target_fixture="context")
 def when_legacy_accept(context: LiveScenario) -> LiveScenario:
     """Exercise a resource that still calls deprecated ws.accept()."""
-
-    async def exercise() -> None:
-        await connect(context, "/ws/deprecated-accept")
-        await asyncio.wait_for(context.recorder.connection_ready.wait(), timeout=5)
-        assert context.session is not None, _ASSERTION_FAILURE
-        await asyncio.wait_for(context.session.close(1000), timeout=5)
-        await context.recorder.wait_for_disconnect(context.recorder.connection_ids[-1])
-
-    context.event_loop.run_until_complete(exercise())
-    return context
+    return _open_and_close_session(context, "/ws/deprecated-accept")
 
 
 @then("the live transport records one acceptance")

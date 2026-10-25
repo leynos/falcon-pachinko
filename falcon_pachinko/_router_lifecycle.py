@@ -136,22 +136,36 @@ async def _prepare_websocket(
     session: SessionState,
 ) -> LifecycleGuard:
     """Adapt and guard the socket before constructing route resources."""
-    candidate: object = ws
-    if router._simulator_factory is not None:
-        candidate = router._simulator_factory(req, ws)
-        if inspect.isawaitable(candidate):
-            candidate = await candidate
-
-        for attr in ("accept", "close", "send_media", "receive_media"):
-            if not _is_valid_websocket_method(candidate, attr):
-                msg = (
-                    "simulator_factory must return a WebSocketLike object; "
-                    f"missing attribute {attr!r}"
-                )
-                raise TypeError(msg)
-
+    candidate = await _simulator_candidate(router, req, ws)
     adapted = track_session_socket(typ.cast("WebSocketLike", candidate), session)
     return LifecycleGuard(adapted, session)
+
+
+async def _simulator_candidate(
+    router: _RouterServices,
+    req: falcon.Request,
+    ws: WebSocketLike,
+) -> object:
+    """Return the configured transport and await asynchronous factories."""
+    factory = router._simulator_factory
+    if factory is None:
+        return ws
+    candidate = factory(req, ws)
+    if inspect.isawaitable(candidate):
+        candidate = await candidate
+    _validate_simulator_candidate(candidate)
+    return candidate
+
+
+def _validate_simulator_candidate(candidate: object) -> None:
+    """Require the async methods used by the guarded socket contract."""
+    for attr in ("accept", "close", "send_media", "receive_media"):
+        if not _is_valid_websocket_method(candidate, attr):
+            msg = (
+                "simulator_factory must return a WebSocketLike object; "
+                f"missing attribute {attr!r}"
+            )
+            raise TypeError(msg)
 
 
 def _is_valid_websocket_method(obj: object, attr_name: str) -> bool:
@@ -261,26 +275,44 @@ async def _complete_negotiation(
 ) -> WebSocketSession | None:
     """Apply the decision after hooks, then accept or reject once."""
     try:
-        accepted, options = decision
-        hook_context.result = accepted
-        await lifecycle.hook_manager.notify_after_connect(hook_context)
-        if not accepted or lifecycle.websocket.phase is ConnectionPhase.CLOSED:
-            if lifecycle.session.phase is not SessionPhase.CONNECTING:
-                await _new_session(lifecycle).aclose()
-            else:
-                await lifecycle.websocket.close()
-            return None
-        if lifecycle.websocket.phase is ConnectionPhase.PRE_ACCEPT:
-            await lifecycle.websocket._accept(options)
-        return _new_session(lifecycle)
-    except asyncio.CancelledError as error:
+        return await _apply_accept_decision(decision, hook_context, lifecycle)
+    except (Exception, asyncio.CancelledError) as error:
+        _record_negotiation_error(error, hook_context)
         await _cleanup_negotiation_failure(error, lifecycle)
         raise
-    except Exception as error:
-        hook_context.error = error
-        hook_context.result = False
-        await _cleanup_negotiation_failure(error, lifecycle)
-        raise
+
+
+async def _apply_accept_decision(
+    decision: tuple[bool, AcceptOptions | None],
+    hook_context: HookContext,
+    lifecycle: _RouteLifecycle,
+) -> WebSocketSession | None:
+    """Run completion hooks, then accept or reject the negotiated session."""
+    accepted, options = decision
+    hook_context.result = accepted
+    await lifecycle.hook_manager.notify_after_connect(hook_context)
+    if not accepted or lifecycle.websocket.phase is ConnectionPhase.CLOSED:
+        await _reject_connection(lifecycle)
+        return None
+    if lifecycle.websocket.phase is ConnectionPhase.PRE_ACCEPT:
+        await lifecycle.websocket._accept(options)
+    return _new_session(lifecycle)
+
+
+async def _reject_connection(lifecycle: _RouteLifecycle) -> None:
+    """Finalize legacy accepted sessions or reject before acceptance."""
+    if lifecycle.session.phase is not SessionPhase.CONNECTING:
+        await _new_session(lifecycle).aclose()
+    else:
+        await lifecycle.websocket.close()
+
+
+def _record_negotiation_error(error: BaseException, hook_context: HookContext) -> None:
+    """Expose ordinary setup errors to cleanup hooks without replacing them."""
+    if isinstance(error, asyncio.CancelledError):
+        return
+    hook_context.error = error
+    hook_context.result = False
 
 
 async def _cleanup_negotiation_failure(
@@ -290,17 +322,34 @@ async def _cleanup_negotiation_failure(
 ) -> None:
     """Close failures before acceptance and finalize legacy accepted errors."""
     if lifecycle.session.phase is not SessionPhase.CONNECTING:
-        try:
-            await _new_session(lifecycle)._finalize(error, finalization_error)
-        except BaseException:
-            if error is None:
-                raise
-    elif lifecycle.websocket.phase is ConnectionPhase.PRE_ACCEPT:
-        try:
-            await lifecycle.websocket.close()
-        except BaseException:
-            if error is None:
-                raise
+        await _finalize_accepted_failure(error, finalization_error, lifecycle)
+        return
+    if lifecycle.websocket.phase is ConnectionPhase.PRE_ACCEPT:
+        await _close_pre_accept_failure(error, lifecycle)
+
+
+async def _finalize_accepted_failure(
+    error: BaseException | None,
+    finalization_error: BaseException | None,
+    lifecycle: _RouteLifecycle,
+) -> None:
+    """Run accepted-session cleanup and preserve its original setup failure."""
+    try:
+        await _new_session(lifecycle)._finalize(error, finalization_error)
+    except BaseException:
+        if error is None:
+            raise
+
+
+async def _close_pre_accept_failure(
+    error: BaseException | None, lifecycle: _RouteLifecycle
+) -> None:
+    """Close a rejected handshake unless close itself is the primary error."""
+    try:
+        await lifecycle.websocket.close()
+    except BaseException:
+        if error is None:
+            raise
 
 
 def _new_session(lifecycle: _RouteLifecycle) -> WebSocketSession:
