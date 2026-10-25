@@ -54,7 +54,7 @@ class ChatPayload(ms.Struct):
 
 
 class ChatResource(WebSocketResource):
-    async def on_connect(self, req, ws, room: str) -> bool:
+    async def on_connect(self, req, ws, room: str = "lobby") -> bool:
         self.state["room"] = room
         return True  # continue to message handling
 
@@ -94,7 +94,7 @@ class RouterAdapter:
         self,
         req: falcon.asgi.Request,
         ws: falcon.asgi.WebSocket,
-        rest: str,
+        rest: str = "",
     ) -> None:
         """Forward one handshake using the router's mount template.
 
@@ -122,14 +122,17 @@ app = falcon.asgi.App()
 configure_raw_frame_media(app)
 router = WebSocketRouter(receive_loop=True)
 router.add_route("/chat/{room}", ChatResource)
+router.add_route("/", ChatResource)
 router.mount("/ws")
+app.add_route("/ws", RouterAdapter(router))
 app.add_route("/ws/{rest:path}", RouterAdapter(router))
 ```
 
-- Falcon matches `/ws/{rest:path}` and forwards the connection to
-  `RouterAdapter`. The adapter presents the `/ws` mount template to the router
-  and delegates other request attributes and methods to Falcon's request. The
-  router then matches `/ws/chat/{room}` against its mounted routes.
+- Falcon sends a connection to `/ws` to the exact mount route and sends paths
+  beneath `/ws` to `/ws/{rest:path}`. Both forward to `RouterAdapter`, which
+  presents the `/ws` mount template to the router and delegates other request
+  attributes and methods to Falcon's request. The router then matches
+  `/ws/chat/{room}` against its mounted routes.
 - `configure_raw_frame_media(app)` preserves inbound TEXT and BINARY frames
   for schema dispatch when the router is mounted manually.
 - Each connection receives a **fresh resource instance** and a **shared state

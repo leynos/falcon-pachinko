@@ -68,9 +68,11 @@ def test_quickstart_constructs_falcon_asgi_app(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/ws/chat/lobby", "/ws"])
 async def test_quickstart_echoes_a_typed_websocket_message(
     quickstart_module: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
+    path: str,
 ) -> None:
     """A live connection reaches the mounted room route and echoes its text."""
     observed_headers: list[str | None] = []
@@ -80,7 +82,7 @@ async def test_quickstart_echoes_a_typed_websocket_message(
         resource: object,
         req: falcon.asgi.Request,
         ws: falcon.asgi.WebSocket,
-        room: str,
+        room: str = "lobby",
     ) -> bool:
         """Read a handshake header before the documented connection hook."""
         observed_headers.append(req.get_header("X-Quickstart-Test"))
@@ -92,7 +94,7 @@ async def test_quickstart_echoes_a_typed_websocket_message(
     async with LiveWebSocketServer(quickstart_module.app) as server:
         client = WebSocketTestClient(server.base_url, allow_insecure=True)
         async with client.connect(
-            "/ws/chat/lobby", headers={"X-Quickstart-Test": "preserved"}
+            path, headers={"X-Quickstart-Test": "preserved"}
         ) as session:
             await session.send_json({"type": "chat.message", "payload": {"text": "hi"}})
             async with asyncio.timeout(5):
