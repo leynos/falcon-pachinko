@@ -105,20 +105,22 @@ class SessionWebSocket:
         self._closing = True
         try:
             await close(**kwargs)
-            if self._session.close_code is None:
-                reported_code = getattr(
-                    self._websocket,
-                    "close_code",
-                    1000 if code is None else code,
-                )
-                if isinstance(reported_code, int):
-                    self._session.close_code = reported_code
+            self._record_close_code(code)
         except (TypeError, ValueError):
             if not is_native:
                 self._closing = was_closing or bool(
                     getattr(self._websocket, "closed", False)
                 )
             raise
+
+    def _record_close_code(self, requested_code: int | None) -> None:
+        """Retain the transport's effective close code after a successful send."""
+        if self._session.close_code is not None:
+            return
+        fallback = 1000 if requested_code is None else requested_code
+        reported_code = getattr(self._websocket, "close_code", fallback)
+        if isinstance(reported_code, int):
+            self._session.close_code = reported_code
 
     async def receive_payload(self) -> object:
         """Preserve native frame types and support injected media transports."""
