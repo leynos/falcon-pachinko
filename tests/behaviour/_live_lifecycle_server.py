@@ -342,6 +342,21 @@ def create_live_application() -> LiveApplication:
     router = WebSocketRouter(
         simulator_factory=lambda _req, ws: AcceptanceCountingWebSocket(ws, recorder)
     )
+    _add_live_routes(router, manager, recorder)
+    _add_global_hooks(router, recorder)
+    prefix = "/ws"
+    router.mount(prefix)
+    app.add_route(prefix, router)
+    app.add_route(prefix + "/{pachinko_path:path}", router)
+    return LiveApplication(app, router, manager, recorder)
+
+
+def _add_live_routes(
+    router: WebSocketRouter,
+    manager: WebSocketConnectionManager,
+    recorder: DisconnectRecorder,
+) -> None:
+    """Register the focused endpoints exercised by live lifecycle scenarios."""
     router.add_route(
         "/session",
         RecordingResource,
@@ -393,6 +408,10 @@ def create_live_application() -> LiveApplication:
         manager=manager,
         recorder=recorder,
     )
+
+
+def _add_global_hooks(router: WebSocketRouter, recorder: DisconnectRecorder) -> None:
+    """Record each global hook in the live lifecycle event stream."""
     for event in (
         "before_connect",
         "after_connect",
@@ -412,11 +431,6 @@ def create_live_application() -> LiveApplication:
                 event,
                 lambda _context, name=event: recorder.events.append(f"global.{name}"),
             )
-    prefix = "/ws"
-    router.mount(prefix)
-    app.add_route(prefix, router)
-    app.add_route(prefix + "/{pachinko_path:path}", router)
-    return LiveApplication(app, router, manager, recorder)
 
 
 @dc.dataclass(slots=True)
@@ -447,58 +461,19 @@ class LiveServer:
     ) -> LiveServer:
         """Start one ephemeral Uvicorn listener and wait for readiness."""
         application = create_live_application()
-        config = uvicorn.Config(
-            application.app,
-            host="127.0.0.1",
-            port=0,
-            ws="websockets",
-            lifespan="off",
-            timeout_graceful_shutdown=1,
-            access_log=False,
-            log_level="critical",
-        )
-        server = server_factory(config)
+        server = server_factory(_server_config(application))
         loop_errors: list[dict[str, object]] = []
         previous_handler = typ.cast(
             "_LoopExceptionHandler | None", loop.get_exception_handler()
         )
-
-        def record_loop_error(
-            _loop: asyncio.AbstractEventLoop, context: dict[str, typ.Any]
-        ) -> None:
-            loop_errors.append(context)
-
-        loop.set_exception_handler(record_loop_error)
+        loop.set_exception_handler(_exception_recorder(loop_errors))
         serve_task = asyncio.create_task(server.serve())
-
-        async def wait_until_started() -> None:
-            while not server.started:
-                if serve_task.done():
-                    serve_task.result()
-                await asyncio.sleep(0.01)
-
         try:
-            if wait_ready is None:
-                await asyncio.wait_for(wait_until_started(), timeout=5)
-            else:
-                await wait_ready(wait_until_started())
+            await _wait_for_startup(server, serve_task, wait_ready)
+            port = _listening_port(server)
         except (Exception, asyncio.CancelledError):
-            serve_task.cancel()
-            try:
-                await asyncio.gather(serve_task, return_exceptions=True)
-            finally:
-                loop.set_exception_handler(previous_handler)
+            await _cleanup_failed_start(loop, previous_handler, serve_task)
             raise
-
-        sockets = server.servers
-        if not sockets or not sockets[0].sockets:
-            loop.set_exception_handler(previous_handler)
-            serve_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await serve_task
-            msg = "Uvicorn reported started without a listening socket"
-            raise RuntimeError(msg)
-        port = sockets[0].sockets[0].getsockname()[1]
         return cls(
             application,
             server,
@@ -539,3 +514,78 @@ class LiveServer:
                     )
             finally:
                 self.loop.set_exception_handler(self._previous_exception_handler)
+
+
+def _server_config(application: LiveApplication) -> uvicorn.Config:
+    """Build the loopback-only configuration used by live tests."""
+    return uvicorn.Config(
+        application.app,
+        host="127.0.0.1",
+        port=0,
+        ws="websockets",
+        lifespan="off",
+        timeout_graceful_shutdown=1,
+        access_log=False,
+        log_level="critical",
+    )
+
+
+def _exception_recorder(
+    loop_errors: list[dict[str, object]],
+) -> _LoopExceptionHandler:
+    """Return a handler that records unexpected loop errors during a test."""
+
+    def record_loop_error(
+        _loop: asyncio.AbstractEventLoop, context: dict[str, typ.Any]
+    ) -> None:
+        loop_errors.append(context)
+
+    return record_loop_error
+
+
+async def _wait_for_startup(
+    server: uvicorn.Server,
+    serve_task: asyncio.Task[None],
+    wait_ready: cabc.Callable[
+        [cabc.Coroutine[object, object, None]], cabc.Awaitable[None]
+    ]
+    | None,
+) -> None:
+    """Wait for server readiness or an injected test synchronization point."""
+    wait_until_started = _wait_until_started(server, serve_task)
+    if wait_ready is None:
+        await asyncio.wait_for(wait_until_started, timeout=5)
+    else:
+        await wait_ready(wait_until_started)
+
+
+async def _wait_until_started(
+    server: uvicorn.Server, serve_task: asyncio.Task[None]
+) -> None:
+    """Poll the ready flag while surfacing an early serving-task failure."""
+    while not server.started:
+        if serve_task.done():
+            serve_task.result()
+        await asyncio.sleep(0.01)
+
+
+def _listening_port(server: uvicorn.Server) -> int:
+    """Return the first bound port, or fail if startup exposed no listener."""
+    sockets = server.servers
+    if sockets and sockets[0].sockets:
+        return typ.cast("int", sockets[0].sockets[0].getsockname()[1])
+    msg = "Uvicorn reported started without a listening socket"
+    raise RuntimeError(msg)
+
+
+async def _cleanup_failed_start(
+    loop: asyncio.AbstractEventLoop,
+    previous_handler: _LoopExceptionHandler | None,
+    serve_task: asyncio.Task[None],
+) -> None:
+    """Stop a failed start and restore the event loop's prior error handler."""
+    serve_task.cancel()
+    try:
+        await asyncio.gather(serve_task, return_exceptions=True)
+    finally:
+        loop.set_exception_handler(previous_handler)

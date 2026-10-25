@@ -182,6 +182,11 @@ def _validate_close_code(code: object) -> None:
     if code < _MIN_CLOSE_CODE:
         msg = "Invalid close code. The value must be >= 1000"
         raise ValueError(msg)
-    if any(lower <= code <= upper for lower, upper in _RESERVED_CLOSE_CODE_RANGES):
+    if _is_reserved_close_code(code):
         msg = "Invalid close code. Only unreserved codes may be used."
         raise ValueError(msg)
+
+
+def _is_reserved_close_code(code: int) -> bool:
+    """Return whether a close code belongs to a range reserved by WebSocket."""
+    return any(lower <= code <= upper for lower, upper in _RESERVED_CLOSE_CODE_RANGES)

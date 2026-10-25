@@ -150,8 +150,7 @@ class RecordingWS(DummyWS):
             The WebSocket subprotocol to use, by default None
         """
         self.accepted.append(subprotocol)
-        self.accept_calls.append((subprotocol, headers))
-        self.unaccepted = False
+        await super().accept(subprotocol, headers)
         self.accepted_event.set()
 
     @typ.override

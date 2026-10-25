@@ -259,16 +259,31 @@ class SimulatorRouterHarness:
         if accepted_session is None:
             return
         await accepted_session.ws.close()
-        cancelled_for_exit = False
         router_task = session.router_task
-        if router_task is not None and not router_task.done():
-            await asyncio.wait({router_task}, timeout=1.0)
-            if not router_task.done():
-                router_task.cancel()
-                cancelled_for_exit = True
-                with suppress(Exception, asyncio.CancelledError):
-                    await router_task
+        cancelled_for_exit = await self._stop_router_task(router_task)
         self._retrieve_task_exception(router_task)
+        await self._close_session_handle(
+            accepted_session, cancelled_for_exit=cancelled_for_exit
+        )
+
+    @staticmethod
+    async def _stop_router_task(router_task: asyncio.Task[None] | None) -> bool:
+        """Wait briefly for routing to finish, then cancel it for fixture exit."""
+        if router_task is None or router_task.done():
+            return False
+        await asyncio.wait({router_task}, timeout=1.0)
+        if router_task.done():
+            return False
+        router_task.cancel()
+        with suppress(Exception, asyncio.CancelledError):
+            await router_task
+        return True
+
+    @staticmethod
+    async def _close_session_handle(
+        accepted_session: WebSocketSession, *, cancelled_for_exit: bool
+    ) -> None:
+        """Finalize the handle without swallowing caller cancellation."""
         try:
             await accepted_session.aclose()
         except asyncio.CancelledError:

@@ -212,15 +212,23 @@ def _raise_primary_session_error(
 
 def _raise_cleanup_failures(cleanup_failures: tuple[BaseException, ...]) -> None:
     """Propagate one cleanup error directly or group multiple failures."""
-    failures = list(cleanup_failures)
-    if not failures:
-        return
-    if len(failures) == 1:
-        raise failures[0]
-    if all(isinstance(failure, Exception) for failure in failures):
-        exceptions = [typ.cast("Exception", failure) for failure in failures]
+    match cleanup_failures:
+        case ():
+            return
+        case (failure,):
+            raise failure
+        case _:
+            _raise_cleanup_failure_group(cleanup_failures)
+
+
+def _raise_cleanup_failure_group(
+    cleanup_failures: tuple[BaseException, ...],
+) -> typ.NoReturn:
+    """Use an ExceptionGroup unless a cleanup failure is a BaseException."""
+    if all(isinstance(failure, Exception) for failure in cleanup_failures):
+        exceptions = [typ.cast("Exception", failure) for failure in cleanup_failures]
         raise ExceptionGroup("session", exceptions)
-    raise BaseExceptionGroup("session", failures)
+    raise BaseExceptionGroup("session", cleanup_failures)
 
 
 def _session_cancellation(
