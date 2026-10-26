@@ -60,6 +60,9 @@ class ChatResource(WebSocketResource):
 
     @handles_message("chat.message")
     async def handle_message(self, ws, payload: ChatPayload) -> None:
+        # The router leaves an absent payload as None.
+        if payload is None:
+            return
         await ws.send_media({"type": "echo", "text": payload.text})
 
 
@@ -140,10 +143,12 @@ app.add_route("/ws/{rest:path}", RouterAdapter(router))
 - The example opts into a router-owned receive-and-dispatch session with
   `receive_loop=True`. The default is `False`, which returns after acceptance
   and leaves receives and cleanup to the application.
-- The `ChatPayload` annotation makes the router pass a `ChatPayload` instance
-  to the handler. An unannotated handler receives the decoded JSON value
-  directly, such as a `dict` for an object, a list for an array, or `None` when
-  the payload is absent.
+- When `payload` is present and valid, the `ChatPayload` annotation makes the
+  router pass a `ChatPayload` instance to the handler. When `payload` is
+  absent, the typed handler receives `None`; this example ignores it.
+- An unannotated handler receives the decoded JSON value directly, such as a
+  `dict` for an object, a list for an array, or `None` when the payload is
+  absent.
 
 Save the Python snippet as `quickstart.py`. An ASGI server is required to serve
 the WebSocket connection; Uvicorn is included in the `examples` extra or the

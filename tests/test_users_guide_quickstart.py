@@ -85,6 +85,7 @@ async def test_quickstart_echoes_a_typed_websocket_message(
     async with LiveWebSocketServer(quickstart_module.app) as server:
         client = WebSocketTestClient(server.base_url, allow_insecure=True)
         async with client.connect(path) as session:
+            await session.send_json({"type": "chat.message"})
             await session.send_json({"type": "chat.message", "payload": {"text": "hi"}})
             async with asyncio.timeout(5):
                 response = await session.receive_json()
