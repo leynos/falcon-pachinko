@@ -9,6 +9,7 @@ import typing as typ
 import falcon
 import pytest
 
+from falcon_pachinko import WebSocketResource, WebSocketRouter
 from falcon_pachinko.testing import WebSocketSimulator
 from falcon_pachinko.unittests.helpers import make_req
 from falcon_pachinko.unittests.router_session_helpers import (
@@ -368,6 +369,38 @@ async def test_disabled_receive_loop_preserves_immediate_return() -> None:
     assert socket.receive_calls == 0, "the default path must not receive frames"
     assert not resource.disconnects, (
         "the default path must retain existing lifecycle ownership"
+    )
+
+
+@pytest.mark.asyncio
+async def test_setup_only_handoff_allows_application_owned_dispatch() -> None:
+    """Application-owned receives can dispatch after setup returns."""
+
+    class ApplicationOwnedDispatchResource(WebSocketResource):
+        def __init__(self) -> None:
+            self.websocket: WebSocketLike | None = None
+            self.unhandled: list[str | bytes] = []
+
+        @typ.override
+        async def on_accepted(self, ws: WebSocketLike) -> None:
+            self.websocket = ws
+
+        @typ.override
+        async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+            self.unhandled.append(message)
+
+    resource = ApplicationOwnedDispatchResource()
+    router = WebSocketRouter(receive_loop=False)
+    router.add_route("/session", lambda: resource)
+    router.mount("/")
+    await router.on_websocket(make_req("/session"), SessionSocket())
+
+    websocket = resource.websocket
+    assert websocket is not None, "setup must retain the accepted application socket"
+    await resource.dispatch(websocket, "application-owned frame")
+
+    assert resource.unhandled == ["application-owned frame"], (
+        "the completed router setup must release its receive guard to the app"
     )
 
 

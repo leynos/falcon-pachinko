@@ -62,12 +62,14 @@ Once `on_connect()` approves or the resource accepts, `before_disconnect` hooks
 run before `on_disconnect`. Normal peer closure uses Falcon's
 `WebSocketDisconnected.code`; an unavailable code and cancellation cleanup use
 1006 as callback metadata. Cancellation propagates without sending a close
-frame with reserved code 1006. Unexpected receive or handler failures close
-with 1011 and run cleanup. A rejection that remains unaccepted does not call
-`on_disconnect`; if `on_connect()` accepts and then fails, cleanup still runs.
-Multiple ordinary failures are raised in a primary-first `ExceptionGroup`.
-Cancellation remains a bare `CancelledError`, and cleanup failures hidden by
-cancellation are reported to the event loop's exception handler.
+frame with reserved code 1006. Unexpected receive or handler failures use 1011
+while the transport remains open. If transport loss has already closed it
+without a reported code, cleanup uses 1006 and skips another close. A rejection
+that remains unaccepted does not call `on_disconnect`; if `on_connect()`
+accepts and then fails, cleanup still runs. Multiple ordinary failures are
+raised in a primary-first `ExceptionGroup`. Cancellation remains a bare
+`CancelledError`, and cleanup failures hidden by cancellation are reported to
+the event loop's exception handler.
 
 The diagrams below show the opted-in `receive_loop=True` session path.
 
@@ -401,12 +403,17 @@ logic.
     closure, cancellation, or receive failure. Failures in `after_connect`,
     `accept`, or `on_accepted` are cleaned up even when `receive_loop=False`.
     `close_code` is `WebSocketDisconnected.code` for normal peer closure, or
-    1006 when the code is missing or cancellation interrupts the session.
-    Cancellation propagates without sending a close frame with reserved code
-    1006. Unexpected receive or handler failures close with 1011 and
-    propagate. Rejected negotiations and failed `on_connect` calls do not call
-    it. After successful setup with `receive_loop=False`, the application owns
-    session cleanup.
+    1006 when the code is missing, the transport is already closed without a
+    code, or cancellation interrupts the session. Cancellation propagates
+    without sending a close frame with reserved code 1006. Unexpected receive
+    or handler failures close with 1011 while the transport remains open and
+    propagate. Rejected negotiations and failures before approval or
+    acceptance do not call it; acceptance followed by a setup failure does.
+    After successful setup with `receive_loop=False`, the application owns
+    session cleanup. Lifecycle hooks and handlers receive `SessionWebSocket`
+    around native Falcon sockets in either receive mode; the adapter is passed
+    to the application for its receive loop when setup succeeds with
+    `receive_loop=False`.
 
   - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str,
     bytes])`
