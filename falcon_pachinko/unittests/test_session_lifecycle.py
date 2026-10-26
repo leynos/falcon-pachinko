@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import types
 import typing as typ
 
 import falcon
@@ -12,6 +13,7 @@ from hypothesis import strategies as st
 
 from falcon_pachinko import WebSocketResource
 from falcon_pachinko._session import SessionPhase, SessionState
+from falcon_pachinko._session_driver import _SessionOptions, run_session
 from falcon_pachinko.hooks import HookCollection, HookEvent, HookManager
 from falcon_pachinko.unittests._session_fixtures import (
     RecordingResource,
@@ -95,6 +97,54 @@ async def test_clean_client_close_runs_disconnect_once_with_received_code(
     assert getattr(observations[-1], "phase", None) == "closed", _ASSERTION_FAILURE
     assert getattr(observations[-1], "close_code", None) == 4000, _ASSERTION_FAILURE
     assert getattr(observations[-1], "duration_seconds", -1) >= 0, _ASSERTION_FAILURE
+
+
+@pytest.mark.asyncio
+async def test_session_observation_durations_use_injected_clock(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Lifecycle diagnostics use deterministic time at the session boundary."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
+    resource = RecordingResource()
+    socket = SessionSocket()
+    hook_manager = HookManager(global_hooks=HookCollection(), resources=(resource,))
+    resource.bind_hook_manager(hook_manager)
+    request = typ.cast("falcon.Request", make_session_request())
+    dispatch = typ.cast(
+        "typ.Any",
+        types.SimpleNamespace(
+            req=request,
+            ws=socket,
+            match=types.SimpleNamespace(params={}),
+        ),
+    )
+    instant = 0.0
+
+    def observation_clock() -> float:
+        nonlocal instant
+        instant += 0.25
+        return instant
+
+    await run_session(
+        resource,
+        dispatch,
+        hook_manager=hook_manager,
+        options=_SessionOptions(
+            receive_loop=True,
+            observation_clock=observation_clock,
+        ),
+    )
+
+    session_records = [
+        record
+        for record in caplog.records
+        if record.name == "falcon_pachinko._session_driver"
+        and getattr(record, "operation", None) == "session"
+    ]
+    assert [
+        typ.cast("float", getattr(record, "duration_seconds", -1))
+        for record in session_records
+    ] == [0.25, 3.25], _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio
