@@ -285,29 +285,32 @@ cleanup after setup succeeds.
 
 The effective close code passed to `on_disconnect` follows this table:
 
-| Session ending                                 | Code passed to `on_disconnect`                         |
-| ---------------------------------------------- | ------------------------------------------------------ |
-| Client sends a close frame                     | Falcon's code, or `1006` if unavailable                |
-| Handler or server calls `close(code)`          | `code` to client; Falcon's code or `1006` for cleanup  |
-| Transport loss without a close frame           | `1006`                                                 |
-| Task cancellation                              | `1006`; no close frame with this reserved code is sent |
-| Approval succeeds but acceptance does not      | `1006`; no WebSocket close frame can be sent           |
-| Failure after acceptance on an open socket     | `1011`; the router attempts a close                    |
-| Handler failure after code-less transport loss | `1006`; the transport is already closed                |
+| Session ending                                 | Code passed to `on_disconnect`                                          |
+| ---------------------------------------------- | ----------------------------------------------------------------------- |
+| Client sends a close frame                     | Falcon's code, or `1006` if unavailable                                 |
+| Handler or server calls `close(code)`          | Recorded code for a successful close; otherwise Falcon's code or `1006` |
+| Transport loss without a close frame           | `1006`                                                                  |
+| Task cancellation                              | `1006`; no close frame with this reserved code is sent                  |
+| Approval succeeds but acceptance does not      | `1006`; no WebSocket close frame can be sent                            |
+| Failure after acceptance on an open socket     | `1011`; the router attempts a close                                     |
+| Handler failure after code-less transport loss | `1006`; the transport is already closed                                 |
 
-When Falcon has no reported code, cleanup uses `1006`. Setup failures before
-the cleanup promise point do not run `on_disconnect`; failures after approval
-or acceptance do. An approved but unaccepted connection is cleaned up with
-`1006`, since the handshake has no established WebSocket on which to send a
-close frame. A previously reported socket close code is retained if the handler
-then fails. If the transport is already closed without a code, cleanup uses
-`1006` and does not try to close it again. The router runs `before_disconnect`
-before the callback and guards both against later receive dispatch. Cleanup
-runs in a shielded task and has no timeout, so `on_disconnect` must terminate.
-A lone failure propagates unchanged; multiple ordinary failures form a
-primary-first `ExceptionGroup`. Cancellation remains a bare `CancelledError`,
-and cleanup errors suppressed by cancellation are sent to the event loop's
-exception handler.
+After a successful `close(code)`, the adapter records Falcon's reported close
+code when available, or the requested code when the transport exposes no code.
+That recorded value takes precedence over later disconnect metadata. For other
+endings, Falcon's reported code is used, with `1006` when no code is available.
+Setup failures before the cleanup promise point do not run `on_disconnect`;
+failures after approval or acceptance do. An approved but unaccepted connection
+is cleaned up with `1006`, since the handshake has no established WebSocket on
+which to send a close frame. A previously reported socket close code is
+retained if the handler then fails. If the transport is already closed without
+a code, cleanup uses `1006` and does not try to close it again. The router runs
+`before_disconnect` before the callback and guards both against later receive
+dispatch. Cleanup runs in a shielded task and has no timeout, so
+`on_disconnect` must terminate. A lone failure propagates unchanged; multiple
+ordinary failures form a primary-first `ExceptionGroup`. Cancellation remains a
+bare `CancelledError`, and cleanup errors suppressed by cancellation are sent
+to the event loop's exception handler.
 
 `resource.has_router_session` is true while the router owns lifecycle work,
 including connection setup. Use it to leave accepted-session membership removal

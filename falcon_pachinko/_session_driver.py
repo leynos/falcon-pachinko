@@ -453,7 +453,7 @@ async def _receive_session(
         try:
             raw = await receive_frame(dispatch.ws)
         except (falcon.WebSocketDisconnected, _PeerDisconnectedError) as exc:
-            session.close_code = _effective_disconnect_code(exc)
+            _record_session_disconnect_code(session, exc)
             return
 
         # A close can be initiated by another task while receive_media is
@@ -492,7 +492,15 @@ def _record_session_ending(
 ) -> BaseException | None:
     """Distinguish a transport ending from an unexpected session failure."""
     if isinstance(error, (falcon.WebSocketDisconnected, _PeerDisconnectedError)):
-        session.close_code = _effective_disconnect_code(error)
+        _record_session_disconnect_code(session, error)
         return None
     session.primary_error = error
     return error
+
+
+def _record_session_disconnect_code(
+    session: SessionState, error: BaseException
+) -> None:
+    """Keep a successful local close ahead of later disconnect metadata."""
+    if session.close_code is None:
+        session.close_code = _effective_disconnect_code(error)

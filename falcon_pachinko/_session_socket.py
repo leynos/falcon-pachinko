@@ -118,9 +118,12 @@ class SessionWebSocket:
         if self._session.close_code is not None:
             return
         fallback = 1000 if requested_code is None else requested_code
-        reported_code = getattr(self._websocket, "close_code", fallback)
+        reported_code = getattr(self._websocket, "close_code", None)
         if isinstance(reported_code, int):
             self._session.close_code = reported_code
+        else:
+            # The optional adapter attribute may exist without reporting a code.
+            self._session.close_code = fallback
 
     async def receive_payload(self) -> object:
         """Preserve native frame types and support injected media transports."""
