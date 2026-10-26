@@ -25,6 +25,7 @@ class SessionWebSocket:
     def __init__(
         self, websocket: WebSocketLike | falcon.asgi.WebSocket, session: SessionState
     ) -> None:
+        """Track lifecycle facts that the transport may stop exposing."""
         self._websocket = websocket
         self._session = session
         # Falcon's unaccepted becomes False after a rejected handshake closes.

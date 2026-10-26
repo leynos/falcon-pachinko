@@ -33,7 +33,7 @@ from ._route_support import (
 )
 from ._router_attachment import attach_router
 from ._router_resources import _ResourceResolver
-from ._session_driver import run_session
+from ._session_driver import _SessionOptions, run_session
 from ._uri_template import _compile_prefix_template, compile_uri_template
 from .hooks import HookCollection, HookManager
 from .protocols import WebSocketLike
@@ -502,5 +502,5 @@ class WebSocketRouter:
             resource,
             dispatch,
             hook_manager=hook_manager,
-            receive_loop=self._receive_loop,
+            options=_SessionOptions(receive_loop=self._receive_loop),
         )

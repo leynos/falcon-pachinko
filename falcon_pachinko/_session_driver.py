@@ -79,6 +79,14 @@ class SessionDispatch(typ.Protocol):
         """Selected route parameters consumed by the session driver."""
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _SessionOptions:
+    """Bundle receive ownership and diagnostic timing choices."""
+
+    receive_loop: bool
+    observation_clock: cabc.Callable[[], float] = time.monotonic
+
+
 @dc.dataclass(slots=True)
 class _SessionExecution:
     """Keep the session's request, resource, and failure state together."""
@@ -87,6 +95,7 @@ class _SessionExecution:
     dispatch: SessionDispatch
     session: SessionState
     hook_manager: HookManager
+    observation_clock: cabc.Callable[[], float]
     context: HookContext | None = None
     primary_error: BaseException | None = None
 
@@ -125,7 +134,9 @@ def _log_session_observation(
             "outcome": outcome,
             "phase": execution.session.phase.value,
             "close_code": close_code,
-            "duration_seconds": max(0.0, time.monotonic() - observation.started),
+            "duration_seconds": max(
+                0.0, execution.observation_clock() - observation.started
+            ),
             "resource_type": _type_name(execution.resource),
             "exception_type": (
                 _type_name(observation.error) if observation.error is not None else None
@@ -151,26 +162,52 @@ async def run_session(
     dispatch: SessionDispatch,
     *,
     hook_manager: HookManager,
-    receive_loop: bool = True,
+    options: _SessionOptions,
 ) -> bool:
-    """Run setup and, when enabled, receive frames and finish the session."""
-    execution = _SessionExecution(resource, dispatch, SessionState(), hook_manager)
+    """Run one connection's setup, receive loop, and cleanup.
+
+    The observation clock controls diagnostic durations independently of
+    session state, so tests can assert timings without a real clock.
+
+    Parameters
+    ----------
+    resource:
+        Resource selected for this connection.
+    dispatch:
+        Request, socket, and route match owned by the router.
+    hook_manager:
+        Hook manager bound to the selected resource chain.
+    options:
+        Receive-loop ownership and diagnostic clock for this session.
+
+    Returns
+    -------
+    bool
+        ``True`` after this matched route handles the connection attempt.
+    """
+    execution = _SessionExecution(
+        resource,
+        dispatch,
+        SessionState(),
+        hook_manager,
+        observation_clock=options.observation_clock,
+    )
     handed_off_to_application = False
     dispatch.session = execution.session
     dispatch.ws = track_session_socket(dispatch.ws, execution.session)
     hook_manager.bind_session(execution.session)
-    started = time.monotonic()
+    started = options.observation_clock()
     _log_session_observation(
         execution, _SessionObservation("session", "started", started)
     )
     try:
         setup_completed = await _run_setup_and_receive(
-            execution, receive_loop=receive_loop
+            execution, receive_loop=options.receive_loop
         )
 
         if _should_finish_established_session(
             execution,
-            receive_loop=receive_loop,
+            receive_loop=options.receive_loop,
             setup_completed=setup_completed,
         ):
             await _finish_established_session(execution)
@@ -187,7 +224,7 @@ async def run_session(
             execution, _SessionObservation("session", outcome, started)
         )
         handed_off_to_application = _should_handoff_setup_session(
-            execution, receive_loop=receive_loop
+            execution, receive_loop=options.receive_loop
         )
         return True
     finally:
@@ -195,7 +232,9 @@ async def run_session(
             # The router's receive guard must not outlive its setup-only lease.
             hook_manager.release_session(execution.session)
             execution.session.mark_closed()
-        elif _should_release_setup_session(execution, receive_loop=receive_loop):
+        elif _should_release_setup_session(
+            execution, receive_loop=options.receive_loop
+        ):
             # Rejections and pre-approval failures must not leave stale state.
             execution.session.mark_closed()
 
@@ -261,7 +300,7 @@ async def _run_setup(execution: _SessionExecution) -> bool:
     dispatch = execution.dispatch
     session = execution.session
     hook_manager = execution.hook_manager
-    setup_started = time.monotonic()
+    setup_started = execution.observation_clock()
     _log_session_observation(
         execution, _SessionObservation("setup", "started", setup_started)
     )
@@ -284,7 +323,9 @@ async def _run_setup(execution: _SessionExecution) -> bool:
         ):
             _log_session_observation(
                 execution,
-                _SessionObservation("acceptance", "completed", time.monotonic()),
+                _SessionObservation(
+                    "acceptance", "completed", execution.observation_clock()
+                ),
             )
         setup_outcome = (
             "rejected" if session.phase is SessionPhase.CONNECTING else "completed"
@@ -298,7 +339,9 @@ async def _run_setup(execution: _SessionExecution) -> bool:
         if was_connecting and session.phase is SessionPhase.ESTABLISHED:
             _log_session_observation(
                 execution,
-                _SessionObservation("acceptance", "completed", time.monotonic()),
+                _SessionObservation(
+                    "acceptance", "completed", execution.observation_clock()
+                ),
             )
         if session.phase is SessionPhase.ESTABLISHED:
             _record_and_log_session_ending(execution, "setup", setup_started, exc)
@@ -311,7 +354,7 @@ async def _run_setup(execution: _SessionExecution) -> bool:
 
 async def _run_receive(execution: _SessionExecution) -> None:
     """Drive receive processing and record its established-session ending."""
-    receive_started = time.monotonic()
+    receive_started = execution.observation_clock()
     _log_session_observation(
         execution, _SessionObservation("receive", "started", receive_started)
     )
@@ -415,7 +458,7 @@ async def _finish_established_session(
         params=dict(params),
         primary_error=execution.primary_error,
     )
-    cleanup_started = time.monotonic()
+    cleanup_started = execution.observation_clock()
     _log_session_observation(
         execution, _SessionObservation("cleanup", "started", cleanup_started)
     )
