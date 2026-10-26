@@ -24,6 +24,46 @@ from falcon_pachinko.unittests.helpers import DummyWS
 _ASSERTION_FAILURE = "lifecycle expectation failed"
 
 
+class _SocketWithoutCloseCode:
+    """Expose no acceptance probe and no effective close-code metadata."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.close_codes: list[int] = []
+
+    @property
+    def close_code(self) -> None:
+        return None
+
+    async def accept(self) -> None:
+        pass
+
+    async def close(self, code: int = 1000) -> None:
+        self.closed = True
+        self.close_codes.append(code)
+
+    async def send_media(self, data: object) -> None:
+        del data
+
+    async def receive_media(self) -> object:
+        if self.closed:
+            raise falcon.WebSocketDisconnected(None)
+        pytest.fail("the test socket only receives after server close")
+
+
+class _AcceptAndCloseResource(RecordingResource):
+    """Accept and close during setup to test the recorded session outcome."""
+
+    async def on_connect(
+        self, req: falcon.Request, ws: object, **params: object
+    ) -> bool:
+        del req, params
+        websocket = typ.cast("typ.Any", ws)
+        await websocket.accept()
+        await websocket.close(4001)
+        return True
+
+
 @pytest.mark.asyncio
 async def test_mapping_media_is_preserved_as_one_json_frame() -> None:
     """A mapping frame is media, not a batch of frames to iterate."""
@@ -59,6 +99,22 @@ async def test_close_before_buffered_frame_skips_overridden_dispatch() -> None:
     assert resource.raw_frames == [], "a closed transport must not dispatch frames"
     assert resource.disconnect_codes == [4004], (
         "discarding late frames must preserve the reported disconnect code"
+    )
+
+
+@pytest.mark.asyncio
+async def test_server_close_survives_missing_transport_close_metadata() -> None:
+    """A successful close remains effective when optional metadata is absent."""
+    router = make_session_router(_AcceptAndCloseResource)
+    socket = _SocketWithoutCloseCode()
+
+    await router.on_websocket(
+        typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
+    )
+
+    assert socket.close_codes == [4001], _ASSERTION_FAILURE
+    assert _AcceptAndCloseResource.instances[0].disconnect_codes == [4001], (
+        "missing transport metadata must not erase the successful server close"
     )
 
 
