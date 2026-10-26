@@ -192,7 +192,6 @@ async def run_session(
         hook_manager,
         observation_clock=options.observation_clock,
     )
-    handed_off_to_application = False
     dispatch.session = execution.session
     dispatch.ws = track_session_socket(dispatch.ws, execution.session)
     hook_manager.bind_session(execution.session)
@@ -200,11 +199,28 @@ async def run_session(
     _log_session_observation(
         execution, _SessionObservation("session", "started", started)
     )
+    handed_off_to_application = False
+    try:
+        handed_off_to_application = await _drive_session(execution, options, started)
+        return True
+    finally:
+        _release_session_ownership(
+            execution,
+            options,
+            handed_off_to_application=handed_off_to_application,
+        )
+
+
+async def _drive_session(
+    execution: _SessionExecution,
+    options: _SessionOptions,
+    started: float,
+) -> bool:
+    """Run setup and cleanup, returning whether receive ownership was handed off."""
     try:
         setup_completed = await _run_setup_and_receive(
             execution, receive_loop=options.receive_loop
         )
-
         if _should_finish_established_session(
             execution,
             receive_loop=options.receive_loop,
@@ -214,29 +230,32 @@ async def run_session(
     except BaseException as exc:
         _log_session_failure(execution, "session", started, exc)
         raise
-    else:
-        outcome = (
-            "rejected"
-            if execution.session.phase is SessionPhase.CONNECTING
-            else "completed"
-        )
-        _log_session_observation(
-            execution, _SessionObservation("session", outcome, started)
-        )
-        handed_off_to_application = _should_handoff_setup_session(
-            execution, receive_loop=options.receive_loop
-        )
-        return True
-    finally:
-        if handed_off_to_application:
-            # The router's receive guard must not outlive its setup-only lease.
-            hook_manager.release_session(execution.session)
-            execution.session.mark_closed()
-        elif _should_release_setup_session(
-            execution, receive_loop=options.receive_loop
-        ):
-            # Rejections and pre-approval failures must not leave stale state.
-            execution.session.mark_closed()
+
+    outcome = (
+        "rejected"
+        if execution.session.phase is SessionPhase.CONNECTING
+        else "completed"
+    )
+    _log_session_observation(
+        execution, _SessionObservation("session", outcome, started)
+    )
+    return _should_handoff_setup_session(execution, receive_loop=options.receive_loop)
+
+
+def _release_session_ownership(
+    execution: _SessionExecution,
+    options: _SessionOptions,
+    *,
+    handed_off_to_application: bool,
+) -> None:
+    """Release setup-only guards without weakening disconnect ownership."""
+    if handed_off_to_application:
+        # The router's receive guard must not outlive its setup-only lease.
+        execution.hook_manager.release_session(execution.session)
+        execution.session.mark_closed()
+    elif _should_release_setup_session(execution, receive_loop=options.receive_loop):
+        # Rejections and pre-approval failures must not leave stale state.
+        execution.session.mark_closed()
 
 
 def _should_finish_established_session(
