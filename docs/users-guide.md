@@ -252,9 +252,12 @@ resource and its hooks.
     `WebSocketDisconnected.code`; an unavailable code and cancellation use
     `1006` as cleanup metadata. Cancellation propagates without sending a close
     frame with reserved code `1006`. Unexpected receive or handler failures
-    close with `1011` and propagate the original exception. An ordinary
-    exception from `on_accepted` closes with `1011` and runs cleanup with
-    `1011`. A rejection that remains unaccepted does not run cleanup. If
+    use `1011` and propagate the original exception while the transport stays
+    open. If the transport already closed without a reported code, cleanup uses
+    `1006` and skips another close attempt. An ordinary
+    exception from `on_accepted` uses `1011` while the transport remains open;
+    a closed transport without a reported code uses `1006`. A rejection that
+    remains unaccepted does not run cleanup. If
     `on_connect` accepts the socket before failing, cleanup still runs; an
     unaccepted `on_connect` failure must roll back any partial registration.
     With successful setup and `receive_loop=False`, the application owns
@@ -272,34 +275,39 @@ warn when replacing customized inbound handlers, and preserve the configured
 outgoing serializers. Falcon's default handlers decode input when neither entry
 point has enabled raw-frame handling.
 
-In `receive_loop=True` sessions, native Falcon sockets passed to lifecycle
-hooks, message hooks, and handlers such as `on_unhandled` use a forwarding
-adapter that implements `WebSocketLike`. This means
+For either receive mode, native Falcon sockets passed to lifecycle hooks,
+message hooks, and handlers such as `on_unhandled` use a forwarding adapter
+that implements `WebSocketLike`. This means
 `isinstance(ws, falcon.asgi.WebSocket)` is false; attributes the adapter does
-not define are forwarded to Falcon's socket.
+not define are forwarded to Falcon's socket. With `receive_loop=False`, the
+application receives this adapter during setup and owns later reception and
+cleanup after setup succeeds.
 
 The effective close code passed to `on_disconnect` follows this table:
 
-| Session ending                            | Code passed to `on_disconnect`                         |
-| ----------------------------------------- | ------------------------------------------------------ |
-| Client sends a close frame                | Falcon's code, or `1006` if unavailable                |
-| Handler or server calls `close(code)`     | `code` to client; Falcon's code or `1006` for cleanup  |
-| Transport loss without a close frame      | `1006`                                                 |
-| Task cancellation                         | `1006`; no close frame with this reserved code is sent |
-| Approval succeeds but acceptance does not | `1006`; no WebSocket close frame can be sent           |
-| Failure after acceptance                  | `1011`; the router attempts a close                    |
+| Session ending                                 | Code passed to `on_disconnect`                         |
+| ---------------------------------------------- | ------------------------------------------------------ |
+| Client sends a close frame                     | Falcon's code, or `1006` if unavailable                |
+| Handler or server calls `close(code)`          | `code` to client; Falcon's code or `1006` for cleanup  |
+| Transport loss without a close frame           | `1006`                                                 |
+| Task cancellation                              | `1006`; no close frame with this reserved code is sent |
+| Approval succeeds but acceptance does not      | `1006`; no WebSocket close frame can be sent           |
+| Failure after acceptance on an open socket     | `1011`; the router attempts a close                    |
+| Handler failure after code-less transport loss | `1006`; the transport is already closed                |
 
 When Falcon has no reported code, cleanup uses `1006`. Setup failures before
 the cleanup promise point do not run `on_disconnect`; failures after approval
 or acceptance do. An approved but unaccepted connection is cleaned up with
 `1006`, since the handshake has no established WebSocket on which to send a
 close frame. A previously reported socket close code is retained if the handler
-then fails. The router runs `before_disconnect` before the callback and guards
-both against later receive dispatch. Cleanup runs in a shielded task and has no
-timeout, so `on_disconnect` must terminate. A lone failure propagates
-unchanged; multiple ordinary failures form a primary-first `ExceptionGroup`.
-Cancellation remains a bare `CancelledError`, and cleanup errors suppressed by
-cancellation are sent to the event loop's exception handler.
+then fails. If the transport is already closed without a code, cleanup uses
+`1006` and does not try to close it again. The router runs `before_disconnect`
+before the callback and guards both against later receive dispatch. Cleanup
+runs in a shielded task and has no timeout, so `on_disconnect` must terminate.
+A lone failure propagates unchanged; multiple ordinary failures form a
+primary-first `ExceptionGroup`. Cancellation remains a bare `CancelledError`,
+and cleanup errors suppressed by cancellation are sent to the event loop's
+exception handler.
 
 `resource.has_router_session` is true while the router owns lifecycle work,
 including connection setup. Use it to leave accepted-session membership removal

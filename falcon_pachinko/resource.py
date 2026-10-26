@@ -336,18 +336,21 @@ class WebSocketResource:
         ``after_connect`` or ``accept`` fails. A peer close code is passed
         through, or 1006 when the peer close code is unavailable or acceptance
         does not complete. An ordinary exception from ``on_accepted`` occurs
-        after acceptance: the socket closes with 1011, and cleanup receives
-        1011. Cancellation uses 1006 as cleanup metadata and propagates without
-        sending a close frame with that reserved code. If cancellation
-        interrupts peer-close cleanup, remaining cleanup switches to 1006; a
-        callback already invoked is not attempted again. Unexpected receive or
-        handler failures close with 1011 and pass 1011 here. These failures
-        propagate after cleanup.
+        after acceptance: an open socket closes with 1011, and cleanup receives
+        1011. If the transport is already closed without a reported code,
+        cleanup uses 1006 and does not attempt another close. Cancellation uses
+        1006 as cleanup metadata and propagates without sending a close frame
+        with that reserved code. If cancellation interrupts peer-close cleanup,
+        remaining cleanup switches to 1006; a callback already invoked is not
+        attempted again. Unexpected receive or handler failures use the same
+        1011-on-open, 1006-on-closed rule and propagate after cleanup.
 
-        Rejected connections and failed ``on_connect`` calls do not invoke this
-        method. Cancellation inside this callback does not cause a second
-        callback attempt. With the default ``receive_loop=False``, the
-        application owns session reception and cleanup.
+        A falsey, unaccepted rejection and a failure before approval or
+        acceptance do not invoke this method. If ``on_connect`` accepts the
+        socket and then fails, cleanup still runs. Cancellation inside this
+        callback does not cause a second callback attempt. With the default
+        ``receive_loop=False``, the application owns reception and cleanup
+        after successful setup.
 
         Parameters
         ----------

@@ -155,6 +155,7 @@ async def run_session(
 ) -> bool:
     """Run setup and, when enabled, receive frames and finish the session."""
     execution = _SessionExecution(resource, dispatch, SessionState(), hook_manager)
+    handed_off_to_application = False
     dispatch.session = execution.session
     dispatch.ws = track_session_socket(dispatch.ws, execution.session)
     hook_manager.bind_session(execution.session)
@@ -185,10 +186,17 @@ async def run_session(
         _log_session_observation(
             execution, _SessionObservation("session", outcome, started)
         )
+        handed_off_to_application = _should_handoff_setup_session(
+            execution, receive_loop=receive_loop
+        )
         return True
     finally:
-        # Rejections and pre-approval failures must not leave stale ownership.
-        if _should_release_setup_session(execution, receive_loop=receive_loop):
+        if handed_off_to_application:
+            # The router's receive guard must not outlive its setup-only lease.
+            hook_manager.release_session(execution.session)
+            execution.session.mark_closed()
+        elif _should_release_setup_session(execution, receive_loop=receive_loop):
+            # Rejections and pre-approval failures must not leave stale state.
             execution.session.mark_closed()
 
 
@@ -219,6 +227,15 @@ def _should_release_setup_session(
     if receive_loop:
         return False
     return phase is SessionPhase.ESTABLISHED
+
+
+def _should_handoff_setup_session(
+    execution: _SessionExecution,
+    *,
+    receive_loop: bool,
+) -> bool:
+    """Release receive hooks only after successful setup-only ownership transfer."""
+    return not receive_loop and execution.session.phase is SessionPhase.ESTABLISHED
 
 
 async def _run_setup_and_receive(

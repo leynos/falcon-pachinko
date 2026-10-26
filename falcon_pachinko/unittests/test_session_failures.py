@@ -185,6 +185,42 @@ async def test_session_and_disconnect_failures_are_grouped_primary_first(
 
 
 @pytest.mark.asyncio
+async def test_handler_failure_after_code_less_transport_loss_uses_1006() -> None:
+    """A closed peer without a code cannot receive a server error close."""
+    primary = RuntimeError("handler failed after transport loss")
+
+    class TrackingSocket(SessionSocket):
+        def __init__(self, *frames: object) -> None:
+            super().__init__(*frames)
+            self.close_attempts = 0
+
+        async def close(self, code: int = 1000) -> None:
+            self.close_attempts += 1
+            await super().close(code)
+
+    socket = TrackingSocket(b"frame")
+
+    class PeerGoneThenFailResource(RecordingResource):
+        async def dispatch(self, ws: object, raw: str | bytes) -> None:
+            del ws, raw
+            socket.closed = True
+            raise primary
+
+    router = make_session_router(PeerGoneThenFailResource)
+
+    with pytest.raises(RuntimeError) as raised:
+        await router.on_websocket(
+            typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
+        )
+
+    assert raised.value is primary, _ASSERTION_FAILURE
+    assert PeerGoneThenFailResource.instances[0].disconnect_codes == [1006], (
+        "a closed transport without a close code must use abnormal-closure metadata"
+    )
+    assert socket.close_attempts == 0, "cleanup must not close an already-closed peer"
+
+
+@pytest.mark.asyncio
 async def test_cleanup_only_failure_is_propagated_unchanged() -> None:
     """A lone resource cleanup failure remains the original exception."""
     cleanup = LookupError("disconnect failed")

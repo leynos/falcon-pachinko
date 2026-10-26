@@ -164,7 +164,23 @@ router.attach(app)
   when `receive_loop=False`. Peer closure uses `WebSocketDisconnected.code`; a
   missing code and cancellation use `1006` as callback metadata. Cancellation
   propagates without sending a close frame with reserved code `1006`.
-  Unexpected receive or handler failures close with `1011` and propagate.
+  Unexpected receive or handler failures use `1011` while the transport is
+  open, then propagate. If the transport is already closed without a reported
+  code, cleanup uses `1006` and does not attempt another close.
+- In either receive mode, lifecycle hooks and handlers receive the
+  `SessionWebSocket` forwarding adapter around native Falcon sockets. It
+  forwards socket operations and attributes, but
+  `isinstance(ws, falcon.asgi.WebSocket)` is false. With `receive_loop=False`,
+  the application receives this adapter during setup and owns later reception
+  and cleanup after successful setup.
+- The cleanup promise begins when `on_connect` approves or the socket is
+  accepted. A rejection that remains unaccepted and an `on_connect` failure
+  before approval or acceptance do not call `on_disconnect`; roll back any
+  partial registration in those paths. Once setup crosses that boundary,
+  failures still call `on_disconnect` once.
+- An exception from `on_accepted` uses close code `1011` while the transport is
+  open. If the transport has already closed without a reported code, cleanup
+  receives `1006` and skips another close.
 
 `router.attach()` also enables raw TEXT and BINARY input for all WebSocket
 routes on the app, preserving its outgoing serializers. For manually mounted
@@ -192,14 +208,16 @@ direct calls to `WebSocketResource.dispatch()`. Call `await ws.accept()` in
 in resource handlers and `on_unhandled`; frames are dispatched sequentially,
 and returning normally from `on_unhandled` keeps the session open. The router
 runs `before_disconnect` before attempting `on_disconnect` once. A missing peer
-close code or failure during `after_connect` or `accept` uses `1006` for
-cleanup. An ordinary exception from `on_accepted` occurs after acceptance,
-closes with `1011`, and runs cleanup with `1011`. Cancellation uses `1006` as
-cleanup metadata and propagates without sending a close frame with the reserved
-code. Unexpected receive or handler failures close with `1011` and propagate
-the original exception. The default `receive_loop=False` returns after
-successful acceptance, leaving subsequent frame reception and cleanup to the
-application.
+close code or a failure before acceptance completes uses `1006` for cleanup.
+After acceptance, an ordinary exception from `on_accepted` uses `1011` while
+the transport remains open; a closed transport without a reported code uses
+`1006` and is not closed again. Cancellation uses `1006` as cleanup metadata
+and propagates without sending a close frame with the reserved code. Unexpected
+receive or handler failures use `1011` and propagate the original exception
+while the transport remains open. If transport loss has already closed the
+socket without a code, cleanup uses `1006` and skips the close attempt. The
+default `receive_loop=False` returns after successful acceptance, leaving
+subsequent frame reception and cleanup to the application.
 
 1) **Wire dependency injection via `resource_factory`:**
 

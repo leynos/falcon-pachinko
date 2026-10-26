@@ -148,20 +148,25 @@ def _effective_close_code(context: CleanupContext) -> int:
         return context.session.close_code
     if not _socket_is_accepted(context):
         return ABNORMAL_CLOSURE
-    transport_code = _reported_transport_close_code(context)
+    transport_code, transport_closed = _reported_transport_close_state(context)
     if transport_code is not None:
         # A handler may have sent a meaningful close before it failed.
         return transport_code
+    if transport_closed:
+        return ABNORMAL_CLOSURE
     return ABNORMAL_CLOSURE if primary_error is None else INTERNAL_ERROR
 
 
-def _reported_transport_close_code(context: CleanupContext) -> int | None:
-    """Return transport metadata only after the transport reports closure."""
+def _reported_transport_close_state(
+    context: CleanupContext,
+) -> tuple[int | None, bool]:
+    """Return a usable code and whether the transport is already closed."""
     transport_closed = getattr(context.dispatch.ws, "closed", None)
     if transport_closed is False:
-        return None
+        return None, False
     transport_code = getattr(context.dispatch.ws, "close_code", None)
-    return transport_code if type(transport_code) is int else None
+    close_code = transport_code if type(transport_code) is int else None
+    return close_code, transport_closed is True
 
 
 def _socket_is_accepted(context: CleanupContext) -> bool:
@@ -178,7 +183,8 @@ def _should_send_internal_error_close(context: CleanupContext) -> bool:
         return False
     if context.session.close_code is not None:
         return False
-    return _reported_transport_close_code(context) is None
+    transport_code, transport_closed = _reported_transport_close_state(context)
+    return not transport_closed and transport_code is None
 
 
 async def _run_disconnect_hooks(

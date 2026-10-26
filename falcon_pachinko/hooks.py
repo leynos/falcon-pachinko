@@ -192,6 +192,11 @@ class HookManager:
         """Bind router-owned lifecycle state for receive dispatch guards."""
         self._session = session
 
+    def release_session(self, session: SessionState) -> None:
+        """Release the router guard when application receive ownership begins."""
+        if self._session is session:
+            self._session = None
+
     @property
     def session(self) -> SessionState | None:
         """Router-bound session state, if any."""
