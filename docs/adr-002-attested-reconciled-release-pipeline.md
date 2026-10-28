@@ -8,7 +8,7 @@ The existing wheel-only release workflow published a GitHub Release before
 attaching its asset, did not publish to PyPI, and built distributions directly
 from the source tree. Its broad write permission, mutable action references,
 persisted checkout credentials, and cancellation of in-progress runs left
-avoidable risks in a privileged workflow. The artifact-download layout also
+avoidable risks in a privileged workflow. The artefact-download layout also
 made it possible for an empty release to be published without a clear failure.
 
 Falcon-Pachinko is pure Python. Its distribution name is `falcon-pachinko` and
@@ -81,7 +81,7 @@ attested build. Fill missing destination names only. A GitHub-only file is
 copied into PyPI; a GitHub asset missing for a PyPI name is fetched from PyPI.
 Validate fetched hashes against the Simple index and compare final SHA-256
 digests at both destinations. Never overwrite or clobber an existing GitHub
-asset. Fail on an empty artifact set. Leave a draft in place on any mismatch;
+asset. Fail on an empty artefact set. Leave a draft in place on any mismatch;
 remove draft status only after successful convergence, setting the GitHub
 pre-release flag from the checked project version.
 
@@ -132,7 +132,7 @@ PyPI is the canonical destination for names it already contains, and the GitHub
 Release converges to those same bytes. Retries can complete a partial
 publication without clobbering assets. Digest disagreement leaves a visible
 draft for investigation instead of publishing inconsistent files. Existing
-artifacts may have been built by earlier runs; the current run's bundle is
+artefacts may have been built by earlier runs; the current run's bundle is
 attached only when it truthfully attests every canonical distribution.
 
 The release process relies on maintainers keeping `pyproject.toml`, `uv.lock`,
@@ -145,5 +145,5 @@ so its OIDC compatibility remains an operational assumption to verify.
 The exact build-backend constraints and hash binding are deliberately deferred
 to issue #230, which depends on the repository's lock-file decision in
 [issue #209](https://github.com/leynos/falcon-pachinko/issues/209). This ADR
-records the artifact handoff and privilege separation that let publication
+records the artefact handoff and privilege separation that let publication
 consume attested bytes without resolving build requirements again.

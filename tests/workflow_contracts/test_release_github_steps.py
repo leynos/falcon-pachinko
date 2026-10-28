@@ -50,6 +50,11 @@ def _run_with_fake_gh(
         tmp_path / "tools",
         "gh",
         'printf \'%s\\n\' "$*" >> "${GH_CALLS}"\n'
+        'if [ "$1" = "api" ]; then\n'
+        '  [ "$GH_API_STATUS" = 0 ] || exit "$GH_API_STATUS"\n'
+        '  [ "$GH_RELEASE_PRESENT" = true ] && printf "%s\\n" "$GITHUB_REF_NAME"\n'
+        "  exit 0\n"
+        "fi\n"
         'if [ "$1 $2" = "release view" ]; then\n'
         '  case "$*" in\n'
         "    *--jq*) printf '%s\\n' \"${GH_IS_DRAFT}\";;\n"
@@ -62,6 +67,9 @@ def _run_with_fake_gh(
         "PATH": os.pathsep.join((str(tmp_path / "tools"), os.defpath)),
         "GH_CALLS": str(calls),
         "GH_VIEW_STATUS": str(view_status),
+        "GH_API_STATUS": "0",
+        "GH_RELEASE_PRESENT": "true",
+        "GH_REPO": "leynos/falcon-pachinko",
         "GH_IS_DRAFT": "true",
         "GITHUB_REF_NAME": _TAG,
         **(extra_env or {}),
@@ -84,7 +92,8 @@ def test_an_existing_release_is_reused(tmp_path: pth.Path) -> None:
     )
 
     assert status == 0, stderr
-    assert calls == [["release", "view", _TAG]], "an existing release must be reused"
+    assert len(calls) == 1, calls
+    assert calls[0][0] == "api", calls
 
 
 @pytest.mark.parametrize(
@@ -99,8 +108,7 @@ def test_a_missing_release_is_created_as_a_draft(
     status, stderr, calls = _run_with_fake_gh(
         tmp_path,
         step_script("draft-release", "Create or reuse the draft release"),
-        view_status=1,
-        extra_env={"IS_PRERELEASE": is_prerelease},
+        extra_env={"IS_PRERELEASE": is_prerelease, "GH_RELEASE_PRESENT": "false"},
     )
 
     assert status == 0, stderr
@@ -213,3 +221,15 @@ def test_the_release_is_published_with_its_prerelease_status(
     assert calls == [
         ["release", "edit", _TAG, "--draft=false", f"--prerelease={is_prerelease}"]
     ], "Release contract failed"
+
+
+def test_a_release_lookup_error_does_not_create_a_draft(tmp_path: pth.Path) -> None:
+    """A failed listing must never be mistaken for an absent release."""
+    status, _, calls = _run_with_fake_gh(
+        tmp_path,
+        step_script("draft-release", "Create or reuse the draft release"),
+        extra_env={"IS_PRERELEASE": "false", "GH_API_STATUS": "1"},
+    )
+    assert status != 0, "failed lookup must stop the job"
+    assert len(calls) == 1, calls
+    assert calls[0][0] == "api", calls

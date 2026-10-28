@@ -1112,7 +1112,7 @@ Two rules follow, and a green run demonstrates neither:
   to a label with a newline inside the expression. The document still parses,
   `actionlint` still passes, and GitHub evaluates the newline-bearing
   expression anyway.
-- Do not copy the expression onto the other three lanes. They trigger on a
+- Do not copy the expression onto the remaining lanes. They trigger on a
   push or a tag, where `github.event.pull_request` is null, so the guard could
   never hold. A guard that cannot hold reads as protection and is not.
 
@@ -1137,10 +1137,11 @@ The two measured ceilings are sized from real runs rather than chosen:
 Fifteen minutes is roughly twenty-five times the longest of these, which leaves
 room for a cold cache and for Ubicloud's two vCPUs. `falcon-minimum` has no
 recorded run yet; its thirty-minute ceiling gives the uncovered full suite
-extra headroom. The release lanes have no recorded runs either, so their
-thirty-minute ceilings are not measured; they are set wide on the principle
-that a release killed part-way is worse than one that runs long. Re-size each
-lane on its third Ubicloud run.
+extra headroom. `build-dist` also has no recorded run, so its fifteen-minute
+ceiling is provisional. The release lanes have no recorded runs either, so
+their thirty-minute ceilings are provisional and set wide because a release
+killed part-way is worse than one that runs long. Re-size each lane after its
+third Ubicloud run.
 
 The last row is the first run on Ubicloud, and it is slower than the
 GitHub-hosted run above it: 44 s against 36 s, on an 11 s queue against 2 s.

@@ -160,11 +160,14 @@ jobs:
           IS_PRERELEASE: ${{ needs.check-version.outputs.prerelease }}
         run: |
           set -euo pipefail
-          # A re-run reuses whatever release the tag already has, draft or not.
-          if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
-            echo "Reusing the existing release for ${GITHUB_REF_NAME}."
-            exit 0
-          fi
+          # Listing includes drafts and fails closed if the API is unavailable.
+          tags=$(gh api --paginate "repos/${GH_REPO}/releases" --jq '.[].tag_name')
+          while IFS= read -r tag; do
+            if [ "$tag" = "$GITHUB_REF_NAME" ]; then
+              echo "Reusing the existing release for ${GITHUB_REF_NAME}."
+              exit 0
+            fi
+          done <<< "$tags"
           flags=(--draft --verify-tag --generate-notes --title "${GITHUB_REF_NAME}")
           if [ "${IS_PRERELEASE}" = true ]; then
             flags+=(--prerelease)

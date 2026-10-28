@@ -135,6 +135,7 @@ class FakeRelease:
             "FAKE_PYPI_FILES": str(self.pypi),
             "FAKE_CALLS": str(self.root / "calls.jsonl"),
             "GITHUB_OUTPUT": str(self.root / "github-output"),
+            "GH_REPO": "leynos/falcon-pachinko",
             **extra,
         }
 

@@ -94,6 +94,9 @@ def _gh_download(args: list[str]) -> int:
 
 def gh(args: list[str]) -> int:
     """Serve the ``gh release`` calls the release workflow makes."""
+    if args and args[0] == "api":
+        print(os.environ.get("GITHUB_REF_NAME", "v1.2.3"))
+        return 0
     command = args[1] if len(args) > 1 else ""
     if command == "view":
         if "--jq" in args:
