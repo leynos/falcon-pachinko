@@ -1,6 +1,6 @@
 [project]
 name = "falcon-pachinko"
-version = "0.1.0-alpha2"
+version = "0.1.0-alpha3"
 description = "Adds WebSocket routing and message handling for Falcon ASGI applications."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -503,6 +503,7 @@ pytest_add_cli_args_test_selection = [
 #   - tests/workflow_contracts/  (all of it; every module reads workflows)
 #   - tests/test_toolchain_versions.py
 #   - tests/test_uv_toolchain.py
+#   - tests/test_release_archives.py
 # `-m "not lint_toolchain"` drops the tests that provision a PyPy
 # interpreter and reach the network. `-p no:cacheprovider` keeps the run
 # from writing a cache into the copied tree.
@@ -510,6 +511,7 @@ pytest_add_cli_args = [
     "--ignore=tests/workflow_contracts",
     "--ignore=tests/test_toolchain_versions.py",
     "--ignore=tests/test_uv_toolchain.py",
+    "--ignore=tests/test_release_archives.py",
     "-m",
     "not lint_toolchain",
     "-p",

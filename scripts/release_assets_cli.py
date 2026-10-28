@@ -46,7 +46,9 @@ if typ.TYPE_CHECKING:
 
 def _parser() -> argparse.ArgumentParser:
     """Build the command-line interface the release workflow calls."""
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description="Reconcile release distribution assets."
+    )
     parser.add_argument("command", choices=_COMMANDS)
     parser.add_argument("--publish", type=Path, required=True)
     parser.add_argument("--assets", type=Path)

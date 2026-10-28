@@ -50,3 +50,11 @@ def test_missing_input_fails_before_reading_state(
             args.extend([f"--{option}", str(tmp_path / "absent")])
     assert release_assets_cli.main(args) == 1, "missing input must fail"
     assert f"--{missing} is required" in capsys.readouterr().err, missing
+
+
+def test_parser_works_without_module_docstring(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Optimized Python can strip module docstrings without breaking the CLI."""
+    monkeypatch.setattr(release_assets_cli, "__doc__", None)
+    with pytest.raises(SystemExit) as result:
+        release_assets_cli.main(["--help"])
+    assert result.value.code == 0, "the parser must work without a docstring"

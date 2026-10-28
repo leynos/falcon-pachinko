@@ -80,7 +80,7 @@ def _job_directory(fake: FakeRelease, job: str) -> tuple[pth.Path, dict[str, str
 _STEP_OUTPUT = re.compile(r"\$\{\{\s*steps\.([\w-]+)\.outputs\.([\w-]+)\s*\}\}")
 
 
-def _reference(template: str, step_id: str, name: str, stated: dict[str, str]) -> str:
+def _reference(step_id: str, name: str, stated: dict[str, str]) -> str:
     """Return the value a ``steps.<id>.outputs.<name>`` reference resolves to.
 
     The workflow writes a step's outputs under whichever key the script chose,
@@ -107,7 +107,7 @@ def _reference(template: str, step_id: str, name: str, stated: dict[str, str]) -
 def _substitute(value: str, stated: dict[str, str]) -> str:
     """Replace each ``steps.<id>.outputs.<name>`` reference with its value."""
     return _STEP_OUTPUT.sub(
-        lambda match: _reference(value, match.group(1), match.group(2), stated),
+        lambda match: _reference(match.group(1), match.group(2), stated),
         value,
     )
 

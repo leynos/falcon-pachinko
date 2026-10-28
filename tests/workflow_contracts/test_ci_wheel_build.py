@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
-import os
-import pathlib
 import shutil
-import subprocess  # ruff: ignore[suspicious-subprocess-import] - execute the checked-in Bash step
 import sys
+import typing as typ
 
 import pytest
-import yaml
 
-from .strict_yaml import StrictLoader
+from tests.helpers.ci_workflows import ROOT
+from tests.helpers.release_workflow import run_bash, step_script
+from tests.helpers.strict_yaml import load
 
-ROOT = pathlib.Path(__file__).resolve().parents[2]
+if typ.TYPE_CHECKING:
+    import pathlib
+
 BASH = shutil.which("bash")
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32" or BASH is None, reason="The CI step requires Bash."
@@ -28,15 +29,10 @@ def test_distribution_count(
     tmp_path: pathlib.Path, sdists: int, wheels: int, expected: str
 ) -> None:
     """Only a single sdist with at least one wheel is accepted."""
-    workflow = yaml.load(
-        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
-        Loader=StrictLoader,  # ruff: ignore[unsafe-yaml-load] - strict SafeLoader subclass
-    )
-    steps = workflow["jobs"]["build-dist"]["steps"]
-    script = next(
-        step["run"]
-        for step in steps
-        if step.get("name") == "Require exactly one sdist to travel with the wheel"
+    script = step_script(
+        "build-dist",
+        "Require exactly one sdist to travel with the wheel",
+        workflow="ci.yml",
     )
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -44,15 +40,7 @@ def test_distribution_count(
         (dist / f"package-{index}.tar.gz").touch()
     for index in range(wheels):
         (dist / f"package-{index}.whl").touch()
-    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv
-        [str(BASH), "-c", script],
-        cwd=tmp_path,
-        env={**os.environ, "WHEEL_DIR": "dist"},
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    result = run_bash(script, tmp_path, {"WHEEL_DIR": "dist"})
     assert (result.returncode == 0) is (expected == "pass"), result.stderr
 
 
@@ -61,11 +49,10 @@ def test_action_stages_distributions_from_custom_output(
     tmp_path: pathlib.Path, out_dir: str
 ) -> None:
     """A custom build directory still uploads only distribution files."""
-    action = yaml.load(
-        (ROOT / ".github/actions/pure-python-wheel/action.yml").read_text(
-            encoding="utf-8"
-        ),
-        Loader=StrictLoader,  # ruff: ignore[unsafe-yaml-load] - strict SafeLoader subclass
+    action_path = ROOT / ".github/actions/pure-python-wheel/action.yml"
+    action = typ.cast(
+        "dict[str, typ.Any]",
+        load(action_path.read_text(encoding="utf-8"), str(action_path)),
     )
     script = next(
         step["run"]
@@ -78,15 +65,7 @@ def test_action_stages_distributions_from_custom_output(
     (output / "package.whl").touch()
     if out_dir != "release-dist":
         (output / "coverage.xml").touch()
-    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv
-        [str(BASH), "-c", script],
-        cwd=tmp_path,
-        env={**os.environ, "OUT_DIR": out_dir},
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    result = run_bash(script, tmp_path, {"OUT_DIR": out_dir})
     assert result.returncode == 0, result.stderr
     staged = {p.name for p in (tmp_path / "release-dist").iterdir()}
     assert staged == {"package.tar.gz", "package.whl"}, staged

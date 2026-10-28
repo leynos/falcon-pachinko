@@ -21,6 +21,30 @@ including the
 - Python 3.12 or newer
 - Falcon 4.x with ASGI support
 
+## Installation
+
+Install the `falcon-pachinko` distribution with pip or uv:
+
+```bash
+python -m pip install --pre falcon-pachinko
+uv add --prerelease allow falcon-pachinko
+```
+
+Pre-releases require opting in. Use
+`python -m pip install --pre falcon-pachinko` with pip, or
+`uv add --prerelease allow falcon-pachinko` with uv. The distribution provides
+the `falcon_pachinko` import package.
+
+Optional extras provide the example application's dependencies or the public
+testing utilities:
+
+```bash
+python -m pip install --pre 'falcon-pachinko[examples]'
+python -m pip install --pre 'falcon-pachinko[testing]'
+uv add --prerelease allow 'falcon-pachinko[examples]'
+uv add --prerelease allow 'falcon-pachinko[testing]'
+```
+
 ## Key features
 
 - `WebSocketRouter` mounts nested WebSocket routes on Falcon with

@@ -1241,3 +1241,11 @@ looking deliberate. Those contracts read the trigger block under the boolean
 key `True`, because YAML 1.1 parses the bare word `on` that way; a contract
 reading the string `"on"` finds nothing and passes on an empty mapping, which
 is itself asserted.
+
+## Publishing a release
+
+Pull requests build an sdist and a wheel from it. The tag workflow attests
+those distributions, publishes missing files through PyPI Trusted Publishing,
+then reconciles and publishes the GitHub Release after comparing digests.
+Follow the [release workflow guide](release-workflow.md) for versioning,
+repository settings, tag creation, retries, and mismatch recovery.
