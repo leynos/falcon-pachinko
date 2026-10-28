@@ -43,7 +43,9 @@ runs:
           echo "No distributions found." >&2
           exit 1
         fi
-        cp -- "${files[@]}" release-dist/
+        if [ "$(realpath "$OUT_DIR")" != "$(realpath release-dist)" ]; then
+          cp -- "${files[@]}" release-dist/
+        fi
     - name: Upload sdist and wheel artefact
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:

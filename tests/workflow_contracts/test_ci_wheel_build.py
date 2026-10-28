@@ -56,7 +56,10 @@ def test_distribution_count(
     assert (result.returncode == 0) is (expected == "pass"), result.stderr
 
 
-def test_action_stages_distributions_from_custom_output(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("out_dir", ["custom", "release-dist"])
+def test_action_stages_distributions_from_custom_output(
+    tmp_path: pathlib.Path, out_dir: str
+) -> None:
     """A custom build directory still uploads only distribution files."""
     action = yaml.load(
         (ROOT / ".github/actions/pure-python-wheel/action.yml").read_text(
@@ -69,15 +72,16 @@ def test_action_stages_distributions_from_custom_output(tmp_path: pathlib.Path) 
         for step in action["runs"]["steps"]
         if step.get("name") == "Stage distributions"
     )
-    output = tmp_path / "custom"
+    output = tmp_path / out_dir
     output.mkdir()
     (output / "package.tar.gz").touch()
     (output / "package.whl").touch()
-    (output / "coverage.xml").touch()
+    if out_dir != "release-dist":
+        (output / "coverage.xml").touch()
     result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv
         [str(BASH), "-c", script],
         cwd=tmp_path,
-        env={**os.environ, "OUT_DIR": "custom"},
+        env={**os.environ, "OUT_DIR": out_dir},
         check=False,
         capture_output=True,
         text=True,
