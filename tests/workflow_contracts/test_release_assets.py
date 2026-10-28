@@ -149,3 +149,34 @@ def test_verification_rejects_empty_distribution_set(tmp_path: pth.Path) -> None
     bundles.mkdir()
     problems = release_assets.verify(_state(publish), bundles)
     assert problems, "an empty distribution set must fail verification"
+
+
+def test_malformed_pypi_entry_reports_its_source(tmp_path: pth.Path) -> None:
+    """An index entry without hashes reports the file instead of a bare key."""
+    index = tmp_path / "index.json"
+    index.write_text(
+        '{"files": [{"filename": "p.whl", "url": "p.whl"}]}', encoding="utf-8"
+    )
+    with pytest.raises(
+        release_assets.ReleaseAssetError, match=r"index\.json.*malformed"
+    ):
+        release_assets.read_pypi_index(index)
+
+
+def test_malformed_github_entry_reports_its_source(tmp_path: pth.Path) -> None:
+    """A nameless asset is rejected with the listing filename."""
+    assets = tmp_path / "assets.json"
+    assets.write_text('{"assets": [{}]}', encoding="utf-8")
+    with pytest.raises(
+        release_assets.ReleaseAssetError, match=r"assets\.json.*malformed"
+    ):
+        release_assets.read_github_assets(assets)
+
+
+def test_missing_github_output_is_a_release_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing output configuration produces a contextual release error."""
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    with pytest.raises(release_assets.ReleaseAssetError, match="GITHUB_OUTPUT"):
+        release_assets.write_output("remaining", value=True)

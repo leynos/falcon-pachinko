@@ -23,6 +23,7 @@ to ``argparse`` and the workflow's ``GITHUB_OUTPUT`` protocol.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import typing as typ
 from pathlib import Path
@@ -160,7 +161,7 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
             _path(args, option)
         state = State.load(args.publish, args.index, args.assets)
         _COMMANDS[args.command](state, args)
-    except (ReleaseAssetError, OSError, KeyError, ValueError) as error:
+    except (ReleaseAssetError, OSError, json.JSONDecodeError) as error:
         if args.poll:
             print(error, file=sys.stderr)
         else:

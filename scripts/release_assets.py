@@ -181,19 +181,27 @@ def read_pypi_index(path: Path) -> dict[str, PypiFile]:
     dict[str, PypiFile]
         Each distribution filename mapped to its SHA-256 digest and download URL.
 
+    Raises
+    ------
+    ReleaseAssetError
+        If the index contains malformed file entries.
+
     Notes
     -----
-    File access and JSON decoding errors propagate. A malformed file entry
-    also propagates its missing-key error.
+    File access and JSON decoding errors propagate.
     """
     document = json.loads(path.read_text(encoding="utf-8"))
-    return {
-        entry["filename"]: PypiFile(
-            sha256=entry["hashes"]["sha256"].lower(),
-            url=urllib.parse.urljoin(INDEX_URL, entry["url"]),
-        )
-        for entry in document.get("files", [])
-    }
+    try:
+        return {
+            entry["filename"]: PypiFile(
+                sha256=entry["hashes"]["sha256"].lower(),
+                url=urllib.parse.urljoin(INDEX_URL, entry["url"]),
+            )
+            for entry in document.get("files", [])
+        }
+    except (KeyError, TypeError, AttributeError, ValueError) as error:
+        msg = f"{path.name} has a malformed file entry: {error!r}"
+        raise ReleaseAssetError(msg) from error
 
 
 def read_github_assets(path: Path) -> dict[str, str | None]:
@@ -210,16 +218,24 @@ def read_github_assets(path: Path) -> dict[str, str | None]:
         Asset filenames mapped to lowercase SHA-256 hex digests, or ``None``
         when GitHub did not report a SHA-256 digest.
 
+    Raises
+    ------
+    ReleaseAssetError
+        If the release asset listing contains malformed entries.
+
     Notes
     -----
-    File access and JSON decoding errors propagate. An asset entry without a
-    name propagates its missing-key error.
+    File access and JSON decoding errors propagate.
     """
     document = json.loads(path.read_text(encoding="utf-8"))
-    return {
-        asset["name"]: _digest_hex(asset.get("digest"))
-        for asset in document.get("assets", [])
-    }
+    try:
+        return {
+            asset["name"]: _digest_hex(asset.get("digest"))
+            for asset in document.get("assets", [])
+        }
+    except (KeyError, TypeError, AttributeError, ValueError) as error:
+        msg = f"{path.name} has a malformed asset entry: {error!r}"
+        raise ReleaseAssetError(msg) from error
 
 
 def _digest_hex(digest: object) -> str | None:
@@ -298,12 +314,20 @@ def write_output(name: str, *, value: bool) -> None:
     value : bool
         The boolean value to write in lowercase.
 
+    Raises
+    ------
+    ReleaseAssetError
+        If ``GITHUB_OUTPUT`` is not set.
+
     Notes
     -----
-    Missing ``GITHUB_OUTPUT`` and output file access errors propagate to the
-    caller.
+    Output file access errors propagate to the caller.
     """
-    with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if output_path is None:
+        msg = "GITHUB_OUTPUT is required to write step outputs"
+        raise ReleaseAssetError(msg)
+    with Path(output_path).open("a", encoding="utf-8") as output:
         output.write(f"{name}={str(value).lower()}\n")
 
 
