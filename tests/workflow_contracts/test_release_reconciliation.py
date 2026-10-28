@@ -16,6 +16,7 @@ import re
 import shutil
 import sys
 import typing as typ
+from pathlib import PurePath
 
 import pytest
 
@@ -213,7 +214,7 @@ def test_each_destination_is_sent_only_what_it_lacks(fake: FakeRelease) -> None:
 
     uploads = [call for call in fake.calls("gh") if call[:2] == ["release", "upload"]]
     assert len(uploads) == 1, uploads
-    sent = sorted(path.rsplit("/", 1)[-1] for path in uploads[0][3:])
+    sent = sorted(PurePath(path).name for path in uploads[0][3:])
     assert sent == sorted((_PYPI_ONLY, _NEITHER)), "Release contract failed"
     assert not any("--clobber" in call for call in fake.calls("gh")), (
         "Release contract failed"

@@ -92,25 +92,30 @@ def _gh_download(args: list[str]) -> int:
     return 0
 
 
+def _gh_view(args: list[str]) -> int:
+    """Return the requested release fields from the fake service."""
+    if "--jq" in args:
+        print("true" if _is_draft() else "false")
+    else:
+        print(_assets_json())
+    return 0
+
+
 def gh(args: list[str]) -> int:
     """Serve the ``gh release`` calls the release workflow makes."""
     if args and args[0] == "api":
         print(os.environ.get("GITHUB_REF_NAME", "v1.2.3"))
         return 0
     command = args[1] if len(args) > 1 else ""
-    if command == "view":
-        if "--jq" in args:
-            # The workflow asks for one scalar field; `gh --jq` prints the
-            # value alone, without the JSON document around it.
-            print("true" if _is_draft() else "false")
+    match command:
+        case "view":
+            return _gh_view(args)
+        case "upload":
+            return _gh_upload(args[3:])
+        case "download":
+            return _gh_download(args)
+        case _:
             return 0
-        print(_assets_json())
-        return 0
-    if command == "upload":
-        return _gh_upload(args[3:])
-    if command == "download":
-        return _gh_download(args)
-    return 0
 
 
 def _index_serving() -> int:
