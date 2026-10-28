@@ -14,7 +14,16 @@ if typ.TYPE_CHECKING:
 
 @pytest.mark.parametrize(
     ("version", "expected"),
-    [("0.1.0-alpha3", True), ("1.0.0", False), ("1.0.0+rc", False)],
+    [
+        ("0.1.0-alpha3", True),
+        ("1.0.0", False),
+        ("1.0.0+rc", False),
+        ("1.0.0rc1", True),
+        ("1.0.0.dev1", True),
+        ("1.0.0preview1", True),
+        ("1.0.0.post1", False),
+        ("1.0.0.post1.dev2", True),
+    ],
 )
 def test_prerelease_classification(version: str, *, expected: bool) -> None:
     """Classify public prerelease markers without treating local labels as such."""
@@ -51,3 +60,12 @@ def test_normalized_spelling_does_not_match(tmp_path: pathlib.Path) -> None:
         )
         == 1
     ), "Release contract must hold"
+
+
+def test_tag_without_prefix_is_rejected(tmp_path: pathlib.Path) -> None:
+    """A tag without the required prefix fails before comparison."""
+    result = release_version.main(
+        {"GITHUB_REF_NAME": "0.1.0-alpha3", "GITHUB_OUTPUT": str(tmp_path / "output")},
+        tmp_path,
+    )
+    assert result == 1, "a release tag must start with v"

@@ -140,3 +140,12 @@ def test_the_missing_list_names_what_the_index_does_not_yet_show(
     assert release_assets.missing_from_index(expected_names, listed) == missing, (
         "Release contract must hold"
     )
+
+
+def test_verification_rejects_empty_distribution_set(tmp_path: pth.Path) -> None:
+    """Verification cannot publish an empty release."""
+    publish = _built(tmp_path / "publish")
+    bundles = tmp_path / "bundles"
+    bundles.mkdir()
+    problems = release_assets.verify(_state(publish), bundles)
+    assert problems, "an empty distribution set must fail verification"

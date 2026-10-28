@@ -61,6 +61,17 @@ class Plan:
     github_uploads: frozenset[str]
 
 
+def _source_of(
+    name: str, on_pypi: cabc.Collection[str], on_github: cabc.Collection[str]
+) -> Source:
+    """Choose PyPI, GitHub, or local bytes in that order."""
+    if name in on_pypi:
+        return Source.PYPI
+    if name in on_github:
+        return Source.GITHUB
+    return Source.LOCAL
+
+
 def plan(
     local: cabc.Iterable[str],
     on_pypi: cabc.Collection[str],
@@ -90,14 +101,7 @@ def plan(
 
     """
     names = frozenset(local)
-    canonical = {
-        name: Source.PYPI
-        if name in on_pypi
-        else Source.GITHUB
-        if name in on_github
-        else Source.LOCAL
-        for name in names
-    }
+    canonical = {name: _source_of(name, on_pypi, on_github) for name in names}
     return Plan(
         canonical=canonical,
         pypi_uploads=frozenset(name for name in names if name not in on_pypi),
@@ -165,7 +169,23 @@ class PypiFile:
 
 
 def read_pypi_index(path: Path) -> dict[str, PypiFile]:
-    """Map each filename in a PEP 691 JSON index to its digest and URL."""
+    """Map each filename in a PEP 691 JSON index to its digest and URL.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The saved JSON document returned by PyPI's Simple API.
+
+    Returns
+    -------
+    dict[str, PypiFile]
+        Each distribution filename mapped to its SHA-256 digest and download URL.
+
+    Notes
+    -----
+    File access and JSON decoding errors propagate. A malformed file entry
+    also propagates its missing-key error.
+    """
     document = json.loads(path.read_text(encoding="utf-8"))
     return {
         entry["filename"]: PypiFile(
@@ -177,7 +197,24 @@ def read_pypi_index(path: Path) -> dict[str, PypiFile]:
 
 
 def read_github_assets(path: Path) -> dict[str, str | None]:
-    """Map each asset in ``gh release view --json assets`` to its digest."""
+    """Map each asset in ``gh release view --json assets`` to its digest.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The saved JSON response from ``gh release view --json assets``.
+
+    Returns
+    -------
+    dict[str, str | None]
+        Asset filenames mapped to lowercase SHA-256 hex digests, or ``None``
+        when GitHub did not report a SHA-256 digest.
+
+    Notes
+    -----
+    File access and JSON decoding errors propagate. An asset entry without a
+    name propagates its missing-key error.
+    """
     document = json.loads(path.read_text(encoding="utf-8"))
     return {
         asset["name"]: _digest_hex(asset.get("digest"))
@@ -193,13 +230,48 @@ def _digest_hex(digest: object) -> str | None:
 
 
 def sha256_of(path: Path) -> str:
-    """Return the SHA-256 hex digest of one file's bytes."""
+    """Return the SHA-256 hex digest of one file's bytes.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The file whose bytes to hash.
+
+    Returns
+    -------
+    str
+        The lowercase SHA-256 digest in hexadecimal form.
+
+    Notes
+    -----
+    File access errors propagate to the caller.
+    """
     with path.open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def local_names(directory: Path) -> list[str]:
-    """List the artefact names in ``directory``, refusing any unsafe name."""
+    """List the artefact names in ``directory``, refusing any unsafe name.
+
+    Parameters
+    ----------
+    directory : pathlib.Path
+        The directory containing distribution files.
+
+    Returns
+    -------
+    list[str]
+        The sorted filenames found in the directory.
+
+    Raises
+    ------
+    ReleaseAssetError
+        If a filename is unsafe to use as an artefact path or TSV field.
+
+    Notes
+    -----
+    Directory access errors propagate to the caller.
+    """
     names = sorted(path.name for path in directory.iterdir())
     unsafe = [name for name in names if not _SAFE_NAME.fullmatch(name)]
     if unsafe:
@@ -217,7 +289,20 @@ def _check_digest(path: Path, expected: str | None) -> None:
 
 
 def write_output(name: str, *, value: bool) -> None:
-    """Append one ``true``/``false`` step output for the workflow."""
+    """Append one ``true``/``false`` step output for the workflow.
+
+    Parameters
+    ----------
+    name : str
+        The GitHub Actions output name.
+    value : bool
+        The boolean value to write in lowercase.
+
+    Notes
+    -----
+    Missing ``GITHUB_OUTPUT`` and output file access errors propagate to the
+    caller.
+    """
     with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
         output.write(f"{name}={str(value).lower()}\n")
 
@@ -237,6 +322,17 @@ class State:
         ``assets`` is optional because one command reads the PyPI index alone;
         a caller that needs the release's holdings passes the listing.
 
+        Parameters
+        ----------
+        publish : pathlib.Path
+            Directory containing the staged distribution files.
+        index : pathlib.Path | None
+            Saved PyPI Simple API response, or ``None`` when PyPI state is not
+            needed.
+        assets : pathlib.Path | None
+            Saved GitHub Release asset listing, or ``None`` when no listing is
+            available.
+
         Returns
         -------
         State
@@ -246,12 +342,39 @@ class State:
         return cls(publish, pypi, read_github_assets(assets) if assets else {})
 
     def plan(self) -> Plan:
-        """Plan this run's uploads against both destinations."""
+        """Plan this run's uploads against both destinations.
+
+        Returns
+        -------
+        Plan
+            Canonical sources and the filenames each destination lacks.
+
+        Notes
+        -----
+        Errors from listing the staged directory or validating its filenames
+        propagate to the caller.
+        """
         return plan(local_names(self.publish), self.pypi, self.github)
 
 
 def carryover(state: State) -> list[str]:
-    """Return the names whose GitHub bytes PyPI may need."""
+    """Return the names whose GitHub bytes PyPI may need.
+
+    Parameters
+    ----------
+    state : State
+        The staged artefacts and destination listings.
+
+    Returns
+    -------
+    list[str]
+        Sorted filenames present in the build and the GitHub Release.
+
+    Notes
+    -----
+    Errors from listing the staged directory or validating its filenames
+    propagate to the caller.
+    """
     return sorted(set(local_names(state.publish)) & set(state.github))
 
 
@@ -274,14 +397,17 @@ def stage_pypi(state: State, github_files: Path) -> bool:
     decided = state.plan()
     for name, source in sorted(decided.canonical.items()):
         artefact = state.publish / name
-        if source is Source.PYPI:
-            print(f"::notice::Skipping {name}: already on PyPI")
-            artefact.unlink()
-        elif source is Source.GITHUB:
-            carried = github_files / name
-            _check_digest(carried, state.github[name])
-            print(f"::notice::Uploading the GitHub Release's bytes for {name}")
-            shutil.copyfile(carried, artefact)
+        match source:
+            case Source.PYPI:
+                print(f"::notice::Skipping {name}: already on PyPI")
+                artefact.unlink()
+            case Source.GITHUB:
+                carried = github_files / name
+                _check_digest(carried, state.github[name])
+                print(f"::notice::Uploading the GitHub Release's bytes for {name}")
+                shutil.copyfile(carried, artefact)
+            case Source.LOCAL:
+                pass
     if not decided.pypi_uploads:
         print("Every artefact is already on PyPI; nothing to publish.")
     return bool(decided.pypi_uploads)
@@ -316,17 +442,26 @@ def canonical_digest(state: State, name: str) -> tuple[Source, str | None]:
     The digest is ``None`` only for a GitHub asset whose digest GitHub did not
     report; this run's own bytes are always hashable.
 
+    Parameters
+    ----------
+    state : State
+        The staged artefacts and both destinations' listings.
+    name : str
+        Distribution filename whose canonical source is being resolved.
+
     Returns
     -------
     tuple[Source, str | None]
         The canonical source and its reported digest.
     """
     source = state.plan().canonical[name]
-    if source is Source.PYPI:
-        return source, state.pypi[name].sha256
-    if source is Source.GITHUB:
-        return source, state.github[name]
-    return source, sha256_of(state.publish / name)
+    match source:
+        case Source.PYPI:
+            return source, state.pypi[name].sha256
+        case Source.GITHUB:
+            return source, state.github[name]
+        case Source.LOCAL:
+            return source, sha256_of(state.publish / name)
 
 
 def attests_canonical_bytes(state: State) -> bool:
@@ -411,7 +546,28 @@ def _copy_unattached_bundles(bundles: Path, state: State, output: Path) -> None:
 
 
 def stage_github(state: State, bundles: Path, output: Path) -> list[tuple[str, str]]:
-    """Stage what the GitHub Release lacks; return the PyPI files to fetch."""
+    """Stage what the GitHub Release lacks and list PyPI files to fetch.
+
+    Parameters
+    ----------
+    state : State
+        The staged distributions and existing destination assets.
+    bundles : pathlib.Path
+        The directory containing provenance bundles from this build.
+    output : pathlib.Path
+        The directory in which to stage missing release assets.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        Filename and HTTPS URL pairs for canonical PyPI files missing from
+        the GitHub Release.
+
+    Notes
+    -----
+    Errors from validating the state, reading inputs, checking URLs, or staging
+    files propagate to the caller.
+    """
     lacking = sorted(state.plan().github_uploads)
     fetch = _pypi_fetch_list(lacking, state.pypi)
     output.mkdir(parents=True, exist_ok=True)
@@ -421,7 +577,19 @@ def stage_github(state: State, bundles: Path, output: Path) -> list[tuple[str, s
 
 
 def check_fetched(state: State, output: Path) -> None:
-    """Raise unless every file fetched from PyPI matches PyPI's digest."""
+    """Raise unless every file fetched from PyPI matches PyPI's digest.
+
+    Parameters
+    ----------
+    state : State
+        The canonical sources and PyPI digests for release distributions.
+    output : pathlib.Path
+        The directory containing files fetched from PyPI.
+
+    Notes
+    -----
+    File access errors and digest mismatches propagate to the caller.
+    """
     for name in sorted(state.plan().github_uploads & set(state.pypi)):
         _check_digest(output / name, state.pypi[name].sha256)
 
@@ -433,13 +601,23 @@ def verify(state: State, bundles: Path) -> list[str]:
     :func:`attests_canonical_bytes`. A run that reconciles any name onto other
     bytes cannot truthfully attach its own, and `verify` must not demand it.
 
+    Parameters
+    ----------
+    state : State
+        The staged distributions and PyPI and GitHub asset listings.
+    bundles : pathlib.Path
+        Directory containing the provenance bundles attached to this build.
+
     Returns
     -------
     list[str]
         Descriptions of missing or inconsistent destination assets.
     """
+    names = local_names(state.publish)
+    if not names:
+        return ["No distributions were provided for verification."]
     pypi = {name: file.sha256 for name, file in state.pypi.items()}
-    problems = mismatches(local_names(state.publish), pypi, state.github)
+    problems = mismatches(names, pypi, state.github)
     if not attests_canonical_bytes(state):
         return problems
     missing = sorted(

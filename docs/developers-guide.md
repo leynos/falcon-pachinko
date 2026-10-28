@@ -1063,8 +1063,12 @@ public-repository minutes are free and where this migration has nothing to gain.
 | `ci.yml` `falcon-minimum`             | pull request, push | 30 min  |
 | `ci.yml` `build-dist`                 | pull request, push | 15 min  |
 | `coverage-main.yml` `coverage-upload` | push to `main`     | 15 min  |
-| `release.yml` `pure-wheel`            | tag push           | 30 min  |
-| `release.yml` `release`               | tag push           | 30 min  |
+| `release.yml` `check-version`         | tag push           | 30 min  |
+| `release.yml` `build-wheels`          | tag push           | 30 min  |
+| `release.yml` `attest`                | tag push           | 30 min  |
+| `release.yml` `draft-release`         | tag push           | 30 min  |
+| `release.yml` `publish-pypi`          | tag push           | 30 min  |
+| `release.yml` `publish-release`       | tag push           | 30 min  |
 
 *Table: the lanes that run on Ubicloud.*
 
@@ -1074,7 +1078,7 @@ calls a reusable workflow and declares no runner of its own.
 
 ### Pull-request lanes use a fork-safe runner expression
 
-A pull request from a fork cannot obtain an Ubicloud runner. `lint-test` and
+A pull request from a fork cannot obtain an Ubicloud runner. `lint-test`,
 `falcon-minimum` and `build-dist` serve pull requests, so a fixed
 `ubicloud-standard-2` would leave a fork pull request queueing for a runner
 that never arrives. A pull request Dependabot opened also takes the hosted
@@ -1213,8 +1217,9 @@ contracts rather than derived from the workflows. The rule that every Ubicloud
 lane declares a ceiling says nothing about the number, so a ceiling widened to
 six hours would pass it while leaving this guide's table wrong; the same holds
 for `coverage-main.yml`'s `branches: [main]` and `release.yml`'s `v*.*.*` tags,
-which carry the rest of the placement argument. Change a figure in a workflow
-and this guide in the same commit, or the contract fails.
+which carry the rest of the placement argument. All six release jobs use the
+same 30-minute ceiling. Change a figure in a workflow and this guide in the
+same commit, or the contract fails.
 
 The registry in `.github/actionlint.yaml` is held to an equality with the
 labels actually in use, in both directions. A subset assertion would miss a
@@ -1228,10 +1233,11 @@ contract names the workflows the traversal must reach, so dropping one fails
 there rather than silently shrinking what the registry is held to.
 
 Two contracts read the `on:` block rather than the jobs, because the placement
-rules rest on claims about events: that a fork can reach `lint-test` and
-`falcon-minimum`, and that no fork can reach the remaining Ubicloud jobs. A
-contract reading only `runs-on` asserts the consequence and never the premise,
-so a silent change to a trigger would leave the consequence looking deliberate.
-Those contracts read the trigger block under the boolean key `True`, because
-YAML 1.1 parses the bare word `on` that way; a contract reading the string
-`"on"` finds nothing and passes on an empty mapping, which is itself asserted.
+rules rest on claims about events: that a fork can reach `lint-test`,
+`falcon-minimum` and `build-dist`, and that no fork can reach the remaining
+Ubicloud jobs. A contract reading only `runs-on` asserts the consequence and
+never the premise, so a silent change to a trigger would leave the consequence
+looking deliberate. Those contracts read the trigger block under the boolean
+key `True`, because YAML 1.1 parses the bare word `on` that way; a contract
+reading the string `"on"` finds nothing and passes on an empty mapping, which
+is itself asserted.

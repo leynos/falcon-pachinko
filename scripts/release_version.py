@@ -76,7 +76,22 @@ def is_prerelease(version: str) -> bool:
 
 
 def main(environ: cabc.Mapping[str, str], root: Path) -> int:
-    """Compare the declared version with the tag's; report pre-release status."""
+    """Compare the declared version with the tag's; report pre-release status.
+
+    Parameters
+    ----------
+    environ : collections.abc.Mapping[str, str]
+        Environment values containing ``GITHUB_REF_NAME`` and
+        ``GITHUB_OUTPUT``. The tag must include its leading ``v``.
+    root : pathlib.Path
+        Repository root containing ``pyproject.toml``.
+
+    Returns
+    -------
+    int
+        ``0`` when the tag version matches the declared version, otherwise
+        ``1`` after reporting a workflow error.
+    """
     tag = environ["GITHUB_REF_NAME"]
     if not tag.startswith("v"):
         print(f"::error::Release tag must start with v: {tag}")

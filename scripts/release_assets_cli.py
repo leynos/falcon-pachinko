@@ -112,7 +112,8 @@ def _verify(state: State, args: argparse.Namespace) -> None:
     """Fail on any artefact or bundle the two destinations disagree on."""
     problems = verify(state, _path(args, "bundles"))
     if problems:
-        raise ReleaseAssetError("; ".join(problems))
+        msg = "; ".join(problems)
+        raise ReleaseAssetError(msg)
     print("PyPI and the GitHub Release hold the same bytes for every artefact.")
 
 
@@ -126,10 +127,35 @@ _COMMANDS: dict[str, cabc.Callable[[State, argparse.Namespace], None]] = {
 }
 
 
+_REQUIRES: dict[str, tuple[str, ...]] = {
+    "carryover": ("assets",),
+    "stage-pypi": ("index", "assets", "github_files"),
+    "stage-github": ("index", "assets", "bundles", "output"),
+    "check-fetched": ("index", "assets", "output"),
+    "index-expected": ("index",),
+    "verify": ("index", "assets", "bundles"),
+}
+
+
 def main(argv: cabc.Sequence[str] | None = None) -> int:
-    """Run one reconciliation command; report failures as annotations."""
+    """Run one reconciliation command; report failures as annotations.
+
+    Parameters
+    ----------
+    argv : collections.abc.Sequence[str] | None, optional
+        Command-line arguments to parse. If ``None``, parse the process
+        arguments from ``sys.argv``.
+
+    Returns
+    -------
+    int
+        ``0`` when the selected command succeeds, or ``1`` when a release
+        asset or input-file error is reported.
+    """
     args = _parser().parse_args(argv)
     try:
+        for option in _REQUIRES[args.command]:
+            _path(args, option)
         state = State.load(args.publish, args.index, args.assets)
         _COMMANDS[args.command](state, args)
     except (ReleaseAssetError, OSError, KeyError, ValueError) as error:
