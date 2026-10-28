@@ -148,7 +148,7 @@ build: uv .venv uv.lock ## Build virtual-env and install deps
 # `uv build` writes both artefacts into `dist/`, which is the directory
 # `make clean` removes and `.gitignore` excludes.
 build-release: ## Build artefacts (sdist & wheel)
-	uv build --sdist --wheel
+	uv build --out-dir dist
 
 clean: ## Remove build artefacts
 	rm -rf build dist *.egg-info \

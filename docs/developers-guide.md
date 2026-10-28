@@ -1061,6 +1061,7 @@ public-repository minutes are free and where this migration has nothing to gain.
 | ------------------------------------- | ------------------ | ------- |
 | `ci.yml` `lint-test`                  | pull request, push | 15 min  |
 | `ci.yml` `falcon-minimum`             | pull request, push | 30 min  |
+| `ci.yml` `build-dist`                 | pull request, push | 15 min  |
 | `coverage-main.yml` `coverage-upload` | push to `main`     | 15 min  |
 | `release.yml` `pure-wheel`            | tag push           | 30 min  |
 | `release.yml` `release`               | tag push           | 30 min  |
@@ -1076,14 +1077,15 @@ calls a reusable workflow and declares no runner of its own.
 ### Pull-request lanes use a fork-safe runner expression
 
 A pull request from a fork cannot obtain an Ubicloud runner. `lint-test` and
-`falcon-minimum` serve pull requests, so a fixed `ubicloud-standard-2` would
-leave such a pull request queueing for a runner that never arrives. A pull
-request Dependabot opened also takes the hosted arm: hosted minutes cost
-nothing on a public repository, and Dependabot opens many pull requests, which
-therefore build cold on the hosted pool. The guard tests the pull request's
-author, not `github.actor`, because the actor is whoever triggered the run, so
-a person pushing to a Dependabot branch would flip the runner. Both jobs
-resolve their label from the head repository and the author instead:
+`falcon-minimum` and `build-dist` serve pull requests, so a fixed
+`ubicloud-standard-2` would leave a fork pull request queueing for a runner
+that never arrives. A pull request Dependabot opened also takes the hosted
+arm: hosted minutes cost nothing on a public repository, and Dependabot opens
+many pull requests, which therefore build cold on the hosted pool. The guard
+tests the pull request's author, not `github.actor`, because the actor is
+whoever triggered the run, so a person pushing to a Dependabot branch would
+flip the runner. All three jobs resolve their label from the head repository
+and the author instead:
 
 ```yaml
 runs-on: >-

@@ -52,8 +52,9 @@ from .workflow_support import (
 FORK_FALLBACK_LANES = (
     ("ci.yml", "lint-test"),
     ("ci.yml", "falcon-minimum"),
+    ("ci.yml", "build-dist"),
 )
-# The trigger contract names the shared workflow trigger once; both jobs live
+# The trigger contract names the shared workflow trigger once; all jobs live
 # in `ci.yml` and inherit the same workflow-level events.
 FORK_FALLBACK_LANE = FORK_FALLBACK_LANES[0]
 #: Each Ubicloud lane's ceiling in minutes, as the developer guide's table
@@ -64,6 +65,7 @@ FORK_FALLBACK_LANE = FORK_FALLBACK_LANES[0]
 LANE_CEILINGS = {
     ("ci.yml", "lint-test"): 15,
     ("ci.yml", "falcon-minimum"): 30,
+    ("ci.yml", "build-dist"): 15,
     ("coverage-main.yml", "coverage-upload"): 15,
     ("release.yml", "pure-wheel"): 30,
     ("release.yml", "release"): 30,
