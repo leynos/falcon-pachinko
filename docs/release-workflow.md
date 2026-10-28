@@ -1,9 +1,8 @@
 # Release Workflow
 
 The release workflow builds and publishes a pure Python wheel. Binary wheels
-for specific architectures are no longer produced. The cross-platform `build`
-job in `.github/workflows/release.yml` was disabled to avoid unnecessary
-maintenance, since the project contains no C or Rust code.
+for specific architectures are not produced because the project contains no C
+or Rust code.
 
 The process runs automatically when a git tag matching `v*.*.*` is pushed. For
 example:
@@ -22,4 +21,5 @@ uv build --wheel --out-dir dist
 ```
 
 To build both artefacts locally, run `make build-release`, which runs
-`uv build --sdist --wheel` and writes them into `dist/`.
+`uv build --out-dir dist`. This builds the source distribution first, then
+builds the wheel from it, and writes both files into `dist/`.

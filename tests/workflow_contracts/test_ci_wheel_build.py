@@ -29,7 +29,7 @@ def test_distribution_count(
 ) -> None:
     """Only a single sdist with at least one wheel is accepted."""
     workflow = yaml.load(
-        (ROOT / ".github/workflows/ci.yml").read_text(),
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
         Loader=StrictLoader,  # ruff: ignore[unsafe-yaml-load] - strict SafeLoader subclass
     )
     steps = workflow["jobs"]["build-dist"]["steps"]
@@ -54,3 +54,75 @@ def test_distribution_count(
         timeout=30,
     )
     assert (result.returncode == 0) is (expected == "pass"), result.stderr
+
+
+def test_action_stages_distributions_from_custom_output(tmp_path: pathlib.Path) -> None:
+    """A custom build directory still uploads only distribution files."""
+    action = yaml.load(
+        (ROOT / ".github/actions/pure-python-wheel/action.yml").read_text(
+            encoding="utf-8"
+        ),
+        Loader=StrictLoader,  # ruff: ignore[unsafe-yaml-load] - strict SafeLoader subclass
+    )
+    script = next(
+        step["run"]
+        for step in action["runs"]["steps"]
+        if step.get("name") == "Stage distributions"
+    )
+    output = tmp_path / "custom"
+    output.mkdir()
+    (output / "package.tar.gz").touch()
+    (output / "package.whl").touch()
+    (output / "coverage.xml").touch()
+    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv
+        [str(BASH), "-c", script],
+        cwd=tmp_path,
+        env={**os.environ, "OUT_DIR": "custom"},
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    staged = {p.name for p in (tmp_path / "release-dist").iterdir()}
+    assert staged == {"package.tar.gz", "package.whl"}, staged
+
+
+def test_release_uploads_both_distribution_kinds(tmp_path: pathlib.Path) -> None:
+    """The interim release step uploads both kinds from the named artefact."""
+    workflow = yaml.load(
+        (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"),
+        Loader=StrictLoader,  # ruff: ignore[unsafe-yaml-load] - strict SafeLoader subclass
+    )
+    step = next(
+        step
+        for step in workflow["jobs"]["release"]["steps"]
+        if step.get("name") == "Upload distributions to release"
+    )
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "package.tar.gz").touch()
+    (dist / "package.whl").touch()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > args\n', encoding="utf-8")
+    gh.chmod(0o755)
+    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv
+        [str(BASH), "-c", step["run"]],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "GITHUB_REF_NAME": "v1.0.0",
+            "BASH_ENV": "",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    arguments = (tmp_path / "args").read_text(encoding="utf-8").splitlines()
+    assert "dist/package.tar.gz" in arguments, arguments
+    assert "dist/package.whl" in arguments, arguments

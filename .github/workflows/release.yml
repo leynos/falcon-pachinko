@@ -50,11 +50,19 @@ jobs:
           generate_release_notes: true
       - uses: actions/download-artifact@v8
         with:
+          name: wheels-pure
           path: dist
-      - name: Upload wheels to release
+      - name: Upload distributions to release
+        shell: bash
         run: |
-          set -eu
-          find dist/wheels-* -type f -name "*.whl" -print0 | \
-            xargs -0 -r gh release upload "${{ github.ref_name }}"
+          set -euo pipefail
+          shopt -s nullglob
+          wheels=(dist/*.whl)
+          sdists=(dist/*.tar.gz)
+          if [ "${#wheels[@]}" -eq 0 ] || [ "${#sdists[@]}" -ne 1 ]; then
+            echo "Expected wheels and exactly one sdist." >&2
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" "${wheels[@]}" "${sdists[@]}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
