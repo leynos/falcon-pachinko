@@ -17,7 +17,7 @@ from falcon_pachinko import (
 from falcon_pachinko.hooks import HookContext, HookEvent
 from falcon_pachinko.testing import WebSocketTestClient
 
-from ._live_server import LiveServerTransport
+from ._live_server import LiveServerTransport, _assert_no_loop_errors
 from ._live_server import SignalFreeServer as _SignalFreeServer
 
 if typ.TYPE_CHECKING:
@@ -102,3 +102,4 @@ def live_server(
     finally:
         for context in contexts:
             live_event_loop.run_until_complete(context.transport.stop())
+            _assert_no_loop_errors(context.transport.loop_errors)

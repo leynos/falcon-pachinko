@@ -60,16 +60,26 @@ into the router-owned path. It uses the shared session driver and public
 
 Once `on_connect()` approves or the resource accepts, `before_disconnect` hooks
 run before `on_disconnect`. Normal peer closure uses Falcon's
-`WebSocketDisconnected.code`; an unavailable code and cancellation cleanup use
-1006 as callback metadata. Cancellation propagates without sending a close
-frame with reserved code 1006. Unexpected receive or handler failures use 1011
-while the transport remains open. If transport loss has already closed it
-without a reported code, cleanup uses 1006 and skips another close. A rejection
-that remains unaccepted does not call `on_disconnect`; if `on_connect()`
-accepts and then fails, cleanup still runs. Multiple ordinary failures are
-raised in a primary-first `ExceptionGroup`. Cancellation remains a bare
-`CancelledError`, and cleanup failures hidden by cancellation are reported to
-the event loop's exception handler.
+`WebSocketDisconnected.code`; an unavailable code and an already-closed
+transport without a reported code use 1006 as callback metadata. Cancellation
+without an earlier selected or reported code selects 1001 and attempts a
+best-effort close when the accepted transport remains open. If caller
+cancellation arrives while peer-close cleanup is already running, the shielded
+task preserves the selected peer code and does not restart either cleanup
+stage. Unexpected receive or handler failures use 1011 while the transport
+remains open. If transport loss has already closed it without a reported code,
+cleanup uses 1006 and skips another close. A rejection that remains unaccepted
+does not call `on_disconnect`; if `on_connect()` accepts and then fails,
+cleanup still runs. Multiple ordinary failures are raised in a primary-first
+`ExceptionGroup`. Cancellation remains a bare `CancelledError`, and cleanup
+failures hidden by cancellation are reported to the event loop's exception
+handler.
+
+When a handler or server closes an open transport, the requested code (1000
+when omitted) becomes effective before the close send is awaited. A later
+peer-close response cannot replace it. If the close attempt fails while the
+transport remains open, the provisional code is rolled back; an already-closed
+transport contributes its reported code, or 1006 when none is available.
 
 The diagrams below show the opted-in `receive_loop=True` session path.
 
@@ -403,15 +413,20 @@ logic.
     closure, cancellation, or receive failure. Failures in `after_connect`,
     `accept`, or `on_accepted` are cleaned up even when `receive_loop=False`.
     `close_code` is `WebSocketDisconnected.code` for normal peer closure, or
-    1006 when the code is missing, the transport is already closed without a
-    code, or cancellation interrupts the session. Cancellation propagates
-    without sending a close frame with reserved code 1006. Unexpected receive
-    or handler failures close with 1011 while the transport remains open and
-    propagate. Rejected negotiations and failures before approval or
+    1006 when the code is missing or the transport is already closed without a
+    code. Cancellation preserves a previously selected or reported close code;
+    otherwise it selects 1001 and attempts a close while the accepted transport
+    remains open. Code-less transport loss uses 1006. If caller
+    cancellation arrives during peer-close cleanup, the shielded task preserves
+    the selected peer code and does not restart either cleanup stage. Unexpected
+    receive or handler failures close with 1011 while the transport remains
+    open and propagate. Rejected negotiations and failures before approval or
     acceptance do not call it; acceptance followed by a setup failure does.
-    After successful setup with `receive_loop=False`, the application owns
-    session cleanup. Lifecycle hooks and handlers receive `SessionWebSocket`
-    around native Falcon sockets in either receive mode; the adapter is passed
+    After successful setup and observed acceptance with `receive_loop=False`,
+    the application owns session cleanup. Approval without completed
+    acceptance is cleaned up by the router before it returns. Lifecycle hooks
+    and handlers receive `SessionWebSocket` around native Falcon sockets in
+    either receive mode; the adapter is passed
     to the application for its receive loop when setup succeeds with
     `receive_loop=False`.
 
@@ -1243,7 +1258,9 @@ router and the relationships between the main classes.
 
 The router-owned receive path shown here is enabled with
 `WebSocketRouter(receive_loop=True)`; by default, the router returns after
-acceptance and the application owns subsequent receives and cleanup.
+observed acceptance and the application owns subsequent receives and cleanup.
+Approval without completed acceptance is cleaned up by the router before it
+returns.
 
 ```mermaid
 sequenceDiagram
@@ -1273,13 +1290,16 @@ sequenceDiagram
             WebSocketResource-->>Client: optional response
         end
         alt Unexpected receive or dispatch exception
-            WebSocketRouter->>Client: Close WebSocket with 1011
-            WebSocketRouter->>WebSocketRouter: before_disconnect hooks (best effort)
-            WebSocketRouter->>WebSocketResource: Best-effort on_disconnect(1011)
-        else Peer disconnect
-            WebSocketRouter->>WebSocketRouter: before_disconnect hooks
-            WebSocketRouter->>WebSocketResource: on_disconnect(WebSocketDisconnected.code)
+            opt Accepted transport remains open without a selected code
+                WebSocketRouter->>Client: Best-effort close with 1011
+            end
+        else Cancellation
+            opt Accepted transport remains open without a selected code
+                WebSocketRouter->>Client: Best-effort close with 1001
+            end
         end
+        WebSocketRouter->>WebSocketRouter: Shielded before_disconnect hooks
+        WebSocketRouter->>WebSocketResource: Shielded on_disconnect(effective code)
     end
 ```
 
@@ -1640,19 +1660,24 @@ frame to the selected resource's dispatcher and waits for that dispatch to
 finish before receiving the next frame. The loop creates no task per frame. A
 normal peer close runs `before_disconnect` hooks and attempts `on_disconnect`
 once with `WebSocketDisconnected.code`; a missing peer close code maps to 1006.
-Cancellation propagates after cleanup with 1006 as callback metadata and does
-not send a close frame with reserved code 1006. An unexpected receive or
-handler exception closes with 1011, runs best-effort cleanup, and propagates
-the original exception. Failure during `after_connect` or `accept` uses 1006
-for cleanup. An ordinary exception from `on_accepted` occurs after acceptance,
-so the router closes with 1011 and passes 1011 to cleanup, including when
-`receive_loop=False`. Cancellation during `on_accepted` uses 1006 as cleanup
-metadata and does not send a close frame with that reserved code. Cancellation
-cleanup may retry a disconnect hook interrupted before the callback, but
-interruption inside the callback does not call it again. After successful setup
-with the default `receive_loop=False`, the router returns and the application
-owns receiving and cleanup. Returning normally from `on_unhandled` leaves an
-opted-in session open.
+Cancellation propagates after cleanup with a previously selected or reported
+close code. Otherwise, it selects 1001 and attempts a best-effort close if the
+accepted transport remains open; code-less transport loss uses 1006. An
+unexpected receive or handler exception attempts close 1011 while the transport
+remains open, runs shielded cleanup, and propagates the original exception. A
+transport already closed without a code uses 1006 and is not closed again. An
+unaccepted failure during `after_connect` or `accept` uses 1006 for cleanup. An
+ordinary exception from `on_accepted` occurs after acceptance, so the router
+closes with 1011 and passes 1011 to cleanup, including when
+`receive_loop=False`. Cancellation during `on_accepted` preserves any selected
+or reported close code; otherwise, it selects 1001 and attempts a close while
+the accepted transport remains open. Code-less transport loss uses 1006.
+Cancellation that arrives while the cleanup task runs waits for the same task
+to finish with the selected code; neither cleanup stage is restarted. After
+successful setup and observed acceptance with the default `receive_loop=False`,
+the router returns and the application owns receiving and cleanup. Approval
+without completed acceptance is cleaned up by the router. Returning normally
+from `on_unhandled` leaves an opted-in session open.
 
 ```mermaid
 stateDiagram-v2
@@ -1665,9 +1690,10 @@ stateDiagram-v2
     Active --> Closing: WebSocketDisconnected
     Active --> Failed: receive or handler exception
     Active --> Cancelled: task cancellation
-    Closing --> Disconnected: before_disconnect / on_disconnect
-    Failed --> Disconnected: close(1011) / best-effort cleanup
-    Cancelled --> Disconnected: on_disconnect(1006) / best-effort cleanup
+    Closing --> Disconnecting: peer close
+    Failed --> Disconnecting: receive or handler failure
+    Cancelled --> Disconnecting: task cancellation
+    Disconnecting --> Disconnected: best-effort close if needed / shielded cleanup
     Rejected --> [*]
     Disconnected --> [*]
 ```

@@ -54,8 +54,10 @@ def _cleanup_context(
 ) -> CleanupContext:
     resource = RecordingResource()
     # The lightweight request supplies the fields exercised by these tests.
+    socket = SessionSocket()
+    socket.unaccepted = False
     dispatch = _CleanupDispatch(
-        typ.cast("falcon.Request", make_session_request()), SessionSocket()
+        typ.cast("falcon.Request", make_session_request()), socket
     )
     return CleanupContext(
         resource=resource,

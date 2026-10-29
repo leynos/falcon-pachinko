@@ -9,6 +9,7 @@ import typing as typ
 
 from ._session import (
     ABNORMAL_CLOSURE,
+    GOING_AWAY,
     INTERNAL_ERROR,
     MAX_CLOSE_CODE,
     SessionState,
@@ -126,7 +127,7 @@ async def _close_failed_session(
     context: CleanupContext, failures: list[BaseException]
 ) -> int:
     """Choose the effective close code and close a failed session best-effort."""
-    should_send_close = _should_send_internal_error_close(context)
+    should_send_close = _should_send_close(context)
     close_code = _effective_close_code(context)
     context.session.close_code = close_code
     if not should_send_close:
@@ -140,21 +141,28 @@ async def _close_failed_session(
 
 
 def _effective_close_code(context: CleanupContext) -> int:
-    """Select cancellation, recorded, transport, or fallback close metadata."""
-    primary_error = context.primary_error
-    if isinstance(primary_error, asyncio.CancelledError):
-        return ABNORMAL_CLOSURE
-    if context.session.close_code is not None:
-        return context.session.close_code
+    """Prefer observed close codes over cancellation and fallback metadata."""
+    # An unaccepted handshake cannot transmit a WebSocket close frame.
     if not _socket_is_accepted(context):
         return ABNORMAL_CLOSURE
+    # Cancellation only supplies a fallback when an earlier close did not win.
+    if context.session.close_code is not None:
+        return context.session.close_code
+    primary_error = context.primary_error
     transport_code, transport_closed = _reported_transport_close_state(context)
+    if isinstance(primary_error, asyncio.CancelledError):
+        return _cancelled_session_close_code(transport_code)
     if transport_code is not None:
         # A handler may have sent a meaningful close before it failed.
         return transport_code
     if transport_closed:
         return ABNORMAL_CLOSURE
     return ABNORMAL_CLOSURE if primary_error is None else INTERNAL_ERROR
+
+
+def _cancelled_session_close_code(transport_code: int | None) -> int:
+    """Retain a reported code, or choose going-away for task cancellation."""
+    return transport_code if transport_code is not None else GOING_AWAY
 
 
 def _reported_transport_close_state(
@@ -174,10 +182,10 @@ def _socket_is_accepted(context: CleanupContext) -> bool:
     return getattr(context.dispatch.ws, "unaccepted", None) is False
 
 
-def _should_send_internal_error_close(context: CleanupContext) -> bool:
-    """Send 1011 only when no prior close or cancellation owns the ending."""
+def _should_send_close(context: CleanupContext) -> bool:
+    """Send the selected failure or cancellation code on an open socket."""
     primary_error = context.primary_error
-    if primary_error is None or isinstance(primary_error, asyncio.CancelledError):
+    if primary_error is None:
         return False
     if not _socket_is_accepted(context):
         return False

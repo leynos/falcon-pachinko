@@ -207,7 +207,7 @@ class TaskStreamResource(WebSocketResource):
         workspace_id: str,
         project_id: str,
     ) -> bool:
-        """Attach the websocket to the workspace-wide room."""
+        """Register, accept, and open the workspace session before returning."""
         session = _TaskStreamSession(
             conn_id=secrets.token_hex(12),
             workspace_id=workspace_id,
@@ -224,22 +224,22 @@ class TaskStreamResource(WebSocketResource):
         session: _TaskStreamSession,
         ws: WebSocketLike,
     ) -> None:
-        """Prepare the workspace, accept the socket, and publish readiness."""
+        """Accept before exposing workspace membership or publishing readiness."""
         is_accepted = False
         try:
-            await self._prepare_workspace_session(session)
             is_accepted = await self._accept_session(ws)
+            await self._prepare_workspace_session(session)
             await self._associate_pending_audits(session)
             await self._record_open_session(session)
             await self._send_session_ready(ws, session)
         except BaseException as error:
-            await self._rollback_unaccepted_setup(
+            await self._rollback_setup_without_router_cleanup(
                 session, ws, is_accepted=is_accepted, error=error
             )
             raise
 
     async def _prepare_workspace_session(self, session: _TaskStreamSession) -> None:
-        """Join the workspace and audit setup before the handshake."""
+        """Join the accepted socket to its workspace and retain route state."""
         await self._conn_mgr.join_room(
             session.conn_id, _workspace_room(session.workspace_id)
         )
@@ -283,7 +283,7 @@ class TaskStreamResource(WebSocketResource):
             },
         })
 
-    async def _rollback_unaccepted_setup(
+    async def _rollback_setup_without_router_cleanup(
         self,
         session: _TaskStreamSession,
         ws: WebSocketLike,
@@ -291,9 +291,11 @@ class TaskStreamResource(WebSocketResource):
         is_accepted: bool,
         error: BaseException,
     ) -> None:
-        """Roll back unless an accepted router session owns cleanup."""
+        """Remove membership when router cleanup cannot own the setup failure."""
         was_accepted = is_accepted or getattr(ws, "unaccepted", True) is False
-        # The compatibility router returns after setup without a session owner.
+        # The router binds its session before on_connect. For accepted sockets,
+        # router-owned cleanup removes the connection; roll back here only for
+        # direct or unaccepted setup.
         if self.has_router_session and was_accepted:
             return
         try:
@@ -316,9 +318,9 @@ class TaskStreamResource(WebSocketResource):
         error.add_note(f"Connection rollback also failed: {removal_error!r}")
 
     async def _rollback_connection(self, conn_id: str) -> asyncio.CancelledError | None:
-        """Join pre-accept removal even when the session is cancelled again."""
-        # No framework disconnect is promised yet; rollback must finish before
-        # the owning task exits, rather than merely outliving it under a shield.
+        """Join direct or unaccepted removal through repeated cancellation."""
+        # Direct calls have no router-owned disconnect callback to remove the
+        # connection, so rollback must finish before on_connect exits.
         removal = asyncio.create_task(self._conn_mgr.remove_connection(conn_id))
         interruption = await self._join_connection_removal(removal)
         self._conn_id = None

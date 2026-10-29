@@ -38,20 +38,22 @@ preserves the setup order: `before_connect` hooks, `on_connect`,
 accept its own socket during setup; `on_accepted()` runs after acceptance. The
 selected child resource and its bound hook manager are retained for frame
 dispatch and cleanup. With the default `receive_loop=False`, the router returns
-after setup and acceptance, leaving receive and disconnect ownership to the
-application.
+after setup and observed acceptance, leaving receive and disconnect ownership
+to the application. If approval does not complete acceptance, the router runs
+cleanup before returning.
 
 `SessionState` moves through `CONNECTING`, `ESTABLISHED`, `DISCONNECTING`, and
 `CLOSED`. Approval by `on_connect()` or observed resource-owned acceptance
 establishes the cleanup boundary. A false result without acceptance remains a
-rejection and does not run post-accept cleanup. If setup exits after
-establishment, the router completes cleanup before returning in either mode.
-With `receive_loop=True`, the router retains lifecycle ownership until
-disconnect; after successful setup with `receive_loop=False`, it returns
-control and the application owns subsequent receives and disconnect cleanup.
-The receive loop dispatches frames only while the state is `ESTABLISHED`.
-Receive hooks and resource dispatch are guarded once disconnect begins, so a
-buffered frame cannot start another receive cycle during cleanup.
+rejection and does not run post-accept cleanup. If established setup fails,
+acceptance is not observed, or the transport closes before ownership is handed
+off, the router completes cleanup before returning in either mode. With
+`receive_loop=True`, the router retains lifecycle ownership until disconnect;
+after successful setup and observed acceptance with `receive_loop=False`, it
+returns control and the application owns subsequent receives and disconnect
+cleanup. The receive loop dispatches frames only while the state is
+`ESTABLISHED`. Receive hooks and resource dispatch are guarded once disconnect
+begins, so a buffered frame cannot start another receive cycle during cleanup.
 
 For both receive modes, `track_session_socket()` wraps native sockets in
 `SessionWebSocket` before setup hooks run. The adapter forwards transport
@@ -59,10 +61,12 @@ operations and attributes, records native or protocol-only acceptance in
 `SessionState`, and begins the receive guard as soon as closing starts. Its
 receive path preserves native TEXT and BINARY frames and adapts media-only
 transports without changing the application's dispatch API. It validates native
-close codes and records the effective code after a successful close so cleanup
-does not replace it. When setup succeeds with `receive_loop=False`, the driver
-releases its receive guard before returning; the application's receive loop and
-calls to `dispatch()` can then run normally through the same adapter.
+close codes and records the requested code before awaiting the send, rolling it
+back if the transport remains open after failure. This prevents a concurrent
+receive from replacing the server-selected code. When setup succeeds with
+`receive_loop=False`, the driver releases its receive guard before returning;
+the application's receive loop and calls to `dispatch()` can then run normally
+through the same adapter.
 
 The session driver performs cleanup in a separate shielded task. It first
 notifies `before_disconnect` hooks with the request, socket, route parameters,
@@ -78,9 +82,10 @@ hidden by cancellation are sent to the running loop's exception handler. Peer
 disconnects use Falcon's reported code, with `1006` when it is missing. A
 failure after acceptance attempts close `1011` while the transport remains
 open. If the transport already reports closed without a code, cleanup uses
-`1006` and skips another close. Cancellation uses `1006` as cleanup metadata
-and does not send that reserved code in a close frame. An already-reported
-close code is retained.
+`1006` and skips another close. Cancellation preserves a previously selected or
+reported close code; otherwise it selects `1001` and attempts a best-effort
+close while the accepted transport remains open. Code-less transport loss
+without cancellation uses `1006`.
 
 ## Cluster fan-out maintenance
 
@@ -268,17 +273,20 @@ does not wrap a handler again.
 `run_session()` receives one raw frame at a time and dispatches it to the same
 selected `WebSocketResource`. Falcon signals a peer disconnect with
 `falcon.WebSocketDisconnected`; the simulator uses the package's internal
-peer-disconnect signal. `SessionWebSocket` preserves Falcon's reported close
-code, using `1006` when no code is available. On media-only transports, decoded
-`str` and `bytes` pass through, while other values are JSON-encoded with
-`msgspec`. Failures while receiving, adapting or validating a frame, including
-malformed media, are unexpected session failures. After acceptance they use the
-`1011` cleanup path while the transport remains open and no close code was
-reported. If the transport is already closed without a code, cleanup uses
-`1006` and skips another close. The original failure is re-raised after
-cleanup. Multiple ordinary failures are grouped with the session error first.
-Cancellation propagates as a bare `CancelledError`; cleanup failures hidden by
-cancellation are reported to the running loop's exception handler.
+peer-disconnect signal. `SessionWebSocket` claims a requested server close code
+before awaiting transport shutdown, so a later peer reply cannot replace it. If
+that close fails while the transport remains open, the adapter rolls back the
+provisional code. Otherwise, it preserves Falcon's reported disconnect code,
+using `1006` when none is available. On media-only transports, decoded `str` and
+`bytes` pass through, while other values are JSON-encoded with `msgspec`.
+Failures while receiving, adapting or validating a frame, including malformed
+media, are unexpected session failures. After acceptance, they use the `1011`
+cleanup path while the transport remains open and no close code was reported.
+If the transport is already closed without a code, cleanup uses `1006` and
+skips another close. The original failure is re-raised after cleanup. Multiple
+ordinary failures are grouped with the session error first. Cancellation
+propagates as a bare `CancelledError`; cleanup failures hidden by cancellation
+are reported to the running loop's exception handler.
 
 The `ServerAdapter` protocol isolates the ASGI server. Its `task` property is
 the serve-loop task, `start(app, sock)` returns only after lifespan startup and
@@ -462,9 +470,11 @@ handshake. Simulator tests remain useful supplementary coverage for isolated
 resource and routing behaviour. They do not prove Falcon's actual ASGI
 responder or lifespan behaviour.
 
-Test request doubles should expose both `path` and `path_template`. Use an empty
-`path_template` for root-mounted router tests, matching the runtime default
-used by Falcon-style request objects that do not provide a template.
+Test request doubles must expose `path`. When template lookup matters, provide
+`path_template` or `uri_template`: the router reads `path_template` first,
+falls back to `uri_template` when it is absent or empty, then uses an empty
+template for root-mounted routing. Add one of these optional fields when
+testing Falcon mount validation.
 
 ## Reserved lifecycle dispatch
 
@@ -540,8 +550,13 @@ During an ordinary peer disconnect, `before_disconnect` hooks run before the
 single `on_disconnect(ws, peer_code)` attempt; a missing peer close code maps
 to 1006. Caller cancellation does not cancel the separate shielded cleanup
 task: it continues through both cleanup stages and attempts `on_disconnect()`
-exactly once. Receive and dispatch guards prevent a new frame from starting
-receive hooks after the session reaches `DISCONNECTING`.
+exactly once. Cancellation during peer-close cleanup preserves the selected
+peer code and does not restart either stage. Cancellation that ends the session
+preserves an already selected or reported close code; otherwise cleanup selects
+1001 and attempts a best-effort close if the accepted transport remains open. A
+code-less transport loss without cancellation uses 1006. Receive and dispatch
+guards prevent a new frame from starting receive hooks after the session reaches
+`DISCONNECTING`.
 
 An unexpected receive or handler failure after acceptance attempts close 1011
 when the transport remains open and no close code has already been reported,
@@ -550,12 +565,11 @@ closed without a code, cleanup uses 1006 and does not try another close.
 Failure in `after_connect` or `accept` before acceptance completes uses 1006
 for cleanup. An ordinary exception from `on_accepted()` occurs after acceptance
 and uses 1011 for cleanup while the transport remains open. Cancellation uses
-1006 as cleanup metadata without sending a close frame with that reserved code,
-and propagates as a bare `CancelledError`. A lone cleanup failure propagates
-unchanged; multiple ordinary failures are grouped, with any session failure
-first. Cleanup failures hidden by cancellation are reported to the running
-loop's exception handler. Cleanup has no timeout, so `on_disconnect()` must
-terminate.
+1001 unless a close code was already reported, and propagates as a bare
+`CancelledError`. A lone cleanup failure propagates unchanged; multiple
+ordinary failures are grouped, with any session failure first. Cleanup failures
+hidden by cancellation are reported to the running loop's exception handler.
+Cleanup has no timeout, so `on_disconnect()` must terminate.
 
 Test sockets must terminate receive loops. `DummyWS` and `RecordingWS` return
 their scripted frames in order and then signal peer disconnection. The

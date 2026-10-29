@@ -105,8 +105,9 @@ class WebSocketRouter:
             permits the session and attempt ``on_disconnect`` once, including
             acceptance setup failure. ``attach()`` and
             ``configure_raw_frame_media(app)`` share the User Guide's app-wide
-            raw-media setup. If false, return after acceptance; the application
-            owns receiving and cleanup.
+            raw-media setup. If false, return after observed acceptance; the
+            application owns receiving and cleanup. Approval without completed
+            acceptance is cleaned up by the router before it returns.
         """
         self._raw: list[_RawRoute] = []
         self._routes: list[_CompiledRoute] = []

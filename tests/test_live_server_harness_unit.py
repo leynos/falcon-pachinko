@@ -78,6 +78,22 @@ class _StartedWithoutSocketServer:
             self.stopped.set()
 
 
+def test_loop_error_assertion_accepts_an_empty_capture() -> None:
+    """A clean live server leaves no unacknowledged loop failures."""
+    _live_server._assert_no_loop_errors([])
+
+
+def test_loop_error_assertion_reports_unacknowledged_failures() -> None:
+    """A captured loop failure cannot disappear during fixture teardown."""
+    failure = RuntimeError("cleanup failure")
+
+    with pytest.raises(AssertionError, match="cleanup failure"):
+        _live_server._assert_no_loop_errors([
+            {"exception": failure},
+            {"message": "secondary failure"},
+        ])
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "startup_error",

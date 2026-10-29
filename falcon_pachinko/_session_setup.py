@@ -91,12 +91,12 @@ class ConnectionSetup:
             return True
         if getattr(self.ws, "closed", False):
             return True
-        accepted_by_router = self.is_unaccepted(self.ws)
-        if accepted_by_router:
+        if self.is_unaccepted(self.ws):
             await self.ws.accept()
         if getattr(self.ws, "closed", False):
             return True
-        if accepted_by_router or self._socket_is_accepted():
+        # Injected transports can return without completing the handshake.
+        if not self.is_unaccepted(self.ws) or self._socket_is_accepted():
             await self.resource.on_accepted(self.ws)
         return True
 

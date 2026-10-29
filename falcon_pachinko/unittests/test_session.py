@@ -272,8 +272,8 @@ async def test_failure_cleanup_errors_are_grouped_after_handler_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancellation_uses_1006_and_skips_after_receive() -> None:
-    """Cancellation reports abnormal closure without emitting after_receive."""
+async def test_cancellation_uses_1001_and_skips_after_receive() -> None:
+    """Cancellation attempts going-away close without emitting after_receive."""
 
     class WaitingResource(SessionResource):
         hooks = HookCollection()
@@ -305,8 +305,8 @@ async def test_cancellation_uses_1006_and_skips_after_receive() -> None:
     finally:
         resource.release.set()
 
-    assert not ws.closed, "cancellation must not send reserved close code 1006"
-    assert resource.disconnects == [1006], "cancellation cleanup must report 1006"
+    assert ws.closed == [1001], "cancellation must attempt close code 1001"
+    assert resource.disconnects == [1001], "cancellation cleanup must report 1001"
     assert not after_receive, "cancelled dispatch must skip after_receive"
 
 

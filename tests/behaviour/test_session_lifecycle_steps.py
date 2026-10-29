@@ -135,8 +135,8 @@ def then_manager_close_recorded(context: LiveScenario) -> None:
     assert context.recorder.disconnect_invocations == 1, (
         "on_disconnect must be invoked exactly once"
     )
-    assert records[0][1] == 1000, (
-        "cleanup must receive Falcon's reported peer close response code"
+    assert records[0][1] == 4002, (
+        "cleanup must receive the effective server-initiated close code"
     )
 
 

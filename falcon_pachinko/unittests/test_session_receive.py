@@ -6,11 +6,13 @@ import asyncio
 import typing as typ
 
 import falcon
+import falcon.asgi
 import pytest
 
 from falcon_pachinko._session import SessionState
 from falcon_pachinko._session_socket import SessionWebSocket, receive_frame
 from falcon_pachinko.hooks import HookCollection, HookEvent, HookManager
+from falcon_pachinko.media import configure_raw_frame_media
 from falcon_pachinko.resource import WebSocketResource
 from falcon_pachinko.router import WebSocketRouter
 from falcon_pachinko.unittests._session_fixtures import (
@@ -72,6 +74,47 @@ async def test_mapping_media_is_preserved_as_one_json_frame() -> None:
     assert await receive_frame(websocket) == b'{"type":"ping"}', (
         "mapping media must be encoded as one JSON frame"
     )
+
+
+@pytest.mark.asyncio
+async def test_not_ready_native_socket_preserves_buffered_frame() -> None:
+    """Falcon may mark a socket not ready while earlier frames remain queued."""
+    app = falcon.asgi.App()
+    configure_raw_frame_media(app)
+    events: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    events.put_nowait({"type": "websocket.receive", "text": '{"type":"queued"}'})
+    events.put_nowait({"type": "websocket.disconnect", "code": 4000})
+    disconnect_received = asyncio.Event()
+
+    async def receive() -> dict[str, object]:
+        message = await events.get()
+        if message.get("type") == "websocket.disconnect":
+            disconnect_received.set()
+        return message
+
+    async def send(message: dict[str, object]) -> None:
+        del message
+        await asyncio.sleep(0)
+
+    websocket = falcon.asgi.WebSocket(
+        "2.4",
+        {},
+        typ.cast("typ.Any", receive),
+        typ.cast("typ.Any", send),
+        app.ws_options.media_handlers,
+        app.ws_options.max_receive_queue,
+        app.ws_options.default_close_reasons,
+    )
+    await websocket.accept()
+    await asyncio.wait_for(disconnect_received.wait(), timeout=1)
+    session_websocket = SessionWebSocket(websocket, SessionState())
+
+    assert await receive_frame(session_websocket) == '{"type":"queued"}', (
+        "a frame queued before disconnect must reach resource dispatch"
+    )
+    with pytest.raises(falcon.WebSocketDisconnected) as raised:
+        await receive_frame(session_websocket)
+    assert raised.value.code == 4000, "the queued disconnect code must be retained"
 
 
 @pytest.mark.asyncio
@@ -202,6 +245,7 @@ async def test_close_guard_overrides_wrapped_is_closed_probe() -> None:
     await asyncio.wait_for(socket.close_started.wait(), timeout=1)
     transport_still_open = not socket.is_closed
     receive_still_allowed = hook_manager.can_receive(typ.cast("typ.Any", websocket))
+    close_code_while_pending = session.close_code
     socket.finish_close.set()
     await asyncio.wait_for(close_task, timeout=1)
 
@@ -209,7 +253,33 @@ async def test_close_guard_overrides_wrapped_is_closed_probe() -> None:
     assert not receive_still_allowed, (
         "receive eligibility must stop when the wrapper begins closing"
     )
+    assert close_code_while_pending == 4001, (
+        "the requested close code must win before the transport can report a reply"
+    )
     assert session.close_code == 4001, "cleanup must retain the sent close code"
+
+
+@pytest.mark.asyncio
+async def test_failed_close_rolls_back_its_provisional_code() -> None:
+    """A failed transport close must not masquerade as an effective close."""
+
+    class FailingCloseSocket(SessionSocket):
+        async def close(self, code: int = 1000) -> None:
+            del code
+            raise RuntimeError("failed")
+
+    session = SessionState()
+    session.establish()
+    socket = FailingCloseSocket()
+    websocket = SessionWebSocket(typ.cast("typ.Any", socket), session)
+
+    with pytest.raises(RuntimeError, match="failed"):
+        await websocket.close(4002)
+
+    assert session.close_code is None, "a failed close must roll back its code"
+    assert not websocket.closed, (
+        "a failed close on an open transport must reopen the guard"
+    )
 
 
 @pytest.mark.asyncio

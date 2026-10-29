@@ -25,7 +25,7 @@ _ASSERTION_FAILURE = "lifecycle expectation failed"
 async def test_cancellation_during_receive_closes_and_runs_cleanup(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Cancellation uses abnormal-close metadata without a close frame."""
+    """Cancellation attempts a going-away close before shielded cleanup."""
     caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
     router = make_session_router()
     socket = SessionSocket(block_receive=True)
@@ -40,15 +40,47 @@ async def test_cancellation_during_receive_closes_and_runs_cleanup(
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert not socket.close_codes, _ASSERTION_FAILURE
-    assert RecordingResource.instances[0].disconnect_codes == [1006], _ASSERTION_FAILURE
+    assert socket.close_codes == [1001], "cancellation must attempt a going-away close"
+    assert RecordingResource.instances[0].disconnect_codes == [1001], _ASSERTION_FAILURE
     observations = [
         record
         for record in caplog.records
         if record.name == "falcon_pachinko._session_driver"
     ]
     assert getattr(observations[-1], "outcome", None) == "cancelled", _ASSERTION_FAILURE
-    assert getattr(observations[-1], "close_code", None) == 1006, _ASSERTION_FAILURE
+    assert getattr(observations[-1], "close_code", None) == 1001, _ASSERTION_FAILURE
+
+
+@pytest.mark.asyncio
+async def test_cancellation_after_handler_close_preserves_selected_code() -> None:
+    """Cancellation cannot replace a close code selected by the handler."""
+    handler_started = asyncio.Event()
+
+    class CloseThenWaitResource(RecordingResource):
+        @typ.override
+        async def dispatch(self, ws: object, raw: str | bytes) -> None:
+            del raw
+            await typ.cast("typ.Any", ws).close(4001)
+            handler_started.set()
+            await asyncio.Event().wait()
+
+    router = make_session_router(CloseThenWaitResource)
+    socket = SessionSocket(b'{"type":"wait"}')
+    task = asyncio.create_task(
+        router.on_websocket(
+            typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
+        )
+    )
+    await handler_started.wait()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert CloseThenWaitResource.instances[0].disconnect_codes == [4001], (
+        "cancellation must retain a close code already selected by the handler"
+    )
+    assert socket.close_codes == [4001], _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio
@@ -87,7 +119,7 @@ async def test_cancellation_reports_cleanup_failure_to_loop_handler() -> None:
     )
     assert reported[0]["operation"] == "cleanup", _ASSERTION_FAILURE
     assert reported[0]["phase"] == "closed", _ASSERTION_FAILURE
-    assert reported[0]["close_code"] == 1006, _ASSERTION_FAILURE
+    assert reported[0]["close_code"] == 1001, _ASSERTION_FAILURE
     assert reported[0]["exception_type"] == "RuntimeError", _ASSERTION_FAILURE
     assert "CANARY" not in typ.cast("str", reported[0]["message"]), (
         "loop-handler context must omit exception values"
@@ -125,7 +157,7 @@ async def _exercise_repeated_cancellation(repetitions: int) -> None:
     resource.finish_disconnect.set()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert resource.disconnect_codes == [1006], _ASSERTION_FAILURE
+    assert resource.disconnect_codes == [1001], _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio
