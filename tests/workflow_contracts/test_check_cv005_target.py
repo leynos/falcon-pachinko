@@ -164,24 +164,17 @@ def test_the_lane_runs_ci_tests_before_cv005() -> None:
     steps = REPOSITORY.jobs("ci.yml")["lint-test"].get("steps")
 
     assert isinstance(steps, list), "ci.yml:lint-test must declare its steps"
-    named_commands = [
-        (step.get("name"), step.get("run")) for step in steps if isinstance(step, dict)
-    ]
+    workflow_steps = [step for step in steps if isinstance(step, dict)]
+    named_commands = [(step.get("name"), step.get("run")) for step in workflow_steps]
     test_step = ("Run tests", "make test-ci")
     cv005_step = ("Check the CV-005 contracts", "make check-cv005")
-    workflow_steps = [step for step in steps if isinstance(step, dict)]
-
     assert test_step in named_commands, "the lane must run the CI test target"
     assert cv005_step in named_commands, "the lane must run the CV-005 check"
     assert named_commands.index(test_step) < named_commands.index(cv005_step), (
         "the CI test target must run before the CV-005 check"
     )
     required_steps = [
-        next(
-            step
-            for step in workflow_steps
-            if (step.get("name"), step.get("run")) == command
-        )
+        workflow_steps[named_commands.index(command)]
         for command in (test_step, cv005_step)
     ]
     for step, (name, _) in zip(required_steps, (test_step, cv005_step), strict=True):
