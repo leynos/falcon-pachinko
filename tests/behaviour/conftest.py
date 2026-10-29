@@ -9,7 +9,7 @@ import pytest
 from pytest_bdd import given, then
 
 from falcon_pachinko.testing import WebSocketTestClient
-from tests.behaviour._live_server import LiveServer
+from tests.behaviour._live_server import LiveServer, _assert_no_loop_errors
 from tests.behaviour._session_context import (
     LiveScenario,
     close_client_context,
@@ -63,6 +63,7 @@ def given_live_server(
             await close_client_context(context)
 
         event_loop.run_until_complete(finish())
+        _assert_no_loop_errors(context.server.loop_errors)
 
     request.addfinalizer(cleanup)
     return context

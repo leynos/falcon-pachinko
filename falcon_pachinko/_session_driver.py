@@ -8,9 +8,7 @@ hook manager, while shielded cleanup preserves failure and cancellation policy.
 from __future__ import annotations
 
 import abc
-import asyncio
 import dataclasses as dc
-import logging
 import time
 import typing as typ
 
@@ -19,7 +17,6 @@ import falcon
 from ._disconnect import _PeerDisconnectedError
 from ._session import (
     ABNORMAL_CLOSURE,
-    MAX_CLOSE_CODE,
     SessionPhase,
     SessionState,
 )
@@ -28,9 +25,14 @@ from ._session_cleanup import (
     raise_session_failures,
     run_shielded_cleanup,
 )
+from ._session_observation import (
+    _cleanup_outcome,
+    _log_session_observation,
+    _outcome_for_error,
+    _SessionObservation,
+)
 from ._session_setup import ConnectionSetup
 from ._session_socket import receive_frame, track_session_socket
-from .diagnostics import _type_name
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -38,23 +40,6 @@ if typ.TYPE_CHECKING:
     from .hooks import HookContext, HookManager
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
-
-logger = logging.getLogger(__name__)
-_OBSERVATION_OPERATIONS = frozenset({
-    "session",
-    "setup",
-    "acceptance",
-    "receive",
-    "cleanup",
-})
-_OBSERVATION_OUTCOMES = frozenset({
-    "started",
-    "completed",
-    "rejected",
-    "failed",
-    "cancelled",
-})
-_MAX_CLEANUP_FAILURE_TYPES = 3
 
 
 class SessionRouteMatch(typ.Protocol):
@@ -98,63 +83,6 @@ class _SessionExecution:
     observation_clock: cabc.Callable[[], float]
     context: HookContext | None = None
     primary_error: BaseException | None = None
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _SessionObservation:
-    """Keep bounded event metadata together at the logging boundary."""
-
-    operation: str
-    outcome: str
-    started: float
-    error: BaseException | None = None
-    cleanup_failures: tuple[BaseException, ...] = ()
-
-
-def _log_session_observation(
-    execution: _SessionExecution,
-    observation: _SessionObservation,
-) -> None:
-    """Emit bounded lifecycle metadata without reflecting caller values."""
-    operation = observation.operation
-    operation = operation if operation in _OBSERVATION_OPERATIONS else "other"
-    outcome = observation.outcome
-    outcome = outcome if outcome in _OBSERVATION_OUTCOMES else "other"
-    failure_types = tuple(
-        _type_name(failure)
-        for failure in observation.cleanup_failures[:_MAX_CLEANUP_FAILURE_TYPES]
-    )
-    close_code = execution.session.close_code
-    if type(close_code) is not int or not 0 <= close_code <= MAX_CLOSE_CODE:
-        close_code = None
-    logger.debug(
-        "WebSocket session observation",
-        extra={
-            "operation": operation,
-            "outcome": outcome,
-            "phase": execution.session.phase.value,
-            "close_code": close_code,
-            "duration_seconds": max(
-                0.0, execution.observation_clock() - observation.started
-            ),
-            "resource_type": _type_name(execution.resource),
-            "exception_type": (
-                _type_name(observation.error) if observation.error is not None else None
-            ),
-            "primary_exception_type": (
-                _type_name(execution.primary_error)
-                if execution.primary_error is not None
-                else None
-            ),
-            "cleanup_failure_count": min(
-                len(observation.cleanup_failures), _MAX_CLEANUP_FAILURE_TYPES
-            ),
-            "cleanup_failures_truncated": (
-                len(observation.cleanup_failures) > _MAX_CLEANUP_FAILURE_TYPES
-            ),
-            "cleanup_failure_types": failure_types,
-        },
-    )
 
 
 async def run_session(
@@ -268,6 +196,8 @@ def _should_finish_established_session(
     session = execution.session
     if session.phase is not SessionPhase.ESTABLISHED:
         return False
+    if not _is_websocket_accepted(execution.dispatch.ws):
+        return True
     if receive_loop or not setup_completed:
         return True
     return bool(getattr(execution.dispatch.ws, "closed", False))
@@ -409,27 +339,6 @@ def _log_session_failure(
     )
 
 
-def _outcome_for_error(error: BaseException | None) -> str:
-    """Map a session error to a bounded lifecycle outcome."""
-    if error is None:
-        return "completed"
-    if isinstance(error, asyncio.CancelledError):
-        return "cancelled"
-    return "failed"
-
-
-def _cleanup_outcome(
-    failures: tuple[BaseException, ...],
-    interruptions: tuple[asyncio.CancelledError, ...],
-) -> str:
-    """Map cleanup failures and interruptions to a bounded outcome."""
-    if failures:
-        return "failed"
-    if interruptions:
-        return "cancelled"
-    return "completed"
-
-
 def _record_and_log_session_ending(
     execution: _SessionExecution,
     operation: str,
@@ -563,6 +472,6 @@ def _record_session_ending(
 def _record_session_disconnect_code(
     session: SessionState, error: BaseException
 ) -> None:
-    """Keep a successful local close ahead of later disconnect metadata."""
+    """Keep an earlier local close selection ahead of disconnect metadata."""
     if session.close_code is None:
         session.close_code = _effective_disconnect_code(error)

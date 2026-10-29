@@ -105,8 +105,8 @@ async def test_receive_loop_cancellation_disconnects_once(
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert resource.disconnects == [(socket, 1006)], (
-            "cancellation must trigger cleanup with abnormal-close metadata"
+        assert resource.disconnects == [(socket, 1001)], (
+            "cancellation must trigger cleanup with going-away metadata"
         )
     finally:
         task.cancel()
@@ -115,11 +115,11 @@ async def test_receive_loop_cancellation_disconnects_once(
 
 @pytest.mark.parametrize("receive_loop", [False, True])
 @pytest.mark.asyncio
-async def test_accepted_setup_cancellation_reports_1006_without_closing(
+async def test_accepted_setup_cancellation_reports_1001_and_closes(
     *,
     receive_loop: bool,
 ) -> None:
-    """Cancellation after acceptance cleans up without sending reserved 1006."""
+    """Cancellation after acceptance attempts a going-away close and cleans up."""
     resource = CancellingAcceptedResource()
     socket = SessionSocket()
     router = session_router(resource, receive_loop=receive_loop)
@@ -132,9 +132,9 @@ async def test_accepted_setup_cancellation_reports_1006_without_closing(
         await router.on_websocket(make_req("/session"), socket)
 
     assert socket.accepted, "accepted setup cancellation must follow ws.accept()"
-    assert not socket.closed, "cancellation must not send reserved close code 1006"
-    assert observed_codes == [1006], "disconnect hooks must receive code 1006"
-    assert resource.disconnects == [(socket, 1006)], (
+    assert socket.close_codes == [1001], "cancellation must attempt close code 1001"
+    assert observed_codes == [1001], "disconnect hooks must receive code 1001"
+    assert resource.disconnects == [(socket, 1001)], (
         "resource cleanup must receive cancellation metadata exactly once"
     )
 

@@ -237,7 +237,9 @@ resource and its hooks.
     connection. The router runs `after_connect` hooks before it calls
     `accept()`. With `receive_loop=True`, it then begins receiving frames; with
     the default `False`, the application owns reception. If `on_connect()` sends
-    a frame itself, call `await ws.accept()` first.
+    a frame itself, call `await ws.accept()` first. This resource-owned
+    acceptance lets a resource complete its initial setup in `on_connect()`;
+    otherwise, put accepted-session work in `on_accepted()`.
 - `on_accepted(ws) -> None`
   - Runs immediately after Falcon accepts an allowed connection. Put
     accept-dependent I/O here, such as registering the socket with a connection
@@ -249,19 +251,22 @@ resource and its hooks.
     owns cleanup after peer disconnect, cancellation, or receive failure. A
     failure during `after_connect`, `accept`, or `on_accepted` is cleaned up
     even when `receive_loop=False`. Peer disconnects use
-    `WebSocketDisconnected.code`; an unavailable code and cancellation use
-    `1006` as cleanup metadata. Cancellation propagates without sending a close
-    frame with reserved code `1006`. Unexpected receive or handler failures
+    `WebSocketDisconnected.code`; an unavailable code or an already-closed
+    transport without a reported code uses `1006` as cleanup metadata.
+    Cancellation on an accepted, open transport attempts a `1001` close before
+    cleanup; an already selected or reported code takes precedence. Unexpected
+    receive or handler failures
     use `1011` and propagate the original exception while the transport stays
-    open. If the transport already closed without a reported code, cleanup uses
-    `1006` and skips another close attempt. An ordinary
-    exception from `on_accepted` uses `1011` while the transport remains open;
-    a closed transport without a reported code uses `1006`. A rejection that
-    remains unaccepted does not run cleanup. If
-    `on_connect` accepts the socket before failing, cleanup still runs; an
-    unaccepted `on_connect` failure must roll back any partial registration.
-    With successful setup and `receive_loop=False`, the application owns
-    receive and cleanup.
+    open. If the transport has already closed without a reported code, cleanup
+    uses `1006` and skips another close attempt. An ordinary exception from
+    `on_accepted` uses `1011` while the transport remains open; a closed
+    transport without a reported code uses `1006`. A rejection that remains
+    unaccepted does not run cleanup. If `on_connect` accepts the socket before
+    failing, cleanup still runs; an unaccepted `on_connect` failure must roll
+    back any partial registration.
+    After successful setup and observed acceptance with `receive_loop=False`,
+    the application owns reception and cleanup. If approval does not complete
+    acceptance, the router runs cleanup before returning.
 - With `receive_loop=True`, the router passes values returned by
   `ws.receive_media()` to `WebSocketResource.dispatch()` in order until the
   peer disconnects. An attached router configures raw media handlers so the
@@ -285,26 +290,36 @@ cleanup after setup succeeds.
 
 The effective close code passed to `on_disconnect` follows this table:
 
-| Session ending                                 | Code passed to `on_disconnect`                                          |
-| ---------------------------------------------- | ----------------------------------------------------------------------- |
-| Client sends a close frame                     | Falcon's code, or `1006` if unavailable                                 |
-| Handler or server calls `close(code)`          | Recorded code for a successful close; otherwise Falcon's code or `1006` |
-| Transport loss without a close frame           | `1006`                                                                  |
-| Task cancellation                              | `1006`; no close frame with this reserved code is sent                  |
-| Approval succeeds but acceptance does not      | `1006`; no WebSocket close frame can be sent                            |
-| Failure after acceptance on an open socket     | `1011`; the router attempts a close                                     |
-| Handler failure after code-less transport loss | `1006`; the transport is already closed                                 |
+| Session ending                             | Code passed to `on_disconnect`                                               |
+| ------------------------------------------ | ---------------------------------------------------------------------------- |
+| Client sends a close frame                 | Falcon's code; `1006` if unavailable                                         |
+| Handler or server calls `close(code)`      | Requested code; `1000` if omitted; reported code or `1006` if already closed |
+| Transport loss without a close frame       | `1006`                                                                       |
+| Task cancellation without a reported code  | `1001`; close attempted if transport is open                                 |
+| Approval succeeds without acceptance       | `1006`; no WebSocket close frame can be sent                                 |
+| Failure after acceptance on an open socket | `1011`; close attempted                                                      |
+| Handler failure after code-less loss       | `1006`; transport is already closed                                          |
 
-After a successful `close(code)`, the adapter records Falcon's reported close
-code when available, or the requested code when the transport exposes no code.
-That recorded value takes precedence over later disconnect metadata. For other
-endings, Falcon's reported code is used, with `1006` when no code is available.
-Setup failures before the cleanup promise point do not run `on_disconnect`;
-failures after approval or acceptance do. An approved but unaccepted connection
-is cleaned up with `1006`, since the handshake has no established WebSocket on
-which to send a close frame. A previously reported socket close code is
-retained if the handler then fails. If the transport is already closed without
-a code, cleanup uses `1006` and does not try to close it again. The router runs
+When cancellation ends the session, a close code already selected or reported
+by the handler, server or transport takes precedence. Otherwise, the router
+selects `1001` and attempts a best-effort close if the accepted transport
+remains open. If caller cancellation arrives during peer-close cleanup, the
+shielded cleanup keeps the selected peer code and does not restart either
+cleanup stage.
+
+Before awaiting a close on an open transport, the adapter records the requested
+code (`1000` when omitted). This keeps a concurrent receive from replacing the
+server's selected code with the peer's close-handshake response. A failed close
+rolls back that provisional code unless the transport reports a completed
+close. If the transport was already closed before the attempt, its reported
+code is used, with `1006` when none is available. For other endings, Falcon's
+reported code is used, with `1006` when no code is available. Setup failures
+before the cleanup promise point do not run `on_disconnect`; failures after
+approval or acceptance do. An approved but unaccepted connection is cleaned up
+with `1006`, since the handshake has no established WebSocket on which to send
+a close frame. A previously reported socket close code is retained if the
+handler then fails. If the transport is already closed without a code, cleanup
+uses `1006` and does not try to close it again. The router runs
 `before_disconnect` before the callback and guards both against later receive
 dispatch. Cleanup runs in a shielded task and has no timeout, so
 `on_disconnect` must terminate. A lone failure propagates unchanged; multiple
@@ -819,8 +834,11 @@ uvicorn --factory examples.reference_app.server:create_app --host 127.0.0.1 --po
 
 Connect to `ws://127.0.0.1:8000/ws/workspaces/atlas/projects/triage/tasks` with
 headers `x-workspace-token: seekrit` and `x-user: casey`. After Falcon accepts
-the connection, `on_accepted` registers the socket in `workspace:atlas` and
-sends `session.ready`. Send a JSON text message such as:
+the connection, `TaskStreamResource.on_connect()` has registered the socket,
+joined `workspace:atlas`, recorded the session, and sent `session.ready`. This
+resource uses explicit acceptance in `on_connect()` before its initial send;
+other resources can leave acceptance to the router and use `on_accepted()` for
+accepted-session setup. Send a JSON text message such as:
 
 ```json
 {"type":"task.add","task_id":"T-42","title":"Investigate live WebSockets"}
@@ -844,8 +862,8 @@ verifies that an invalid token rejects the handshake and records
 uv run pytest -q tests/behaviour/test_reference_example_live_steps.py
 ```
 
-The example's router uses `receive_loop=True`, so the library accepts the
-socket and owns ordered frame reception and dispatch. No application receive
-loop or direct `WebSocketResource.dispatch()` call is needed. Use the example
-as a blueprint. Adapt its authentication, services, and worker policy to the
-target application.
+`TaskStreamResource.on_connect()` accepts the socket before sending its ready
+event. The router then owns ordered frame reception and dispatch. No
+application receive loop or direct `WebSocketResource.dispatch()` call is
+needed. Use the example as a blueprint. Adapt its authentication, services, and
+worker policy to the target application.

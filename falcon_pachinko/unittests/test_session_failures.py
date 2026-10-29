@@ -126,7 +126,7 @@ async def test_after_connect_cancellation_reports_original_setup_failure() -> No
 
     assert raised.value is cancellation, "the original cancellation must stay bare"
     assert reported == [primary], "the original setup failure must stay observable"
-    assert AcceptThenFail.instances[0].disconnect_codes == [1006], (
+    assert AcceptThenFail.instances[0].disconnect_codes == [1001], (
         "setup cancellation must still execute the promised cleanup"
     )
 

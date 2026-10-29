@@ -1,7 +1,7 @@
 """Exercise handler failure and server shutdown through real Falcon sessions.
 
 The feature bindings assert cleanup with 1011 for unexpected handler failures,
-the Uvicorn-reported code for idle shutdown, and 1006 for cancellation during
+the Uvicorn-reported code for idle shutdown, and 1001 for cancellation during
 blocked handlers. Each scenario verifies cleanup through recorded effects.
 """
 
@@ -171,13 +171,13 @@ def when_server_stops_blocked(context: LiveScenario) -> LiveScenario:
     return context
 
 
-@then("disconnect cleanup is recorded once with code 1006")
+@then("disconnect cleanup is recorded once with code 1001")
 def then_cancellation_cleanup(context: LiveScenario) -> None:
-    """Verify task cancellation is reported as going away exactly once."""
+    """Verify task cancellation uses a going-away close exactly once."""
     context.event_loop.run_until_complete(stop_server(context))
     records = context.recorder.disconnect_records
     assert len(records) == 1, "cancelled accepted sessions must clean up once"
     assert context.recorder.disconnect_invocations == 1, (
         "cancellation must invoke on_disconnect exactly once"
     )
-    assert records[0][1] == 1006, "cancellation cleanup must use code 1006"
+    assert records[0][1] == 1001, "cancellation cleanup must use code 1001"

@@ -94,37 +94,72 @@ class SessionWebSocket:
         # first so a rejected argument cannot disable an accepted connection.
         if is_native:
             _validate_close_code(code)
+        kwargs = self._close_kwargs(code, reason, is_native=is_native)
+        close = typ.cast(
+            "cabc.Callable[..., cabc.Awaitable[None]]", self._websocket.close
+        )
+        was_closing = self._closing
+        transport_was_closed = bool(getattr(self._websocket, "closed", False))
+        previous_close_code = self._session.close_code
+        claims_close_code = previous_close_code is None and not transport_was_closed
+        effective_requested_code = 1000 if code is None else code
+        if claims_close_code:
+            # The receive pump can observe the peer's reply while Falcon is
+            # still completing this send, so claim the server's selected code.
+            self._session.close_code = effective_requested_code
+        self._closing = True
+        try:
+            await close(**kwargs)
+        except BaseException:
+            self._rollback_close_attempt(
+                was_closing=was_closing,
+                claims_close_code=claims_close_code,
+                requested_code=effective_requested_code,
+                previous_close_code=previous_close_code,
+            )
+            raise
+        if not claims_close_code and previous_close_code is None:
+            self._record_close_code()
+
+    @staticmethod
+    def _close_kwargs(
+        code: int | None,
+        reason: str | None,
+        *,
+        is_native: bool,
+    ) -> dict[str, object]:
+        """Preserve Falcon's default while forwarding supported options."""
         kwargs: dict[str, object] = {
             "code": 1000 if code is None and not is_native else code
         }
         if reason is not None:
             kwargs["reason"] = reason
-        close = typ.cast(
-            "cabc.Callable[..., cabc.Awaitable[None]]", self._websocket.close
-        )
-        was_closing = self._closing
-        self._closing = True
-        try:
-            await close(**kwargs)
-            self._record_close_code(code)
-        except (TypeError, ValueError):
-            if not is_native:
-                self._closing = was_closing or bool(
-                    getattr(self._websocket, "closed", False)
-                )
-            raise
+        return kwargs
 
-    def _record_close_code(self, requested_code: int | None) -> None:
-        """Retain the transport's effective close code after a successful send."""
+    def _rollback_close_attempt(
+        self,
+        *,
+        was_closing: bool,
+        claims_close_code: bool,
+        requested_code: int,
+        previous_close_code: int | None,
+    ) -> None:
+        """Undo provisional close state unless the transport completed closure."""
+        transport_closed = bool(getattr(self._websocket, "closed", False))
+        if not transport_closed:
+            self._closing = was_closing
+        if claims_close_code and self._session.close_code == requested_code:
+            self._session.close_code = previous_close_code
+        if transport_closed and self._session.close_code is None:
+            self._record_close_code()
+
+    def _record_close_code(self) -> None:
+        """Retain transport metadata when a close began after transport loss."""
         if self._session.close_code is not None:
             return
-        fallback = 1000 if requested_code is None else requested_code
         reported_code = getattr(self._websocket, "close_code", None)
-        if isinstance(reported_code, int):
+        if type(reported_code) is int:
             self._session.close_code = reported_code
-        else:
-            # The optional adapter attribute may exist without reporting a code.
-            self._session.close_code = fallback
 
     async def receive_payload(self) -> object:
         """Preserve native frame types and support injected media transports."""
@@ -132,9 +167,10 @@ class SessionWebSocket:
         if not isinstance(websocket, falcon.asgi.WebSocket):
             return await websocket.receive_media()
         if not websocket.ready:
-            # Let the public API raise Falcon's stored disconnect code or its
-            # pre-accept error before accessing the low-level receiver.
-            await websocket.receive_media()
+            # Falcon marks the socket not ready as soon as its pump sees a
+            # disconnect, even when earlier frames remain queued. Keep the
+            # public receiver's result so the raw adapter does not skip them.
+            return await websocket.receive_media()
         # Falcon's public receivers either decode media or consume only one
         # frame type. Isolate this seam so Pachinko can dispatch both raw types
         # without changing application media handlers or losing disconnect codes.
@@ -158,7 +194,7 @@ def track_session_socket(ws: WebSocketLike, session: SessionState) -> WebSocketL
     return ws
 
 
-async def receive_frame(ws: WebSocketLike) -> str | bytes:
+async def receive_frame(ws: WebSocketLike | SessionWebSocket) -> str | bytes:
     """Keep native frames raw and adapt injected media-only transports."""
     media = (
         await ws.receive_payload()

@@ -508,7 +508,7 @@ def test_generated_session_frames_preserve_order_and_disconnect_code(
 
 @pytest.mark.asyncio
 async def test_cancelled_session_runs_cleanup_then_reraises() -> None:
-    """Cancellation reports 1006 to cleanup and remains visible to the caller."""
+    """Cancellation closes with 1001, reports it, and re-raises to the caller."""
     SessionResource.instances.clear()
 
     class BlockingWebSocket(RecordingWS):
@@ -532,9 +532,9 @@ async def test_cancelled_session_runs_cleanup_then_reraises() -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert not ws.closed, "cancellation must not send reserved close code 1006"
-    assert SessionResource.instances[-1].disconnect_codes == [1006], (
-        "server cancellation must reach disconnect cleanup as abnormal closure"
+    assert ws.closed == [1001], "cancellation must attempt close code 1001"
+    assert SessionResource.instances[-1].disconnect_codes == [1001], (
+        "server cancellation must reach disconnect cleanup as going away"
     )
 
 

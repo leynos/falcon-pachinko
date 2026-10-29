@@ -30,6 +30,14 @@ type _LoopExceptionHandler = cabc.Callable[
 _SESSION_TASK_JOIN_TIMEOUT = 5
 
 
+def _assert_no_loop_errors(loop_errors: list[dict[str, object]]) -> None:
+    """Fail when a scenario leaves a server-side error unacknowledged."""
+    unexpected = [
+        error.get("exception") or error.get("message") for error in loop_errors
+    ]
+    assert not unexpected, f"live server reported loop errors: {unexpected!r}"
+
+
 class DisconnectRecorder:
     """Record accepted connections, failures, and completed disconnects."""
 

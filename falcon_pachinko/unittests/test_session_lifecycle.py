@@ -334,9 +334,12 @@ async def test_after_connect_failure_after_approval_runs_cleanup() -> None:
     assert not socket.close_codes, _ASSERTION_FAILURE
 
 
+@pytest.mark.parametrize("receive_loop", [False, True])
 @pytest.mark.asyncio
 async def test_approval_without_acceptance_skips_receive_and_cleans_up(
     caplog: pytest.LogCaptureFixture,
+    *,
+    receive_loop: bool,
 ) -> None:
     """Approval promises cleanup even if a transport never becomes accepted."""
     caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
@@ -345,7 +348,14 @@ async def test_approval_without_acceptance_skips_receive_and_cleans_up(
         async def accept(self, subprotocol: str | None = None) -> None:
             del subprotocol
 
-    router = make_session_router()
+    accepted_calls: list[object] = []
+
+    class UnacceptedResource(RecordingResource):
+        @typ.override
+        async def on_accepted(self, ws: object) -> None:
+            accepted_calls.append(ws)
+
+    router = make_session_router(UnacceptedResource, receive_loop=receive_loop)
     socket = UnacceptedSocket(b'{"type":"unaccepted"}')
     await router.on_websocket(
         typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
@@ -355,6 +365,7 @@ async def test_approval_without_acceptance_skips_receive_and_cleans_up(
     assert RecordingResource.instances[0].disconnect_codes == [1006], (
         "an incomplete handshake uses abnormal-closure metadata"
     )
+    assert not accepted_calls, "on_accepted requires observed acceptance"
     assert not socket.close_codes, "the router cannot close an unaccepted socket"
     assert not any(
         record.name == "falcon_pachinko._session_driver"
@@ -362,6 +373,45 @@ async def test_approval_without_acceptance_skips_receive_and_cleans_up(
         and getattr(record, "outcome", None) == "completed"
         for record in caplog.records
     ), "approval alone must not be logged as observed transport acceptance"
+
+
+@pytest.mark.parametrize("receive_loop", [False, True])
+@pytest.mark.asyncio
+async def test_unaccepted_close_request_uses_abnormal_cleanup_code(
+    *,
+    receive_loop: bool,
+) -> None:
+    """A pre-accept close request has no WebSocket close-code channel."""
+
+    class CloseBeforeAcceptResource(RecordingResource):
+        @typ.override
+        async def on_connect(
+            self, req: falcon.Request, ws: object, **params: object
+        ) -> bool:
+            del req, params
+            await typ.cast("SessionSocket", ws).close(4003)
+            return True
+
+    class UnprobedSocket(SessionSocket):
+        def __getattribute__(self, name: str) -> object:
+            if name == "unaccepted":
+                raise AttributeError(name)
+            return super().__getattribute__(name)
+
+    router = make_session_router(
+        CloseBeforeAcceptResource,
+        receive_loop=receive_loop,
+    )
+    socket = UnprobedSocket()
+
+    await router.on_websocket(
+        typ.cast("typ.Any", make_session_request()), typ.cast("typ.Any", socket)
+    )
+
+    assert socket.close_codes == [4003], _ASSERTION_FAILURE
+    assert CloseBeforeAcceptResource.instances[0].disconnect_codes == [1006], (
+        "unaccepted sessions cannot report a WebSocket close code"
+    )
 
 
 @pytest.mark.asyncio

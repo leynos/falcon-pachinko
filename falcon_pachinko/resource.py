@@ -338,11 +338,13 @@ class WebSocketResource:
         does not complete. An ordinary exception from ``on_accepted`` occurs
         after acceptance: an open socket closes with 1011, and cleanup receives
         1011. If the transport is already closed without a reported code,
-        cleanup uses 1006 and does not attempt another close. Cancellation uses
-        1006 as cleanup metadata and propagates without sending a close frame
-        with that reserved code. If cancellation interrupts peer-close cleanup,
-        remaining cleanup switches to 1006; a callback already invoked is not
-        attempted again. Unexpected receive or handler failures use the same
+        cleanup uses 1006 and does not attempt another close. Cancellation as
+        the session-ending cause preserves any selected or reported code;
+        otherwise it selects 1001 and attempts a best-effort close while the
+        accepted transport remains open. If cancellation
+        arrives while peer-close cleanup is already running, the shielded task
+        keeps the selected peer code and finishes without restarting either
+        cleanup stage. Unexpected receive or handler failures use the same
         1011-on-open, 1006-on-closed rule and propagate after cleanup.
 
         A falsey, unaccepted rejection and a failure before approval or
@@ -350,7 +352,8 @@ class WebSocketResource:
         socket and then fails, cleanup still runs. Cancellation inside this
         callback does not cause a second callback attempt. With the default
         ``receive_loop=False``, the application owns reception and cleanup
-        after successful setup.
+        after successful setup and observed acceptance. If approval does not
+        complete acceptance, the router runs cleanup before returning.
 
         Parameters
         ----------
