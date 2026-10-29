@@ -314,6 +314,21 @@ _COLLIDING_MODULE = "test_shared_name.py"
 _COLLIDING_TEST = "def test_placeholder() -> None:\n    assert True\n"
 
 
+def test_mutmut_excludes_repository_contract_modules() -> None:
+    """Repository contracts must not run against mutmut's incomplete copy.
+
+    The command contracts read the repository-root Makefile, which mutmut
+    does not copy into its baseline environment.
+    """
+    configuration = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    mutation_args = configuration["tool"]["mutmut"]["pytest_add_cli_args"]
+
+    assert "--ignore=tests/test_uv_command_contracts.py" in mutation_args, (
+        "the uv command contracts read the root Makefile, which mutmut does "
+        "not copy into its test environment"
+    )
+
+
 def test_pytest_does_not_collect_the_generated_mutants_tree(
     tmp_path: pathlib.Path,
 ) -> None:
