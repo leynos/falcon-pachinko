@@ -1,4 +1,13 @@
-"""Parse project ``uv`` commands for the repository lock contract tests."""
+"""Scan project commands for compliance with the committed lock policy.
+
+The helpers parse Makefile recipes and GitHub Actions ``run:`` scripts. They
+preserve shell command boundaries, recognize supported Make prefixes and uv
+options, and report unlocked project ``uv run`` and ``uv sync`` commands with
+source-line context. Unsupported shell syntax raises a focused error instead
+of silently skipping a command. The contract tests in
+``tests/test_uv_command_contracts.py`` use this scanner to enforce the
+repository's committed ``uv.lock`` policy.
+"""
 
 from __future__ import annotations
 
@@ -10,8 +19,16 @@ class ShellCommandSyntaxError(ValueError):
     """A shell command could not be parsed with source-line context."""
 
 
-class UnsupportedUvOptionError(ValueError):
+class UnsupportedCommandOptionError(ValueError):
+    """An unsupported command option prevents safe project-lock scanning."""
+
+
+class UnsupportedUvOptionError(UnsupportedCommandOptionError):
     """A global uv option is not covered by the command contract scanner."""
+
+
+class UnsupportedEnvOptionError(UnsupportedCommandOptionError):
+    """An env option prevents safe inspection of its wrapped command."""
 
 
 MAKE_VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -30,19 +47,44 @@ SHELL_COMMAND_PREFIXES = frozenset({
 ENV_FLAGS = frozenset({
     "-",
     "-0",
+    "--block-signal",
+    "--default-signal",
     "--debug",
+    "--ignore-signal",
     "--ignore-environment",
+    "--list-signal-handling",
     "--null",
     "-i",
     "-v",
 })
-ENV_OPTIONS_WITH_VALUES = frozenset({"-u", "--unset"})
+ENV_OPTIONS_WITH_VALUES = frozenset({
+    "-a",
+    "--argv0",
+    "--env0-from",
+    "-C",
+    "--chdir",
+    "-u",
+    "--unset",
+})
+ENV_INLINE_OPTIONS_WITH_VALUES = re.compile(
+    r"(?:--(?:argv0|chdir|env0-from|unset)=|-a|-C|-u).+"
+)
+ENV_OPTIONAL_VALUE_OPTIONS = frozenset({
+    "--block-signal",
+    "--default-signal",
+    "--ignore-signal",
+})
 MAKE_ASSIGNMENT_OPERATORS = frozenset({"=", "?=", ":=", "+=", "!=", "::="})
 UV_INFORMATIONAL_OPTIONS = frozenset({"--help", "--version", "-h", "-V"})
 SHELL_HEREDOC_PART = re.compile(
     r"(?P<comment>(?<![^\s;&|()<>])\#[^\n]*)|'[^']*'|"
     r'"(?:\\.|[^"\\])*"|\\.|(?P<operator>(?<!<)(?:<<-(?!<)|<<(?!<)))'
 )
+SHELL_QUOTED_TEXT = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+SHELL_COMMAND_SUBSTITUTION = re.compile(r"\$\((?!\()")
+MAKE_COMMAND_SUBSTITUTION = re.compile(r"\$\$\((?!\()")
+QUOTED_OPEN_PARENTHESIS = "\ue000"
+QUOTED_CLOSE_PARENTHESIS = "\ue001"
 # Keep global option arity aligned with `uv --help`; their values must not be
 # mistaken for the command whose arguments no longer belong to uv.
 UV_GLOBAL_OPTIONS_WITH_VALUES = frozenset({
@@ -339,7 +381,9 @@ def run_step_scripts(document: object) -> list[str]:
     return scripts
 
 
-def _shell_commands(line: str, *, line_number: int) -> list[list[str]]:
+def _shell_commands(
+    line: str, *, line_number: int, is_makefile: bool
+) -> list[list[str]]:
     """Split a logical shell line at command separators.
 
     Returns
@@ -347,11 +391,24 @@ def _shell_commands(line: str, *, line_number: int) -> list[list[str]]:
     list of list of str
         Shell command token groups, with separators removed.
     """
-    tokens = _shell_command_tokens(line, line_number=line_number)
-    return _commands_from_tokens(tokens)
+    tokens = _shell_command_tokens(
+        line, line_number=line_number, is_makefile=is_makefile
+    )
+    commands = _commands_from_tokens(tokens, is_makefile=is_makefile)
+    return [
+        [
+            token.replace(QUOTED_OPEN_PARENTHESIS, "(").replace(
+                QUOTED_CLOSE_PARENTHESIS, ")"
+            )
+            for token in command
+        ]
+        for command in commands
+    ]
 
 
-def _shell_command_tokens(line: str, *, line_number: int) -> list[str]:
+def _shell_command_tokens(
+    line: str, *, line_number: int, is_makefile: bool
+) -> list[str]:
     """Tokenize a shell line and attach its source location on syntax errors.
 
     Returns
@@ -364,20 +421,48 @@ def _shell_command_tokens(line: str, *, line_number: int) -> list[str]:
     ShellCommandSyntaxError
         The logical shell line has unbalanced quoting.
     """
+    token_source = _protect_quoted_parentheses(
+        line, line_number=line_number, is_makefile=is_makefile
+    )
+    punctuation_chars = ";&|" if is_makefile else ";&|()"
     try:
-        return _shell_tokens(line, punctuation_chars=";&|")
+        return _shell_tokens(token_source, punctuation_chars=punctuation_chars)
     except ValueError as error:
         message = f"Unbalanced quote at shell line {line_number}: {line!r}"
         raise ShellCommandSyntaxError(message) from error
 
 
-def _commands_from_tokens(tokens: list[str]) -> list[list[str]]:
+def _protect_quoted_parentheses(
+    line: str, *, line_number: int, is_makefile: bool
+) -> str:
+    """Keep literal quoted parentheses out of shell command boundaries."""
+
+    def replace(match: re.Match[str]) -> str:
+        quoted = match.group(0)
+        substitution = (
+            MAKE_COMMAND_SUBSTITUTION if is_makefile else SHELL_COMMAND_SUBSTITUTION
+        )
+        if quoted.startswith('"') and substitution.search(quoted):
+            message = (
+                f"Unsupported quoted command substitution at shell line "
+                f"{line_number}: {line!r}"
+            )
+            raise ShellCommandSyntaxError(message)
+        return quoted.replace("(", QUOTED_OPEN_PARENTHESIS).replace(
+            ")", QUOTED_CLOSE_PARENTHESIS
+        )
+
+    return SHELL_QUOTED_TEXT.sub(replace, line)
+
+
+def _commands_from_tokens(tokens: list[str], *, is_makefile: bool) -> list[list[str]]:
     """Group shell tokens by command separators, omitting the separators."""
     commands: list[list[str]] = []
     current: list[str] = []
+    separators = ";&|" if is_makefile else ";&|()"
 
     for token in tokens:
-        if token and all(character in ";&|" for character in token):
+        if token and all(character in separators for character in token):
             if current:
                 commands.append(current)
                 current = []
@@ -502,7 +587,6 @@ ENV_OPTION_ARITY = {
     **dict.fromkeys(ENV_FLAGS, 1),
     **dict.fromkeys(ENV_OPTIONS_WITH_VALUES, 2),
 }
-ENV_INLINE_UNSET_OPTION = re.compile(r"(?:--unset=|-u).+")
 
 
 def _env_command_index(tokens: list[str], index: int) -> int | None:
@@ -516,6 +600,12 @@ def _env_command_index(tokens: list[str], index: int) -> int | None:
         if option_arity is not None:
             command_index += option_arity
             continue
+        if argument.startswith("-"):
+            message = (
+                f"Unsupported GNU env option {argument!r}; add it to "
+                "ENV_FLAGS or ENV_OPTIONS_WITH_VALUES"
+            )
+            raise UnsupportedEnvOptionError(message)
         if SHELL_ASSIGNMENT.match(argument) is None:
             return command_index
         command_index += 1
@@ -526,14 +616,16 @@ def _env_option_arity(argument: str) -> int | None:
     """Return how many tokens a supported GNU ``env`` option consumes."""
     if argument in ENV_OPTION_ARITY:
         return ENV_OPTION_ARITY[argument]
-    if _is_inline_env_unset_option(argument):
+    if _is_inline_env_option_with_value(argument):
+        return 1
+    if any(argument.startswith(f"{option}=") for option in ENV_OPTIONAL_VALUE_OPTIONS):
         return 1
     return None
 
 
-def _is_inline_env_unset_option(argument: str) -> bool:
-    """Return whether an unset option carries its name in the same token."""
-    return ENV_INLINE_UNSET_OPTION.fullmatch(argument) is not None
+def _is_inline_env_option_with_value(argument: str) -> bool:
+    """Return whether a value-taking env option carries its value inline."""
+    return ENV_INLINE_OPTIONS_WITH_VALUES.fullmatch(argument) is not None
 
 
 def _is_unlocked_project_command(command: list[str], *, is_makefile: bool) -> bool:
@@ -605,8 +697,9 @@ def unlocked_project_commands(
 
     Notes
     -----
-    Parsing errors propagate as ``ShellCommandSyntaxError``. An unsupported
-    global uv option propagates as ``UnsupportedUvOptionError``.
+    Parsing errors propagate as ``ShellCommandSyntaxError``. Unsupported
+    command options propagate as ``UnsupportedCommandOptionError`` with the
+    specific uv or env option type retained.
     """
     violations: list[tuple[int, str]] = []
     for line_number, line in _logical_lines(text):
@@ -623,16 +716,18 @@ def _unlocked_commands_on_line(
 ) -> list[tuple[int, str]]:
     """Find unlocked invocations in one logical line with useful errors."""
     violations: list[tuple[int, str]] = []
-    for command in _shell_commands(line, line_number=line_number):
+    for command in _shell_commands(
+        line, line_number=line_number, is_makefile=is_makefile
+    ):
         command_text = " ".join(command)
         try:
             is_unlocked = _is_unlocked_project_command(command, is_makefile=is_makefile)
-        except UnsupportedUvOptionError as error:
+        except UnsupportedCommandOptionError as error:
             message = (
-                f"Unsupported uv option at line {line_number}: "
+                f"Unsupported command option at line {line_number}: "
                 f"{command_text!r}: {error}"
             )
-            raise UnsupportedUvOptionError(message) from error
+            raise type(error)(message) from error
         if is_unlocked:
             violations.append((line_number, command_text))
     return violations
