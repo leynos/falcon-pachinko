@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - the tests drive make itself
 import tomllib
@@ -34,6 +35,15 @@ PUBLISHER_SELECTION: typ.Final[dict[str, str]] = {
 }
 MAKE = shutil.which("make")
 FULL_COMMIT = re.compile(r"[0-9a-f]{40}")
+PYTEST_OPTIONS_WITH_ARGUMENTS = frozenset({
+    "-k",
+    "-m",
+    "-o",
+    "--confcutdir",
+    "--deselect",
+    "--ignore",
+    "--rootdir",
+})
 
 pytestmark = pytest.mark.skipif(MAKE is None, reason="make is not installed")
 
@@ -47,6 +57,62 @@ def _make(*args: str) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
     )
+
+
+def _parse_pytest_command(command: str) -> tuple[list[str], list[str]] | None:
+    """Split a shell command into its prefix and pytest arguments."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    try:
+        pytest_index = words.index("pytest")
+    except ValueError:
+        return None
+    return words[:pytest_index], words[pytest_index + 1 :]
+
+
+def _pytest_path_arguments(arguments: list[str]) -> list[str]:
+    """Return positional pytest paths without option values."""
+    paths = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            paths.extend(arguments[index + 1 :])
+            break
+        if argument in PYTEST_OPTIONS_WITH_ARGUMENTS:
+            index += 2
+        elif any(
+            argument.startswith(f"{option}=")
+            for option in PYTEST_OPTIONS_WITH_ARGUMENTS
+        ) or argument.startswith("-"):
+            index += 1
+        else:
+            paths.append(argument)
+            index += 1
+    return paths
+
+
+def _pytest_command_selects_complete_suite(command: str) -> bool:
+    """Allow configured testpaths or both explicit roots, never one root."""
+    parsed = _parse_pytest_command(command)
+    if parsed is None:
+        return False
+    _, arguments = parsed
+    return _pytest_path_arguments(arguments) in ([], ["falcon_pachinko", "tests"])
+
+
+def _pytest_command_line(output: str) -> str | None:
+    """Find a Make dry-run line that invokes pytest."""
+    for line in output.splitlines():
+        parsed = _parse_pytest_command(line)
+        if parsed is None:
+            continue
+        prefix, _ = parsed
+        if prefix[:2] == ["uv", "run"] and "which" not in prefix:
+            return line
+    return None
 
 
 def test_the_target_runs_the_check_from_a_full_commit_under_python_313() -> None:
@@ -184,6 +250,36 @@ def test_the_lane_runs_ci_tests_before_cv005() -> None:
         )
 
 
+def test_pytest_command_must_select_both_suites() -> None:
+    """Explicit paths must retain both configured test roots."""
+    configured_testpaths = (
+        'uv run --locked --extra examples pytest -v -m "not lint_toolchain"'
+    )
+    both_roots = (
+        "uv run --locked --extra examples pytest -v "
+        'falcon_pachinko tests -m "not lint_toolchain"'
+    )
+    tests_only = (
+        'uv run --locked --extra examples pytest -v tests -m "not lint_toolchain"'
+    )
+    package_only = (
+        "uv run --locked --extra examples pytest -v falcon_pachinko "
+        '-m "not lint_toolchain"'
+    )
+    assert _pytest_command_selects_complete_suite(configured_testpaths), (
+        "configured testpaths must select the complete suite"
+    )
+    assert _pytest_command_selects_complete_suite(both_roots), (
+        "both explicit suite roots must be accepted"
+    )
+    assert not _pytest_command_selects_complete_suite(tests_only), (
+        "tests alone would omit falcon_pachinko"
+    )
+    assert not _pytest_command_selects_complete_suite(package_only), (
+        "falcon_pachinko alone would omit tests"
+    )
+
+
 def test_local_and_ci_test_targets_keep_their_distinct_selections() -> None:
     """Scenario: Make exposes complete local and post-marker CI test targets.
 
@@ -195,15 +291,23 @@ def test_local_and_ci_test_targets_keep_their_distinct_selections() -> None:
 
     assert local.returncode == 0, f"make -n test must succeed: {local.stderr}"
     assert ci.returncode == 0, f"make -n test-ci must succeed: {ci.stderr}"
-    full_command = "uv run --locked --extra examples pytest -v"
-    filtered_command = f'{full_command} -m "not lint_toolchain"'
+    local_command = _pytest_command_line(local.stdout)
+    ci_command = _pytest_command_line(ci.stdout)
+    assert local_command is not None, f"make test must run pytest: {local.stdout}"
+    assert ci_command is not None, f"make test-ci must run pytest: {ci.stdout}"
 
-    assert full_command in local.stdout, (
-        f"make test must run the full locked suite: {local.stdout}"
+    expected_prefix = ["uv", "run", "--locked", "--extra", "examples"]
+    local_prefix, local_arguments = _parse_pytest_command(local_command) or ([], [])
+    ci_prefix, ci_arguments = _parse_pytest_command(ci_command) or ([], [])
+    assert local_prefix == ci_prefix == expected_prefix, (
+        f"both test targets must use the locked examples environment: "
+        f"local={local_prefix!r}, ci={ci_prefix!r}"
     )
-    assert "lint_toolchain" not in local.stdout, (
-        f"make test must not exclude the lint_toolchain marker: {local.stdout}"
+    assert local_arguments, local_command
+    assert local_arguments[0] == "-v", local_command
+    assert "lint_toolchain" not in local_arguments, (
+        f"make test must not exclude the lint_toolchain marker: {local_command}"
     )
-    assert filtered_command in ci.stdout, (
-        f"make test-ci must exclude only the lint_toolchain marker: {ci.stdout}"
-    )
+    assert _pytest_command_selects_complete_suite(local_command), local_command
+    assert ci_arguments[:3] == ["-v", "-m", "not lint_toolchain"], ci_command
+    assert _pytest_command_selects_complete_suite(ci_command), ci_command
