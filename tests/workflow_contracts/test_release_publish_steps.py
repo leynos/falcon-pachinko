@@ -108,15 +108,31 @@ def test_the_distribution_is_the_name_the_release_publishes() -> None:
     )
 
 
-def test_collection_gathers_the_sdist_with_every_wheel(tmp_path: pth.Path) -> None:
-    """Wheels from every artefact directory and the one sdist are collected."""
-    _touch(tmp_path / "dist", "p-1-py3-none-any.whl", "p-1.tar.gz")
+@pytest.mark.parametrize(
+    "wheels",
+    [
+        ("p-1-py3-none-any.whl",),
+        ("p-1-py3-none-any.whl", "p-1-cp313-cp313-linux.whl"),
+    ],
+    ids=["single-wheel", "multiple-wheels"],
+)
+def test_collection_gathers_the_sdist_with_every_wheel(
+    tmp_path: pth.Path, wheels: tuple[str, ...]
+) -> None:
+    """Every wheel travels with the single sdist, preserving its bytes."""
+    expected = (*wheels, "p-1.tar.gz")
+    _touch(tmp_path / "dist", *expected)
 
     completed = run_bash(step_script(*_COLLECT_STEP), tmp_path)
 
     assert completed.returncode == 0, completed.stderr
-    collected = sorted(path.name for path in (tmp_path / "dist" / "publish").iterdir())
-    assert collected == list(_ARTEFACTS), "every wheel and the sdist must be staged"
+    publish = tmp_path / "dist" / "publish"
+    collected = sorted(path.name for path in publish.iterdir())
+    assert collected == sorted(expected), "every wheel and the sdist must be staged"
+    for name in expected:
+        assert (publish / name).read_bytes() == name.encode(), (
+            f"collection must preserve the bytes of {name}"
+        )
 
 
 @pytest.mark.parametrize(

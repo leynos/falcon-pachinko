@@ -204,7 +204,7 @@ def test_unverified_carried_bytes_fail_before_pypi_staging_mutation(
     """A compromised release asset cannot gain fresh publishing provenance."""
     monkeypatch.setenv(variable, value)
     before = _holdings(fake.pypi)
-    with pytest.raises(AssertionError, match="provenance"):
+    with pytest.raises(AssertionError, match="cannot safely carry GitHub asset"):
         _draft_and_publish_pypi(fake)
     assert _holdings(fake.pypi) == before, "reject before publishing any carried file"
     staged = fake.root / "publish-pypi" / "dist" / "pypi"

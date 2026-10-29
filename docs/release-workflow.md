@@ -50,10 +50,10 @@ incompatible bundle.
 PyPI is canonical when a filename already exists there. Otherwise an existing
 GitHub Release asset is canonical, followed by the current build. Existing
 files are never overwritten. A name present only on GitHub is copied to PyPI
-only after its original bundle verifies the downloaded bytes and binds their
-exact filename and digest. All carried files are validated before staging
-changes; missing or invalid provenance stops publication. Identical bytes from
-the current attested build need no carry. A name missing from GitHub is fetched
+after its original bundle verifies the downloaded bytes and binds their exact
+filename and digest. All carried files are validated before staging changes;
+missing or invalid provenance stops publication. Identical bytes from the
+current attested build need no carry. A name missing from GitHub is fetched
 from PyPI. A digest mismatch fails the run and leaves the release in draft so
 the conflict can be investigated without publishing divergent bytes.
 
