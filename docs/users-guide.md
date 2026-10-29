@@ -131,11 +131,11 @@ app.add_route("/ws", RouterAdapter(router))
 app.add_route("/ws/{rest:path}", RouterAdapter(router))
 ```
 
-- Falcon sends a connection to `/ws` to the exact mount route and sends paths
-  beneath `/ws` to `/ws/{rest:path}`. Both forward to `RouterAdapter`, which
-  presents the `/ws` mount template to the router and delegates other request
-  attributes and methods to Falcon's request. The router then matches
-  `/ws/chat/{room}` against its mounted routes.
+- Falcon matches a connection to `/ws` against the exact mount route, or a
+  descendant path against `/ws/{rest:path}`, then forwards the connection to
+  `RouterAdapter`. The adapter presents the `/ws` mount template to the router
+  and delegates other request attributes and methods to Falcon's request. The
+  router then matches `/ws/chat/{room}` against its mounted routes.
 - `configure_raw_frame_media(app)` preserves inbound TEXT and BINARY frames
   for schema dispatch when the router is mounted manually.
 - Each connection receives a **fresh resource instance** and a **shared state

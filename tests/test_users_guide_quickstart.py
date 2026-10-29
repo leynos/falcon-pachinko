@@ -27,18 +27,102 @@ def _extract_quickstart_source(guide: str) -> str:
         pytest.fail(f"users guide is missing the {heading!r} heading")
 
     section = guide[heading_position + len(heading) :]
-    next_heading = re.search(r"^#{1,6}\s+.*$", section, re.MULTILINE)
-    if next_heading is not None:
-        section = section[: next_heading.start()]
-
-    fence = re.search(
-        r"^```python[ \t]*\r?\n(?P<source>.*?)^```[ \t]*$",
+    # Consume complete fences before considering headings inside their source.
+    blocks = re.finditer(
+        r"^```(?P<language>[^\r\n]*)\r?\n(?P<source>.*?)^```[ \t]*\r?$"
+        r"|^#{1,6}[ \t]+[^\r\n]*\r?$",
         section,
         re.MULTILINE | re.DOTALL,
     )
-    if fence is None:
+    python_source: str | None = None
+    for block in blocks:
+        language = block.group("language")
+        if language is None:
+            break
+        if language.strip() == "python":
+            python_source = block.group("source")
+            break
+    if python_source is None:
         pytest.fail(f"{heading!r} is missing its Python code fence")
-    return fence.group("source")
+    return python_source
+
+
+def test_extract_quickstart_source_preserves_python_comments() -> None:
+    """A Python comment inside the fence is source, not a section boundary."""
+    guide = """## 2. Quickstart (Composable Routing)
+
+```python
+# Configure the application.
+app = object()
+```
+"""
+
+    assert _extract_quickstart_source(guide) == (
+        "# Configure the application.\napp = object()\n"
+    ), "extracting the quick-start must retain unindented Python comments"
+
+
+def test_extract_quickstart_source_requires_the_target_heading() -> None:
+    """An unrelated Python fence cannot replace the quick-start heading."""
+    guide = """## Another section
+
+```python
+app = object()
+```
+"""
+
+    with pytest.raises(pytest.fail.Exception, match="users guide is missing the"):
+        _extract_quickstart_source(guide)
+
+
+def test_extract_quickstart_source_rejects_a_later_sections_fence() -> None:
+    """A missing quick-start fence must fail before the next section's code."""
+    guide = """## 2. Quickstart (Composable Routing)
+
+There is no example here.
+
+## Another section
+
+```python
+later = object()
+```
+"""
+
+    with pytest.raises(pytest.fail.Exception, match="missing its Python code fence"):
+        _extract_quickstart_source(guide)
+
+
+def test_extract_quickstart_source_uses_the_first_python_fence() -> None:
+    """Only the first Python example in the target section is returned."""
+    guide = """```python
+before = object()
+```
+
+## 2. Quickstart (Composable Routing)
+
+```sh
+# Prepare the environment.
+uv sync
+```
+
+```python
+first = object()
+```
+
+```python
+second = object()
+```
+
+## Another section
+
+```python
+later = object()
+```
+"""
+
+    assert _extract_quickstart_source(guide) == "first = object()\n", (
+        "the extractor must return the first Python fence after the target heading"
+    )
 
 
 @pytest.fixture
