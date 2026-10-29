@@ -195,13 +195,17 @@ uv sync --group dev --extra examples --extra testing --locked
 
 `--locked` requires the lockfile to match `pyproject.toml`; a stale or missing
 lockfile makes the command fail rather than silently resolving a different
-release set. CI uses `--locked` for project-environment commands, fails when
-the lock is stale and never regenerates it. The main coverage lane runs
+release set. Repository-owned CI project-environment commands use `--locked`,
+fail when the lock is stale and never regenerate it. The main coverage lane runs
 `uv lock --check` before its pinned shared coverage action, whose project sync
-is maintained outside this repository. `make test` runs the complete suite and
-requests the `examples` extra in its locked `uv run` command. After the CI lane
-runs the dedicated `lint_toolchain` step, it uses `make test-ci` to avoid
-running those integration tests twice while keeping them in the local suite.
+is maintained outside this repository. The separate scheduled/manual mutation
+workflow also delegates to a pinned shared workflow; that workflow runs
+`uv run --with` without `--locked`, so uv may update a stale lock while
+preparing that job's project environment. This mutation workflow is not a
+pull-request check. `make test` runs the complete suite and requests the
+`examples` extra in its locked `uv run` command. After the CI lane runs the
+dedicated `lint_toolchain` step, it uses `make test-ci` to avoid running those
+integration tests twice while keeping them in the local suite.
 
 ### Refreshing the lockfile
 
