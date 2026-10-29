@@ -1,6 +1,7 @@
 version: 2
 updates:
-  # Enable version updates for GitHub Actions
+  # Keep action refs SHA-pinned with same-line # vX.Y.Z comments. Dependabot
+  # updates SHAs to SHAs and rewrites the version comments.
   - package-ecosystem: "github-actions"
     groups:
       shared-actions:

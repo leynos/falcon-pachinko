@@ -1164,6 +1164,21 @@ the 19 s and 36 s lanes will be dominated by runner start-up either way.
 `make test-workflow-contracts` runs them on their own. `make test` collects
 them too, which is what makes them a gate rather than a convenience.
 
+The action-reference reader checks every workflow and local action manifest.
+External GitHub Actions and reusable workflows must use a full 40-character
+lowercase commit SHA; Docker actions must use a SHA-256 digest. Local `./`
+action references are exempt because they resolve within the checked-out
+repository. Keep the upstream release version in a same-line `# vX.Y.Z` comment
+so Dependabot can update the SHA and comment together. This also applies to the
+[Markdown lint action](#markdown-formatting-and-linting).
+
+Before updating a pin, query the owning repository with
+`gh api repos/OWNER/REPO/git/ref/tags/TAG`, and follow annotated tag objects
+with `gh api repos/OWNER/REPO/git/tags/SHA` until the object is a commit.
+Verify that an exact release tag in the same major version resolves to that
+commit. Record the release, commit, and upstream evidence in the pull request;
+never infer a SHA from an unverified version comment.
+
 They need two development dependencies that the library itself does not.
 **PyYAML** parses the GitHub Actions documents, and **Hypothesis** generates
 the declarations the label readers are held to. Both are in the `dev`
