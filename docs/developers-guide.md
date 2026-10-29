@@ -298,6 +298,10 @@ invalid schema in place and disguise a schema bug as a malformed message.
 
 ## Safe diagnostics
 
+`convert_and_invoke_handler` converts every typed envelope payload, including
+`None` from omission or JSON `null`. Validation failures reach `on_unhandled`;
+handler defaults are not applied.
+
 Framework diagnostics must not call `repr()` or `str()` on raw payloads,
 decoded caller values, or other caller-controlled objects. Use the shared
 bounded metadata helpers in `falcon_pachinko.diagnostics` for identifiers,
