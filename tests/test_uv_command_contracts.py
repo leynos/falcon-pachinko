@@ -23,6 +23,8 @@ if typ.TYPE_CHECKING:
 from tests._makefile import MAKEFILE, REPO_ROOT
 from tests._uv_command_scanner import (
     ShellCommandSyntaxError,
+    UnsupportedCommandOptionError,
+    UnsupportedEnvOptionError,
     UnsupportedUvOptionError,
     run_step_scripts,
     unlocked_project_commands,
@@ -36,7 +38,7 @@ def test_makefile_project_commands_require_the_lockfile() -> None:
         violations = unlocked_project_commands(
             MAKEFILE.read_text(encoding="utf-8"), is_makefile=True
         )
-    except (ShellCommandSyntaxError, UnsupportedUvOptionError) as error:
+    except (ShellCommandSyntaxError, UnsupportedCommandOptionError) as error:
         message = f"Makefile: {error}"
         raise type(error)(message) from error
 
@@ -83,7 +85,7 @@ def _workflow_script_violations(path: pathlib.Path, script: str) -> list[str]:
     """Return unlocked commands with the workflow path in each diagnostic."""
     try:
         commands = unlocked_project_commands(script)
-    except (ShellCommandSyntaxError, UnsupportedUvOptionError) as error:
+    except (ShellCommandSyntaxError, UnsupportedCommandOptionError) as error:
         location = path.relative_to(REPO_ROOT)
         message = f"{location}: {error}"
         raise type(error)(message) from error
@@ -157,10 +159,16 @@ def test_ci_run_steps_require_the_project_lockfile() -> None:
             [],
         ),
         ("@uv run pytest", [(1, "@uv run pytest")]),
-        ("$(UV) run pytest", [(1, "$(UV) run pytest")]),
+        ("$(UV) run pytest", []),
         ("@$(UV) run --locked pytest", []),
         ("{ uv sync; }", [(1, "{ uv sync")]),
         ("{ uv sync --locked; }", []),
+        ("(cd sub && uv sync)", [(1, "uv sync")]),
+        ("(uv sync)", [(1, "uv sync")]),
+        ("x=$(uv sync)", [(1, "uv sync")]),
+        ("echo '(uv sync)'", []),
+        ("echo '(' uv sync", []),
+        ('echo "$(( 2 + 2 ))"', []),
         (
             "env UV_PYTHON=3.13 uv run pytest",
             [(1, "env UV_PYTHON=3.13 uv run pytest")],
@@ -169,6 +177,18 @@ def test_ci_run_steps_require_the_project_lockfile() -> None:
         (
             "env -u UV_CACHE_DIR uv sync",
             [(1, "env -u UV_CACHE_DIR uv sync")],
+        ),
+        (
+            "env -C subdir uv sync",
+            [(1, "env -C subdir uv sync")],
+        ),
+        (
+            "env --chdir subdir uv sync",
+            [(1, "env --chdir subdir uv sync")],
+        ),
+        (
+            "env --chdir=subdir uv sync",
+            [(1, "env --chdir=subdir uv sync")],
         ),
         (
             "env --unset UV_CACHE_DIR uv sync",
@@ -347,6 +367,36 @@ def test_command_scanner_fails_closed_on_unknown_uv_global_options() -> None:
 
     with pytest.raises(UnsupportedUvOptionError, match=r"line 2.*uv --unrecognised"):
         unlocked_project_commands(script)
+
+
+def test_command_scanner_fails_closed_on_unsupported_env_options() -> None:
+    """An env option the scanner cannot parse must not hide the wrapped uv."""
+    script = "env -S 'uv sync'"
+
+    with pytest.raises(UnsupportedEnvOptionError, match=r"line 1.*env -S"):
+        unlocked_project_commands(script)
+
+
+def test_command_scanner_fails_closed_on_quoted_command_substitutions() -> None:
+    """A command substitution in double quotes must not hide a project call."""
+    script = 'x="$(uv sync)"'
+
+    with pytest.raises(
+        ShellCommandSyntaxError,
+        match=r"Unsupported quoted command substitution at shell line 1",
+    ):
+        unlocked_project_commands(script)
+
+
+def test_makefile_scanner_fails_closed_on_quoted_shell_substitutions() -> None:
+    """Escaped Make dollars identify shell substitutions after Make expands."""
+    source = 'TARGET = "$$(uv sync)"'
+
+    with pytest.raises(
+        ShellCommandSyntaxError,
+        match=r"Unsupported quoted command substitution at shell line 1",
+    ):
+        unlocked_project_commands(source, is_makefile=True)
 
 
 def test_command_scanner_keeps_multiline_quoted_text_as_one_argument() -> None:
