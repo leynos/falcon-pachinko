@@ -1,9 +1,4 @@
-"""Keep the CI lane that exercises Falcon's declared lower bound.
-
-The lockfile deliberately selects the newest compatible Falcon release for
-the main CI lane. This contract keeps a separate lane on the package's lower
-bound and proves its override survives the version check and test run.
-"""
+"""Protect Falcon's lower-bound lane and the locked-version CI lane."""
 
 from __future__ import annotations
 
@@ -394,6 +389,19 @@ def _masked_command_violations(
     ]
 
 
+def _skippable_command_violations(
+    commands: list[CommandEntry], required_commands: dict[str, CommandEntry | None]
+) -> list[str]:
+    """Reject required commands guarded by a preceding shell condition."""
+    separators = {(step, index): separator for step, index, _, separator in commands}
+    return [
+        f"{MINIMUM_JOB} {name} command must not follow a conditional operator"
+        for name, entry in required_commands.items()
+        if entry is not None
+        and separators.get((entry[0], entry[1] - 1)) in {"&&", "||"}
+    ]
+
+
 def _step_order_violations(
     setup_positions: dict[str, int | None],
     required_commands: dict[str, CommandEntry | None],
@@ -462,6 +470,7 @@ def _minimum_job_violations(job: dict[str, object], lower_bound: str) -> list[st
     violations.extend(command_violations)
     violations.extend(_step_order_violations(setup_positions, required_commands))
     violations.extend(_masked_command_violations(required_commands))
+    violations.extend(_skippable_command_violations(commands, required_commands))
     violations.extend(_resync_violations(commands, required_commands))
     return violations
 
@@ -489,6 +498,9 @@ def falcon_minimum_lane_violations(
     ----------
     source : WorkflowSource
         The workflow directory to inspect.
+    project_metadata_path : pathlib.Path, optional
+        The pyproject.toml supplying Falcon's lower bound; defaults to the
+        repository's own file.
 
     Returns
     -------
