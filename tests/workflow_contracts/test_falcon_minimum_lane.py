@@ -194,7 +194,6 @@ def _version_check_command(command: CommandGroup) -> bool:
     if not _is_command(command, "uv", "run", "--no-sync", "python", "-c"):
         return False
     # Accept only known checks whose exit status is nonzero on a mismatch.
-
     try:
         tree = ast.dump(ast.parse(" ".join(command[5:])))
     except SyntaxError:
@@ -751,7 +750,8 @@ def test_shell_commands_join_continuations_and_keep_lines_separate() -> None:
         min_size=1,
         max_size=4,
     ),
-    st.sampled_from([";", "&&", "||", "|", "&"]),
+    st.sampled_from([";", "&&", "||", "|", "&", "\n"]),
+    st.sampled_from([" ", " \\\n"]),
     st.lists(
         st.text(alphabet="abcXYZ09 ;|&#'\"", min_size=1, max_size=12),
         min_size=1,
@@ -759,15 +759,16 @@ def test_shell_commands_join_continuations_and_keep_lines_separate() -> None:
     ),
 )
 def test_shell_grouping_preserves_generated_quoted_arguments(
-    left: list[str], operator: str, right: list[str]
+    left: list[str], operator: str, joiner: str, right: list[str]
 ) -> None:
     """The parser preserves generated argv and supported shell operators."""
-    script = " ".join(map(shlex.quote, ["echo", *left])) + f" {operator} "
-    script += " ".join(map(shlex.quote, ["printf", *right]))
-    assert _command_groups(script) == [
-        (("echo", *left), operator),
+    script = joiner.join(map(shlex.quote, ["echo", *left])) + f" {operator} "
+    script += joiner.join(map(shlex.quote, ["printf", *right]))
+    expected = [
+        (("echo", *left), None if operator == "\n" else operator),
         (("printf", *right), None),
-    ], f"incorrect shell grouping: {script}"
+    ]
+    assert _command_groups(script) == expected, f"incorrect shell grouping: {script}"
 
 
 def test_quoted_and_escaped_operators_are_protected() -> None:
