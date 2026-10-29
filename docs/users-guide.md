@@ -482,6 +482,13 @@ class ChatResource(WebSocketResource):
   open; application code can call `await ws.close(code=...)` when its policy
   requires closure.
 
+For messages without a schema, the envelope's `payload` may be omitted or set
+to JSON `null`; both decode to `None` and cannot be distinguished. A typed
+handler validates either value against its annotation. Non-optional types send
+both to `on_unhandled`; use `T | None` to accept a missing payload. `T | None`
+and `typing.Any` accept both values as `None`. Parameter defaults are never
+applied, and untyped handlers still receive `None`.
+
 Falcon's default WebSocket media handlers may decode frames before
 `receive_media()` returns them. Raw-frame media setup is required when dispatch
 needs the exact TEXT or BINARY payload. When schema dispatch needs the original
