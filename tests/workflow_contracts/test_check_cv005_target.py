@@ -42,6 +42,7 @@ PYTEST_OPTIONS_WITH_ARGUMENTS = frozenset({
     "--confcutdir",
     "--deselect",
     "--ignore",
+    "--ignore-glob",
     "--rootdir",
 })
 
@@ -94,12 +95,23 @@ def _pytest_path_arguments(arguments: list[str]) -> list[str]:
     return paths
 
 
+def _pytest_command_ignores_paths(arguments: list[str]) -> bool:
+    """Reject options that can exclude files from the complete test suite."""
+    return any(
+        argument == option or argument.startswith(f"{option}=")
+        for argument in arguments
+        for option in ("--ignore", "--ignore-glob")
+    )
+
+
 def _pytest_command_selects_complete_suite(command: str) -> bool:
     """Allow configured testpaths or both explicit roots, never one root."""
     parsed = _parse_pytest_command(command)
     if parsed is None:
         return False
     _, arguments = parsed
+    if _pytest_command_ignores_paths(arguments):
+        return False
     return _pytest_path_arguments(arguments) in ([], ["falcon_pachinko", "tests"])
 
 
@@ -266,6 +278,18 @@ def test_pytest_command_must_select_both_suites() -> None:
         "uv run --locked --extra examples pytest -v falcon_pachinko "
         '-m "not lint_toolchain"'
     )
+    ignored_tests_attached = (
+        "uv run --locked --extra examples pytest -v --ignore=tests "
+        '-m "not lint_toolchain"'
+    )
+    ignored_tests_separate = (
+        "uv run --locked --extra examples pytest -v --ignore tests "
+        '-m "not lint_toolchain"'
+    )
+    ignored_tests_glob = (
+        'uv run --locked --extra examples pytest -v --ignore-glob="tests/**" '
+        '-m "not lint_toolchain"'
+    )
     assert _pytest_command_selects_complete_suite(configured_testpaths), (
         "configured testpaths must select the complete suite"
     )
@@ -277,6 +301,15 @@ def test_pytest_command_must_select_both_suites() -> None:
     )
     assert not _pytest_command_selects_complete_suite(package_only), (
         "falcon_pachinko alone would omit tests"
+    )
+    assert not _pytest_command_selects_complete_suite(ignored_tests_attached), (
+        "--ignore=tests would omit the tests root"
+    )
+    assert not _pytest_command_selects_complete_suite(ignored_tests_separate), (
+        "--ignore tests would omit the tests root"
+    )
+    assert not _pytest_command_selects_complete_suite(ignored_tests_glob), (
+        "--ignore-glob could omit a test root"
     )
 
 
