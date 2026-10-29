@@ -409,3 +409,98 @@ class WorkflowSource:
 #: This repository's own workflows and registry. The contracts read through
 #: this; the tests that prove the readers build their own.
 REPOSITORY: typ.Final[WorkflowSource] = WorkflowSource(WORKFLOW_DIR, ACTIONLINT_CONFIG)
+
+
+class NotAListError(WorkflowShapeError):
+    """A required list has another shape.
+
+    Parameters
+    ----------
+    site : str
+        Location of the malformed container.
+    """
+
+    def __init__(self, site: str) -> None:
+        super().__init__(f"{site} must be a list")
+
+
+class UnsupportedUsesError(WorkflowShapeError):
+    """An action reference cannot be accepted by the pinning policy.
+
+    Parameters
+    ----------
+    site : str
+        Location of the reference.
+    value : object
+        The rejected value.
+    """
+
+    def __init__(self, site: str, value: object) -> None:
+        super().__init__(f"{site}: unsupported or mutable uses {value!r}")
+
+
+@dc.dataclass(frozen=True, slots=True)
+class ActionManifestSource:
+    """Read action manifests from a directory of local actions.
+
+    Attributes
+    ----------
+    action_dir : pathlib.Path
+        Directory containing action subdirectories.
+    """
+
+    action_dir: pathlib.Path
+
+    def names(self) -> list[str]:
+        """Find both supported manifest filenames in action directories.
+
+        Returns
+        -------
+        list[str]
+            Sorted paths relative to the action directory.
+
+        Raises
+        ------
+        UnreadableWorkflowError
+            If the directory cannot be listed.
+        """
+        try:
+            directories = list(self.action_dir.iterdir())
+            return sorted(
+                str(path.relative_to(self.action_dir))
+                for directory in directories
+                if directory.is_dir()
+                for path in directory.iterdir()
+                if path.name in {"action.yml", "action.yaml"}
+            )
+        except OSError as error:
+            raise UnreadableWorkflowError(self.action_dir) from error
+
+    def document(self, name: str) -> dict[str, object]:
+        """Parse a manifest with the workflow loader's strict error handling.
+
+        Parameters
+        ----------
+        name : str
+            Manifest path relative to the action directory.
+
+        Returns
+        -------
+        dict[str, object]
+            The parsed manifest.
+
+        Raises
+        ------
+        NotAMappingError
+            If the manifest does not parse as a mapping.
+        """
+        source = WorkflowSource(self.action_dir, self.action_dir / "unused")
+        document = as_mapping(source._load(self.action_dir / name, name))
+        if document is None:
+            raise NotAMappingError(name)
+        return document
+
+
+ACTION_MANIFESTS: typ.Final[ActionManifestSource] = ActionManifestSource(
+    ROOT / ".github" / "actions"
+)

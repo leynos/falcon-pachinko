@@ -128,6 +128,9 @@ jobs:
       - name: Check the CV-005 contracts
         run: make check-cv005
 
+      - name: Check workflow contracts
+        run: uv run pytest tests/workflow_contracts
+
       # Markdown is linted through the upstream action rather than a `run:`
       # step, because the action's release carries the linter's whole
       # dependency graph: nothing is resolved from the npm registry while the
