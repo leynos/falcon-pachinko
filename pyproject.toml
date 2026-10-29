@@ -493,16 +493,15 @@ pytest_add_cli_args_test_selection = [
 
 # `--ignore` is the only way to drop a directory that mutmut's own `tests/`
 # copy would otherwise collect: the runner builds its argument list from the
-# selection above, and `-m` cannot express "not this module". Three of
-# `tests/`' modules are repository-tooling contracts that read files mutmut
-# never copies -- `.github/workflows/`, `Makefile`, `uv.lock`,
-# `pylintrc-df12.toml`, `.markdownlint-cli2.jsonc` -- so they fail the
-# baseline inside `mutants/`. Their subject is the repository's tooling, not
-# the package's behaviour, so leaving them out costs the mutation score
-# nothing: they never exercise `falcon_pachinko/`.
+# selection above, and `-m` cannot express "not this module". Contracts under
+# `tests/` read repository files mutmut never copies, so they fail the baseline
+# inside `mutants/`. Their subject is repository tooling, not package behaviour,
+# so leaving them out costs the mutation score nothing: they never exercise
+# `falcon_pachinko/`.
 #   - tests/workflow_contracts/  (all of it; every module reads workflows)
 #   - tests/test_toolchain_versions.py
 #   - tests/test_uv_toolchain.py
+#   - tests/test_uv_command_contracts.py
 #   - tests/test_release_archives.py
 # `-m "not lint_toolchain"` drops the tests that provision a PyPy
 # interpreter and reach the network. `-p no:cacheprovider` keeps the run
@@ -511,6 +510,7 @@ pytest_add_cli_args = [
     "--ignore=tests/workflow_contracts",
     "--ignore=tests/test_toolchain_versions.py",
     "--ignore=tests/test_uv_toolchain.py",
+    "--ignore=tests/test_uv_command_contracts.py",
     "--ignore=tests/test_release_archives.py",
     "-m",
     "not lint_toolchain",
