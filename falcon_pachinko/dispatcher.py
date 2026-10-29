@@ -29,7 +29,7 @@ if typ.TYPE_CHECKING:  # pragma: no cover - type hints only
 
 
 class Envelope(ms.Struct, frozen=True):
-    """Simple envelope for messages without a schema."""
+    """Envelope where omitted and null payloads both decode to ``None``."""
 
     type: str
     payload: typ.Any | None = None
@@ -123,11 +123,14 @@ def find_conventional_handler(
 
 
 async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
-    """Convert ``payload`` to the handler's type and invoke it."""
+    """Validate typed payloads, including omitted and null values, then invoke.
+
+    Omission and null are equivalent; handler parameter defaults are not applied.
+    """
     payload_type = context.handler_info.payload_type
     payload = context.payload
     failed = False
-    if payload_type is not None and payload is not None:
+    if payload_type is not None:
         try:
             validate_strict_payload(
                 payload, payload_type, strict=context.handler_info.strict
