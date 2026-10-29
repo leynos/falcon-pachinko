@@ -139,9 +139,9 @@ The `falcon-minimum` job in `.github/workflows/ci.yml` checks the lower bound
 on every pull request and every push to `main`. After `make build` installs the
 locked environment, the job overrides Falcon with `FALCON_MINIMUM_VERSION`,
 verifies the installed version, and runs the full suite with
-`uv run --no-sync pytest -v`. The `--no-sync` flag keeps uv from restoring the
-locked release; `make test` would run its `build` prerequisite and restore that
-release.
+`uv run --locked --no-sync pytest -v`. The `--locked` flag checks the lockfile
+before the run, while `--no-sync` keeps uv from restoring the locked release;
+`make test` would run its `build` prerequisite and restore that release.
 
 When the lower bound changes, update the `falcon` bound in `pyproject.toml`,
 `FALCON_MINIMUM_VERSION` in the workflow, and `EXPECTED_FALCON_VERSION` in
