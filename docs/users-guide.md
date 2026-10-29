@@ -25,37 +25,138 @@ workers, and testing utilities.
 ## 2. Quickstart (Composable Routing)
 
 ```python
+"""Composable Falcon ASGI WebSocket chat quick-start.
+
+Run this app with ``uvicorn quickstart:app``.
+"""
+
+import dataclasses as dc
+import typing as typ
+
 import falcon.asgi
-from falcon_pachinko import WebSocketResource, WebSocketRouter, handles_message
+import msgspec as ms
+
+from falcon_pachinko import (
+    WebSocketResource,
+    WebSocketRouter,
+    configure_raw_frame_media,
+    handles_message,
+)
+
+if typ.TYPE_CHECKING:
+    from falcon_pachinko.protocols import WebSocketLike
+
+
+class ChatPayload(ms.Struct):
+    """Typed message body for a chat message."""
+
+    text: str
 
 
 class ChatResource(WebSocketResource):
-    async def on_connect(self, req, ws, room: str) -> bool:
+    async def on_connect(self, req, ws, room: str = "lobby") -> bool:
         self.state["room"] = room
         return True  # continue to message handling
 
     @handles_message("chat.message")
-    async def handle_message(self, ws, payload):
+    async def handle_message(self, ws, payload: ChatPayload) -> None:
+        # The router leaves an absent payload as None.
+        if payload is None:
+            return
         await ws.send_media({"type": "echo", "text": payload.text})
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _RouterRequest:
+    """Present the mount template while delegating to Falcon's request."""
+
+    request: falcon.asgi.Request
+    path: str
+    path_template: str
+    uri_template: str
+
+    def __getattr__(self, name: str) -> object:
+        """Delegate access to the original Falcon request."""
+        return getattr(self.request, name)
+
+
+class RouterAdapter:
+    """Route Falcon WebSocket connections to a mounted router.
+
+    Parameters
+    ----------
+    router : WebSocketRouter
+        Router that matches paths beneath its mount point.
+    """
+
+    def __init__(self, router: WebSocketRouter) -> None:
+        """Retain the router for incoming connections."""
+        self._router = router
+
+    async def on_websocket(
+        self,
+        req: falcon.asgi.Request,
+        ws: falcon.asgi.WebSocket,
+        rest: str = "",
+    ) -> None:
+        """Forward one handshake using the router's mount template.
+
+        Parameters
+        ----------
+        req : falcon.asgi.Request
+            Falcon request for the incoming WebSocket handshake.
+        ws : falcon.asgi.WebSocket
+            Falcon WebSocket for the incoming connection.
+        rest : str
+            Path captured below the ``/ws`` route prefix.
+        """
+        await self._router.on_websocket(
+            _RouterRequest(
+                request=req,
+                path=req.path,
+                path_template="/ws",
+                uri_template="/ws",
+            ),
+            typ.cast("WebSocketLike", ws),
+        )
+
+
 app = falcon.asgi.App()
+configure_raw_frame_media(app)
 router = WebSocketRouter(receive_loop=True)
 router.add_route("/chat/{room}", ChatResource)
+router.add_route("/", ChatResource)
 router.mount("/ws")
-router.attach(app)
+app.add_route("/ws", RouterAdapter(router))
+app.add_route("/ws/{rest:path}", RouterAdapter(router))
 ```
 
-- `mount()` compiles the router's mount prefix and routes. `attach()` then
-  registers the exact mount and a Falcon catch-all route for descendant paths.
-  It also enables pass-through TEXT and BINARY input for every WebSocket route
-  on the app, while preserving the configured outgoing serializers. It warns if
-  custom media handlers will be replaced.
+- Falcon matches a connection to `/ws` against the exact mount route, or a
+  descendant path against `/ws/{rest:path}`, then forwards the connection to
+  `RouterAdapter`. The adapter presents the `/ws` mount template to the router
+  and delegates other request attributes and methods to Falcon's request. The
+  router then matches `/ws/chat/{room}` against its mounted routes.
+- `configure_raw_frame_media(app)` preserves inbound TEXT and BINARY frames
+  for schema dispatch when the router is mounted manually.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
 - The example opts into a router-owned receive-and-dispatch session with
   `receive_loop=True`. The default is `False`, which returns after acceptance
   and leaves receives and cleanup to the application.
+- When `payload` is present and valid, the `ChatPayload` annotation makes the
+  router pass a `ChatPayload` instance to the handler. When `payload` is
+  absent, the typed handler receives `None`; this example ignores it.
+- An unannotated handler receives the decoded JSON value directly, such as a
+  `dict` for an object, a list for an array, or `None` when the payload is
+  absent.
+
+Save the Python snippet as `quickstart.py`. An ASGI server is required to serve
+the WebSocket connection; Uvicorn is included in the `examples` extra or the
+`dev` dependency group.
+
+```sh
+uvicorn quickstart:app
+```
 
 ### The `add_route` signature
 
