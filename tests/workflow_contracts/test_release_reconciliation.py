@@ -145,6 +145,7 @@ def _draft_and_publish_pypi(fake: FakeRelease) -> None:
     """Run the snapshot, the PyPI staging, and the modelled PyPI upload."""
     draft, env = _job_directory(fake, "draft-release")
     _step("draft-release", "Snapshot the release assets", draft, env)
+    _step("draft-release", "Verify carried asset provenance", draft, env)
     pypi, env = _job_directory(fake, "publish-pypi")
     shutil.copytree(draft / "github-state", pypi / "github-state")
     _step("publish-pypi", "Fetch the PyPI index", pypi, env)
@@ -186,6 +187,46 @@ def fake(tmp_path: pth.Path) -> FakeRelease:
     (release.pypi / _BOTH).write_bytes(b"both")
     (release.github / _BOTH).write_bytes(b"both")
     return release
+
+
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [
+        ("FAKE_ATTESTATION_EXIT", "1"),
+        ("FAKE_ATTESTATION_RECORD_NAME", "different-name.whl"),
+        ("FAKE_ATTESTATION_RECORD_DIGEST", "f" * 64),
+        ("FAKE_ATTESTATION_RECORD_RAW", "not JSON"),
+    ],
+)
+def test_unverified_carried_bytes_fail_before_pypi_staging_mutation(
+    fake: FakeRelease, monkeypatch: pytest.MonkeyPatch, variable: str, value: str
+) -> None:
+    """A compromised release asset cannot gain fresh publishing provenance."""
+    monkeypatch.setenv(variable, value)
+    before = _holdings(fake.pypi)
+    with pytest.raises(AssertionError, match="provenance"):
+        _draft_and_publish_pypi(fake)
+    assert _holdings(fake.pypi) == before, "reject before publishing any carried file"
+    staged = fake.root / "publish-pypi" / "dist" / "pypi"
+    assert _holdings(staged) == {name: _local(name) for name in _ARTEFACTS}, (
+        "validate every carry before deleting or replacing any staged build bytes"
+    )
+
+
+@pytest.mark.parametrize("same_bytes", [False, True])
+def test_no_untrusted_carry_does_not_require_a_provenance_record(
+    fake: FakeRelease, monkeypatch: pytest.MonkeyPatch, *, same_bytes: bool
+) -> None:
+    """Missing releases and identical current-attested bytes remain usable."""
+    if same_bytes:
+        (fake.github / _GITHUB_ONLY).write_bytes(_local(_GITHUB_ONLY))
+    else:
+        (fake.github / _GITHUB_ONLY).unlink()
+    monkeypatch.setenv("FAKE_ATTESTATION_EXIT", "1")
+    _draft_and_publish_pypi(fake)
+    assert (fake.pypi / _GITHUB_ONLY).read_bytes() == _local(_GITHUB_ONLY), (
+        "retain this run's trusted bytes without copying unverified GitHub bytes"
+    )
 
 
 def test_every_name_converges_on_its_canonical_bytes(fake: FakeRelease) -> None:
@@ -252,6 +293,7 @@ def test_the_bundle_is_withheld_when_the_published_bytes_are_not_this_build(
     attestation still reaches the repository's attestation store.
     """
     (fake.github / _BUNDLE).unlink()
+    shutil.copyfile(fake.github / _GITHUB_ONLY, fake.pypi / _GITHUB_ONLY)
     _draft_and_publish_pypi(fake)
     cwd, env = _job_directory(fake, "publish-release")
     for name in _PUBLISH_STEPS:
@@ -271,6 +313,9 @@ def test_interrupted_release_with_rebuilt_bytes_remains_draft(
 ) -> None:
     """Do not publish when the original attestation is unavailable."""
     (fake.github / _BUNDLE).unlink()
+    for name in _ARTEFACTS:
+        (fake.pypi / name).write_bytes(f"original {name}".encode())
+        (fake.github / name).unlink(missing_ok=True)
     _draft_and_publish_pypi(fake)
     cwd = _publish_release(fake, verify=False)
     completed = run_bash(
@@ -320,7 +365,10 @@ def test_a_rerun_after_success_uploads_nothing(fake: FakeRelease) -> None:
     _step("publish-release", "Re-fetch the PyPI index", cwd, env)
     _step("publish-release", "Check both destinations hold the same bytes", cwd, env)
     checks = [
-        call for call in fake.calls("gh") if call[:2] == ["attestation", "verify"]
+        call
+        for call in fake.calls("gh")
+        if call[:2] == ["attestation", "verify"]
+        and call[2].startswith("provenance-check/")
     ]
     assert len(checks) == len(_ARTEFACTS), "verify provenance for every canonical file"
     for call in checks:

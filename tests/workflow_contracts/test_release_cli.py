@@ -19,6 +19,7 @@ if typ.TYPE_CHECKING:
         ("stage-pypi", "index"),
         ("stage-pypi", "assets"),
         ("stage-pypi", "github-files"),
+        ("stage-pypi", "provenance"),
         ("stage-github", "index"),
         ("stage-github", "assets"),
         ("stage-github", "bundles"),
@@ -38,7 +39,7 @@ def test_missing_input_fails_before_reading_state(
     """A missing command-specific input cannot be mistaken for an empty listing."""
     options = {
         "carryover": ("assets",),
-        "stage-pypi": ("index", "assets", "github-files"),
+        "stage-pypi": ("index", "assets", "github-files", "provenance"),
         "stage-github": ("index", "assets", "bundles", "output"),
         "check-fetched": ("index", "assets", "output"),
         "index-expected": ("index",),
@@ -58,3 +59,46 @@ def test_parser_works_without_module_docstring(monkeypatch: pytest.MonkeyPatch) 
     with pytest.raises(SystemExit) as result:
         release_assets_cli.main(["--help"])
     assert result.value.code == 0, "the parser must work without a docstring"
+
+
+def test_missing_github_output_is_reported_by_the_cli_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Missing workflow output configuration remains a contextual CLI error."""
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    publish = tmp_path / "publish"
+    publish.mkdir()
+    (publish / "package.whl").write_bytes(b"wheel")
+    index = tmp_path / "index.json"
+    index.write_text('{"files": []}', encoding="utf-8")
+    assets = tmp_path / "assets.json"
+    assets.write_text('{"assets": []}', encoding="utf-8")
+    result = release_assets_cli.main([
+        "stage-pypi",
+        "--publish",
+        str(publish),
+        "--index",
+        str(index),
+        "--assets",
+        str(assets),
+        "--github-files",
+        str(tmp_path),
+        "--provenance",
+        str(tmp_path),
+    ])
+    assert result == 1, "missing workflow output configuration must fail clearly"
+    assert "GITHUB_OUTPUT" in capsys.readouterr().err, "identify the absent setting"
+
+
+def test_output_writer_uses_the_injected_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Core output writing ignores ambient workflow environment settings."""
+    destination = tmp_path / "injected-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "ambient-output"))
+    release_assets_cli.write_output(destination, "remaining", value=True)
+    release_assets_cli.write_output(destination, "pending", value=False)
+    assert (
+        destination.read_text(encoding="utf-8") == "remaining=true\npending=false\n"
+    ), "append both outputs to the injected destination"
+    assert not (tmp_path / "ambient-output").exists(), "ignore ambient configuration"

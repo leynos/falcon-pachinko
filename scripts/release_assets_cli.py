@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import typing as typ
 from pathlib import Path
@@ -38,7 +39,6 @@ from scripts.release_assets import (
     stage_github,
     stage_pypi,
     verify,
-    write_output,
 )
 
 if typ.TYPE_CHECKING:
@@ -55,6 +55,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--assets", type=Path)
     parser.add_argument("--index", type=Path)
     parser.add_argument("--github-files", type=Path)
+    parser.add_argument("--provenance", type=Path)
     parser.add_argument("--bundles", type=Path)
     parser.add_argument("--output", type=Path)
     # The post-upload index poll re-runs `index-expected` until it passes; a
@@ -73,6 +74,35 @@ def _path(args: argparse.Namespace, option: str) -> Path:
     return value
 
 
+def write_output(output_path: Path, name: str, *, value: bool) -> None:
+    """Append one boolean step output to a caller-supplied file.
+
+    Parameters
+    ----------
+    output_path : pathlib.Path
+        Destination selected by the workflow adapter.
+    name : str
+        The GitHub Actions output name.
+    value : bool
+        The boolean value to write in lowercase.
+
+    Notes
+    -----
+    Output file access errors propagate to the caller.
+    """
+    with output_path.open("a", encoding="utf-8") as output:
+        output.write(f"{name}={str(value).lower()}\n")
+
+
+def _github_output() -> Path:
+    """Resolve the workflow's output file at the CLI boundary."""
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if output_path is None:
+        msg = "GITHUB_OUTPUT is required to write step outputs"
+        raise ReleaseAssetError(msg)
+    return Path(output_path)
+
+
 def _carryover(state: State, args: argparse.Namespace) -> None:
     """Print the names to download from the GitHub Release, one per line."""
     del args
@@ -82,7 +112,10 @@ def _carryover(state: State, args: argparse.Namespace) -> None:
 
 def _stage_pypi(state: State, args: argparse.Namespace) -> None:
     """Stage PyPI's upload set and report whether anything remains."""
-    write_output("remaining", value=stage_pypi(state, _path(args, "github_files")))
+    remaining = stage_pypi(
+        state, _path(args, "github_files"), _path(args, "provenance")
+    )
+    write_output(_github_output(), "remaining", value=remaining)
 
 
 def _stage_github(state: State, args: argparse.Namespace) -> None:
@@ -91,7 +124,9 @@ def _stage_github(state: State, args: argparse.Namespace) -> None:
     fetch = stage_github(state, _path(args, "bundles"), output)
     for name, url in fetch:
         print(f"{name}\t{url}")
-    write_output("pending", value=bool(fetch) or any(output.iterdir()))
+    write_output(
+        _github_output(), "pending", value=bool(fetch) or any(output.iterdir())
+    )
 
 
 def _index_expected(state: State, args: argparse.Namespace) -> None:
@@ -132,7 +167,7 @@ _COMMANDS: dict[str, cabc.Callable[[State, argparse.Namespace], None]] = {
 
 _REQUIRES: dict[str, tuple[str, ...]] = {
     "carryover": ("assets",),
-    "stage-pypi": ("index", "assets", "github_files"),
+    "stage-pypi": ("index", "assets", "github_files", "provenance"),
     "stage-github": ("index", "assets", "bundles", "output"),
     "check-fetched": ("index", "assets", "output"),
     "index-expected": ("index",),

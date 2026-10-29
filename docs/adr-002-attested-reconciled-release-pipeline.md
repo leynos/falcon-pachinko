@@ -83,7 +83,10 @@ Create or reuse a GitHub Release as a draft. Publish the release only after
 PyPI holds all expected distributions. For each filename, choose canonical
 bytes in this order: PyPI, an existing GitHub Release asset, then this run's
 attested build. Fill missing destination names only. A GitHub-only file is
-copied into PyPI; a GitHub asset missing for a PyPI name is fetched from PyPI.
+copied into PyPI only after verifying its original bundle and matching the
+exact named SHA-256 subject. Validate all differing carried bytes before
+mutating PyPI staging. Identical bytes already attested by the current build
+remain in place. A GitHub asset missing for a PyPI name is fetched from PyPI.
 Validate fetched hashes against the Simple index and compare final SHA-256
 digests at both destinations. Never overwrite or clobber an existing GitHub
 asset. Fail on an empty artefact set. Leave a draft in place on any mismatch;

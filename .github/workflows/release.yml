@@ -195,6 +195,35 @@ jobs:
             gh release download "${GITHUB_REF_NAME}" --pattern "${name}" \
               --dir github-state/files
           done < github-state/carryover.txt
+      - name: Verify carried asset provenance
+        id: carried-provenance
+        run: |
+          set -euo pipefail
+          mkdir -p github-state/provenance
+          if [ ! -f github-state/carryover.txt ]; then
+            echo "::error::The carried asset list is missing." >&2
+            exit 1
+          fi
+          if [ ! -s github-state/carryover.txt ]; then
+            exit 0
+          fi
+          bundle="falcon-pachinko-${GITHUB_REF_NAME}.sigstore.json"
+          if ! gh release download "${GITHUB_REF_NAME}" --pattern "${bundle}" \
+            --dir github-state; then
+            echo "::warning::The release has no downloadable provenance bundle; differing carried bytes will be rejected."
+            exit 0
+          fi
+          while IFS= read -r name; do
+            record="github-state/provenance/${name}.json"
+            if ! gh attestation verify "github-state/files/${name}" \
+              --bundle "github-state/${bundle}" --repo "${GH_REPO}" \
+              --cert-identity "https://github.com/${GH_REPO}/.github/workflows/release.yml@refs/tags/${GITHUB_REF_NAME}" \
+              --source-ref "refs/tags/${GITHUB_REF_NAME}" \
+              --source-digest "${GITHUB_SHA}" --format json > "${record}"; then
+              rm -f "${record}"
+              echo "::warning::Could not verify provenance for ${name}; PyPI staging will reject differing carried bytes."
+            fi
+          done < github-state/carryover.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         id: handoff
         with:
@@ -281,7 +310,7 @@ jobs:
           cp -- dist/publish/* dist/pypi/
           python3 -m scripts.release_assets_cli stage-pypi --publish dist/pypi \
             --index pypi-index.json --assets github-state/assets.json \
-            --github-files github-state/files
+            --github-files github-state/files --provenance github-state/provenance
       # pypa's action rather than `uv publish`: with Trusted Publishing it also
       # signs and uploads a PEP 740 attestation for every file, which uv does
       # not. `skip-existing` takes the place of uv's `--check-url`, so a file

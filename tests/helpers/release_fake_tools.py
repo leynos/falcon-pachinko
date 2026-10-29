@@ -111,6 +111,18 @@ def _gh_attestation(args: list[str]) -> int:
         subjects = json.loads(os.environ["FAKE_ATTESTATION_SUBJECTS"])
         artefact = Path(args[2])
         return int(subjects.get(artefact.name) != _digest(artefact))
+    if "--format" in args:
+        artefact = Path(args[2])
+        subject = {
+            "name": os.environ.get("FAKE_ATTESTATION_RECORD_NAME", artefact.name),
+            "digest": {
+                "sha256": os.environ.get(
+                    "FAKE_ATTESTATION_RECORD_DIGEST", _digest(artefact)
+                )
+            },
+        }
+        record = [{"verificationResult": {"statement": {"subject": [subject]}}}]
+        print(os.environ.get("FAKE_ATTESTATION_RECORD_RAW", json.dumps(record)))
     return 0
 
 

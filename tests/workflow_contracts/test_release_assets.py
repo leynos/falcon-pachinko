@@ -171,12 +171,3 @@ def test_malformed_github_entry_reports_its_source(tmp_path: pth.Path) -> None:
         release_assets.ReleaseAssetError, match=r"assets\.json.*malformed"
     ):
         release_assets.read_github_assets(assets)
-
-
-def test_missing_github_output_is_a_release_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Missing output configuration produces a contextual release error."""
-    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
-    with pytest.raises(release_assets.ReleaseAssetError, match="GITHUB_OUTPUT"):
-        release_assets.write_output("remaining", value=True)

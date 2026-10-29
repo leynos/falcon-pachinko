@@ -234,3 +234,22 @@ def test_a_failed_index_lookup_stops_the_upload(
     assert sorted(p.name for p in (tmp_path / "dist" / "publish").iterdir()) == list(
         _ARTEFACTS
     ), "nothing may be skipped"
+
+
+@pytest.mark.parametrize("listing", [None, ""])
+def test_carried_verification_distinguishes_missing_and_empty_list(
+    tmp_path: pth.Path, listing: str | None
+) -> None:
+    """No carry needs no provenance; an absent snapshot must fail closed."""
+    fake = fake_release(tmp_path)
+    state = tmp_path / "github-state"
+    state.mkdir()
+    if listing is not None:
+        (state / "carryover.txt").write_text(listing, encoding="utf-8")
+    completed = run_bash(
+        step_script("draft-release", "Verify carried asset provenance"),
+        tmp_path,
+        fake.env(GITHUB_REF_NAME="v1.2.3"),
+    )
+    assert (completed.returncode == 0) is (listing is not None), completed.stderr
+    assert not fake.calls("gh"), "no assets should trigger no network verification"

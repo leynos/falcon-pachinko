@@ -234,7 +234,7 @@ lint-df12: uv ## Run df12-python-lints and ambrleaks on CPython 3.14
 	$(AMBRLEAKS) tests
 
 typecheck: build uv ## Run typechecking
-	$(TY) check --extra-search-path . falcon_pachinko tests tools scripts/release_assets.py scripts/release_assets_cli.py scripts/release_version.py
+	$(TY) check --extra-search-path . falcon_pachinko tests tools scripts/release_assets.py scripts/release_assets_cli.py scripts/release_version.py scripts/release_provenance.py
 
 # Local convenience only. CI lints Markdown through
 # DavidAnson/markdownlint-cli2-action, whose release carries the linter's

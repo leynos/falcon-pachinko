@@ -20,16 +20,17 @@ import dataclasses as dc
 import enum
 import hashlib
 import json
-import os
 import re
 import shutil
 import sys
 import typing as typ
 import urllib.parse
-from pathlib import Path
+
+from scripts.release_provenance import ProvenanceRecordError, require_matching_record
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
 #: The PEP 691 JSON simple index; relative file URLs resolve against it.
 INDEX_URL = "https://pypi.org/simple/falcon-pachinko/"
@@ -304,33 +305,6 @@ def _check_digest(path: Path, expected: str | None) -> None:
         raise ReleaseAssetError(msg)
 
 
-def write_output(name: str, *, value: bool) -> None:
-    """Append one ``true``/``false`` step output for the workflow.
-
-    Parameters
-    ----------
-    name : str
-        The GitHub Actions output name.
-    value : bool
-        The boolean value to write in lowercase.
-
-    Raises
-    ------
-    ReleaseAssetError
-        If ``GITHUB_OUTPUT`` is not set.
-
-    Notes
-    -----
-    Output file access errors propagate to the caller.
-    """
-    output_path = os.environ.get("GITHUB_OUTPUT")
-    if output_path is None:
-        msg = "GITHUB_OUTPUT is required to write step outputs"
-        raise ReleaseAssetError(msg)
-    with Path(output_path).open("a", encoding="utf-8") as output:
-        output.write(f"{name}={str(value).lower()}\n")
-
-
 @dc.dataclass(frozen=True, slots=True)
 class State:
     """The run's artefacts and what each destination already holds."""
@@ -402,7 +376,52 @@ def carryover(state: State) -> list[str]:
     return sorted(set(local_names(state.publish)) & set(state.github))
 
 
-def stage_pypi(state: State, github_files: Path) -> bool:
+def _prepare_carried_asset(
+    state: State, name: str, github_files: Path, provenance: Path
+) -> Path | None:
+    """Validate a carried asset, or retain identical current-attested bytes."""
+    expected = state.github[name]
+    if expected is None:
+        msg = f"cannot safely carry GitHub asset {name}: no SHA-256 digest"
+        raise ReleaseAssetError(msg)
+    if sha256_of(state.publish / name) == expected:
+        return None
+    asset = github_files / name
+    try:
+        _check_digest(asset, expected)
+        require_matching_record(provenance / f"{name}.json", name, expected)
+    except (OSError, ReleaseAssetError, ProvenanceRecordError) as error:
+        msg = (
+            f"cannot safely carry GitHub asset {name} to PyPI: {error}; "
+            "recover the original verified handoff and investigate before rerunning"
+        )
+        raise ReleaseAssetError(msg) from error
+    return asset
+
+
+def _apply_pypi_choice(
+    name: str,
+    source: Source,
+    artefact: Path,
+    carried: cabc.Mapping[str, Path],
+) -> None:
+    """Apply one already-validated source choice to the publish directory."""
+    match source:
+        case Source.PYPI:
+            print(f"::notice::Skipping {name}: already on PyPI")
+            artefact.unlink()
+        case Source.GITHUB:
+            asset = carried.get(name)
+            if asset is None:
+                print(f"::notice::Retaining this run's attested bytes for {name}")
+            else:
+                print(f"::notice::Uploading verified GitHub Release bytes for {name}")
+                shutil.copyfile(asset, artefact)
+        case Source.LOCAL:
+            pass
+
+
+def stage_pypi(state: State, github_files: Path, provenance: Path) -> bool:
     """Leave in ``publish`` exactly the canonical bytes PyPI lacks.
 
     Parameters
@@ -411,27 +430,24 @@ def stage_pypi(state: State, github_files: Path) -> bool:
         The staged artefacts and both destinations' holdings.
     github_files : Path
         The GitHub Release assets ``draft-release`` downloaded.
+    provenance : Path
+        The verifier's JSON results for carried GitHub assets.
 
     Returns
     -------
     bool
         Whether any artefact remains to upload.
-
     """
     decided = state.plan()
+    carried: dict[str, Path] = {}
     for name, source in sorted(decided.canonical.items()):
-        artefact = state.publish / name
-        match source:
-            case Source.PYPI:
-                print(f"::notice::Skipping {name}: already on PyPI")
-                artefact.unlink()
-            case Source.GITHUB:
-                carried = github_files / name
-                _check_digest(carried, state.github[name])
-                print(f"::notice::Uploading the GitHub Release's bytes for {name}")
-                shutil.copyfile(carried, artefact)
-            case Source.LOCAL:
-                pass
+        if source is Source.GITHUB:
+            asset = _prepare_carried_asset(state, name, github_files, provenance)
+            if asset is not None:
+                carried[name] = asset
+
+    for name, source in sorted(decided.canonical.items()):
+        _apply_pypi_choice(name, source, state.publish / name, carried)
     if not decided.pypi_uploads:
         print("Every artefact is already on PyPI; nothing to publish.")
     return bool(decided.pypi_uploads)
