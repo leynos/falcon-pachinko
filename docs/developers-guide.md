@@ -867,10 +867,11 @@ The `[tool.mutmut]` section in `pyproject.toml` is the whole configuration:
   `no tests`, and a mutation that raised on import — `test_app_install.py` is
   loaded as a pytest plugin — stopped collection outright rather than failing a
   test.
-- **`also_copy`** carries `tools/` and `examples/` into the `mutants/` tree
-  that mutmut runs in. mutmut copies only `tests/`, `pyproject.toml`,
-  `setup.cfg` and root `test*.py` by default, and two modules in `tests/`
-  import those trees through `sys.path`.
+- **`also_copy`** carries `tools/`, `examples/` and `docs/` into the `mutants/`
+  tree that mutmut runs in. mutmut copies only `tests/`, `pyproject.toml`,
+  `setup.cfg` and root `test*.py` by default. Two modules in `tests/` import
+  the first two trees through `sys.path`; the executable quick-start test reads
+  `docs/users-guide.md` relative to its copied file.
 - **`pytest_add_cli_args_test_selection`** names the three test trees the run
   uses: `tests/`, `falcon_pachinko/unittests/` and `falcon_pachinko/behaviour/`.
 - **`pytest_add_cli_args`** drops three modules and one marker.

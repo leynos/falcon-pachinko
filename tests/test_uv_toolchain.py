@@ -314,6 +314,48 @@ def test_the_mutants_exclusion_is_what_prevents_the_collision(
     )
 
 
+def test_mutmut_sandbox_includes_the_quickstart_guide(tmp_path: pathlib.Path) -> None:
+    """The copied documentation test must be able to load its real guide.
+
+    Mutmut copies tests and configuration by default, then adds ``also_copy``
+    inputs. Run the copied construction test so its file-relative guide lookup
+    verifies that the configured support files make the sandbox usable.
+    """
+    sandbox = tmp_path / "mutants"
+    copied_test = sandbox / "tests" / "test_users_guide_quickstart.py"
+    copied_test.parent.mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / "tests" / copied_test.name, copied_test)
+    shutil.copy2(PYPROJECT, sandbox / PYPROJECT.name)
+    settings = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"]["mutmut"]
+
+    for pattern in settings["also_copy"]:
+        for source in REPO_ROOT.glob(pattern):
+            destination = sandbox / source.relative_to(REPO_ROOT)
+            if source.is_dir():
+                shutil.copytree(source, destination, dirs_exist_ok=True)
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+
+    completed = run_command(
+        [
+            "pytest",
+            "--color=no",
+            "-p",
+            "no:cacheprovider",
+            "-q",
+            f"{copied_test}::test_quickstart_constructs_falcon_asgi_app",
+        ],
+        env=tool_environment(),
+    )
+
+    assert completed.returncode == 0, (
+        "mutmut's configured support files must let the copied quick-start "
+        "test load docs/users-guide.md:\n"
+        f"{completed.stdout}{completed.stderr}"
+    )
+
+
 def _duplicate_module_tree(root: pathlib.Path, settings: str) -> pathlib.Path:
     """Lay out the two trees that leave one module name claimed twice.
 

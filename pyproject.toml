@@ -467,10 +467,11 @@ do_not_mutate = [
 ]
 
 # mutmut copies only `tests/`, `test/`, `setup.cfg`, `pyproject.toml` and
-# root `test*.py` into `mutants/`, plus whatever this list names. Two test
-# modules in `tests/` import `tools/` and `examples/` through `sys.path`,
-# so those trees travel with the run. `tests/` itself is copied by mutmut.
-also_copy = ["tools/", "examples/"]
+# root `test*.py` into `mutants/`, plus whatever this list names. The suite
+# imports `tools/` and `examples/` through `sys.path`, and its executable
+# quick-start test reads `docs/users-guide.md` relative to its copied file.
+# Those supporting trees travel with the run; mutmut copies `tests/` itself.
+also_copy = ["tools/", "examples/", "docs/"]
 
 # The whole suite, not just `tests/`: the package's own unit and behaviour
 # tests live in `falcon_pachinko/unittests` and `falcon_pachinko/behaviour`,
