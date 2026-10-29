@@ -1234,10 +1234,10 @@ names the workflows the traversal must reach, so dropping one fails there
 rather than silently shrinking what the registry is held to.
 
 Two contracts read the `on:` block rather than the jobs, because the placement
-rules rest on claims about events: that a fork can reach `lint-test`, and that
-no fork can reach the other three. A contract reading only `runs-on` asserts
-the consequence and never the premise, so a silent change to a trigger would
-leave the consequence looking deliberate. Those contracts read the trigger
-block under the boolean key `True`, because YAML 1.1 parses the bare word `on`
-that way; a contract reading the string `"on"` finds nothing and passes on an
-empty mapping, which is itself asserted.
+rules rest on claims about events: that a fork can reach `lint-test` and
+`falcon-minimum`, and that no fork can reach the remaining Ubicloud jobs. A
+contract reading only `runs-on` asserts the consequence and never the premise,
+so a silent change to a trigger would leave the consequence looking deliberate.
+Those contracts read the trigger block under the boolean key `True`, because
+YAML 1.1 parses the bare word `on` that way; a contract reading the string
+`"on"` finds nothing and passes on an empty mapping, which is itself asserted.

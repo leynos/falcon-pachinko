@@ -7,14 +7,16 @@ bound and proves its override survives the version check and test run.
 
 from __future__ import annotations
 
+import ast
 import collections.abc as cabc
-import functools
 import shlex
 import tomllib
 import typing as typ
 
 import pytest
 import yaml
+from hypothesis import given
+from hypothesis import strategies as st
 from packaging.requirements import Requirement
 from packaging.version import Version
 
@@ -25,11 +27,13 @@ from .falcon_minimum_fixtures import (
     MINIMUM_JOB,
     NEWEST_JOB,
     REGRESSION_MUTATIONS,
+    _command_step,
     valid_workflow,
 )
 from .workflow_support import (
     REPOSITORY,
     ROOT,
+    WorkflowShapeError,
     WorkflowSource,
     as_mapping,
 )
@@ -43,12 +47,9 @@ type CommandEntry = tuple[int, int, CommandGroup, str | None]
 type CommandPredicate = cabc.Callable[[CommandGroup], bool]
 
 
-@functools.cache
-def _project_falcon_lower_bound() -> str:
+def _project_falcon_lower_bound(path: pathlib.Path) -> str:
     """Read and normalize the Falcon lower bound from project metadata."""
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
-        "project"
-    ]
+    project = tomllib.loads(WorkflowSource.text(path))["project"]
     requirements = [Requirement(dependency) for dependency in project["dependencies"]]
     requirement = next(
         (parsed for parsed in requirements if parsed.name == "falcon"),
@@ -83,9 +84,38 @@ def _command_groups(run: str) -> list[CommandLine]:
     ]
 
 
+def _next_shell_state(char: str, quote: str, *, escaped: bool) -> tuple[str, bool]:
+    """Track shell quoting and escaping while preserving the original text."""
+    if escaped:
+        return quote, False
+    if char == "\\" and quote != "'":
+        return quote, True
+    if char in "'\"":
+        if not quote:
+            return char, False
+        if quote == char:
+            return "", False
+    return quote, False
+
+
+def _protect_quoted_operators(line: str) -> str:
+    """Mark quoted or escaped operators so shlex keeps them as arguments."""
+    protected = []
+    quote = ""
+    escaped = False
+    replacements = str.maketrans(";&|", "\ue000\ue001\ue002")
+    for char in line:
+        marked = char.translate(replacements) if quote or escaped else char
+        quote, escaped = _next_shell_state(char, quote, escaped=escaped)
+        protected.append(marked)
+    return "".join(protected)
+
+
 def _line_command_groups(line: str) -> list[CommandLine]:
     """Split one shell line while preserving operators and quoted arguments."""
-    lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|")
+    lexer = shlex.shlex(
+        _protect_quoted_operators(line), posix=True, punctuation_chars=";&|"
+    )
     lexer.whitespace_split = True
     groups: list[CommandLine] = []
     current: list[str] = []
@@ -97,7 +127,7 @@ def _line_command_groups(line: str) -> list[CommandLine]:
             continue
         if token in {"then", "do"} and not current:
             continue
-        current.append(token)
+        current.append(token.translate(str.maketrans("\ue000\ue001\ue002", ";&|")))
     if current:
         groups.append((tuple(current), None))
     return groups
@@ -124,6 +154,8 @@ def _steps(
 
 def _commands(
     steps: list[dict[str, object]],
+    subject: str,
+    violations: list[str],
 ) -> list[CommandEntry]:
     """Return run commands with their step and within-step positions."""
     found: list[CommandEntry] = []
@@ -131,7 +163,14 @@ def _commands(
         run = step.get("run")
         if not isinstance(run, str):
             continue
-        for command_index, (command, separator) in enumerate(_command_groups(run)):
+        try:
+            groups = _command_groups(run)
+        except ValueError as error:
+            violations.append(
+                f"{subject} step {step_index} has invalid shell syntax: {error}"
+            )
+            continue
+        for command_index, (command, separator) in enumerate(groups):
             found.append((step_index, command_index, command, separator))
     return found
 
@@ -153,13 +192,25 @@ def _version_check_command(command: CommandGroup) -> bool:
     """Report whether a no-sync Python command checks installed Falcon."""
     if not _is_command(command, "uv", "run", "--no-sync", "python", "-c"):
         return False
-    code = " ".join(command[5:])
-    return (
-        "importlib.metadata.version" in code
-        and ("version('falcon')" in code or 'version("falcon")' in code)
-        and FALCON_ENV in code
-        and ("==" in code or "!=" in code)
+    # Accept only known checks whose exit status is nonzero on a mismatch.
+    checks = (
+        (
+            "import importlib.metadata, os, sys; "
+            "sys.exit(importlib.metadata.version('falcon') != "
+            "os.environ['FALCON_MINIMUM_VERSION'])"
+        ),
+        (
+            "import importlib.metadata, os, sys; "
+            "actual = importlib.metadata.version('falcon'); "
+            "expected = os.environ['FALCON_MINIMUM_VERSION']; "
+            "sys.exit(0 if actual == expected else 1)"
+        ),
     )
+    try:
+        tree = ast.dump(ast.parse(" ".join(command[5:])))
+    except SyntaxError:
+        return False
+    return any(tree == ast.dump(ast.parse(check)) for check in checks)
 
 
 def _pytest_command(command: CommandGroup) -> bool:
@@ -185,7 +236,9 @@ def _is_enabled(value: object) -> bool:
     return value is True or (isinstance(value, str) and value.casefold() == "true")
 
 
-def _falcon_override(job: dict[str, object], steps: list[dict[str, object]]) -> bool:
+def _falcon_override(
+    job: dict[str, object], steps: list[dict[str, object]], commands: list[CommandEntry]
+) -> bool:
     """Report any Falcon-specific environment pin or package installation."""
     environments = [as_mapping(job.get("env"))]
     environments.extend(as_mapping(step.get("env")) for step in steps)
@@ -197,8 +250,7 @@ def _falcon_override(job: dict[str, object], steps: list[dict[str, object]]) -> 
     ):
         return True
     return any(
-        "falcon==" in " ".join(command).casefold()
-        for _, _, command, _ in _commands(steps)
+        "falcon==" in " ".join(command).casefold() for _, _, command, _ in commands
     )
 
 
@@ -212,7 +264,7 @@ def _job_condition_violations(job: dict[str, object]) -> list[str]:
     return violations
 
 
-def _environment_violations(job: dict[str, object]) -> list[str]:
+def _environment_violations(job: dict[str, object], lower_bound: str) -> list[str]:
     """Hold the workflow pins to Falcon's project lower bound and Python 3.13."""
     environment = as_mapping(job.get("env"))
     expected = (
@@ -228,7 +280,6 @@ def _environment_violations(job: dict[str, object]) -> list[str]:
         for name, value, message in expected
         if environment is None or environment.get(name) != value
     ]
-    lower_bound = _project_falcon_lower_bound()
     if environment is None or environment.get(FALCON_ENV) != lower_bound:
         violations.append(
             f"{MINIMUM_JOB}.env.{FALCON_ENV} must match the Falcon lower bound "
@@ -271,6 +322,13 @@ def _setup_positions(
     violations = []
     if positions["checkout"] is None:
         violations.append(f"{MINIMUM_JOB} must check out the repository")
+    checkout_index = positions["checkout"]
+    if checkout_index is not None:
+        inputs = as_mapping(steps[checkout_index].get("with"))
+        if inputs is None or inputs.get("persist-credentials") is not False:
+            violations.append(
+                f"{MINIMUM_JOB} checkout must set persist-credentials: false"
+            )
     if positions["uv"] is None:
         violations.append(f"{MINIMUM_JOB} must set up uv")
     python_index = positions["python"]
@@ -391,15 +449,15 @@ def _resync_violations(
     return []
 
 
-def _minimum_job_violations(job: dict[str, object]) -> list[str]:
+def _minimum_job_violations(job: dict[str, object], lower_bound: str) -> list[str]:
     """Inspect the environment and ordered commands of the lower-bound job."""
     violations = _job_condition_violations(job)
-    violations.extend(_environment_violations(job))
+    violations.extend(_environment_violations(job, lower_bound))
     steps = _steps(job, MINIMUM_JOB, violations)
     violations.extend(_step_condition_violations(steps))
     setup_positions, setup_violations = _setup_positions(steps)
     violations.extend(setup_violations)
-    commands = _commands(steps)
+    commands = _commands(steps, MINIMUM_JOB, violations)
     required_commands, command_violations = _required_commands(commands)
     violations.extend(command_violations)
     violations.extend(_step_order_violations(setup_positions, required_commands))
@@ -412,15 +470,19 @@ def _newest_job_violations(job: dict[str, object]) -> list[str]:
     """Keep the locked-version lane's build and dependency resolution intact."""
     violations = []
     steps = _steps(job, NEWEST_JOB, violations)
-    commands = _commands(steps)
+    commands = _commands(steps, NEWEST_JOB, violations)
     if not any(_is_command(command, "make", "build") for _, _, command, _ in commands):
         violations.append(f"{NEWEST_JOB} must continue to run make build")
-    if _falcon_override(job, steps):
+    if _falcon_override(job, steps, commands):
         violations.append(f"{NEWEST_JOB} must not override the locked Falcon release")
     return violations
 
 
-def falcon_minimum_lane_violations(source: WorkflowSource) -> list[str]:
+def falcon_minimum_lane_violations(
+    source: WorkflowSource,
+    *,
+    project_metadata_path: pathlib.Path = ROOT / "pyproject.toml",
+) -> list[str]:
     """Return every violation in the minimum-version and newest lanes.
 
     Parameters
@@ -439,7 +501,20 @@ def falcon_minimum_lane_violations(source: WorkflowSource) -> list[str]:
     if minimum_job is None:
         violations.append(f"{CI_WORKFLOW} must declare the {MINIMUM_JOB} job")
     else:
-        violations.extend(_minimum_job_violations(minimum_job))
+        try:
+            lower_bound = _project_falcon_lower_bound(project_metadata_path)
+        except (
+            WorkflowShapeError,
+            tomllib.TOMLDecodeError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as error:
+            violations.append(
+                f"{project_metadata_path} has invalid project metadata: {error}"
+            )
+        else:
+            violations.extend(_minimum_job_violations(minimum_job, lower_bound))
 
     newest_job = jobs.get(NEWEST_JOB)
     if newest_job is None:
@@ -545,3 +620,165 @@ def test_falcon_lower_bound_requires_a_lower_specifier() -> None:
     """An upper bound alone cannot define the minimum CI version."""
     with pytest.raises(ValueError, match="Falcon dependency has no lower bound"):
         _normalise_falcon_lower_bound(Requirement("falcon<5"))
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        (
+            "import importlib.metadata, os, sys; "
+            "actual = importlib.metadata.version('falcon'); "
+            "expected = os.environ['FALCON_MINIMUM_VERSION']; "
+            "sys.exit(0 if actual != expected else 1)"
+        ),
+        (
+            "import importlib.metadata, os, sys; "
+            "actual = importlib.metadata.version('falcon'); "
+            "expected = os.environ['FALCON_MINIMUM_VERSION']; "
+            "actual == expected; sys.exit(0)"
+        ),
+    ],
+    ids=["inverted-result", "unconditional-success"],
+)
+def test_version_check_must_fail_on_a_mismatch(program: str) -> None:
+    """A comparison alone does not prove the process fails on a mismatch."""
+    assert not _version_check_command((
+        "uv",
+        "run",
+        "--no-sync",
+        "python",
+        "-c",
+        program,
+    )), "incorrect version check was accepted"
+
+
+def test_malformed_shell_is_a_named_violation(tmp_path: pathlib.Path) -> None:
+    """An unparseable step reports its job and position rather than raising."""
+    workflow = valid_workflow()
+    jobs = typ.cast("dict[str, object]", workflow["jobs"])
+    job = typ.cast("dict[str, object]", jobs[MINIMUM_JOB])
+    steps = typ.cast("list[dict[str, object]]", job["steps"])
+    steps.append({"run": "echo 'unterminated"})
+    violations = falcon_minimum_lane_violations(
+        _temporary_workflow_source(tmp_path, workflow)
+    )
+    assert any(
+        "falcon-minimum step 7" in item and "shell" in item for item in violations
+    ), f"missing shell diagnostic: {violations}"
+
+
+def test_checkout_must_not_persist_credentials(tmp_path: pathlib.Path) -> None:
+    """The minimum lane must not retain checkout credentials for the suite."""
+    workflow = valid_workflow()
+    jobs = typ.cast("dict[str, object]", workflow["jobs"])
+    job = typ.cast("dict[str, object]", jobs[MINIMUM_JOB])
+    steps = typ.cast("list[dict[str, object]]", job["steps"])
+    del steps[0]["with"]
+    source = _temporary_workflow_source(tmp_path, workflow)
+    assert any(
+        "persist-credentials" in item for item in falcon_minimum_lane_violations(source)
+    ), "checkout must disable credential persistence"
+
+
+def test_temporary_metadata_controls_the_lower_bound(tmp_path: pathlib.Path) -> None:
+    """Synthetic workflows are checked against their own project metadata."""
+    source = _temporary_workflow_source(tmp_path, valid_workflow())
+    metadata = tmp_path / "pyproject.toml"
+    metadata.write_text(
+        '[project]\ndependencies = ["falcon>=4.1,<5"]\n', encoding="utf-8"
+    )
+    violations = falcon_minimum_lane_violations(source, project_metadata_path=metadata)
+    assert any("4.1.0" in item for item in violations), (
+        f"wrong lower bound: {violations}"
+    )
+
+
+@pytest.mark.parametrize(
+    "content", [b"\xff", b"[project\n"], ids=["invalid-utf8", "invalid-toml"]
+)
+def test_invalid_metadata_is_reported(tmp_path: pathlib.Path, content: bytes) -> None:
+    """Invalid metadata becomes an actionable violation rather than a traceback."""
+    source = _temporary_workflow_source(tmp_path, valid_workflow())
+    metadata = tmp_path / "pyproject.toml"
+    metadata.write_bytes(content)
+    violations = falcon_minimum_lane_violations(source, project_metadata_path=metadata)
+    assert any("pyproject.toml" in item for item in violations), (
+        f"missing metadata error: {violations}"
+    )
+
+
+@given(
+    st.lists(
+        st.text(alphabet="abcXYZ09 ;|&'\"", min_size=1, max_size=12),
+        min_size=1,
+        max_size=4,
+    ),
+    st.sampled_from([";", "&&", "||", "|", "&"]),
+    st.lists(
+        st.text(alphabet="abcXYZ09 ;|&'\"", min_size=1, max_size=12),
+        min_size=1,
+        max_size=4,
+    ),
+)
+def test_shell_grouping_preserves_generated_quoted_arguments(
+    left: list[str], operator: str, right: list[str]
+) -> None:
+    """The parser preserves generated argv and supported shell operators."""
+    script = " ".join(map(shlex.quote, ["echo", *left])) + f" {operator} "
+    script += " ".join(map(shlex.quote, ["printf", *right]))
+    assert _command_groups(script) == [
+        (("echo", *left), operator),
+        (("printf", *right), None),
+    ], f"incorrect shell grouping: {script}"
+
+
+@given(
+    st.lists(
+        st.tuples(st.integers(0, 9), st.integers(0, 9), st.integers(0, 9)),
+        min_size=1,
+        max_size=5,
+    )
+)
+def test_generated_lower_bounds_choose_the_strongest(
+    bounds: list[tuple[int, int, int]],
+) -> None:
+    """Multiple generated lower bounds select the strongest release."""
+    specifier = "falcon" + ",".join(
+        ">=" + ".".join(map(str, bound)) for bound in bounds
+    )
+    assert _normalise_falcon_lower_bound(Requirement(specifier)) == ".".join(
+        map(str, max(bounds))
+    ), f"incorrect generated lower bound: {bounds}"
+
+
+def test_command_step_finds_the_unique_checked_command() -> None:
+    """Fixture rewrites share the same checked step and command."""
+    step, command = _command_step(valid_workflow(), "pytest -v")
+    assert step["run"] == command == "uv run --no-sync pytest -v", "wrong step"
+    with pytest.raises(ValueError, match="expected one"):
+        _command_step(valid_workflow(), "missing marker")
+
+
+def test_quoted_and_escaped_operators_are_protected() -> None:
+    """Only operators outside quotes and escapes become separators."""
+    expected = [(("echo", "&", ";", "|"), "&&"), (("printf", "done"), None)]
+    assert _command_groups("echo '&' \\; '|' && printf done") == expected, (
+        "quoted and escaped punctuation must remain arguments"
+    )
+
+
+def test_shell_quote_state_tracks_escapes_and_quotes() -> None:
+    """Quoted text and escaped quotes retain their shell state."""
+    assert _next_shell_state("'", "", escaped=False) == ("'", False), (
+        "single quote state"
+    )
+    assert _next_shell_state("\\", "'", escaped=False) == ("'", False), (
+        "single quote state"
+    )
+    assert _next_shell_state("\\", '"', escaped=False) == ('"', True), "escape state"
+    assert _next_shell_state('"', '"', escaped=True) == ('"', False), (
+        "escaped quote state"
+    )
+    assert _next_shell_state('"', '"', escaped=False) == ("", False), (
+        "closed quote state"
+    )

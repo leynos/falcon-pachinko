@@ -31,7 +31,7 @@ def valid_workflow() -> dict[str, object]:
             "UV_PYTHON": "3.13",
         },
         "steps": [
-            {"uses": "actions/checkout@v7"},
+            {"uses": "actions/checkout@v7", "with": {"persist-credentials": False}},
             {"uses": "actions/setup-python@v7", "with": {"python-version": "3.13"}},
             {"uses": "astral-sh/setup-uv@v10"},
             {"run": "make build"},
@@ -152,35 +152,35 @@ def _set_step_command(workflow: dict[str, object], marker: str, command: str) ->
     _workflow_steps(workflow)[_step_index(workflow, marker)]["run"] = command
 
 
-def _append_to_step_command(
-    workflow: dict[str, object], marker: str, suffix: str
-) -> None:
-    """Append shell syntax to the unique minimum-job step containing a marker."""
+def _command_step(
+    workflow: dict[str, object], marker: str
+) -> tuple[dict[str, object], str]:
+    """Find a unique step and return its checked command for rewriting."""
     step = _workflow_steps(workflow)[_step_index(workflow, marker)]
     run = step.get("run")
     if not isinstance(run, str):
         message = "temporary step command must be a string"
         raise TypeError(message)
+    return step, run
+
+
+def _append_to_step_command(
+    workflow: dict[str, object], marker: str, suffix: str
+) -> None:
+    """Append shell syntax to the unique minimum-job step containing a marker."""
+    step, run = _command_step(workflow, marker)
     step["run"] = f"{run}{suffix}"
 
 
 def _drop_sync_from_version_check(workflow: dict[str, object]) -> None:
     """Remove the no-sync flag from the version-check command."""
-    step = _workflow_steps(workflow)[_step_index(workflow, VERSION_CHECK_MARKER)]
-    run = step.get("run")
-    if not isinstance(run, str):
-        message = "temporary version-check command must be a string"
-        raise TypeError(message)
+    step, run = _command_step(workflow, VERSION_CHECK_MARKER)
     step["run"] = run.replace(" --no-sync", "")
 
 
 def _check_wrong_package(workflow: dict[str, object]) -> None:
     """Point the version check at a package other than Falcon."""
-    step = _workflow_steps(workflow)[_step_index(workflow, VERSION_CHECK_MARKER)]
-    run = step.get("run")
-    if not isinstance(run, str):
-        message = "temporary version-check command must be a string"
-        raise TypeError(message)
+    step, run = _command_step(workflow, VERSION_CHECK_MARKER)
     changed_run = run.replace('version("falcon")', 'version("msgspec")')
     if changed_run == run:
         message = "temporary version-check command must query Falcon"
