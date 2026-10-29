@@ -257,28 +257,35 @@ async def test_pre_accept_rollback_preserves_cancellation_if_removal_fails() -> 
     backend = FailingPendingRollbackBackend()
     manager = WebSocketConnectionManager(backend=backend)
     resource, _repo, _audit, _feed = _build_resource(manager)
-    task = asyncio.create_task(
-        resource.on_connect(
-            _connect_request(),
-            RecordingWebSocket(),
-            workspace_id=_WORKSPACE,
-            project_id=_PROJECT,
-        )
-    )
+
+    async def capture_connect_cancellation() -> asyncio.CancelledError:
+        """Retain cancellation metadata before ``wait_for`` observes it."""
+        try:
+            await resource.on_connect(
+                _connect_request(),
+                RecordingWebSocket(),
+                workspace_id=_WORKSPACE,
+                project_id=_PROJECT,
+            )
+        except asyncio.CancelledError as error:
+            return error
+        raise AssertionError
+
+    task = asyncio.create_task(capture_connect_cancellation())
     try:
         await asyncio.wait_for(backend.removing.wait(), timeout=1)
         task.cancel("rollback interrupted")
         backend.release_removal.set()
 
-        with pytest.raises(
-            asyncio.CancelledError, match="rollback interrupted"
-        ) as raised:
-            await asyncio.wait_for(task, timeout=1)
+        raised = await asyncio.wait_for(task, timeout=1)
+        assert str(raised) == "rollback interrupted", (
+            "the wrapper must preserve the cancellation message"
+        )
 
-        assert raised.value.__cause__ is backend.removal_error, (
+        assert raised.__cause__ is backend.removal_error, (
             "the failed removal must remain chained to cancellation"
         )
-        assert raised.value.__context__ is backend.setup_error, (
+        assert raised.__context__ is backend.setup_error, (
             "the original setup failure must remain in the exception context"
         )
         assert resource._conn_id is not None, (
