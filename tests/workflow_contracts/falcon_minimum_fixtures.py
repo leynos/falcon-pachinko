@@ -221,6 +221,16 @@ REGRESSION_MUTATIONS: typ.Final[dict[str, WorkflowMutator]] = {
     "version-check-failure-masked": lambda workflow: _append_to_step_command(
         workflow, VERSION_CHECK_MARKER, " || true"
     ),
+    "pytest-pipeline-skipped-by-or": lambda workflow: _set_step_command(
+        workflow,
+        PYTEST_MARKER,
+        "true || printf unused | uv run --no-sync pytest -v",
+    ),
+    "pytest-pipeline-skipped-by-and": lambda workflow: _set_step_command(
+        workflow,
+        PYTEST_MARKER,
+        "false && printf unused | uv run --no-sync pytest -v",
+    ),
     "pytest-skipped-by-and": lambda workflow: _set_step_command(
         workflow, PYTEST_MARKER, "false && uv run --no-sync pytest -v"
     ),

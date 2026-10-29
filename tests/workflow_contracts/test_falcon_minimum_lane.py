@@ -392,13 +392,12 @@ def _masked_command_violations(
 def _skippable_command_violations(
     commands: list[CommandEntry], required_commands: dict[str, CommandEntry | None]
 ) -> list[str]:
-    """Reject required commands guarded by a preceding shell condition."""
-    separators = {(step, index): separator for step, index, _, separator in commands}
+    """Require each essential command to be the only command in its step."""
     return [
-        f"{MINIMUM_JOB} {name} command must not follow a conditional operator"
+        f"{MINIMUM_JOB} {name} command must be the only command in its step"
         for name, entry in required_commands.items()
         if entry is not None
-        and separators.get((entry[0], entry[1] - 1)) in {"&&", "||"}
+        and sum(step == entry[0] for step, _, _, _ in commands) != 1
     ]
 
 
@@ -566,7 +565,12 @@ def test_a_minimum_lane_regression_is_reported(
     REGRESSION_MUTATIONS[case](workflow)
     source = _temporary_workflow_source(tmp_path, workflow)
 
-    assert falcon_minimum_lane_violations(source), f"{case} was accepted"
+    violations = falcon_minimum_lane_violations(source)
+    assert violations, f"{case} was accepted"
+    if case.startswith("pytest-pipeline-skipped"):
+        assert any(
+            "pytest command must be the only command" in item for item in violations
+        ), case
 
 
 def test_a_minimal_valid_minimum_lane_has_no_violations(
