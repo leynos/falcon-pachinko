@@ -293,6 +293,9 @@ def test_a_rerun_after_success_uploads_nothing(fake: FakeRelease) -> None:
         (fake.github / name).write_bytes(_local(name))
     _draft_and_publish_pypi(fake)
     _publish_release(fake)
+    for destination in (fake.pypi, fake.github):
+        for name in _ARTEFACTS:
+            (destination / name).write_bytes(f"original {name}".encode())
     before = (_holdings(fake.pypi), _holdings(fake.github))
     for job in ("draft-release", "publish-pypi", "publish-release"):
         shutil.rmtree(fake.root / job)
@@ -307,6 +310,23 @@ def test_a_rerun_after_success_uploads_nothing(fake: FakeRelease) -> None:
     for name in _PUBLISH_STEPS:
         _step("publish-release", name, cwd, env)
     _step("publish-release", "Upload the assets the release lacks", cwd, env)
+    _step("publish-release", "Re-fetch the PyPI index", cwd, env)
+    _step("publish-release", "Check both destinations hold the same bytes", cwd, env)
+    checks = [
+        call for call in fake.calls("gh") if call[:2] == ["attestation", "verify"]
+    ]
+    assert len(checks) == len(_ARTEFACTS), "verify provenance for every canonical file"
+    for call in checks:
+        assert call[call.index("--repo") + 1] == "leynos/falcon-pachinko", (
+            "scope provenance to this repository"
+        )
+        assert call[call.index("--source-digest") + 1] == "a" * 40, (
+            "bind provenance to the tagged commit"
+        )
+        assert call[call.index("--cert-identity") + 1] == (
+            "https://github.com/leynos/falcon-pachinko/"
+            f".github/workflows/release.yml@refs/tags/{_TAG}"
+        ), "require the tag's release workflow certificate"
 
     assert (_holdings(fake.pypi), _holdings(fake.github)) == before, (
         "Release contract failed"
@@ -317,6 +337,32 @@ def test_a_rerun_after_success_uploads_nothing(fake: FakeRelease) -> None:
     assert outputs(cwd / "output")["pending"] == "false", "Release contract failed"
     uploads = [call for call in fake.calls("gh") if call[:2] == ["release", "upload"]]
     assert uploads == [], "a complete re-run uploads nothing, bundle included"
+
+
+@pytest.mark.parametrize("failure", ["signature", "subject", "download"])
+def test_existing_bundle_must_verify_against_canonical_bytes(
+    fake: FakeRelease, failure: str
+) -> None:
+    """A pre-existing bundle is no substitute for successful verification."""
+    _draft_and_publish_pypi(fake)
+    cwd = _publish_release(fake, verify=False)
+    env = fake.env(GITHUB_REF_NAME=_TAG)
+    match failure:
+        case "signature":
+            env["FAKE_ATTESTATION_EXIT"] = "1"
+        case "subject":
+            env["FAKE_ATTESTATION_SUBJECTS"] = "{}"
+        case _:
+            env["FAKE_GITHUB_DOWNLOAD_TAMPER"] = "true"
+    result = run_bash(
+        step_script("publish-release", "Check both destinations hold the same bytes"),
+        cwd,
+        env,
+    )
+    assert result.returncode != 0, "invalid existing provenance must stop publication"
+    assert not any(call[:2] == ["release", "edit"] for call in fake.calls("gh")), (
+        "verification failure must leave the draft unpublished"
+    )
 
 
 def test_the_check_fails_when_the_destinations_disagree(fake: FakeRelease) -> None:

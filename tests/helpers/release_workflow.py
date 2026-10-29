@@ -136,6 +136,7 @@ class FakeRelease:
             "FAKE_CALLS": str(self.root / "calls.jsonl"),
             "GITHUB_OUTPUT": str(self.root / "github-output"),
             "GH_REPO": "leynos/falcon-pachinko",
+            "GITHUB_SHA": "a" * 40,
             **extra,
         }
 

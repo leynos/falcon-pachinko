@@ -32,10 +32,10 @@ without overwriting immutable files or publishing an incomplete release.
 Build both distributions with plain `uv build --out-dir dist`. `uv` builds the
 sdist first and builds the wheel from that sdist, making sdist completeness a
 prerequisite for every wheel. The same composite build action runs in pull
-request CI and on release tags. CI requires exactly one sdist and at least one
-wheel; attestation repeats the check and rejects unexpected files. Archive
-checks verify the import modules, public testing package, package data, wheel
-metadata, and installed imports.
+request CI and on release tags. CI requires exactly one sdist and one wheel;
+attestation collects every wheel with exactly one sdist and rejects unexpected
+files. Archive checks verify the import modules, public testing package,
+package data, wheel metadata, and installed imports.
 
 Keep the pure-Python build path and remove the unused cibuildwheel matrix and
 its local action. Do not add native-platform builds for a package with no
@@ -62,10 +62,12 @@ and the tag-named Sigstore bundle into one `release-dist` artefact. Later jobs
 consume those bytes; publication jobs do not rebuild. The tag-only bundle
 filename makes retries idempotent. Attach that bundle to GitHub only when all
 canonical distribution bytes match the current attested build. An existing
-published file with different bytes requires the earlier build's bundle. If it
-is absent, verification fails and the draft remains unpublished; recover the
-original `release-dist` artefact and rerun publication with those attested
-bytes.
+published file with different bytes requires the earlier build's bundle. Verify
+that bundle cryptographically against the downloaded canonical files, the
+repository's release workflow identity, tag and source commit. If it is absent
+or invalid, verification fails and the draft remains unpublished. Recover by
+rerunning the original run's failed publication jobs while its `release-dist`
+artefact remains available.
 
 ### Destinations and retry behaviour
 

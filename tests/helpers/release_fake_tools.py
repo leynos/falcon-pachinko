@@ -89,6 +89,8 @@ def _gh_download(args: list[str]) -> int:
     target = Path(args[args.index("--dir") + 1])
     target.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(_directory("FAKE_GITHUB_ASSETS") / pattern, target / pattern)
+    if os.environ.get("FAKE_GITHUB_DOWNLOAD_TAMPER") and pattern.endswith(".whl"):
+        (target / pattern).write_bytes(b"tampered download")
     return 0
 
 
@@ -101,8 +103,21 @@ def _gh_view(args: list[str]) -> int:
     return 0
 
 
+def _gh_attestation(args: list[str]) -> int:
+    """Model signature rejection and the verifier's subject digest check."""
+    if os.environ.get("FAKE_ATTESTATION_EXIT"):
+        return int(os.environ["FAKE_ATTESTATION_EXIT"])
+    if "FAKE_ATTESTATION_SUBJECTS" in os.environ:
+        subjects = json.loads(os.environ["FAKE_ATTESTATION_SUBJECTS"])
+        artefact = Path(args[2])
+        return int(subjects.get(artefact.name) != _digest(artefact))
+    return 0
+
+
 def gh(args: list[str]) -> int:
     """Serve the ``gh release`` calls the release workflow makes."""
+    if args[:2] == ["attestation", "verify"]:
+        return _gh_attestation(args)
     if args and args[0] == "api":
         print(os.environ.get("GITHUB_REF_NAME", "v1.2.3"))
         return 0

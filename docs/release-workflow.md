@@ -23,12 +23,29 @@ A push of a tag matching `v*.*.*` starts these jobs:
 An empty or malformed distribution artefact fails before publication. The
 GitHub Release remains a draft until PyPI contains the distributions and both
 destinations agree on their SHA-256 digests. The Sigstore bundle is attached
-only when every canonical distribution came from the current attested build. If
-the matching bundle is missing, verification fails and leaves the release as a
-draft. Recover the original run's `release-dist` artefact and rerun publication
-with its distributions and bundle; never attach a bundle for rebuilt bytes. A
-retry whose build differs also fails verification even if a bundle is already
-attached, because its correspondence cannot be established from the filename.
+only when every canonical distribution came from the current attested build.
+Every publication attempt downloads the release's original bundle and canonical
+files. It verifies their SHA-256 digests against PyPI, then uses
+`gh attestation verify` to verify each file against the bundle, repository,
+release workflow identity, tag and source commit. A completed release therefore
+passes a rerun even if rebuilt bytes differ. Missing or invalid provenance
+fails verification and keeps a draft unpublished.
+
+To recover an interrupted publication, identify the original workflow run that
+built the bytes PyPI holds and rerun only its failed jobs:
+
+```sh
+gh run rerun ORIGINAL_RUN_ID --failed --repo leynos/falcon-pachinko
+```
+
+Keep its successful build and attestation jobs intact: the failed publication
+jobs consume that run's original `release-dist` artefact. GitHub permits reruns
+for 30 days, and the artefact must still be retained. A full rerun rebuilds the
+distributions; downloading an old handoff locally does not make a new run use
+it. If the original run cannot be rerun or its artefact has expired, this
+workflow has no saved-handoff recovery input. Keep the draft unpublished and
+investigate recovery before attempting publication. Never attach a rebuild's
+incompatible bundle.
 
 PyPI is canonical when a filename already exists there. Otherwise an existing
 GitHub Release asset is canonical, followed by the current build. Existing

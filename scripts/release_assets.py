@@ -618,11 +618,12 @@ def check_fetched(state: State, output: Path) -> None:
         _check_digest(output / name, state.pypi[name].sha256)
 
 
-def verify(state: State, bundles: Path) -> list[str]:
+def verify(state: State, bundles: Path, github_files: Path | None = None) -> list[str]:
     """Describe every artefact or bundle the two destinations disagree on.
 
     Require the tag-named provenance bundle even when an earlier build supplied
-    the canonical bytes. A rebuild cannot replace that earlier attestation.
+    the canonical bytes. The workflow separately verifies its signature and
+    subjects against the downloaded canonical files.
 
     Parameters
     ----------
@@ -630,6 +631,8 @@ def verify(state: State, bundles: Path) -> list[str]:
         The staged distributions and PyPI and GitHub asset listings.
     bundles : pathlib.Path
         Directory containing the provenance bundles attached to this build.
+    github_files : pathlib.Path | None, optional
+        Downloaded release files to check against the canonical PyPI digests.
 
     Returns
     -------
@@ -644,11 +647,9 @@ def verify(state: State, bundles: Path) -> list[str]:
     missing = sorted(
         bundle.name for bundle in bundles.iterdir() if bundle.name not in state.github
     )
-    if not attests_canonical_bytes(state):
-        problems.append(
-            "Cannot establish matching provenance for the canonical distributions. "
-            "Recover the original attested release-dist artefact and rerun publication."
-        )
+    if github_files is not None and not problems:
+        for name in names:
+            _check_digest(github_files / name, pypi[name])
     if not list(bundles.iterdir()):
         problems.append("No provenance bundle was provided for verification.")
     absent = (

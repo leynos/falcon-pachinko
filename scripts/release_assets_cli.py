@@ -113,7 +113,7 @@ def _check_fetched(state: State, args: argparse.Namespace) -> None:
 
 def _verify(state: State, args: argparse.Namespace) -> None:
     """Fail on any artefact or bundle the two destinations disagree on."""
-    problems = verify(state, _path(args, "bundles"))
+    problems = verify(state, _path(args, "bundles"), args.github_files)
     if problems:
         msg = "; ".join(problems)
         raise ReleaseAssetError(msg)
