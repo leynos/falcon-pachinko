@@ -286,8 +286,10 @@ def test_interrupted_release_with_rebuilt_bytes_remains_draft(
     )
 
 
-def test_a_rerun_after_success_uploads_nothing(fake: FakeRelease) -> None:
-    """A second complete run finds every name on both sides and changes nothing."""
+def _prepare_completed_release_rerun(
+    fake: FakeRelease,
+) -> tuple[dict[str, bytes], dict[str, bytes]]:
+    """Complete one release, then reset job workspaces for a differing rebuild."""
     for name in _ARTEFACTS:
         (fake.pypi / name).write_bytes(_local(name))
         (fake.github / name).write_bytes(_local(name))
@@ -296,12 +298,17 @@ def test_a_rerun_after_success_uploads_nothing(fake: FakeRelease) -> None:
     for destination in (fake.pypi, fake.github):
         for name in _ARTEFACTS:
             (destination / name).write_bytes(f"original {name}".encode())
-    before = (_holdings(fake.pypi), _holdings(fake.github))
     for job in ("draft-release", "publish-pypi", "publish-release"):
         shutil.rmtree(fake.root / job)
     # Forget the first run's calls: the assertions below are about the second.
     (fake.root / "calls.jsonl").unlink()
 
+    return _holdings(fake.pypi), _holdings(fake.github)
+
+
+def test_a_rerun_after_success_uploads_nothing(fake: FakeRelease) -> None:
+    """A second complete run finds every name on both sides and changes nothing."""
+    before = _prepare_completed_release_rerun(fake)
     # The first run published the release, so the second one starts from a
     # public release; its own draft check is what keeps the bundle off it.
     _draft_and_publish_pypi(fake)

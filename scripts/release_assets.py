@@ -618,6 +618,19 @@ def check_fetched(state: State, output: Path) -> None:
         _check_digest(output / name, state.pypi[name].sha256)
 
 
+def _bundle_problems(bundles: Path, github: cabc.Collection[str]) -> list[str]:
+    """Require a supplied provenance bundle and its matching release asset."""
+    supplied = sorted(bundle.name for bundle in bundles.iterdir())
+    if not supplied:
+        return ["No provenance bundle was provided for verification."]
+    return [
+        f"Provenance bundle {name} is missing from the GitHub Release. "
+        "Recover the original attested release-dist artefact and rerun publication."
+        for name in supplied
+        if name not in github
+    ]
+
+
 def verify(state: State, bundles: Path, github_files: Path | None = None) -> list[str]:
     """Describe every artefact or bundle the two destinations disagree on.
 
@@ -644,17 +657,7 @@ def verify(state: State, bundles: Path, github_files: Path | None = None) -> lis
         return ["No distributions were provided for verification."]
     pypi = {name: file.sha256 for name, file in state.pypi.items()}
     problems = mismatches(names, pypi, state.github)
-    missing = sorted(
-        bundle.name for bundle in bundles.iterdir() if bundle.name not in state.github
-    )
     if github_files is not None and not problems:
         for name in names:
             _check_digest(github_files / name, pypi[name])
-    if not list(bundles.iterdir()):
-        problems.append("No provenance bundle was provided for verification.")
-    absent = (
-        f"Provenance bundle {name} is missing from the GitHub Release. "
-        "Recover the original attested release-dist artefact and rerun publication."
-        for name in missing
-    )
-    return [*problems, *absent]
+    return [*problems, *_bundle_problems(bundles, state.github)]
