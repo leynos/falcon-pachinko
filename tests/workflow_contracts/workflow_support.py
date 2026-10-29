@@ -467,7 +467,7 @@ class ActionManifestSource:
         try:
             directories = list(self.action_dir.iterdir())
             return sorted(
-                str(path.relative_to(self.action_dir))
+                path.relative_to(self.action_dir).as_posix()
                 for directory in directories
                 if directory.is_dir()
                 for path in directory.iterdir()

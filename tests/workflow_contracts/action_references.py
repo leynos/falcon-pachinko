@@ -19,7 +19,20 @@ from .workflow_support import (
 
 
 def validate_reference(site: str, ref: object) -> None:
-    """Require local references, digest-pinned images or full commit SHAs."""
+    """Require local references, digest-pinned images or full commit SHAs.
+
+    Parameters
+    ----------
+    site : str
+        Location of the reference.
+    ref : object
+        The declared reference.
+
+    Raises
+    ------
+    UnsupportedUsesError
+        If the reference is malformed or mutable.
+    """
     if not isinstance(ref, str):
         raise UnsupportedUsesError(site, ref)
     if ref.startswith("./") and ref != "./":
@@ -54,7 +67,25 @@ def _steps(site: str, steps: object) -> cabc.Iterator[tuple[str, str]]:
 def action_references(
     workflows: WorkflowSource, actions: ActionManifestSource
 ) -> cabc.Iterator[tuple[str, str]]:
-    """Yield each declared reference with its file and declaration site."""
+    """Yield each declared reference with its file and declaration site.
+
+    Parameters
+    ----------
+    workflows : WorkflowSource
+        Source of workflow documents.
+    actions : ActionManifestSource
+        Source of action manifests.
+
+    Yields
+    ------
+    tuple[str, str]
+        Declaration site and reference.
+
+    Raises
+    ------
+    NotAMappingError
+        If a required runs mapping is missing or malformed.
+    """
     for name in workflows.names():
         for job_name, job in workflows.jobs(name).items():
             site = f"{name}:jobs.{job_name}"
