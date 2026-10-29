@@ -198,7 +198,25 @@ def _replace_newest_steps(workflow: dict[str, object]) -> None:
     _workflow_job(workflow, NEWEST_JOB)["steps"] = [{"run": "uv run pytest -v"}]
 
 
+def _remove_setup_step(workflow: dict[str, object], index: int) -> None:
+    """Remove a setup action from the known fixture."""
+    del _workflow_steps(workflow)[index]
+
+
+def _swap_build_and_install(workflow: dict[str, object]) -> None:
+    """Move the install before the build in the known fixture."""
+    steps = _workflow_steps(workflow)
+    steps[3], steps[4] = steps[4], steps[3]
+
+
 REGRESSION_MUTATIONS: typ.Final[dict[str, WorkflowMutator]] = {
+    "checkout-removed": lambda workflow: _remove_setup_step(workflow, 0),
+    "python-setup-removed": lambda workflow: _remove_setup_step(workflow, 1),
+    "uv-setup-removed": lambda workflow: _remove_setup_step(workflow, 2),
+    "uv-python-removed": lambda workflow: _remove_environment_value(
+        workflow, MINIMUM_JOB, "UV_PYTHON"
+    ),
+    "install-before-build": _swap_build_and_install,
     "job-removed": lambda workflow: _remove_job(workflow, MINIMUM_JOB),
     "pin-changed-to-4.4.0": lambda workflow: _set_environment_value(
         workflow, MINIMUM_JOB, FALCON_ENV, "4.4.0"
@@ -262,6 +280,18 @@ REGRESSION_MUTATIONS: typ.Final[dict[str, WorkflowMutator]] = {
     "make-test-through-no-sync-uv-run": lambda workflow: _append_step(
         workflow, "uv run --no-sync make test"
     ),
+    "continue-on-error-expression": lambda workflow: _set_job_value(
+        workflow,
+        MINIMUM_JOB,
+        "continue-on-error",
+        "${{ github.event_name == 'pull_request' }}",
+    ),
+    "step-continue-on-error-expression": lambda workflow: _set_step_value(
+        workflow,
+        PYTEST_MARKER,
+        "continue-on-error",
+        "${{ github.event_name == 'pull_request' }}",
+    ),
     "continue-on-error-true": lambda workflow: _set_job_value(
         workflow, MINIMUM_JOB, "continue-on-error", value=True
     ),
@@ -283,3 +313,59 @@ REGRESSION_MUTATIONS: typ.Final[dict[str, WorkflowMutator]] = {
     ),
     "make-build-removed-from-lint-test": _replace_newest_steps,
 }
+
+
+EXPECTED_REGRESSION_VIOLATIONS: typ.Final[dict[str, str]] = {
+    "checkout-removed": "must check out the repository",
+    "python-setup-removed": "must set up Python 3.13",
+    "uv-setup-removed": "must set up uv",
+    "uv-python-removed": "env.UV_PYTHON must be",
+    "install-before-build": "must order checkout, Python, uv, build, install",
+    "job-removed": "must declare the falcon-minimum job",
+    "pin-changed-to-4.4.0": "env.FALCON_MINIMUM_VERSION must be",
+    "pin-removed": "env.FALCON_MINIMUM_VERSION must be",
+    "install-step-removed": "must install falcon==",
+    "verification-step-removed": "must verify Falcon",
+    "no-sync-dropped-from-pytest": "must run pytest",
+    "pytest-filter-added": "must run pytest",
+    "version-check-no-sync-dropped": "must verify Falcon",
+    "version-check-wrong-package": "must verify Falcon",
+    "version-check-failure-masked": "verify command must not be followed",
+    "pytest-empty-single-quote-hash": "must run pytest",
+    "pytest-empty-double-quote-hash": "must run pytest",
+    "pytest-hash-masks-failure": "must run pytest",
+    "pytest-pipeline-skipped-by-or": "pytest command must be the only command",
+    "pytest-pipeline-skipped-by-and": "pytest command must be the only command",
+    "pytest-skipped-by-and": "pytest command must be the only command",
+    "pytest-skipped-by-or": "pytest command must be the only command",
+    "pytest-failure-masked": "pytest command must not be followed",
+    "make-test-after-override": "must not run make, uv sync",
+    "uv-sync-after-override": "must not run make, uv sync",
+    "syncing-uv-run-after-override": "must not run make, uv sync",
+    "falcon-reinstalled-after-override": "must not run make, uv sync",
+    "make-test-through-no-sync-uv-run": "must not run make, uv sync",
+    "continue-on-error-expression": "falcon-minimum must not continue on error",
+    "step-continue-on-error-expression": "must not continue on error",
+    "continue-on-error-true": "falcon-minimum must not continue on error",
+    "step-continue-on-error-true": "must not continue on error",
+    "step-if-skips-pytest": "must not have an if condition",
+    "job-if-limits-triggers": "must not have a job-level if condition",
+    "lint-test-removed": "must retain the lint-test job",
+    "falcon-override-added-to-lint-test": "must not override the locked Falcon",
+    "make-build-removed-from-lint-test": "must continue to run make build",
+}
+
+
+VERSION_CHECK_PROGRAMS: typ.Final[tuple[str, ...]] = (
+    (
+        "import importlib.metadata, os, sys; "
+        "sys.exit(importlib.metadata.version('falcon') != "
+        "os.environ['FALCON_MINIMUM_VERSION'])"
+    ),
+    (
+        "import importlib.metadata, os, sys; "
+        "actual = importlib.metadata.version('falcon'); "
+        "expected = os.environ['FALCON_MINIMUM_VERSION']; "
+        "sys.exit(0 if actual == expected else 1)"
+    ),
+)

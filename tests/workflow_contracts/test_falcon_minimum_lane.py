@@ -18,10 +18,12 @@ from packaging.version import Version
 from .falcon_minimum_fixtures import (
     CI_WORKFLOW,
     EXPECTED_FALCON_VERSION,
+    EXPECTED_REGRESSION_VIOLATIONS,
     FALCON_ENV,
     MINIMUM_JOB,
     NEWEST_JOB,
     REGRESSION_MUTATIONS,
+    VERSION_CHECK_PROGRAMS,
     _command_step,
     valid_workflow,
 )
@@ -192,24 +194,12 @@ def _version_check_command(command: CommandGroup) -> bool:
     if not _is_command(command, "uv", "run", "--no-sync", "python", "-c"):
         return False
     # Accept only known checks whose exit status is nonzero on a mismatch.
-    checks = (
-        (
-            "import importlib.metadata, os, sys; "
-            "sys.exit(importlib.metadata.version('falcon') != "
-            "os.environ['FALCON_MINIMUM_VERSION'])"
-        ),
-        (
-            "import importlib.metadata, os, sys; "
-            "actual = importlib.metadata.version('falcon'); "
-            "expected = os.environ['FALCON_MINIMUM_VERSION']; "
-            "sys.exit(0 if actual == expected else 1)"
-        ),
-    )
+
     try:
         tree = ast.dump(ast.parse(" ".join(command[5:])))
     except SyntaxError:
         return False
-    return any(tree == ast.dump(ast.parse(check)) for check in checks)
+    return any(tree == ast.dump(ast.parse(check)) for check in VERSION_CHECK_PROGRAMS)
 
 
 def _pytest_command(command: CommandGroup) -> bool:
@@ -231,8 +221,10 @@ def _unsafe_environment_command(command: CommandGroup) -> bool:
 
 
 def _is_enabled(value: object) -> bool:
-    """Recognize YAML booleans and quoted boolean strings consistently."""
-    return value is True or (isinstance(value, str) and value.casefold() == "true")
+    """Treat anything other than an absent or false value as enabled."""
+    if value is None or value is False:
+        return False
+    return not (isinstance(value, str) and value.strip().casefold() == "false")
 
 
 def _falcon_override(
@@ -566,11 +558,8 @@ def test_a_minimum_lane_regression_is_reported(
     REGRESSION_MUTATIONS[case](workflow)
     source = _temporary_workflow_source(tmp_path, workflow)
     violations = falcon_minimum_lane_violations(source)
-    assert violations, f"{case} was accepted"
-    if case.startswith("pytest-pipeline-skipped"):
-        assert any(
-            "pytest command must be the only command" in item for item in violations
-        ), case
+    expected = EXPECTED_REGRESSION_VIOLATIONS[case]
+    assert any(expected in item for item in violations), f"{case}: {violations}"
 
 
 def test_a_minimal_valid_minimum_lane_has_no_violations(
@@ -581,43 +570,6 @@ def test_a_minimal_valid_minimum_lane_has_no_violations(
     assert not falcon_minimum_lane_violations(source), (
         "a valid temporary lower-bound lane must satisfy the contract"
     )
-
-
-@pytest.mark.parametrize(
-    ("line", "expected"),
-    [
-        (
-            'echo "a;b" || true',
-            [(("echo", "a;b"), "||"), (("true",), None)],
-        ),
-        (
-            "then uv sync && echo done",
-            [(("uv", "sync"), "&&"), (("echo", "done"), None)],
-        ),
-        (
-            "echo ready | tee log &",
-            [(("echo", "ready"), "|"), (("tee", "log"), "&")],
-        ),
-        ("echo a#b '#' ''# \\# # comment", [(("echo", "a#b", "#", "#", "#"), None)]),
-    ],
-    ids=["quoted-separator", "control-keyword", "pipe-and-background", "hash-comments"],
-)
-def test_shell_line_commands_preserve_operators(
-    line: str, expected: list[CommandLine]
-) -> None:
-    """Quoted punctuation stays in arguments and shell operators stay attached."""
-    assert _line_command_groups(line) == expected, f"incorrect shell grouping: {line}"
-
-
-def test_shell_commands_join_continuations_and_keep_lines_separate() -> None:
-    """A continued command and the following line remain distinct commands."""
-    expected = [
-        (("uv", "run", "--no-sync", "pytest", "-v"), None),
-        (("printf", "a;b"), None),
-    ]
-    assert (
-        _command_groups("uv run \\\n --no-sync pytest -v\nprintf 'a;b'") == expected
-    ), "continuations must join without joining separate shell lines"
 
 
 @pytest.mark.parametrize(
@@ -725,31 +677,6 @@ def test_invalid_metadata_is_reported(tmp_path: pathlib.Path, content: bytes) ->
 
 @given(
     st.lists(
-        st.text(alphabet="abcXYZ09 ;|&#'\"", min_size=1, max_size=12),
-        min_size=1,
-        max_size=4,
-    ),
-    st.sampled_from([";", "&&", "||", "|", "&"]),
-    st.lists(
-        st.text(alphabet="abcXYZ09 ;|&#'\"", min_size=1, max_size=12),
-        min_size=1,
-        max_size=4,
-    ),
-)
-def test_shell_grouping_preserves_generated_quoted_arguments(
-    left: list[str], operator: str, right: list[str]
-) -> None:
-    """The parser preserves generated argv and supported shell operators."""
-    script = " ".join(map(shlex.quote, ["echo", *left])) + f" {operator} "
-    script += " ".join(map(shlex.quote, ["printf", *right]))
-    assert _command_groups(script) == [
-        (("echo", *left), operator),
-        (("printf", *right), None),
-    ], f"incorrect shell grouping: {script}"
-
-
-@given(
-    st.lists(
         st.tuples(st.integers(0, 9), st.integers(0, 9), st.integers(0, 9)),
         min_size=1,
         max_size=5,
@@ -775,6 +702,74 @@ def test_command_step_finds_the_unique_checked_command() -> None:
         _command_step(valid_workflow(), "missing marker")
 
 
+@pytest.mark.parametrize("value", [None, False, "false", " FALSE "])
+def test_disabled_continue_on_error_values(value: object) -> None:
+    """Absent and literal false values leave failures visible."""
+    assert not _is_enabled(value), f"unexpected enabled value: {value!r}"
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        (
+            'echo "a;b" || true',
+            [(("echo", "a;b"), "||"), (("true",), None)],
+        ),
+        (
+            "then uv sync && echo done",
+            [(("uv", "sync"), "&&"), (("echo", "done"), None)],
+        ),
+        (
+            "echo ready | tee log &",
+            [(("echo", "ready"), "|"), (("tee", "log"), "&")],
+        ),
+        ("echo a#b '#' ''# \\# # comment", [(("echo", "a#b", "#", "#", "#"), None)]),
+    ],
+    ids=["quoted-separator", "control-keyword", "pipe-and-background", "hash-comments"],
+)
+def test_shell_line_commands_preserve_operators(
+    line: str, expected: list[CommandLine]
+) -> None:
+    """Quoted punctuation stays in arguments and shell operators stay attached."""
+    assert _line_command_groups(line) == expected, f"incorrect shell grouping: {line}"
+
+
+def test_shell_commands_join_continuations_and_keep_lines_separate() -> None:
+    """A continued command and the following line remain distinct commands."""
+    expected = [
+        (("uv", "run", "--no-sync", "pytest", "-v"), None),
+        (("printf", "a;b"), None),
+    ]
+    assert (
+        _command_groups("uv run \\\n --no-sync pytest -v\nprintf 'a;b'") == expected
+    ), "continuations must join without joining separate shell lines"
+
+
+@given(
+    st.lists(
+        st.text(alphabet="abcXYZ09 ;|&#'\"", min_size=1, max_size=12),
+        min_size=1,
+        max_size=4,
+    ),
+    st.sampled_from([";", "&&", "||", "|", "&"]),
+    st.lists(
+        st.text(alphabet="abcXYZ09 ;|&#'\"", min_size=1, max_size=12),
+        min_size=1,
+        max_size=4,
+    ),
+)
+def test_shell_grouping_preserves_generated_quoted_arguments(
+    left: list[str], operator: str, right: list[str]
+) -> None:
+    """The parser preserves generated argv and supported shell operators."""
+    script = " ".join(map(shlex.quote, ["echo", *left])) + f" {operator} "
+    script += " ".join(map(shlex.quote, ["printf", *right]))
+    assert _command_groups(script) == [
+        (("echo", *left), operator),
+        (("printf", *right), None),
+    ], f"incorrect shell grouping: {script}"
+
+
 def test_quoted_and_escaped_operators_are_protected() -> None:
     """Only operators outside quotes and escapes become separators."""
     expected = [(("echo", "&", ";", "|"), "&&"), (("printf", "done"), None)]
@@ -783,18 +778,22 @@ def test_quoted_and_escaped_operators_are_protected() -> None:
     )
 
 
-def test_shell_quote_state_tracks_escapes_and_quotes() -> None:
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("'", "", False, ("'", False)),
+        ("\\", "'", False, ("'", False)),
+        ("\\", '"', False, ('"', True)),
+        ('"', '"', True, ('"', False)),
+        ('"', '"', False, ("", False)),
+    ],
+    ids=["open", "single-quoted-backslash", "escape", "escaped-quote", "close"],
+)
+def test_shell_quote_state_tracks_escapes_and_quotes(
+    case: tuple[str, str, bool, tuple[str, bool]],
+) -> None:
     """Quoted text and escaped quotes retain their shell state."""
-    assert _next_shell_state("'", "", escaped=False) == ("'", False), (
-        "single quote state"
-    )
-    assert _next_shell_state("\\", "'", escaped=False) == ("'", False), (
-        "single quote state"
-    )
-    assert _next_shell_state("\\", '"', escaped=False) == ('"', True), "escape state"
-    assert _next_shell_state('"', '"', escaped=True) == ('"', False), (
-        "escaped quote state"
-    )
-    assert _next_shell_state('"', '"', escaped=False) == ("", False), (
-        "closed quote state"
+    char, quote, escaped, expected = case
+    assert _next_shell_state(char, quote, escaped=escaped) == expected, (
+        f"incorrect shell state for {case!r}"
     )
