@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import collections.abc as cabc
+import itertools
 import shlex
 import tomllib
 import typing as typ
@@ -67,8 +68,7 @@ def _normalise_falcon_lower_bound(requirement: Requirement) -> str:
         message = "Falcon dependency has no lower bound"
         raise ValueError(message)
     release = max(lower_bounds).release
-    padded_release = (*release, 0, 0)[:3]
-    return ".".join(str(component) for component in padded_release)
+    return ".".join(str(component) for component in (*release, 0, 0)[:3])
 
 
 def _command_groups(run: str) -> list[CommandLine]:
@@ -98,7 +98,7 @@ def _protect_quoted_operators(line: str) -> str:
     protected = []
     quote = ""
     escaped = False
-    replacements = str.maketrans(";&|", "\ue000\ue001\ue002")
+    replacements = str.maketrans(";&|#", "\ue000\ue001\ue002\ue003")
     for char in line:
         marked = char.translate(replacements) if quote or escaped else char
         quote, escaped = _next_shell_state(char, quote, escaped=escaped)
@@ -112,9 +112,10 @@ def _line_command_groups(line: str) -> list[CommandLine]:
         _protect_quoted_operators(line), posix=True, punctuation_chars=";&|"
     )
     lexer.whitespace_split = True
+    lexer.commenters = ""
     groups: list[CommandLine] = []
     current: list[str] = []
-    for token in lexer:
+    for token in itertools.takewhile(lambda item: not item.startswith("#"), lexer):
         if token and not token.strip(";&|"):
             if current:
                 groups.append((tuple(current), token))
@@ -122,7 +123,9 @@ def _line_command_groups(line: str) -> list[CommandLine]:
             continue
         if token in {"then", "do"} and not current:
             continue
-        current.append(token.translate(str.maketrans("\ue000\ue001\ue002", ";&|")))
+        current.append(
+            token.translate(str.maketrans("\ue000\ue001\ue002\ue003", ";&|#"))
+        )
     if current:
         groups.append((tuple(current), None))
     return groups
@@ -498,8 +501,7 @@ def falcon_minimum_lane_violations(
     source : WorkflowSource
         The workflow directory to inspect.
     project_metadata_path : pathlib.Path, optional
-        The pyproject.toml supplying Falcon's lower bound; defaults to the
-        repository's own file.
+        Metadata supplying Falcon's lower bound; defaults to repository pyproject.toml.
 
     Returns
     -------
@@ -526,7 +528,6 @@ def falcon_minimum_lane_violations(
             )
         else:
             violations.extend(_minimum_job_violations(minimum_job, lower_bound))
-
     newest_job = jobs.get(NEWEST_JOB)
     if newest_job is None:
         violations.append(f"{CI_WORKFLOW} must retain the {NEWEST_JOB} job")
@@ -548,7 +549,6 @@ def _temporary_workflow_source(
 def test_the_repository_lane_matches_the_declared_lower_bound() -> None:
     """The checked-in workflow exercises the current Falcon lower bound."""
     violations = falcon_minimum_lane_violations(REPOSITORY)
-
     assert not violations, "\n".join(violations)
 
 
@@ -564,7 +564,6 @@ def test_a_minimum_lane_regression_is_reported(
     workflow = valid_workflow()
     REGRESSION_MUTATIONS[case](workflow)
     source = _temporary_workflow_source(tmp_path, workflow)
-
     violations = falcon_minimum_lane_violations(source)
     assert violations, f"{case} was accepted"
     if case.startswith("pytest-pipeline-skipped"):
@@ -578,7 +577,6 @@ def test_a_minimal_valid_minimum_lane_has_no_violations(
 ) -> None:
     """A small but effective lower-bound lane satisfies the inspection rule."""
     source = _temporary_workflow_source(tmp_path, valid_workflow())
-
     assert not falcon_minimum_lane_violations(source), (
         "a valid temporary lower-bound lane must satisfy the contract"
     )
@@ -599,8 +597,9 @@ def test_a_minimal_valid_minimum_lane_has_no_violations(
             "echo ready | tee log &",
             [(("echo", "ready"), "|"), (("tee", "log"), "&")],
         ),
+        ("echo a#b '#' # comment", [(("echo", "a#b", "#"), None)]),
     ],
-    ids=["quoted-separator", "control-keyword", "pipe-and-background"],
+    ids=["quoted-separator", "control-keyword", "pipe-and-background", "hash-comments"],
 )
 def test_shell_line_commands_preserve_operators(
     line: str, expected: list[CommandLine]
@@ -725,13 +724,13 @@ def test_invalid_metadata_is_reported(tmp_path: pathlib.Path, content: bytes) ->
 
 @given(
     st.lists(
-        st.text(alphabet="abcXYZ09 ;|&'\"", min_size=1, max_size=12),
+        st.text(alphabet="abcXYZ09 ;|&#'\"", min_size=1, max_size=12),
         min_size=1,
         max_size=4,
     ),
     st.sampled_from([";", "&&", "||", "|", "&"]),
     st.lists(
-        st.text(alphabet="abcXYZ09 ;|&'\"", min_size=1, max_size=12),
+        st.text(alphabet="abcXYZ09 ;|&#'\"", min_size=1, max_size=12),
         min_size=1,
         max_size=4,
     ),
