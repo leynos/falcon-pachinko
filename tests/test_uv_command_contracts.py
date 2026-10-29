@@ -10,29 +10,35 @@ lock tracking and contributor guidance.
 
 from __future__ import annotations
 
+import typing as typ
+
 import pytest
 import yaml
 from hypothesis import given
 from hypothesis import strategies as st
 
+if typ.TYPE_CHECKING:
+    import pathlib
+
 from tests._makefile import MAKEFILE, REPO_ROOT
 from tests._uv_command_scanner import (
     ShellCommandSyntaxError,
-    _run_step_scripts,
-    _unlocked_project_commands,
+    UnsupportedUvOptionError,
+    run_step_scripts,
+    unlocked_project_commands,
 )
-from tests.workflow_contracts.strict_yaml import StrictLoader
+from tests.workflow_contracts.strict_yaml import load_strict_yaml
 
 
 def test_makefile_project_commands_require_the_lockfile() -> None:
     """Project commands in Make must reject a stale dependency lock."""
     try:
-        violations = _unlocked_project_commands(
+        violations = unlocked_project_commands(
             MAKEFILE.read_text(encoding="utf-8"), is_makefile=True
         )
-    except ValueError as error:
+    except (ShellCommandSyntaxError, UnsupportedUvOptionError) as error:
         message = f"Makefile: {error}"
-        raise ShellCommandSyntaxError(message) from error
+        raise type(error)(message) from error
 
     assert not violations, "Makefile project commands must use --locked:\n" + "\n".join(
         f"Makefile:{line_number}: {command}" for line_number, command in violations
@@ -42,7 +48,7 @@ def test_makefile_project_commands_require_the_lockfile() -> None:
 def test_makefile_uv_command_variables_require_the_lockfile() -> None:
     """Make variable recipes must not hide an unlocked uv invocation."""
     source = "MUTMUT = UV_PYTHON=3.13 $(UV_ENV) $(UV) run --with mutmut mutmut"
-    violations = _unlocked_project_commands(source, is_makefile=True)
+    violations = unlocked_project_commands(source, is_makefile=True)
 
     assert violations == [(1, source)], (
         "Make variable command definitions must enforce the project lock; "
@@ -50,26 +56,57 @@ def test_makefile_uv_command_variables_require_the_lockfile() -> None:
     )
 
 
+def _ci_workflow_and_action_paths() -> list[pathlib.Path]:
+    """Return repository-owned GitHub workflow and action YAML files."""
+    workflows = REPO_ROOT / ".github" / "workflows"
+    actions = REPO_ROOT / ".github" / "actions"
+    return sorted([
+        *workflows.glob("*.yml"),
+        *workflows.glob("*.yaml"),
+        *actions.glob("*/action.yml"),
+        *actions.glob("*/action.yaml"),
+    ])
+
+
+def _strict_workflow_document(path: pathlib.Path) -> object:
+    """Load a workflow while reporting YAML errors at their repository path."""
+    source = path.read_text(encoding="utf-8")
+    try:
+        return load_strict_yaml(source)
+    except yaml.YAMLError as error:
+        location = path.relative_to(REPO_ROOT)
+        message = f"{location} is not strictly parsable YAML: {error}"
+        raise ValueError(message) from error
+
+
+def _workflow_script_violations(path: pathlib.Path, script: str) -> list[str]:
+    """Return unlocked commands with the workflow path in each diagnostic."""
+    try:
+        commands = unlocked_project_commands(script)
+    except (ShellCommandSyntaxError, UnsupportedUvOptionError) as error:
+        location = path.relative_to(REPO_ROOT)
+        message = f"{location}: {error}"
+        raise type(error)(message) from error
+    return [f"{path.relative_to(REPO_ROOT)}: {command}" for _, command in commands]
+
+
+def _workflow_lock_violations(path: pathlib.Path) -> list[str]:
+    """Check every Actions ``run:`` script in one workflow or action."""
+    scripts = run_step_scripts(_strict_workflow_document(path))
+    return [
+        violation
+        for script in scripts
+        for violation in _workflow_script_violations(path, script)
+    ]
+
+
 def test_ci_run_steps_require_the_project_lockfile() -> None:
     """Repository-owned CI run steps must reject stale project locks."""
-    workflow_files = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
-    action_files = sorted((REPO_ROOT / ".github" / "actions").glob("*/action.yml"))
-    violations: list[str] = []
-
-    for path in [*workflow_files, *action_files]:
-        source = path.read_text(encoding="utf-8")
-        document = yaml.load(source, Loader=StrictLoader)  # ruff: ignore[unsafe-yaml-load] - strict SafeLoader subclass
-        scripts = _run_step_scripts(document)
-        for script in scripts:
-            try:
-                commands = _unlocked_project_commands(script)
-            except ValueError as error:
-                location = path.relative_to(REPO_ROOT)
-                message = f"{location}: {error}"
-                raise ShellCommandSyntaxError(message) from error
-            for _, command in commands:
-                violations.append(f"{path.relative_to(REPO_ROOT)}: {command}")
-
+    violations = [
+        violation
+        for path in _ci_workflow_and_action_paths()
+        for violation in _workflow_lock_violations(path)
+    ]
     assert not violations, (
         "CI project commands must use --locked (each entry names its file and "
         "offending run line):\n" + "\n".join(violations)
@@ -96,10 +133,34 @@ def test_ci_run_steps_require_the_project_lockfile() -> None:
         ("uv --verbose run pytest", [(1, "uv --verbose run pytest")]),
         ("uv -vv run --locked pytest", []),
         ("uv --color never sync", [(1, "uv --color never sync")]),
+        ("uv --native-tls sync", [(1, "uv --native-tls sync")]),
+        ("uv --preview sync", [(1, "uv --preview sync")]),
+        ("uv --isolated sync", [(1, "uv --isolated sync")]),
+        (
+            "uv --python-preference only-managed sync",
+            [(1, "uv --python-preference only-managed sync")],
+        ),
+        (
+            "uv --preview-features json-output sync",
+            [(1, "uv --preview-features json-output sync")],
+        ),
         ("uv --project . sync --locked", []),
+        ("uv --version", []),
+        ("uv -h", []),
+        ("uv -- run pytest", [(1, "uv -- run pytest")]),
+        (
+            "uv run --preview-features json-output --locked pytest",
+            [],
+        ),
+        (
+            "uv run --python-preference only-managed --locked pytest",
+            [],
+        ),
         ("@uv run pytest", [(1, "@uv run pytest")]),
         ("$(UV) run pytest", [(1, "$(UV) run pytest")]),
         ("@$(UV) run --locked pytest", []),
+        ("{ uv sync; }", [(1, "{ uv sync")]),
+        ("{ uv sync --locked; }", []),
         (
             "env UV_PYTHON=3.13 uv run pytest",
             [(1, "env UV_PYTHON=3.13 uv run pytest")],
@@ -118,6 +179,10 @@ def test_ci_run_steps_require_the_project_lockfile() -> None:
         ("uv --no-cache-dir run --locked pytest", []),
         ("uv tool run ruff && uvx ruff && uv build", []),
         ("echo ready # uv sync", []),
+        (
+            "if [ $# -gt 0 ]; then uv sync; fi",
+            [(1, "then uv sync")],
+        ),
         ('echo "uv sync"', []),
     ],
 )
@@ -125,12 +190,68 @@ def test_ci_command_contract_checks_each_shell_invocation(
     script: str, expected: list[tuple[int, str]]
 ) -> None:
     """Check project locks per invocation while exempting tool environments."""
-    violations = _unlocked_project_commands(script)
+    violations = unlocked_project_commands(script)
 
     assert violations == expected, (
         "each project command must independently use --locked, while "
         "tooling and no-project calls stay outside the project lock; "
         f"expected {expected!r}, got {violations!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "recipe_prefix",
+    [
+        "@",
+        "-",
+        "+",
+        "@-",
+        "-@",
+        "@+",
+        "+@",
+        "-+",
+        "+-",
+        "@-+",
+        "@+-",
+        "-@+",
+        "-+@",
+        "+@-",
+        "+-@",
+    ],
+)
+def test_make_recipe_prefixes_do_not_hide_unlocked_uv_commands(
+    recipe_prefix: str,
+) -> None:
+    """Make's ignore, silent and recursive prefixes may appear in combination."""
+    unlocked_recipe = f"{recipe_prefix}uv sync"
+    locked_recipe = f"{recipe_prefix}uv sync --locked"
+
+    assert unlocked_project_commands(unlocked_recipe, is_makefile=True) == [
+        (1, unlocked_recipe)
+    ], "all Make recipe prefix combinations must leave the uv command visible"
+    assert not unlocked_project_commands(locked_recipe, is_makefile=True), (
+        "a locked uv command must pass with any valid Make recipe prefix"
+    )
+
+
+@pytest.mark.parametrize(
+    ("trailing_backslash_count", "expected"),
+    [
+        (1, []),
+        (2, [(2, "uv run pytest")]),
+        (3, []),
+    ],
+)
+def test_command_scanner_uses_odd_backslashes_for_line_continuation(
+    trailing_backslash_count: int, expected: list[tuple[int, str]]
+) -> None:
+    """Only an odd final backslash escapes the physical line boundary."""
+    trailing_backslashes = "\\" * trailing_backslash_count
+    script = f"echo path{trailing_backslashes}\nuv run pytest"
+
+    assert unlocked_project_commands(script) == expected, (
+        "an even run of trailing backslashes must leave the following command "
+        "at a new shell boundary"
     )
 
 
@@ -177,7 +298,7 @@ def test_command_scanner_finds_unlocked_run_across_supported_prefixes(
     unlocked_command = " ".join(command_tokens)
     script = f"uv run --locked pytest {separator} {unlocked_command}"
 
-    assert _unlocked_project_commands(script) == [(1, unlocked_command)], (
+    assert unlocked_project_commands(script) == [(1, unlocked_command)], (
         "the command scanner must find an unlocked uv run after supported "
         f"prefixes and option combinations in {script!r}"
     )
@@ -187,17 +308,52 @@ def test_command_scanner_skips_heredoc_bodies() -> None:
     """Heredoc text is data, and commands after its delimiter remain visible."""
     script = "cat <<'EOF'\nDon't run uv sync\nEOF\nuv run pytest"
 
-    assert _unlocked_project_commands(script) == [(4, "uv run pytest")], (
+    assert unlocked_project_commands(script) == [(4, "uv run pytest")], (
         "heredoc content must not be tokenized as a shell command, and the "
         "scanner must continue after the closing delimiter"
     )
+
+
+def test_command_scanner_rejects_an_unterminated_heredoc() -> None:
+    """An unterminated heredoc must not hide later project commands."""
+    script = "cat <<EOF\nuv sync"
+
+    with pytest.raises(ShellCommandSyntaxError, match=r"line 1.*EOF"):
+        unlocked_project_commands(script)
+
+
+def test_command_scanner_does_not_treat_arithmetic_shift_as_a_heredoc() -> None:
+    """A shift operator inside arithmetic expansion does not start a heredoc."""
+    script = "value=$(( 1 << 2 ))\nuv sync"
+
+    assert unlocked_project_commands(script) == [(2, "uv sync")], (
+        "the arithmetic shift must leave the following shell command visible"
+    )
+
+
+def test_command_scanner_does_not_treat_here_strings_as_heredocs() -> None:
+    """A shell here-string must not hide the following project command."""
+    script = "cat <<< 'uv sync'\nuv sync"
+
+    assert unlocked_project_commands(script) == [(2, "uv sync")], (
+        "here-string input is not a heredoc body, so the next command must be "
+        "checked for --locked"
+    )
+
+
+def test_command_scanner_fails_closed_on_unknown_uv_global_options() -> None:
+    """An unrecognized global option must not hide a project subcommand."""
+    script = "echo ready\nuv --unrecognised sync"
+
+    with pytest.raises(UnsupportedUvOptionError, match=r"line 2.*uv --unrecognised"):
+        unlocked_project_commands(script)
 
 
 def test_command_scanner_keeps_multiline_quoted_text_as_one_argument() -> None:
     """Quoted text may span lines without hiding a later command."""
     script = 'python -c "\nuv sync\n" && uv run pytest'
 
-    assert _unlocked_project_commands(script) == [(1, "uv run pytest")], (
+    assert unlocked_project_commands(script) == [(1, "uv run pytest")], (
         "a multiline quoted argument must remain data while following shell "
         "commands are still checked"
     )
@@ -206,7 +362,7 @@ def test_command_scanner_keeps_multiline_quoted_text_as_one_argument() -> None:
 def test_command_scanner_reports_unbalanced_quotes_with_the_source_line() -> None:
     """Malformed shell input must identify the line that could not be parsed."""
     with pytest.raises(ShellCommandSyntaxError, match="echo 'unfinished") as exc_info:
-        _unlocked_project_commands("echo 'unfinished")
+        unlocked_project_commands("echo 'unfinished")
 
     assert "echo 'unfinished" in str(exc_info.value), (
         "an unbalanced-quote diagnostic must include the offending shell line"

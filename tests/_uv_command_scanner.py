@@ -10,6 +10,10 @@ class ShellCommandSyntaxError(ValueError):
     """A shell command could not be parsed with source-line context."""
 
 
+class UnsupportedUvOptionError(ValueError):
+    """A global uv option is not covered by the command contract scanner."""
+
+
 MAKE_VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 MAKE_VARIABLE_EXPANSION = re.compile(r"\$\((?!UV\))[A-Za-z_][A-Za-z0-9_]*\)")
 SHELL_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
@@ -21,6 +25,7 @@ SHELL_COMMAND_PREFIXES = frozenset({
     "if",
     "then",
     "!",
+    "{",
 })
 ENV_FLAGS = frozenset({
     "-",
@@ -33,9 +38,10 @@ ENV_FLAGS = frozenset({
 })
 ENV_OPTIONS_WITH_VALUES = frozenset({"-u", "--unset"})
 MAKE_ASSIGNMENT_OPERATORS = frozenset({"=", "?=", ":=", "+=", "!=", "::="})
+UV_INFORMATIONAL_OPTIONS = frozenset({"--help", "--version", "-h", "-V"})
 SHELL_HEREDOC_PART = re.compile(
-    r"(?P<comment>(?<![^\s;&|])\#[^\n]*)|'[^']*'|"
-    r'"(?:\\.|[^"\\])*"|\\.|(?P<operator><<-(?!<)|<<(?!<))'
+    r"(?P<comment>(?<![^\s;&|()<>])\#[^\n]*)|'[^']*'|"
+    r'"(?:\\.|[^"\\])*"|\\.|(?P<operator>(?<!<)(?:<<-(?!<)|<<(?!<)))'
 )
 # Keep global option arity aligned with `uv --help`; their values must not be
 # mistaken for the command whose arguments no longer belong to uv.
@@ -46,9 +52,13 @@ UV_GLOBAL_OPTIONS_WITH_VALUES = frozenset({
     "--config-file",
     "--directory",
     "--project",
+    "--preview-features",
+    "--python-preference",
 })
 UV_GLOBAL_FLAGS = frozenset({
+    "--isolated",
     "--managed-python",
+    "--native-tls",
     "--no-cache",
     "--no-cache-dir",
     "--no-config",
@@ -56,6 +66,7 @@ UV_GLOBAL_FLAGS = frozenset({
     "--no-progress",
     "--no-python-downloads",
     "--offline",
+    "--preview",
     "--quiet",
     "--system-certs",
     "--verbose",
@@ -108,6 +119,8 @@ UV_RUN_OPTIONS_WITH_VALUES = frozenset({
     "--refresh-package",
     "--python",
     "-p",
+    "--preview-features",
+    "--python-preference",
     "--allow-insecure-host",
     "--color",
     "--directory",
@@ -123,10 +136,15 @@ def _logical_lines(text: str) -> list[tuple[int, str]]:
     -------
     list of tuple of int and str
         Logical lines paired with their one-based starting line numbers.
+
+    Notes
+    -----
+    An unterminated heredoc raises ``ShellCommandSyntaxError`` before command
+    analysis returns any results.
     """
     logical_lines: list[tuple[int, str]] = []
     fragments: list[str] = []
-    pending_heredocs: list[tuple[str, bool]] = []
+    pending_heredocs: list[tuple[str, bool, int]] = []
     start_line = 1
 
     for line_number, line in enumerate(text.splitlines(), start=1):
@@ -139,11 +157,34 @@ def _logical_lines(text: str) -> list[tuple[int, str]]:
 
     if fragments:
         logical_lines.append((start_line, " ".join(fragments)))
+    _raise_for_unterminated_heredocs(pending_heredocs)
     return logical_lines
 
 
+def _raise_for_unterminated_heredocs(
+    pending_heredocs: list[tuple[str, bool, int]],
+) -> None:
+    """Fail with the source line when heredoc input reaches end of file.
+
+    Raises
+    ------
+    ShellCommandSyntaxError
+        A heredoc is missing its closing delimiter at end of input.
+    """
+    if not pending_heredocs:
+        return
+    delimiters = ", ".join(repr(delimiter) for delimiter, _, _ in pending_heredocs)
+    message = (
+        f"Unterminated heredoc from shell line {pending_heredocs[0][2]}: "
+        f"no closing delimiter for {delimiters}"
+    )
+    raise ShellCommandSyntaxError(message)
+
+
 def _skip_shell_line(
-    line: str, fragments: list[str], pending_heredocs: list[tuple[str, bool]]
+    line: str,
+    fragments: list[str],
+    pending_heredocs: list[tuple[str, bool, int]],
 ) -> bool:
     """Return whether the physical line is a comment or heredoc body."""
     if _consume_heredoc_line(line, pending_heredocs):
@@ -154,7 +195,8 @@ def _skip_shell_line(
 def _append_shell_fragment(line: str, fragments: list[str]) -> bool:
     """Append a physical line and report whether its shell continuation remains open."""
     stripped = line.rstrip()
-    continues = stripped.endswith("\\")
+    trailing_backslashes = len(stripped) - len(stripped.rstrip("\\"))
+    continues = trailing_backslashes % 2 == 1
     fragments.append(stripped[:-1].strip() if continues else line.strip())
     return continues
 
@@ -163,22 +205,36 @@ def _finish_logical_line(
     fragments: list[str],
     start_line: int,
     logical_lines: list[tuple[int, str]],
-    pending_heredocs: list[tuple[str, bool]],
+    pending_heredocs: list[tuple[str, bool, int]],
 ) -> None:
     """Store a complete shell line or retain it while a quote remains open."""
     logical_line = " ".join(fragments)
     if _has_incomplete_shell_quote(logical_line):
         return
     logical_lines.append((start_line, logical_line))
-    pending_heredocs.extend(_heredoc_delimiters(logical_line))
+    pending_heredocs.extend(
+        (delimiter, strip_tabs, start_line)
+        for delimiter, strip_tabs in _heredoc_delimiters(logical_line)
+    )
     fragments.clear()
 
 
 def _shell_tokens(line: str, *, punctuation_chars: str) -> list[str]:
     """Tokenize shell input with the punctuation used by the caller."""
-    lexer = shlex.shlex(line, posix=True, punctuation_chars=punctuation_chars)
+    lexer = shlex.shlex(
+        _strip_shell_comment(line), posix=True, punctuation_chars=punctuation_chars
+    )
     lexer.whitespace_split = True
+    lexer.commenters = ""
     return list(lexer)
+
+
+def _strip_shell_comment(line: str) -> str:
+    """Drop a comment beginning at an unquoted shell word boundary."""
+    for match in SHELL_HEREDOC_PART.finditer(line):
+        if match.group("comment") is not None:
+            return line[: match.start()]
+    return line
 
 
 def _has_incomplete_shell_quote(line: str) -> bool:
@@ -193,16 +249,37 @@ def _has_incomplete_shell_quote(line: str) -> bool:
 def _heredoc_delimiters(line: str) -> list[tuple[str, bool]]:
     """Return heredoc delimiters and whether their bodies strip leading tabs."""
     delimiters: list[tuple[str, bool]] = []
+    arithmetic_depth = 0
+    position = 0
     for match in SHELL_HEREDOC_PART.finditer(line):
+        arithmetic_depth = _advance_arithmetic_expansion_depth(
+            line[position : match.start()], arithmetic_depth
+        )
+        position = match.end()
         if match.group("comment") is not None:
             break
         operator = match.group("operator")
-        if operator is None:
+        if operator is None or arithmetic_depth:
             continue
         delimiter = _first_shell_word(line[match.end() :])
         if delimiter is not None:
             delimiters.append((delimiter, operator.endswith("-")))
     return delimiters
+
+
+def _advance_arithmetic_expansion_depth(source: str, depth: int) -> int:
+    """Track unquoted arithmetic expansions before a possible heredoc token."""
+    index = 0
+    while index < len(source):
+        if source.startswith("$((", index):
+            depth += 1
+            index += 3
+        elif depth and source.startswith("))", index):
+            depth -= 1
+            index += 2
+        else:
+            index += 1
+    return depth
 
 
 def _first_shell_word(source: str) -> str | None:
@@ -213,19 +290,32 @@ def _first_shell_word(source: str) -> str | None:
     return word if isinstance(word, str) else None
 
 
-def _consume_heredoc_line(line: str, pending_heredocs: list[tuple[str, bool]]) -> bool:
+def _consume_heredoc_line(
+    line: str, pending_heredocs: list[tuple[str, bool, int]]
+) -> bool:
     """Consume heredoc body text, dropping a delimiter when it closes."""
     if not pending_heredocs:
         return False
-    delimiter, strip_tabs = pending_heredocs[0]
+    delimiter, strip_tabs, _ = pending_heredocs[0]
     candidate = line.lstrip("\t") if strip_tabs else line
     if candidate == delimiter:
         pending_heredocs.pop(0)
     return True
 
 
-def _run_step_scripts(document: object) -> list[str]:
-    """Collect ``run:`` script values from a parsed workflow document."""
+def run_step_scripts(document: object) -> list[str]:
+    """Collect ``run:`` script values from a parsed workflow document.
+
+    Parameters
+    ----------
+    document : object
+        Parsed workflow or composite-action data.
+
+    Returns
+    -------
+    list of str
+        String ``run`` values found at any depth, in document order.
+    """
     scripts: list[str] = []
 
     def visit(value: object) -> None:
@@ -302,11 +392,10 @@ def _commands_from_tokens(tokens: list[str]) -> list[list[str]]:
 def _normalise_make_command(command: list[str], *, is_makefile: bool) -> list[str]:
     """Remove Make's recipe marker and variable assignment prefix."""
     tokens = command.copy()
-    if tokens:
-        tokens[0] = tokens[0].removeprefix("@")
     if not is_makefile:
-        return tokens
+        return [tokens[0].removeprefix("@"), *tokens[1:]] if tokens else tokens
 
+    _strip_make_recipe_prefixes(tokens)
     try:
         name, operator, *recipe = tokens
     except ValueError:
@@ -314,6 +403,14 @@ def _normalise_make_command(command: list[str], *, is_makefile: bool) -> list[st
     if MAKE_VARIABLE.fullmatch(name) and operator in MAKE_ASSIGNMENT_OPERATORS:
         return recipe
     return tokens
+
+
+def _strip_make_recipe_prefixes(tokens: list[str]) -> None:
+    """Remove Make's silent, ignore-error and recursive recipe prefixes."""
+    while tokens and all(character in "@-+" for character in tokens[0]):
+        tokens.pop(0)
+    if tokens:
+        tokens[0] = tokens[0].lstrip("@-+")
 
 
 def _uv_subcommand_index(tokens: list[str], *, is_makefile: bool) -> int | None:
@@ -344,19 +441,40 @@ def _uv_executable_index(tokens: list[str], *, is_makefile: bool) -> int | None:
 
 def _uv_project_subcommand_index(tokens: list[str], index: int) -> int | None:
     """Return the project subcommand after recognized uv global options."""
-    subcommand_index = index
-    while subcommand_index < len(tokens):
-        option = tokens[subcommand_index]
-        if not option.startswith("-"):
-            break
-        option_arity = _uv_global_option_arity(option)
-        if option_arity is None:
-            return None
-        subcommand_index += option_arity
+    command_index = _uv_global_option_end(tokens, index)
+    if command_index is None:
+        return None
+    if command_index >= len(tokens):
+        return None
+    if tokens[command_index] not in {"run", "sync"}:
+        return None
+    return command_index
 
-    if subcommand_index < len(tokens) and tokens[subcommand_index] in {"run", "sync"}:
-        return subcommand_index
-    return None
+
+def _uv_global_option_end(tokens: list[str], index: int) -> int | None:
+    """Return the command index after global options, if they permit execution."""
+    while index < len(tokens):
+        option = tokens[index]
+        if option in UV_INFORMATIONAL_OPTIONS:
+            return None
+        if option == "--":
+            return index + 1
+        if not option.startswith("-"):
+            return index
+        index += _known_uv_global_option_arity(option)
+    return index
+
+
+def _known_uv_global_option_arity(option: str) -> int:
+    """Return the known option arity or require an explicit scanner update."""
+    arity = _uv_global_option_arity(option)
+    if arity is None:
+        message = (
+            f"Unrecognized uv global option {option!r}; add it to "
+            "UV_GLOBAL_FLAGS or UV_GLOBAL_OPTIONS_WITH_VALUES"
+        )
+        raise UnsupportedUvOptionError(message)
+    return arity
 
 
 def _uv_global_option_arity(option: str) -> int | None:
@@ -468,13 +586,53 @@ def _uv_run_options_before_command(arguments: list[str]) -> list[str]:
     return options
 
 
-def _unlocked_project_commands(
+def unlocked_project_commands(
     text: str, *, is_makefile: bool = False
 ) -> list[tuple[int, str]]:
-    """Return project ``uv run`` or ``uv sync`` lines lacking ``--locked``."""
-    return [
-        (line_number, " ".join(command))
-        for line_number, line in _logical_lines(text)
-        for command in _shell_commands(line, line_number=line_number)
-        if _is_unlocked_project_command(command, is_makefile=is_makefile)
-    ]
+    """Return project commands that use ``uv run`` or ``uv sync`` unlocked.
+
+    Parameters
+    ----------
+    text : str
+        Makefile recipe or shell script source.
+    is_makefile : bool, default=False
+        Whether Make recipe prefixes and variable assignments are present.
+
+    Returns
+    -------
+    list of tuple of int and str
+        One-based logical line numbers paired with each offending command.
+
+    Notes
+    -----
+    Parsing errors propagate as ``ShellCommandSyntaxError``. An unsupported
+    global uv option propagates as ``UnsupportedUvOptionError``.
+    """
+    violations: list[tuple[int, str]] = []
+    for line_number, line in _logical_lines(text):
+        violations.extend(
+            _unlocked_commands_on_line(
+                line, line_number=line_number, is_makefile=is_makefile
+            )
+        )
+    return violations
+
+
+def _unlocked_commands_on_line(
+    line: str, *, line_number: int, is_makefile: bool
+) -> list[tuple[int, str]]:
+    """Find unlocked invocations in one logical line with useful errors."""
+    violations: list[tuple[int, str]] = []
+    for command in _shell_commands(line, line_number=line_number):
+        command_text = " ".join(command)
+        try:
+            is_unlocked = _is_unlocked_project_command(command, is_makefile=is_makefile)
+        except UnsupportedUvOptionError as error:
+            message = (
+                f"Unsupported uv option at line {line_number}: "
+                f"{command_text!r}: {error}"
+            )
+            raise UnsupportedUvOptionError(message) from error
+        if is_unlocked:
+            violations.append((line_number, command_text))
+    return violations
