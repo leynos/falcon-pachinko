@@ -30,10 +30,8 @@ python -m pip install --pre falcon-pachinko
 uv add --prerelease allow falcon-pachinko
 ```
 
-Pre-releases require opting in. Use
-`python -m pip install --pre falcon-pachinko` with pip, or
-`uv add --prerelease allow falcon-pachinko` with uv. The distribution provides
-the `falcon_pachinko` import package.
+Pre-releases require opting in, as shown by the flags above. The distribution
+provides the `falcon_pachinko` import package.
 
 Optional extras provide the example application's dependencies or the public
 testing utilities:

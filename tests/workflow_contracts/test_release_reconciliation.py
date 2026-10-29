@@ -180,6 +180,7 @@ def _holdings(directory: pth.Path) -> dict[str, bytes]:
 def fake(tmp_path: pth.Path) -> FakeRelease:
     """Return destinations seeded with one name per reconciliation case."""
     release = fake_release(tmp_path)
+    (release.github / _BUNDLE).write_bytes(b"original bundle")
     (release.pypi / _PYPI_ONLY).write_bytes(b"pypi")
     (release.github / _GITHUB_ONLY).write_bytes(b"github")
     (release.pypi / _BOTH).write_bytes(b"both")
@@ -195,7 +196,7 @@ def test_every_name_converges_on_its_canonical_bytes(fake: FakeRelease) -> None:
     ship. Attaching it would claim provenance for a different build.
     """
     _draft_and_publish_pypi(fake)
-    _publish_release(fake)
+    _publish_release(fake, verify=False)
 
     expected = {
         _PYPI_ONLY: b"pypi",
@@ -204,13 +205,15 @@ def test_every_name_converges_on_its_canonical_bytes(fake: FakeRelease) -> None:
         _BOTH: b"both",
     }
     assert _holdings(fake.pypi) == expected, "Release contract failed"
-    assert _holdings(fake.github) == expected, "Release contract failed"
+    assert _holdings(fake.github) == {**expected, _BUNDLE: b"original bundle"}, (
+        "Release contract failed"
+    )
 
 
 def test_each_destination_is_sent_only_what_it_lacks(fake: FakeRelease) -> None:
     """GitHub is sent the PyPI-only and new names, nothing else."""
     _draft_and_publish_pypi(fake)
-    _publish_release(fake)
+    _publish_release(fake, verify=False)
 
     uploads = [call for call in fake.calls("gh") if call[:2] == ["release", "upload"]]
     assert len(uploads) == 1, uploads
@@ -225,6 +228,7 @@ def test_the_bundle_is_attached_when_every_artefact_is_this_runs_build(
     fake: FakeRelease,
 ) -> None:
     """A first release ships the attested bytes, so its bundle is truthful."""
+    (fake.github / _BUNDLE).unlink()
     for name in _ARTEFACTS:
         (fake.pypi / name).unlink(missing_ok=True)
         (fake.github / name).unlink(missing_ok=True)
@@ -247,6 +251,7 @@ def test_the_bundle_is_withheld_when_the_published_bytes_are_not_this_build(
     a provenance claim on the release that its own assets contradict. The
     attestation still reaches the repository's attestation store.
     """
+    (fake.github / _BUNDLE).unlink()
     _draft_and_publish_pypi(fake)
     cwd, env = _job_directory(fake, "publish-release")
     for name in _PUBLISH_STEPS:
@@ -261,8 +266,31 @@ def test_the_bundle_is_withheld_when_the_published_bytes_are_not_this_build(
     assert _BUNDLE not in _holdings(fake.github), "Release contract failed"
 
 
+def test_interrupted_release_with_rebuilt_bytes_remains_draft(
+    fake: FakeRelease,
+) -> None:
+    """Do not publish when the original attestation is unavailable."""
+    (fake.github / _BUNDLE).unlink()
+    _draft_and_publish_pypi(fake)
+    cwd = _publish_release(fake, verify=False)
+    completed = run_bash(
+        step_script("publish-release", "Check both destinations hold the same bytes"),
+        cwd,
+        fake.env(GITHUB_REF_NAME=_TAG),
+    )
+    assert completed.returncode != 0, "missing provenance must fail verification"
+    assert "provenance" in completed.stderr.lower(), "explain the recovery failure"
+    assert _BUNDLE not in _holdings(fake.github), "do not attach the rebuilt bundle"
+    assert not any(call[:2] == ["release", "edit"] for call in fake.calls("gh")), (
+        "the release must remain a draft"
+    )
+
+
 def test_a_rerun_after_success_uploads_nothing(fake: FakeRelease) -> None:
     """A second complete run finds every name on both sides and changes nothing."""
+    for name in _ARTEFACTS:
+        (fake.pypi / name).write_bytes(_local(name))
+        (fake.github / name).write_bytes(_local(name))
     _draft_and_publish_pypi(fake)
     _publish_release(fake)
     before = (_holdings(fake.pypi), _holdings(fake.github))
@@ -337,6 +365,10 @@ def test_the_re_fetch_polls_past_a_cached_index(fake: FakeRelease) -> None:
     attempts, until every name this run staged is listed; otherwise a
     successful release would stay a draft until the cache expired.
     """
+    for name in _ARTEFACTS:
+        for destination in (fake.pypi, fake.github):
+            if (destination / name).exists():
+                (destination / name).write_bytes(_local(name))
     _draft_and_publish_pypi(fake)
     cwd, env = _job_directory(fake, "publish-release")
     for name in _PUBLISH_STEPS:
@@ -417,7 +449,7 @@ def test_the_index_is_read_again_after_the_upload(fake: FakeRelease) -> None:
 def test_pypi_downloads_retry_and_are_bounded(fake: FakeRelease) -> None:
     """Every PyPI file download keeps the retry and timeout flags."""
     _draft_and_publish_pypi(fake)
-    _publish_release(fake)
+    _publish_release(fake, verify=False)
 
     downloads = [call for call in fake.calls("curl") if "--fail" in call]
     assert downloads, "the PyPI-only name must be fetched from PyPI"
@@ -437,7 +469,7 @@ def test_a_pypi_only_name_uploads_when_the_bundle_is_already_attached(
             shutil.copyfile(fake.pypi / name, fake.github / name)
     (fake.github / _BUNDLE).write_bytes(b"bundle")
 
-    cwd = _publish_release(fake)
+    cwd = _publish_release(fake, verify=False)
 
     assert outputs(cwd / "output")["pending"] == "true", "Release contract failed"
     assert (

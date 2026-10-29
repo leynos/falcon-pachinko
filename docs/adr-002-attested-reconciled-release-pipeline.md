@@ -62,7 +62,10 @@ and the tag-named Sigstore bundle into one `release-dist` artefact. Later jobs
 consume those bytes; publication jobs do not rebuild. The tag-only bundle
 filename makes retries idempotent. Attach that bundle to GitHub only when all
 canonical distribution bytes match the current attested build. An existing
-published file with different bytes was attested by its earlier build.
+published file with different bytes requires the earlier build's bundle. If it
+is absent, verification fails and the draft remains unpublished; recover the
+original `release-dist` artefact and rerun publication with those attested
+bytes.
 
 ### Destinations and retry behaviour
 

@@ -23,12 +23,12 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.mark.parametrize(
     ("sdists", "wheels", "expected"),
-    [(0, 1, "fail"), (1, 1, "pass"), (2, 1, "fail"), (1, 0, "fail")],
+    [(0, 1, "fail"), (1, 1, "pass"), (2, 1, "fail"), (1, 0, "fail"), (1, 2, "fail")],
 )
 def test_distribution_count(
     tmp_path: pathlib.Path, sdists: int, wheels: int, expected: str
 ) -> None:
-    """Only a single sdist with at least one wheel is accepted."""
+    """Only exactly one sdist and one wheel is accepted."""
     script = step_script(
         "build-dist",
         "Require exactly one sdist to travel with the wheel",

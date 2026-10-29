@@ -887,7 +887,7 @@ The `[tool.mutmut]` section in `pyproject.toml` is the whole configuration:
   `docs/users-guide.md` relative to its copied file.
 - **`pytest_add_cli_args_test_selection`** names the three test trees the run
   uses: `tests/`, `falcon_pachinko/unittests/` and `falcon_pachinko/behaviour/`.
-- **`pytest_add_cli_args`** drops three modules and one marker.
+- **`pytest_add_cli_args`** drops four modules and one marker.
   `--ignore=tests/workflow_contracts`,
   `--ignore=tests/test_toolchain_versions.py` and
   `--ignore=tests/test_uv_toolchain.py` are repository-tooling contracts that
@@ -895,10 +895,13 @@ The `[tool.mutmut]` section in `pyproject.toml` is the whole configuration:
   `.markdownlint-cli2.jsonc` — none of which mutmut copies into `mutants/`, so
   all three fail the baseline there. They say nothing about
   `falcon_pachinko/`'s behaviour, so excluding them costs the mutation score
-  nothing. `-m "not lint_toolchain"` drops the tests that provision a PyPy
-  interpreter and reach the network; `-p no:cacheprovider` keeps the run from
-  writing a cache into the copied tree. Mutmut has no `runner` key in 3.6.0, so
-  these arguments are the whole lever.
+  nothing. `--ignore=tests/test_release_archives.py` excludes the distribution
+  archive test, which builds with `uv` and installs a wheel in a fresh virtual
+  environment that the `mutants/` tree cannot support.
+  `-m "not lint_toolchain"` drops the tests that provision a PyPy interpreter
+  and reach the network; `-p no:cacheprovider` keeps the run from writing a
+  cache into the copied tree. Mutmut has no `runner` key in 3.6.0, so these
+  arguments are the whole lever.
 
 `.github/workflows/mutation.yml` runs the estate's reusable workflow
 (`leynos/shared-actions/.github/workflows/mutation-mutmut.yml`) weekly and on

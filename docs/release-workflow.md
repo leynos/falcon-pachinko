@@ -23,7 +23,12 @@ A push of a tag matching `v*.*.*` starts these jobs:
 An empty or malformed distribution artefact fails before publication. The
 GitHub Release remains a draft until PyPI contains the distributions and both
 destinations agree on their SHA-256 digests. The Sigstore bundle is attached
-only when every canonical distribution came from the current attested build.
+only when every canonical distribution came from the current attested build. If
+the matching bundle is missing, verification fails and leaves the release as a
+draft. Recover the original run's `release-dist` artefact and rerun publication
+with its distributions and bundle; never attach a bundle for rebuilt bytes. A
+retry whose build differs also fails verification even if a bundle is already
+attached, because its correspondence cannot be established from the filename.
 
 PyPI is canonical when a filename already exists there. Otherwise an existing
 GitHub Release asset is canonical, followed by the current build. Existing

@@ -621,9 +621,8 @@ def check_fetched(state: State, output: Path) -> None:
 def verify(state: State, bundles: Path) -> list[str]:
     """Describe every artefact or bundle the two destinations disagree on.
 
-    A bundle is required only when it attests the bytes the release ships; see
-    :func:`attests_canonical_bytes`. A run that reconciles any name onto other
-    bytes cannot truthfully attach its own, and `verify` must not demand it.
+    Require the tag-named provenance bundle even when an earlier build supplied
+    the canonical bytes. A rebuild cannot replace that earlier attestation.
 
     Parameters
     ----------
@@ -642,10 +641,19 @@ def verify(state: State, bundles: Path) -> list[str]:
         return ["No distributions were provided for verification."]
     pypi = {name: file.sha256 for name, file in state.pypi.items()}
     problems = mismatches(names, pypi, state.github)
-    if not attests_canonical_bytes(state):
-        return problems
     missing = sorted(
         bundle.name for bundle in bundles.iterdir() if bundle.name not in state.github
     )
-    absent = (f"{name} is missing from the GitHub Release" for name in missing)
+    if not attests_canonical_bytes(state):
+        problems.append(
+            "Cannot establish matching provenance for the canonical distributions. "
+            "Recover the original attested release-dist artefact and rerun publication."
+        )
+    if not list(bundles.iterdir()):
+        problems.append("No provenance bundle was provided for verification.")
+    absent = (
+        f"Provenance bundle {name} is missing from the GitHub Release. "
+        "Recover the original attested release-dist artefact and rerun publication."
+        for name in missing
+    )
     return [*problems, *absent]

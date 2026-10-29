@@ -235,7 +235,7 @@ jobs:
             echo "Expected exactly one source distribution." >&2
             exit 1
           fi
-          if [ "${#wheels[@]}" -lt 1 ]; then
-            echo "Expected at least one wheel." >&2
+          if [ "${#wheels[@]}" -ne 1 ]; then
+            echo "Expected exactly one wheel." >&2
             exit 1
           fi
