@@ -541,8 +541,11 @@ gates with `make markdownlint` and `make spelling`.
 
 `make lint` provisions nose, then runs Ruff, both Pylint passes, ambrleaks and
 the blocking nose duplication gate. `make typecheck` runs
-`ty check falcon_pachinko tests tools`. These are the complete local and CI
-checks; they need no wrapper or second manual step.
+`ty check --extra-search-path .` against `falcon_pachinko`, `tests`, `tools`,
+and the release helpers `scripts/release_assets.py`,
+`scripts/release_assets_cli.py`, `scripts/release_version.py` and
+`scripts/release_provenance.py`. These are the complete local and CI checks;
+they need no wrapper or second manual step.
 
 Ruff is pinned at 0.16.4 via `RUFF_VERSION` in the Makefile, and the same
 version is installed in `.github/workflows/ci.yml` with
