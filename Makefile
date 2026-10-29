@@ -125,7 +125,7 @@ AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(DF12_PYTHON) \
 	--with astroid==$(ASTROID_VERSION) ambrleaks
 
 .PHONY: help all clean build build-release lint lint-pylint lint-df12 \
-	pylint-pypy-python fmt check-fmt markdownlint nixie spelling test \
+	pylint-pypy-python fmt check-fmt markdownlint nixie spelling test test-ci \
 	test-workflow-contracts check-cv005 typecheck install-nose duplication \
 	duplication-test duplication-allow mutation mutation-results \
 	$(TOOLS) $(VENV_TOOLS)
@@ -253,8 +253,11 @@ nixie: $(NIXIE) ## Validate Mermaid diagrams
 	  -not -path './.uv-tools/*' -not -path './.uv-python/*' \
 	  -print0 | xargs -0 $(NIXIE)
 
-test: build uv pytest ## Run tests
+test: build uv pytest ## Run the complete test suite
 	uv run --locked --extra examples pytest -v
+
+test-ci: build uv pytest ## Run tests after CI's dedicated lint-toolchain step
+	uv run --locked --extra examples pytest -v -m "not lint_toolchain"
 
 # Mutation testing is not a commit gate: it is slow and it is informational.
 # `.github/workflows/mutation.yml` calls the estate's reusable workflow, which

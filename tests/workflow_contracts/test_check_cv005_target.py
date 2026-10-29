@@ -154,3 +154,63 @@ def test_the_lane_runs_the_check_as_its_own_step() -> None:
     assert isinstance(steps, list), "ci.yml:lint-test must declare its steps"
     runs = [step.get("run") for step in steps if isinstance(step, dict)]
     assert "make check-cv005" in runs, "the lane must run make check-cv005"
+
+
+def test_the_lane_runs_ci_tests_before_cv005() -> None:
+    """Scenario: ``ci.yml`` runs the remaining suite after lint-toolchain.
+
+    Invariant: the locked ``make test-ci`` target runs before the CV-005 check.
+    """
+    steps = REPOSITORY.jobs("ci.yml")["lint-test"].get("steps")
+
+    assert isinstance(steps, list), "ci.yml:lint-test must declare its steps"
+    named_commands = [
+        (step.get("name"), step.get("run")) for step in steps if isinstance(step, dict)
+    ]
+    test_step = ("Run tests", "make test-ci")
+    cv005_step = ("Check the CV-005 contracts", "make check-cv005")
+    workflow_steps = [step for step in steps if isinstance(step, dict)]
+
+    assert test_step in named_commands, "the lane must run the CI test target"
+    assert cv005_step in named_commands, "the lane must run the CV-005 check"
+    assert named_commands.index(test_step) < named_commands.index(cv005_step), (
+        "the CI test target must run before the CV-005 check"
+    )
+    required_steps = [
+        next(
+            step
+            for step in workflow_steps
+            if (step.get("name"), step.get("run")) == command
+        )
+        for command in (test_step, cv005_step)
+    ]
+    for step, (name, _) in zip(required_steps, (test_step, cv005_step), strict=True):
+        assert "if" not in step, f"the {name!r} step must run unconditionally"
+        assert "continue-on-error" not in step, (
+            f"the {name!r} step must be able to fail"
+        )
+
+
+def test_local_and_ci_test_targets_keep_their_distinct_selections() -> None:
+    """Scenario: Make exposes complete local and post-marker CI test targets.
+
+    Invariant: ``test`` includes every test, while ``test-ci`` excludes only
+    the ``lint_toolchain`` marker already run as a dedicated CI step.
+    """
+    local = _make("-n", "test")
+    ci = _make("-n", "test-ci")
+
+    assert local.returncode == 0, f"make -n test must succeed: {local.stderr}"
+    assert ci.returncode == 0, f"make -n test-ci must succeed: {ci.stderr}"
+    full_command = "uv run --locked --extra examples pytest -v"
+    filtered_command = f'{full_command} -m "not lint_toolchain"'
+
+    assert full_command in local.stdout, (
+        f"make test must run the full locked suite: {local.stdout}"
+    )
+    assert "lint_toolchain" not in local.stdout, (
+        f"make test must not exclude the lint_toolchain marker: {local.stdout}"
+    )
+    assert filtered_command in ci.stdout, (
+        f"make test-ci must exclude only the lint_toolchain marker: {ci.stdout}"
+    )

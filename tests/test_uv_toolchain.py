@@ -36,7 +36,7 @@ from tests._makefile import (
     run_command,
     tool_environment,
 )
-from tests.workflow_contracts.strict_yaml import StrictLoader
+from tests.workflow_contracts.strict_yaml import load_strict_yaml
 
 if typ.TYPE_CHECKING:
     import pathlib
@@ -187,7 +187,10 @@ def test_make_test_installs_the_examples_extra() -> None:
 
 def test_main_coverage_checks_the_lock_before_the_shared_action() -> None:
     """The external main coverage action must be preceded by a lock check."""
-    workflow = yaml.load(COVERAGE_MAIN.read_text(encoding="utf-8"), Loader=StrictLoader)  # ruff: ignore[unsafe-yaml-load] - strict SafeLoader subclass
+    workflow = typ.cast(
+        "dict[str, dict[str, dict[str, list[dict[str, object]]]]]",
+        load_strict_yaml(COVERAGE_MAIN.read_text(encoding="utf-8")),
+    )
     steps = workflow["jobs"]["coverage-upload"]["steps"]
     step_names = [step.get("name") for step in steps]
 
@@ -203,6 +206,13 @@ def test_main_coverage_checks_the_lock_before_the_shared_action() -> None:
     assert steps[lock_step_index].get("run") == "uv lock --check", (
         ".github/workflows/coverage-main.yml must use `uv lock --check` "
         "for the external action's project sync"
+    )
+    lock_step = steps[lock_step_index]
+    assert "if" not in lock_step, (
+        ".github/workflows/coverage-main.yml must not skip the lock check"
+    )
+    assert "continue-on-error" not in lock_step, (
+        ".github/workflows/coverage-main.yml must let the lock check fail the job"
     )
     assert lock_step_index < coverage_step_index, (
         ".github/workflows/coverage-main.yml must check the lock before "
@@ -238,7 +248,7 @@ def test_developer_guide_has_the_authoritative_lock_policy() -> None:
     """Keep the lock-file policy in one discoverable guide subsection."""
     guide = (REPO_ROOT / "docs" / "developers-guide.md").read_text(encoding="utf-8")
 
-    assert "## Lock-file policy" in guide, (
+    assert re.search(r"^## Lock-file policy$", guide, flags=re.MULTILINE), (
         "docs/developers-guide.md must contain the authoritative "
         "`## Lock-file policy` subsection"
     )

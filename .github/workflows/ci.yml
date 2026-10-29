@@ -31,7 +31,7 @@ jobs:
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     # Ubicloud runners register as just-in-time self-hosted runners, so
     # GitHub's six-hour limit does not apply and the lane needs its own
-    # ceiling. The longest observed run of this job is 36 s; see the runner
+    # ceiling. The longest observed run of this job is 44 s; see the runner
     # placement section of the developer guide for the measurements.
     timeout-minutes: 15
     env:
@@ -123,10 +123,11 @@ jobs:
       - name: Run typechecker
         run: make typecheck
 
-      # Run the standard target so the examples extra is installed from the
-      # committed lock and example-dependent tests do not skip in CI.
+      # Keep `make test` complete for local runs. This CI target excludes the
+      # lint-toolchain marker already exercised by the dedicated step above.
+      # The examples extra still comes from the committed lock.
       - name: Run tests
-        run: make test
+        run: make test-ci
 
       # The shared CV-005 contract library holds the coverage and CodeScene shape
       # of these workflows; `make test` runs only the repository's own contracts.

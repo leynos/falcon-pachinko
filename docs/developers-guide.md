@@ -160,8 +160,15 @@ This repository commits `uv.lock` to pin one reviewed dependency release set
 for development and CI, despite the wide runtime bounds declared in
 `pyproject.toml`. This decision supersedes the floating-resolution behaviour
 recorded in issue [#83](https://github.com/leynos/falcon-pachinko/issues/83).
-The lockfile resolves the runtime dependencies, development group and
-`examples` and `testing` extras across the declared `requires-python` range.
+The [decision record](adr-002-commit-uv-lock-for-development-and-ci.md)
+explains the rationale and compatibility trade-off. The lockfile resolves the
+runtime dependencies, development group and `examples` and `testing` extras
+across the declared `requires-python` range.
+
+Routine CI validates the reviewed lockfile release set, rather than every
+Falcon release allowed by `>=4,<5`. Grouped Dependabot updates provide the
+reviewed path for newer releases; their pull requests run locked CI. Published
+distributions still expose the declared ranges to consumers.
 
 Use `make build` to install the development environment. Its equivalent direct
 command is:
@@ -191,9 +198,10 @@ lockfile makes the command fail rather than silently resolving a different
 release set. CI uses `--locked` for project-environment commands, fails when
 the lock is stale and never regenerates it. The main coverage lane runs
 `uv lock --check` before its pinned shared coverage action, whose project sync
-is maintained outside this repository. `make test` requests the `examples`
-extra in its locked `uv run` command, so tests that need the example-only
-`aiosqlite` dependency run instead of being skipped.
+is maintained outside this repository. `make test` runs the complete suite and
+requests the `examples` extra in its locked `uv run` command. After the CI lane
+runs the dedicated `lint_toolchain` step, it uses `make test-ci` to avoid
+running those integration tests twice while keeping them in the local suite.
 
 ### Refreshing the lockfile
 

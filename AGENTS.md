@@ -69,9 +69,10 @@ When implementing changes, adhere to the following testing procedures:
   `dev` dependency group, synced from the committed `uv.lock`
   (`uv sync --group dev --locked`). The `examples` and `testing` extras are
   optional; install them only when needed. Use the `examples` extra with
-  `uv sync --extra examples --locked` to run example programs and tests that
-  use example-only dependencies such as `aiosqlite`. Use the `testing` extra
-  with `uv sync --extra testing --locked`. See the Developer Guide's
+  `uv sync --group dev --extra examples --locked` to run example programs and
+  tests that use example-only dependencies such as `aiosqlite`. Use the
+  `testing` extra with `uv sync --group dev --extra testing --locked`. See the
+  Developer Guide's
   [lock-file policy](docs/developers-guide.md#lock-file-policy). Prefer Make
   targets over invoking tools directly. When editing `Makefile`, run
   `mbake validate Makefile` to confirm the syntax is correct. `make build`

@@ -30,7 +30,7 @@ import typing as typ
 
 import yaml
 
-from .strict_yaml import StrictLoader
+from .strict_yaml import load_strict_yaml
 
 #: Repository root, three levels above this file.
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -274,7 +274,7 @@ class WorkflowSource:
         """
         text = self.text(path)
         try:
-            return yaml.load(text, Loader=StrictLoader)  # ruff: ignore[unsafe-yaml-load] - strict SafeLoader subclass
+            return load_strict_yaml(text)
         except yaml.YAMLError as error:
             raise UnparsableWorkflowError(subject) from error
 
