@@ -1,329 +1,38 @@
-"""Enforce project uv lock use in Make and CI commands."""
+"""Enforce project-lock use at repository command boundaries.
+
+The scanner parses Make recipes and GitHub Actions ``run:`` scripts, including
+shell command boundaries, prefixes and uv option arity. It flags project
+``uv run`` and ``uv sync`` commands without ``--locked`` while leaving
+``--no-project`` runs and isolated ``uv tool``, ``uvx`` and ``uv build``
+environments outside the project lock. ``tests/test_uv_toolchain.py`` checks
+lock tracking and contributor guidance.
+"""
 
 from __future__ import annotations
 
-import re
-import shlex
-
 import pytest
 import yaml
+from hypothesis import given
+from hypothesis import strategies as st
 
 from tests._makefile import MAKEFILE, REPO_ROOT
-
-MAKE_VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-MAKE_VARIABLE_EXPANSION = re.compile(r"\$\((?!UV\))[A-Za-z_][A-Za-z0-9_]*\)")
-SHELL_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-SHELL_COMMAND_PREFIXES = frozenset({
-    "command",
-    "do",
-    "else",
-    "env",
-    "exec",
-    "if",
-    "then",
-    "!",
-})
-MAKE_ASSIGNMENT_OPERATORS = frozenset({"=", "?=", ":=", "+=", "!=", "::="})
-# Keep global option arity aligned with `uv --help`; their values must not be
-# mistaken for the command whose arguments no longer belong to uv.
-UV_GLOBAL_OPTIONS_WITH_VALUES = frozenset({
-    "--allow-insecure-host",
-    "--cache-dir",
-    "--color",
-    "--config-file",
-    "--directory",
-    "--project",
-})
-UV_GLOBAL_FLAGS = frozenset({
-    "--managed-python",
-    "--no-cache",
-    "--no-config",
-    "--no-managed-python",
-    "--no-progress",
-    "--no-python-downloads",
-    "--offline",
-    "--quiet",
-    "--system-certs",
-    "--verbose",
-    "-n",
-})
-UV_REPEATED_OUTPUT_OPTIONS = re.compile(r"^-(?:q+|v+)$")
-# Keep option arity aligned with `uv run --help`: their values must not be
-# mistaken for the command whose arguments no longer belong to uv.
-UV_RUN_OPTIONS_WITH_VALUES = frozenset({
-    "--extra",
-    "--no-extra",
-    "--group",
-    "--no-group",
-    "--only-group",
-    "--no-editable-package",
-    "--env-file",
-    "--with",
-    "-w",
-    "--with-editable",
-    "--with-requirements",
-    "--package",
-    "--python-platform",
-    "--index",
-    "--default-index",
-    "--index-url",
-    "-i",
-    "--extra-index-url",
-    "--find-links",
-    "-f",
-    "--index-strategy",
-    "--keyring-provider",
-    "--upgrade-package",
-    "-P",
-    "--upgrade-group",
-    "--resolution",
-    "--prerelease",
-    "--prerelease-package",
-    "--fork-strategy",
-    "--exclude-newer",
-    "--exclude-newer-package",
-    "--reinstall-package",
-    "--link-mode",
-    "--config-setting",
-    "-C",
-    "--config-settings-package",
-    "--no-build-isolation-package",
-    "--no-build-package",
-    "--no-binary-package",
-    "--cache-dir",
-    "--refresh-package",
-    "--python",
-    "-p",
-    "--allow-insecure-host",
-    "--color",
-    "--directory",
-    "--project",
-    "--config-file",
-})
-
-
-def _logical_lines(text: str) -> list[tuple[int, str]]:
-    """Return source lines joined across shell or Make continuations.
-
-    Returns
-    -------
-    list of tuple of int and str
-        Logical lines paired with their one-based starting line numbers.
-    """
-    logical_lines: list[tuple[int, str]] = []
-    fragments: list[str] = []
-    start_line = 1
-
-    for line_number, line in enumerate(text.splitlines(), start=1):
-        if not fragments and line.lstrip().startswith("#"):
-            continue
-        if not fragments:
-            start_line = line_number
-        stripped = line.rstrip()
-        continues = stripped.endswith("\\")
-        fragments.append(stripped[:-1].strip() if continues else line.strip())
-        if not continues:
-            logical_lines.append((start_line, " ".join(fragments)))
-            fragments = []
-
-    if fragments:
-        logical_lines.append((start_line, " ".join(fragments)))
-    return logical_lines
-
-
-def _run_step_scripts(document: object) -> list[str]:
-    """Collect ``run:`` script values from a parsed workflow document."""
-    scripts: list[str] = []
-
-    def visit(value: object) -> None:
-        match value:
-            case dict():
-                run_script = value.get("run")
-                match run_script:
-                    case str() as script:
-                        scripts.append(script)
-                    case _:
-                        pass
-                for child in value.values():
-                    visit(child)
-            case list():
-                for child in value:
-                    visit(child)
-            case _:
-                return
-
-    visit(document)
-    return scripts
-
-
-def _shell_commands(line: str) -> list[list[str]]:
-    """Split a logical shell line at command separators.
-
-    Returns
-    -------
-    list of list of str
-        Shell command token groups, with separators removed.
-    """
-    lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|")
-    lexer.whitespace_split = True
-    commands: list[list[str]] = []
-    current: list[str] = []
-
-    for token in lexer:
-        if token and all(character in ";&|" for character in token):
-            if current:
-                commands.append(current)
-                current = []
-        else:
-            current.append(token)
-
-    if current:
-        commands.append(current)
-    return commands
-
-
-def _normalise_make_command(command: list[str], *, is_makefile: bool) -> list[str]:
-    """Remove Make's recipe marker and variable assignment prefix."""
-    tokens = command.copy()
-    if tokens:
-        tokens[0] = tokens[0].removeprefix("@")
-    if not is_makefile:
-        return tokens
-
-    try:
-        name, operator, *recipe = tokens
-    except ValueError:
-        return tokens
-    if MAKE_VARIABLE.fullmatch(name) and operator in MAKE_ASSIGNMENT_OPERATORS:
-        return recipe
-    return tokens
-
-
-def _uv_subcommand_index(tokens: list[str], *, is_makefile: bool) -> int | None:
-    """Return the run or sync index after uv and its global options."""
-    invocation = _uv_executable_index(tokens, is_makefile=is_makefile)
-    if invocation is None:
-        return None
-    return _uv_project_subcommand_index(tokens, invocation + 1)
-
-
-def _uv_executable_index(tokens: list[str], *, is_makefile: bool) -> int | None:
-    """Return the uv token after shell prefixes, if present."""
-    invocation = 0
-    while invocation < len(tokens) and _is_command_prefix(
-        tokens[invocation], is_makefile=is_makefile
-    ):
-        invocation += 1
-    if invocation < len(tokens) and tokens[invocation] in {"uv", "$(UV)"}:
-        return invocation
-    return None
-
-
-def _uv_project_subcommand_index(tokens: list[str], index: int) -> int | None:
-    """Return the project subcommand after recognized uv global options."""
-    subcommand_index = index
-    while subcommand_index < len(tokens):
-        option = tokens[subcommand_index]
-        if not option.startswith("-"):
-            break
-        option_arity = _uv_global_option_arity(option)
-        if option_arity is None:
-            return None
-        subcommand_index += option_arity
-
-    if subcommand_index < len(tokens) and tokens[subcommand_index] in {"run", "sync"}:
-        return subcommand_index
-    return None
-
-
-def _uv_global_option_arity(option: str) -> int | None:
-    """Return how many tokens a recognized global option consumes."""
-    name, separator, _ = option.partition("=")
-    if name in UV_GLOBAL_OPTIONS_WITH_VALUES:
-        return 1 if separator else 2
-    if not separator and name in UV_GLOBAL_FLAGS:
-        return 1
-    if UV_REPEATED_OUTPUT_OPTIONS.fullmatch(option):
-        return 1
-    return None
-
-
-def _is_command_prefix(token: str, *, is_makefile: bool) -> bool:
-    """Return whether a shell token precedes the invoked command."""
-    return (
-        token in SHELL_COMMAND_PREFIXES
-        or SHELL_ASSIGNMENT.match(token) is not None
-        or (is_makefile and MAKE_VARIABLE_EXPANSION.fullmatch(token) is not None)
-    )
-
-
-def _is_unlocked_project_command(command: list[str], *, is_makefile: bool) -> bool:
-    """Return whether one project invocation omits its lock enforcement.
-
-    Returns
-    -------
-    bool
-        Whether the project command's uv option prefix omits ``--locked``.
-    """
-    tokens = _normalise_make_command(command, is_makefile=is_makefile)
-    subcommand_index = _uv_subcommand_index(tokens, is_makefile=is_makefile)
-    if subcommand_index is None:
-        return False
-
-    subcommand = tokens[subcommand_index]
-    arguments = tokens[subcommand_index + 1 :]
-    match subcommand:
-        case "sync":
-            return "--locked" not in arguments
-        case "run":
-            uv_options = _uv_run_options_before_command(arguments)
-            return "--locked" not in uv_options and "--no-project" not in uv_options
-        case _:
-            return False
-
-
-def _uv_run_options_before_command(arguments: list[str]) -> list[str]:
-    """Return uv run options before its invoked command.
-
-    Returns
-    -------
-    list of str
-        Option names passed to uv before the command boundary.
-    """
-    options: list[str] = []
-    index = 0
-
-    while index < len(arguments):
-        argument = arguments[index]
-        if argument == "--":
-            break
-        if not argument.startswith("-"):
-            break
-        option = argument.partition("=")[0]
-        options.append(option)
-        takes_value = option in UV_RUN_OPTIONS_WITH_VALUES and "=" not in argument
-        index += 2 if takes_value else 1
-
-    return options
-
-
-def _unlocked_project_commands(
-    text: str, *, is_makefile: bool = False
-) -> list[tuple[int, str]]:
-    """Return project ``uv run`` or ``uv sync`` lines lacking ``--locked``."""
-    return [
-        (line_number, " ".join(command))
-        for line_number, line in _logical_lines(text)
-        for command in _shell_commands(line)
-        if _is_unlocked_project_command(command, is_makefile=is_makefile)
-    ]
+from tests._uv_command_scanner import (
+    ShellCommandSyntaxError,
+    _run_step_scripts,
+    _unlocked_project_commands,
+)
+from tests.workflow_contracts.strict_yaml import StrictLoader
 
 
 def test_makefile_project_commands_require_the_lockfile() -> None:
     """Project commands in Make must reject a stale dependency lock."""
-    violations = _unlocked_project_commands(
-        MAKEFILE.read_text(encoding="utf-8"), is_makefile=True
-    )
+    try:
+        violations = _unlocked_project_commands(
+            MAKEFILE.read_text(encoding="utf-8"), is_makefile=True
+        )
+    except ValueError as error:
+        message = f"Makefile: {error}"
+        raise ShellCommandSyntaxError(message) from error
 
     assert not violations, "Makefile project commands must use --locked:\n" + "\n".join(
         f"Makefile:{line_number}: {command}" for line_number, command in violations
@@ -349,9 +58,16 @@ def test_ci_run_steps_require_the_project_lockfile() -> None:
 
     for path in [*workflow_files, *action_files]:
         source = path.read_text(encoding="utf-8")
-        scripts = _run_step_scripts(yaml.safe_load(source))
+        document = yaml.load(source, Loader=StrictLoader)  # ruff: ignore[unsafe-yaml-load] - strict SafeLoader subclass
+        scripts = _run_step_scripts(document)
         for script in scripts:
-            for _, command in _unlocked_project_commands(script):
+            try:
+                commands = _unlocked_project_commands(script)
+            except ValueError as error:
+                location = path.relative_to(REPO_ROOT)
+                message = f"{location}: {error}"
+                raise ShellCommandSyntaxError(message) from error
+            for _, command in commands:
                 violations.append(f"{path.relative_to(REPO_ROOT)}: {command}")
 
     assert not violations, (
@@ -389,6 +105,17 @@ def test_ci_run_steps_require_the_project_lockfile() -> None:
             [(1, "env UV_PYTHON=3.13 uv run pytest")],
         ),
         ("env UV_PYTHON=3.13 uv run --locked pytest", []),
+        (
+            "env -u UV_CACHE_DIR uv sync",
+            [(1, "env -u UV_CACHE_DIR uv sync")],
+        ),
+        (
+            "env --unset UV_CACHE_DIR uv sync",
+            [(1, "env --unset UV_CACHE_DIR uv sync")],
+        ),
+        ("env --ignore-environment --unset=UV_CACHE_DIR uv sync --locked", []),
+        ("uv --no-cache-dir run pytest", [(1, "uv --no-cache-dir run pytest")]),
+        ("uv --no-cache-dir run --locked pytest", []),
         ("uv tool run ruff && uvx ruff && uv build", []),
         ("echo ready # uv sync", []),
         ('echo "uv sync"', []),
@@ -404,4 +131,86 @@ def test_ci_command_contract_checks_each_shell_invocation(
         "each project command must independently use --locked, while "
         "tooling and no-project calls stay outside the project lock; "
         f"expected {expected!r}, got {violations!r}"
+    )
+
+
+@given(
+    command_prefix=st.sampled_from([
+        (),
+        ("env", "UV_CACHE_DIR=cache"),
+        ("env", "-u", "UV_CACHE_DIR"),
+        ("UV_PYTHON=3.13",),
+    ]),
+    global_options=st.lists(
+        st.sampled_from([
+            ("--no-cache-dir",),
+            ("--cache-dir", "cache"),
+            ("--verbose",),
+        ]),
+        max_size=3,
+    ),
+    run_options=st.lists(
+        st.sampled_from([
+            ("--extra", "examples"),
+            ("--with", "mutmut"),
+            ("--python", "3.13"),
+        ]),
+        max_size=3,
+    ),
+    separator=st.sampled_from(("&&", ";", "||")),
+)
+def test_command_scanner_finds_unlocked_run_across_supported_prefixes(
+    command_prefix: tuple[str, ...],
+    global_options: list[tuple[str, ...]],
+    run_options: list[tuple[str, ...]],
+    separator: str,
+) -> None:
+    """Supported prefixes and option arities must not hide an unlocked run."""
+    command_tokens = [
+        *command_prefix,
+        "uv",
+        *(token for option in global_options for token in option),
+        "run",
+        *(token for option in run_options for token in option),
+        "pytest",
+    ]
+    unlocked_command = " ".join(command_tokens)
+    script = f"uv run --locked pytest {separator} {unlocked_command}"
+
+    assert _unlocked_project_commands(script) == [(1, unlocked_command)], (
+        "the command scanner must find an unlocked uv run after supported "
+        f"prefixes and option combinations in {script!r}"
+    )
+
+
+def test_command_scanner_skips_heredoc_bodies() -> None:
+    """Heredoc text is data, and commands after its delimiter remain visible."""
+    script = "cat <<'EOF'\nDon't run uv sync\nEOF\nuv run pytest"
+
+    assert _unlocked_project_commands(script) == [(4, "uv run pytest")], (
+        "heredoc content must not be tokenized as a shell command, and the "
+        "scanner must continue after the closing delimiter"
+    )
+
+
+def test_command_scanner_keeps_multiline_quoted_text_as_one_argument() -> None:
+    """Quoted text may span lines without hiding a later command."""
+    script = 'python -c "\nuv sync\n" && uv run pytest'
+
+    assert _unlocked_project_commands(script) == [(1, "uv run pytest")], (
+        "a multiline quoted argument must remain data while following shell "
+        "commands are still checked"
+    )
+
+
+def test_command_scanner_reports_unbalanced_quotes_with_the_source_line() -> None:
+    """Malformed shell input must identify the line that could not be parsed."""
+    with pytest.raises(ShellCommandSyntaxError, match="echo 'unfinished") as exc_info:
+        _unlocked_project_commands("echo 'unfinished")
+
+    assert "echo 'unfinished" in str(exc_info.value), (
+        "an unbalanced-quote diagnostic must include the offending shell line"
+    )
+    assert "line 1" in str(exc_info.value), (
+        "an unbalanced-quote diagnostic must include its logical line number"
     )

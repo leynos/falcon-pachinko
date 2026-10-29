@@ -254,7 +254,7 @@ nixie: $(NIXIE) ## Validate Mermaid diagrams
 	  -print0 | xargs -0 $(NIXIE)
 
 test: build uv pytest ## Run tests
-	uv run --locked pytest -v
+	uv run --locked --extra examples pytest -v
 
 # Mutation testing is not a commit gate: it is slow and it is informational.
 # `.github/workflows/mutation.yml` calls the estate's reusable workflow, which

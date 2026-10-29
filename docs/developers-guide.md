@@ -170,12 +170,20 @@ command is:
 uv sync --group dev --locked
 ```
 
-When an optional extra is needed, install it with the development group and the
-lockfile:
+Each locked sync is exact: it removes extras not named in that command. When an
+environment needs only one optional extra, sync it with the development group
+and the lockfile:
 
 ```sh
 uv sync --group dev --extra examples --locked
 uv sync --group dev --extra testing --locked
+```
+
+These are alternatives, not cumulative installs. When both extras are needed,
+request them together:
+
+```sh
+uv sync --group dev --extra examples --extra testing --locked
 ```
 
 `--locked` requires the lockfile to match `pyproject.toml`; a stale or missing
@@ -183,7 +191,9 @@ lockfile makes the command fail rather than silently resolving a different
 release set. CI uses `--locked` for project-environment commands, fails when
 the lock is stale and never regenerates it. The main coverage lane runs
 `uv lock --check` before its pinned shared coverage action, whose project sync
-is maintained outside this repository.
+is maintained outside this repository. `make test` requests the `examples`
+extra in its locked `uv run` command, so tests that need the example-only
+`aiosqlite` dependency run instead of being skipped.
 
 ### Refreshing the lockfile
 
@@ -768,10 +778,10 @@ families remain visible. The initial report selected only `__init__.py`,
 
 `make build` installs the `dev` dependency group with
 `uv sync --group dev --locked`; it does not install the optional `examples`
-extra. Run `uv sync --group dev --extra examples --locked` before running
-example programs or tests that require example-only dependencies such as
-`aiosqlite`. See the [lock-file policy](#lock-file-policy) for the installation
-and refresh rules.
+extra. `make test` requests that extra when it runs pytest. Before running an
+example program or a direct test command that needs example-only dependencies
+such as `aiosqlite`, use `uv sync --group dev --extra examples --locked`. See
+the [lock-file policy](#lock-file-policy) for how exact syncs select extras.
 
 The detector runs `syntax,semantic,near`, with a minimum of 24 intermediate-
 language tokens, `surface = "all"`, and a top-30 ranked-family limit. `all`
@@ -919,17 +929,18 @@ The `[tool.mutmut]` section in `pyproject.toml` is the whole configuration:
   `docs/users-guide.md` relative to its copied file.
 - **`pytest_add_cli_args_test_selection`** names the three test trees the run
   uses: `tests/`, `falcon_pachinko/unittests/` and `falcon_pachinko/behaviour/`.
-- **`pytest_add_cli_args`** drops four modules and one marker.
+- **`pytest_add_cli_args`** drops five test paths and one marker.
   `--ignore=tests/workflow_contracts`,
-  `--ignore=tests/test_toolchain_versions.py` and
-  `--ignore=tests/test_uv_toolchain.py` are repository-tooling contracts that
-  read `.github/workflows/`, `Makefile`, `uv.lock`, `pylintrc-df12.toml` and
-  `.markdownlint-cli2.jsonc` — none of which mutmut copies into `mutants/`, so
-  all three fail the baseline there. They say nothing about
-  `falcon_pachinko/`'s behaviour, so excluding them costs the mutation score
-  nothing. `--ignore=tests/test_release_archives.py` excludes the distribution
-  archive test, which builds with `uv` and installs a wheel in a fresh virtual
-  environment that the `mutants/` tree cannot support.
+  `--ignore=tests/test_toolchain_versions.py`,
+  `--ignore=tests/test_uv_toolchain.py` and
+  `--ignore=tests/test_uv_command_contracts.py` are repository-tooling
+  contracts that read `.github/workflows/`, `.github/actions/`, `Makefile`,
+  `uv.lock`, `pylintrc-df12.toml` and `.markdownlint-cli2.jsonc` — none of
+  which mutmut copies into `mutants/`, so all four fail the baseline there.
+  They say nothing about `falcon_pachinko/`'s behaviour, so excluding them
+  costs the mutation score nothing. `--ignore=tests/test_release_archives.py`
+  excludes the distribution archive test, which builds with `uv` and installs a
+  wheel in a fresh virtual environment that the `mutants/` tree cannot support.
   `-m "not lint_toolchain"` drops the tests that provision a PyPy interpreter
   and reach the network; `-p no:cacheprovider` keeps the run from writing a
   cache into the copied tree. Mutmut has no `runner` key in 3.6.0, so these
