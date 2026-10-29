@@ -36,6 +36,7 @@ from tests._makefile import (
     run_command,
     tool_environment,
 )
+from tests.workflow_contracts.strict_yaml import StrictLoader
 
 if typ.TYPE_CHECKING:
     import pathlib
@@ -174,9 +175,19 @@ def test_make_build_installs_the_locked_dependency_set() -> None:
     )
 
 
+def test_make_test_installs_the_examples_extra() -> None:
+    """The standard test target must run example-only tests instead of skipping."""
+    recipe = makefile_recipe("test")
+
+    assert "uv run --locked --extra examples pytest -v" in recipe, (
+        "make test must request the examples extra for tests that need "
+        f"aiosqlite; its recipe is:\n{recipe}"
+    )
+
+
 def test_main_coverage_checks_the_lock_before_the_shared_action() -> None:
     """The external main coverage action must be preceded by a lock check."""
-    workflow = yaml.safe_load(COVERAGE_MAIN.read_text(encoding="utf-8"))
+    workflow = yaml.load(COVERAGE_MAIN.read_text(encoding="utf-8"), Loader=StrictLoader)  # ruff: ignore[unsafe-yaml-load] - strict SafeLoader subclass
     steps = workflow["jobs"]["coverage-upload"]["steps"]
     step_names = [step.get("name") for step in steps]
 
