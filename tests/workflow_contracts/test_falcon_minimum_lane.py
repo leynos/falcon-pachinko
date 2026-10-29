@@ -57,6 +57,11 @@ def _project_falcon_lower_bound() -> str:
     if requirement is None:
         message = "pyproject.toml must declare a Falcon dependency"
         raise ValueError(message)
+    return _normalise_falcon_lower_bound(requirement)
+
+
+def _normalise_falcon_lower_bound(requirement: Requirement) -> str:
+    """Select the strongest lower bound and pad its release to three parts."""
     lower_bounds = [
         Version(bound.version)
         for bound in requirement.specifier
@@ -72,24 +77,29 @@ def _project_falcon_lower_bound() -> str:
 
 def _command_groups(run: str) -> list[CommandLine]:
     """Split a run script into commands and retain their following operators."""
-    groups: list[CommandLine] = []
     continued = run.replace("\\\n", " ")
-    for line in continued.splitlines():
-        lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|")
-        lexer.whitespace_split = True
-        tokens = list(lexer)
-        current: list[str] = []
-        for token in tokens:
-            if token and all(character in ";&|" for character in token):
-                if current:
-                    groups.append((tuple(current), token))
-                    current = []
-            elif token in {"then", "do"} and not current:
-                continue
-            else:
-                current.append(token)
-        if current:
-            groups.append((tuple(current), None))
+    return [
+        group for line in continued.splitlines() for group in _line_command_groups(line)
+    ]
+
+
+def _line_command_groups(line: str) -> list[CommandLine]:
+    """Split one shell line while preserving operators and quoted arguments."""
+    lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|")
+    lexer.whitespace_split = True
+    groups: list[CommandLine] = []
+    current: list[str] = []
+    for token in lexer:
+        if token and not token.strip(";&|"):
+            if current:
+                groups.append((tuple(current), token))
+                current = []
+            continue
+        if token in {"then", "do"} and not current:
+            continue
+        current.append(token)
+    if current:
+        groups.append((tuple(current), None))
     return groups
 
 
@@ -159,14 +169,14 @@ def _pytest_command(command: CommandGroup) -> bool:
 
 def _unsafe_environment_command(command: CommandGroup) -> bool:
     """Report a command that can replace the Falcon override with the lockfile."""
-    if command and command[0] == "make":
+    if _is_command(command, "make"):
         return True
     if _is_command(command, "uv", "pip", "install"):
         return any("falcon==" in argument.casefold() for argument in command[3:])
-    if not _is_command(command, "uv") or len(command) < 2:
-        return False
-    return command[1] == "sync" or (
-        command[1] == "run" and ("--no-sync" not in command or "make" in command[2:])
+    if _is_command(command, "uv", "sync"):
+        return True
+    return _is_command(command, "uv", "run") and (
+        "--no-sync" not in command or "make" in command[2:]
     )
 
 
@@ -481,3 +491,57 @@ def test_a_minimal_valid_minimum_lane_has_no_violations(
     assert not falcon_minimum_lane_violations(source), (
         "a valid temporary lower-bound lane must satisfy the contract"
     )
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        (
+            'echo "a;b" || true',
+            [(("echo", "a;b"), "||"), (("true",), None)],
+        ),
+        (
+            "then uv sync && echo done",
+            [(("uv", "sync"), "&&"), (("echo", "done"), None)],
+        ),
+        (
+            "echo ready | tee log &",
+            [(("echo", "ready"), "|"), (("tee", "log"), "&")],
+        ),
+    ],
+    ids=["quoted-separator", "control-keyword", "pipe-and-background"],
+)
+def test_shell_line_commands_preserve_operators(
+    line: str, expected: list[CommandLine]
+) -> None:
+    """Quoted punctuation stays in arguments and shell operators stay attached."""
+    assert _line_command_groups(line) == expected, f"incorrect shell grouping: {line}"
+
+
+def test_shell_commands_join_continuations_and_keep_lines_separate() -> None:
+    """A continued command and the following line remain distinct commands."""
+    expected = [
+        (("uv", "run", "--no-sync", "pytest", "-v"), None),
+        (("printf", "a;b"), None),
+    ]
+    assert (
+        _command_groups("uv run \\\n --no-sync pytest -v\nprintf 'a;b'") == expected
+    ), "continuations must join without joining separate shell lines"
+
+
+@pytest.mark.parametrize(
+    ("specifier", "expected"),
+    [("falcon>=4,<5", "4.0.0"), ("falcon>=4,>=4.0.1,<5", "4.0.1")],
+    ids=["short-release", "strongest-lower-bound"],
+)
+def test_falcon_lower_bound_normalisation(specifier: str, expected: str) -> None:
+    """The strongest declared lower bound is padded to three release parts."""
+    assert _normalise_falcon_lower_bound(Requirement(specifier)) == expected, (
+        f"incorrect Falcon lower bound for {specifier}"
+    )
+
+
+def test_falcon_lower_bound_requires_a_lower_specifier() -> None:
+    """An upper bound alone cannot define the minimum CI version."""
+    with pytest.raises(ValueError, match="Falcon dependency has no lower bound"):
+        _normalise_falcon_lower_bound(Requirement("falcon<5"))
