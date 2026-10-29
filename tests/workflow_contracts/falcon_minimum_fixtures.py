@@ -369,3 +369,12 @@ VERSION_CHECK_PROGRAMS: typ.Final[tuple[str, ...]] = (
         "sys.exit(0 if actual == expected else 1)"
     ),
 )
+
+
+SHELL_STATE_CASES = [
+    ("'", "", False, ("'", False)),
+    ("\\", "'", False, ("'", False)),
+    ("\\", '"', False, ('"', True)),
+    ('"', '"', True, ('"', False)),
+    ('"', '"', False, ("", False)),
+]

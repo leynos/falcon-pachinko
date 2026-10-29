@@ -23,6 +23,7 @@ from .falcon_minimum_fixtures import (
     MINIMUM_JOB,
     NEWEST_JOB,
     REGRESSION_MUTATIONS,
+    SHELL_STATE_CASES,
     VERSION_CHECK_PROGRAMS,
     _command_step,
     valid_workflow,
@@ -676,20 +677,23 @@ def test_invalid_metadata_is_reported(tmp_path: pathlib.Path, content: bytes) ->
 
 @given(
     st.lists(
-        st.tuples(st.integers(0, 9), st.integers(0, 9), st.integers(0, 9)),
+        st.tuples(
+            st.sampled_from([">", ">="]),
+            st.lists(st.integers(0, 9), min_size=1, max_size=3),
+        ),
         min_size=1,
         max_size=5,
     )
 )
 def test_generated_lower_bounds_choose_the_strongest(
-    bounds: list[tuple[int, int, int]],
+    bounds: list[tuple[str, list[int]]],
 ) -> None:
     """Multiple generated lower bounds select the strongest release."""
     specifier = "falcon" + ",".join(
-        ">=" + ".".join(map(str, bound)) for bound in bounds
+        operator + ".".join(map(str, release)) for operator, release in bounds
     )
     assert _normalise_falcon_lower_bound(Requirement(specifier)) == ".".join(
-        map(str, max(bounds))
+        map(str, max(tuple([*release, 0, 0][:3]) for _, release in bounds))
     ), f"incorrect generated lower bound: {bounds}"
 
 
@@ -781,13 +785,7 @@ def test_quoted_and_escaped_operators_are_protected() -> None:
 
 @pytest.mark.parametrize(
     "case",
-    [
-        ("'", "", False, ("'", False)),
-        ("\\", "'", False, ("'", False)),
-        ("\\", '"', False, ('"', True)),
-        ('"', '"', True, ('"', False)),
-        ('"', '"', False, ("", False)),
-    ],
+    SHELL_STATE_CASES,
     ids=["open", "single-quoted-backslash", "escape", "escaped-quote", "close"],
 )
 def test_shell_quote_state_tracks_escapes_and_quotes(
