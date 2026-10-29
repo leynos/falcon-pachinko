@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import collections.abc as cabc
-import itertools
 import shlex
 import tomllib
 import typing as typ
@@ -67,16 +66,15 @@ def _normalise_falcon_lower_bound(requirement: Requirement) -> str:
     if not lower_bounds:
         message = "Falcon dependency has no lower bound"
         raise ValueError(message)
-    release = max(lower_bounds).release
-    return ".".join(str(component) for component in (*release, 0, 0)[:3])
+    return ".".join(
+        str(component) for component in (*max(lower_bounds).release, 0, 0)[:3]
+    )
 
 
 def _command_groups(run: str) -> list[CommandLine]:
     """Split a run script into commands and retain their following operators."""
-    continued = run.replace("\\\n", " ")
-    return [
-        group for line in continued.splitlines() for group in _line_command_groups(line)
-    ]
+    lines = run.replace("\\\n", " ").splitlines()
+    return [group for line in lines for group in _line_command_groups(line)]
 
 
 def _next_shell_state(char: str, quote: str, *, escaped: bool) -> tuple[str, bool]:
@@ -98,9 +96,13 @@ def _protect_quoted_operators(line: str) -> str:
     protected = []
     quote = ""
     escaped = False
+    word_started = False
     replacements = str.maketrans(";&|#", "\ue000\ue001\ue002\ue003")
     for char in line:
-        marked = char.translate(replacements) if quote or escaped else char
+        protect = quote or escaped or (char == "#" and word_started)
+        marked = char.translate(replacements) if protect else char
+        if not quote and not escaped:
+            word_started = not (char.isspace() or char in ";&|")
         quote, escaped = _next_shell_state(char, quote, escaped=escaped)
         protected.append(marked)
     return "".join(protected)
@@ -112,10 +114,9 @@ def _line_command_groups(line: str) -> list[CommandLine]:
         _protect_quoted_operators(line), posix=True, punctuation_chars=";&|"
     )
     lexer.whitespace_split = True
-    lexer.commenters = ""
     groups: list[CommandLine] = []
     current: list[str] = []
-    for token in itertools.takewhile(lambda item: not item.startswith("#"), lexer):
+    for token in lexer:
         if token and not token.strip(";&|"):
             if current:
                 groups.append((tuple(current), token))
@@ -597,7 +598,7 @@ def test_a_minimal_valid_minimum_lane_has_no_violations(
             "echo ready | tee log &",
             [(("echo", "ready"), "|"), (("tee", "log"), "&")],
         ),
-        ("echo a#b '#' # comment", [(("echo", "a#b", "#"), None)]),
+        ("echo a#b '#' ''# \\# # comment", [(("echo", "a#b", "#", "#", "#"), None)]),
     ],
     ids=["quoted-separator", "control-keyword", "pipe-and-background", "hash-comments"],
 )
