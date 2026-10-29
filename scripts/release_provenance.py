@@ -104,9 +104,11 @@ def has_matching_subject(document: object, name: str, digest: str) -> bool:
     >>> has_matching_subject([record], "package.whl", digest)
     True
     """
-    if not isinstance(document, list) or not document:
-        return False
-    return any(_result_matches(result, name, digest) for result in document)
+    match document:
+        case list() as results:
+            return any(_result_matches(result, name, digest) for result in results)
+        case _:
+            return False
 
 
 def require_matching_record(record_path: pth.Path, name: str, digest: str) -> None:
@@ -136,28 +138,32 @@ def require_matching_record(record_path: pth.Path, name: str, digest: str) -> No
 
 
 def _result_matches(result: object, name: str, digest: str) -> bool:
-    """Check one verification result for a matching subject."""
-    # Each untrusted JSON layer must pass an explicit type check before lookup.
-    if not isinstance(result, dict):
-        return False
-    verification = result.get("verificationResult")
-    if not isinstance(verification, dict):
-        return False
-    statement = verification.get("statement")
-    if not isinstance(statement, dict):
-        return False
-    subjects = statement.get("subject")
-    if not isinstance(subjects, list):
-        return False
-    return any(_subject_matches(subject, name, digest) for subject in subjects)
+    """Check one verifier envelope for a matching statement."""
+    match result:
+        case {"verificationResult": {"statement": statement} as verification} if (
+            isinstance(result, dict) and isinstance(verification, dict)
+        ):
+            return _statement_matches(statement, name, digest)
+        case _:
+            return False
+
+
+def _statement_matches(statement: object, name: str, digest: str) -> bool:
+    """Check the JSON statement's subject list without accepting other mappings."""
+    match statement:
+        case {"subject": list() as subjects} if isinstance(statement, dict):
+            return any(_subject_matches(subject, name, digest) for subject in subjects)
+        case _:
+            return False
 
 
 def _subject_matches(subject: object, name: str, digest: str) -> bool:
     """Check one statement subject's exact filename and SHA-256."""
-    if not isinstance(subject, dict) or subject.get("name") != name:
-        return False
-    subject_digest = subject.get("digest")
-    if not isinstance(subject_digest, dict):
-        return False
-    sha256 = subject_digest.get("sha256")
-    return isinstance(sha256, str) and sha256.lower() == digest.lower()
+    match subject:
+        case {
+            "name": subject_name,
+            "digest": {"sha256": str() as sha256} as subject_digest,
+        } if isinstance(subject, dict) and isinstance(subject_digest, dict):
+            return subject_name == name and sha256.lower() == digest.lower()
+        case _:
+            return False

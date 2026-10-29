@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import types
 import typing as typ
 
 import pytest
@@ -63,6 +64,70 @@ def test_unstructured_verification_cannot_authorize_a_carry(document: object) ->
     """Every JSON layer must have the verifier's expected structure."""
     assert not has_matching_subject(document, "package.whl", "a" * 64), (
         "malformed verification records cannot authorize carried bytes"
+    )
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        tuple(_record()),
+        [types.MappingProxyType(_record()[0])],
+        [
+            {
+                "verificationResult": types.MappingProxyType({
+                    "statement": {
+                        "subject": [
+                            {"name": "package.whl", "digest": {"sha256": "a" * 64}}
+                        ]
+                    }
+                })
+            }
+        ],
+        [
+            {
+                "verificationResult": {
+                    "statement": types.MappingProxyType({
+                        "subject": [
+                            {"name": "package.whl", "digest": {"sha256": "a" * 64}}
+                        ]
+                    })
+                }
+            }
+        ],
+        [
+            {
+                "verificationResult": {
+                    "statement": {
+                        "subject": [
+                            types.MappingProxyType({
+                                "name": "package.whl",
+                                "digest": {"sha256": "a" * 64},
+                            })
+                        ]
+                    }
+                }
+            }
+        ],
+        [
+            {
+                "verificationResult": {
+                    "statement": {
+                        "subject": [
+                            {
+                                "name": "package.whl",
+                                "digest": types.MappingProxyType({"sha256": "a" * 64}),
+                            }
+                        ]
+                    }
+                }
+            }
+        ],
+    ],
+)
+def test_non_json_container_types_remain_rejected(document: object) -> None:
+    """Matching must preserve the list/dict boundaries of decoded JSON."""
+    assert not has_matching_subject(document, "package.whl", "a" * 64), (
+        "structural matching must not widen accepted container types"
     )
 
 
