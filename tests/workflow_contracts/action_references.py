@@ -35,14 +35,16 @@ def validate_reference(site: str, ref: object) -> None:
     """
     if not isinstance(ref, str):
         raise UnsupportedUsesError(site, ref)
-    if ref.startswith("./") and ref != "./":
-        return
+    if not _is_pinned(ref):
+        raise UnsupportedUsesError(site, ref)
+
+
+def _is_pinned(ref: str) -> bool:
+    if ref.startswith("./"):
+        return ref != "./"
     if ref.startswith("docker://"):
-        if re.fullmatch(r"docker://[^\s@]+@sha256:[0-9a-f]{64}", ref):
-            return
-    elif re.fullmatch(r"[^/\s@]+/[^/\s@]+(?:/[^/\s@]+)*@[0-9a-f]{40}", ref):
-        return
-    raise UnsupportedUsesError(site, ref)
+        return bool(re.fullmatch(r"docker://[^\s@]+@sha256:[0-9a-f]{64}", ref))
+    return bool(re.fullmatch(r"[^/\s@]+/[^/\s@]+(?:/[^/\s@]+)*@[0-9a-f]{40}", ref))
 
 
 def _uses(site: str, mapping: dict[str, object]) -> cabc.Iterator[tuple[str, str]]:
@@ -81,22 +83,26 @@ def action_references(
     tuple[str, str]
         Declaration site and reference.
 
-    Raises
-    ------
-    NotAMappingError
-        If a required runs mapping is missing or malformed.
     """
+    yield from _workflow_references(workflows)
+    yield from _manifest_references(actions)
+
+
+def _workflow_references(workflows: WorkflowSource) -> cabc.Iterator[tuple[str, str]]:
     for name in workflows.names():
         for job_name, job in workflows.jobs(name).items():
             site = f"{name}:jobs.{job_name}"
             yield from _uses(site, job)
             if "steps" in job:
                 yield from _steps(f"{site}.steps", job["steps"])
+
+
+def _manifest_references(
+    actions: ActionManifestSource,
+) -> cabc.Iterator[tuple[str, str]]:
     for name in actions.names():
         runs = as_mapping(actions.document(name).get("runs"))
         if runs is None:
             raise NotAMappingError(f"{name}:runs")
-        if runs.get("using") == "composite":
+        if runs.get("using") == "composite" or "steps" in runs:
             yield from _steps(f"{name}:runs.steps", runs.get("steps"))
-        elif "steps" in runs:
-            yield from _steps(f"{name}:runs.steps", runs["steps"])
