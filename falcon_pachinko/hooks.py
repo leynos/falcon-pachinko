@@ -334,47 +334,55 @@ class HookManager:
 
         The target/socket/code form remains available for one release and emits
         ``DeprecationWarning``. New callers should prepare a ``HookContext``.
+        Mixed forms and incomplete legacy calls are rejected.
 
         Returns
         -------
         HookContext | None
             The deprecated form returns its created context. The prepared form
             mutates the supplied context and returns ``None``.
-
-        Raises
-        ------
-        TypeError
-            If arguments from both call forms are mixed or required legacy
-            values are missing.
         """
         if isinstance(context, HookContext):
-            if any(value is not None for value in (target, ws, close_code)):
-                msg = "pass either a HookContext or legacy disconnect arguments"
-                raise TypeError(msg)
-            context.event = HookEvent.BEFORE_DISCONNECT
-            await self._run_hooks(HookEvent.BEFORE_DISCONNECT, context)
-            return None
-
-        if context is not None:
-            if target is not None:
-                msg = "pass the target either positionally or by keyword"
-                raise TypeError(msg)
-            target = typ.cast("WebSocketResource", context)
-        if not all(value is not None for value in (target, ws, close_code)):
-            msg = (
-                "legacy notify_before_disconnect calls require target, ws, "
-                "and close_code"
+            return await self._notify_prepared_disconnect(
+                context, target=target, ws=ws, close_code=close_code
             )
-            raise TypeError(msg)
-        target = typ.cast("WebSocketResource", target)
-        ws = typ.cast("WebSocketLike", ws)
-        close_code = typ.cast("int", close_code)
+        return await self._notify_legacy_disconnect(
+            context, target=target, ws=ws, close_code=close_code
+        )
 
+    async def _notify_prepared_disconnect(
+        self,
+        context: HookContext,
+        *,
+        target: WebSocketResource | None,
+        ws: WebSocketLike | None,
+        close_code: int | None,
+    ) -> None:
+        """Run hooks with a context prepared by the session driver."""
+        if any(value is not None for value in (target, ws, close_code)):
+            msg = "pass either a HookContext or legacy disconnect arguments"
+            raise TypeError(msg)
+        context.event = HookEvent.BEFORE_DISCONNECT
+        await self._run_hooks(HookEvent.BEFORE_DISCONNECT, context)
+
+    async def _notify_legacy_disconnect(
+        self,
+        context: WebSocketResource | None,
+        *,
+        target: WebSocketResource | None,
+        ws: WebSocketLike | None,
+        close_code: int | None,
+    ) -> HookContext:
+        """Preserve the former call shape while callers migrate."""
+        target = _resolve_legacy_disconnect_target(context, target)
+        target, ws, close_code = _require_legacy_disconnect_arguments(
+            target, ws, close_code
+        )
         warnings.warn(
             "The target/ws/close_code form of notify_before_disconnect is "
             "deprecated; pass a prepared HookContext instead.",
             DeprecationWarning,
-            stacklevel=2,
+            stacklevel=3,
         )
         return await self._notify_before_event(
             HookEvent.BEFORE_DISCONNECT,
@@ -382,3 +390,32 @@ class HookManager:
             ws=ws,
             close_code=close_code,
         )
+
+
+def _resolve_legacy_disconnect_target(
+    context: WebSocketResource | None,
+    target: WebSocketResource | None,
+) -> WebSocketResource | None:
+    """Resolve the former positional target without accepting two targets."""
+    if context is None:
+        return target
+    if target is not None:
+        msg = "pass the target either positionally or by keyword"
+        raise TypeError(msg)
+    return context
+
+
+def _require_legacy_disconnect_arguments(
+    target: WebSocketResource | None,
+    ws: WebSocketLike | None,
+    close_code: int | None,
+) -> tuple[WebSocketResource, WebSocketLike, int]:
+    """Narrow required values for the deprecated public call form."""
+    msg = "legacy notify_before_disconnect calls require target, ws, and close_code"
+    if target is None:
+        raise TypeError(msg)
+    if ws is None:
+        raise TypeError(msg)
+    if close_code is None:
+        raise TypeError(msg)
+    return target, ws, close_code
