@@ -19,6 +19,7 @@ import typing as typ
 import falcon
 import falcon.asgi
 
+from ._observability import _observe_lifecycle
 from ._route_support import (
     _CompiledRoute,
     _normalize_path,
@@ -42,6 +43,7 @@ from .observability import (
     SessionInstrumentation,
 )
 from .lifecycle import ConnectionPhase, WebSocketSession
+from ._session_instrumentation import start_session_instrumentation
 from .protocols import WebSocketLike
 
 # Imported at runtime, not under TYPE_CHECKING: ``ResourceFactory`` below is a
@@ -52,6 +54,7 @@ from .resource import WebSocketResource
 
 if typ.TYPE_CHECKING:
     from ._session import SessionState
+    from .observability import LifecycleObserver
 
 __all__ = ["ResourceFactory", "SimulatorFactory", "WebSocketRouter"]
 
@@ -111,6 +114,7 @@ class WebSocketRouter(_RouterResolutionMixin):
         name: str | None = None,
         resource_factory: ResourceFactory | None = None,
         simulator_factory: SimulatorFactory | None = None,
+        receive_loop: bool = False,
     ) -> None:
         """Create a router and configure its resource factories.
 
@@ -122,6 +126,10 @@ class WebSocketRouter(_RouterResolutionMixin):
             Optional factory used to create routed resources.
         simulator_factory : SimulatorFactory or None, default=None
             Optional factory used by simulator routing.
+        receive_loop : bool, default=False
+            If true, run the accepted session through disconnect cleanup. By
+            default, return after accepted setup and hand later reception and
+            cleanup to the application.
         """
         self._raw: list[_RawRoute] = []
         self._routes: list[_CompiledRoute] = []
@@ -139,11 +147,13 @@ class WebSocketRouter(_RouterResolutionMixin):
         self._resource_factory = resource_factory or (lambda factory: factory())
         self._simulator_factory = simulator_factory
         self._attached = False
+        self._receive_loop = receive_loop
         self._session_instrumentation: SessionInstrumentation = (
             NOOP_SESSION_INSTRUMENTATION
         )
         self._session_started = False
         self._session_clock: cabc.Callable[[], float] = time.monotonic
+        self._lifecycle_observer: LifecycleObserver | None = None
 
     def configure_session_instrumentation(
         self,
@@ -188,6 +198,28 @@ class WebSocketRouter(_RouterResolutionMixin):
                 time.monotonic if monotonic_clock is None else monotonic_clock
             )
 
+    @property
+    def lifecycle_observer(self) -> LifecycleObserver | None:
+        """Optional host adapter for lifecycle metrics and tracing.
+
+        Returns
+        -------
+        LifecycleObserver or None
+            The configured adapter, or ``None`` when instrumentation is disabled.
+        """
+        return self._lifecycle_observer
+
+    @lifecycle_observer.setter
+    def lifecycle_observer(self, observer: LifecycleObserver | None) -> None:
+        """Configure optional lifecycle instrumentation before serving requests.
+
+        Parameters
+        ----------
+        observer : LifecycleObserver or None
+            Synchronous host adapter, or ``None`` to disable instrumentation.
+            Existing sessions retain the adapter selected during negotiation.
+        """
+        self._lifecycle_observer = observer
 
     @staticmethod
     def _compile_route(
@@ -368,7 +400,10 @@ class WebSocketRouter(_RouterResolutionMixin):
         """
         session = await self.negotiate(req, ws, **params)
         if session is not None:
-            await session.run()
+            if self._receive_loop:
+                await session.run()
+            else:
+                session._hand_off_to_application()
 
     async def negotiate(
         self, req: _RequestLike, ws: WebSocketLike, **params: object
@@ -397,17 +432,44 @@ class WebSocketRouter(_RouterResolutionMixin):
         -------
         WebSocketSession or None
             The accepted session, or ``None`` when the selected resource rejects.
-
-        Raises
-        ------
-        falcon.HTTPNotFound
-            If the request does not match this router's mount point or routes.
         """
         del params
-        self._validate_mount_template(req)
         with self._mount_lock:
             self._session_started = True
-        preparation = _ConnectionPreparation()
+        preparation = _ConnectionPreparation(observer=self._lifecycle_observer)
+        instrumentation_run = start_session_instrumentation(
+            preparation.session,
+            self._session_instrumentation,
+            self._session_clock,
+        )
+        preparation.instrumentation_run = instrumentation_run
+        with _observe_lifecycle(
+            preparation.observer,
+            "negotiation",
+            span_name="falcon_pachinko.websocket.negotiation",
+        ) as observation:
+            try:
+                self._validate_mount_template(req)
+                session = await self._negotiate_route(req, ws, preparation)
+                instrumentation_run.finish_setup()
+                if session is None:
+                    observation.reject()
+                    instrumentation_run.finish()
+                return session
+            except BaseException as error:
+                instrumentation_run.finish_setup(error)
+                instrumentation_run.finish(error)
+                raise
+            finally:
+                observation.set_close_code(preparation.session.close_code)
+
+    async def _negotiate_route(
+        self,
+        req: _RequestLike,
+        ws: WebSocketLike,
+        preparation: _ConnectionPreparation,
+    ) -> WebSocketSession | None:
+        """Resolve route candidates using one guarded transport and observer."""
         for route in self._routes:
             match = self._validate_and_normalize_path(route, req)
             if match is None:
@@ -450,7 +512,7 @@ class WebSocketRouter(_RouterResolutionMixin):
         match = self._validate_and_normalize_path(route, req)
         if match is None:
             return False
-        preparation = _ConnectionPreparation()
+        preparation = _ConnectionPreparation(observer=self._lifecycle_observer)
         dispatch = _Dispatch(
             route=route,
             req=typ.cast("falcon.Request", req),
@@ -460,7 +522,10 @@ class WebSocketRouter(_RouterResolutionMixin):
         )
         session = await execute_route_with_error_handling(self, dispatch, preparation)
         if session is not None:
-            await session.run()
+            if self._receive_loop:
+                await session.run()
+            else:
+                session._hand_off_to_application()
         elif not dispatch.matched:
             websocket = preparation.websocket
             if websocket is not None and websocket.phase is ConnectionPhase.PRE_ACCEPT:

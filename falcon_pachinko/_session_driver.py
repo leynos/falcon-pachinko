@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import contextlib
 import dataclasses as dc
 import logging
 import typing as typ
@@ -16,12 +17,14 @@ import typing as typ
 import falcon
 
 from ._disconnect import _PeerDisconnectedError
+from ._observability import _observe_lifecycle
 from ._session import (
     ABNORMAL_CLOSURE,
     GOING_AWAY,
     INTERNAL_ERROR,
     effective_close_code,
 )
+from ._session_instrumentation import _SessionInstrumentationRun
 from ._session_cleanup import (
     CleanupContext,
     raise_session_failures,
@@ -33,9 +36,16 @@ from .diagnostics import _type_name
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from ._observability import _LifecycleObservation
     from ._session import SessionState
     from .hooks import HookManager
     from .lifecycle import LifecycleGuard
+    from .observability import (
+        LifecycleFailureCategory,
+        LifecycleObserver,
+        LifecycleOperation,
+        LifecycleSpanName,
+    )
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
 
@@ -51,11 +61,16 @@ class SessionRouteMatch(typ.Protocol):
         """Captured URI parameters for the selected resource."""
 
 
-class SessionDispatch(typ.Protocol):
-    """Mutable socket and lifecycle fields supplied by the routing pipeline."""
+class SessionConnection(typ.Protocol):
+    """Request and socket fields shared by session execution and cleanup."""
 
     req: falcon.Request
     ws: WebSocketLike
+
+
+class SessionDispatch(SessionConnection, typ.Protocol):
+    """Mutable socket and lifecycle fields supplied by the routing pipeline."""
+
     session: SessionState | None
 
     @property
@@ -77,6 +92,35 @@ class SessionDriverContext:
     params: cabc.Mapping[str, object]
     primary_error: BaseException | None = None
     finalization_error: BaseException | None = None
+    observer: LifecycleObserver | None = None
+    instrumentation_run: _SessionInstrumentationRun | None = None
+
+
+@contextlib.contextmanager
+def _observe_session_operation(
+    context: SessionDriverContext,
+    operation: LifecycleOperation,
+    *,
+    span_name: LifecycleSpanName | None = None,
+    failure_category: LifecycleFailureCategory = "other",
+) -> cabc.Iterator[_LifecycleObservation]:
+    """Capture the final close category before completing a session observation.
+
+    Yields
+    ------
+    _LifecycleObservation
+        State for operation-specific failure classification.
+    """
+    with _observe_lifecycle(
+        context.observer,
+        operation,
+        span_name=span_name,
+        failure_category=failure_category,
+    ) as observation:
+        try:
+            yield observation
+        finally:
+            observation.set_close_code(context.session_state.close_code)
 
 
 async def run_session(
@@ -102,14 +146,12 @@ async def run_session(
 
 async def _run_session_body(context: SessionDriverContext) -> None:
     """Run resource setup and the receive loop before finalization."""
-    await context.resource.on_session_start(context.websocket)
+    with _observe_session_operation(
+        context, "session_start", failure_category="application"
+    ):
+        await context.resource.on_session_start(context.websocket)
     if context.hook_manager.can_receive(context.websocket):
-        await _receive_session(
-            context.resource,
-            context.dispatch,
-            context.session_state,
-            context.hook_manager,
-        )
+        await _receive_session(context)
 
 
 async def _close_after_session_run(
@@ -143,7 +185,15 @@ async def _close_after_session_error(
         return None
 
     if isinstance(error, asyncio.CancelledError):
-        context.session_state.close_code = ABNORMAL_CLOSURE
+        close_code = effective_close_code(
+            context.websocket.close_code, context.session_state, error
+        )
+        context.session_state.close_code = close_code
+        if not context.websocket.closed:
+            try:
+                await context.websocket.close(close_code)
+            except (Exception, asyncio.CancelledError) as close_error:
+                return close_error
         return None
 
     close_code = INTERNAL_ERROR
@@ -173,6 +223,19 @@ async def _handle_session_failure(
 
 async def finalize_session(context: SessionDriverContext) -> None:
     """Close if needed, run disconnect hooks, then apply error precedence."""
+    with _observe_session_operation(
+        context,
+        "finalization",
+        span_name="falcon_pachinko.websocket.finalization",
+        failure_category="cleanup",
+    ) as observation:
+        await _finalize_session(context, observation)
+
+
+async def _finalize_session(
+    context: SessionDriverContext, observation: _LifecycleObservation
+) -> None:
+    """Retain the finalization policy while reporting its selected failure."""
     session = context.session_state
     recorded_code = getattr(context.websocket, "close_code", None)
     session.close_code = effective_close_code(
@@ -186,21 +249,39 @@ async def finalize_session(context: SessionDriverContext) -> None:
         session=session,
         params=dict(context.params),
         primary_error=context.primary_error,
+        observer=context.observer,
+        instrumentation_run=context.instrumentation_run,
     )
     cleanup_failures, interrupted = await run_shielded_cleanup(cleanup_context)
     failures = (
         (context.finalization_error,) if context.finalization_error is not None else ()
     ) + cleanup_failures
-    raise_session_failures(context.primary_error, failures, interrupted)
+    if context.primary_error is not None:
+        observation.record_failure(context.primary_error, "application")
+    raise_session_failures(
+        context.primary_error,
+        failures,
+        interrupted,
+        session=context.session_state,
+    )
 
 
-async def _receive_session(
-    resource: WebSocketResource,
-    dispatch: SessionDispatch,
-    session: SessionState,
-    hook_manager: HookManager,
-) -> None:
+async def _receive_session(context: SessionDriverContext) -> None:
     """Receive and route frames until Falcon reports a disconnect."""
+    with _observe_session_operation(
+        context, "receive_termination", failure_category="transport"
+    ) as observation:
+        await _receive_session_body(context, observation)
+
+
+async def _receive_session_body(
+    context: SessionDriverContext, observation: _LifecycleObservation
+) -> None:
+    """Dispatch frames silently and classify the one receive-loop termination."""
+    resource = context.resource
+    dispatch = context.dispatch
+    session = context.session_state
+    hook_manager = context.hook_manager
     while hook_manager.can_receive(dispatch.ws):
         try:
             raw = await receive_frame(dispatch.ws)
@@ -213,7 +294,11 @@ async def _receive_session(
         # suspended. Do not dispatch the late frame into receive hooks.
         if not hook_manager.can_receive(dispatch.ws):
             return
-        await resource.dispatch(dispatch.ws, raw)
+        try:
+            await resource.dispatch(dispatch.ws, raw)
+        except BaseException as error:
+            observation.record_failure(error, "application")
+            raise
 
 
 def _effective_disconnect_code(error: BaseException) -> int:

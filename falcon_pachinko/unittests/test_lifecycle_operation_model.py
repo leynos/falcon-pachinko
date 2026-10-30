@@ -32,6 +32,7 @@ class _ModelTransport:
     """Controllable transport that records lifecycle-sensitive operations."""
 
     def __init__(self) -> None:
+        """Expose transport calls and controlled suspension points to the model."""
         self.unaccepted = True
         self.closed = False
         self.close_code: int | None = None
@@ -53,6 +54,7 @@ class _ModelTransport:
     async def accept(
         self, subprotocol: str | None = None, headers: object = None
     ) -> None:
+        """Record a handshake and optionally suspend before accepting."""
         del subprotocol, headers
         self.accept_calls += 1
         if self.pause_accept:
@@ -62,6 +64,7 @@ class _ModelTransport:
         self.successful_accepts += 1
 
     async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
+        """Keep the first modeled close transition and its effective code."""
         del reason
         if self.closed:
             return
@@ -69,15 +72,18 @@ class _ModelTransport:
         self.close_code = 1000 if code is None else code
 
     async def send_media(self, data: object) -> None:
+        """Count data calls that escape the guard outside its accepted phase."""
         del data
         self.send_calls += 1
         if self.unaccepted or self.closed:
             self.data_calls_before_acceptance += 1
 
     async def send_text(self, message: str) -> None:
+        """Route text through the same modeled data-operation counter."""
         await self.send_media(message)
 
     async def receive_media(self) -> object:
+        """Yield a frame, peer disconnect, or controlled receive suspension."""
         self.receive_calls += 1
         if self.unaccepted or self.closed:
             self.data_calls_before_acceptance += 1
@@ -91,6 +97,7 @@ class _ModelTransport:
         return "frame"
 
     async def receive_text(self) -> str:
+        """Check the model's text boundary after applying its receive schedule."""
         message = await self.receive_media()
         if not isinstance(message, str):
             msg = "model transport returned a non-text frame"

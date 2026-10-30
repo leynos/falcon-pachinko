@@ -154,8 +154,8 @@ async def drive_session(
     """Receive and dispatch frames inline until the WebSocket session ends.
 
     Peer disconnection runs the disconnect lifecycle with the peer's close
-    code (or 1006 if Falcon does not provide one). Cancellation reports 1006 to
-    cleanup without sending that reserved WebSocket close code, then propagates.
+    code (or 1006 if Falcon does not provide one). Cancellation uses 1001 when
+    no earlier close code was selected, attempts that close, then propagates.
     Any other receive or handler failure closes with 1011, runs best-effort
     cleanup, and is re-raised unchanged.
 

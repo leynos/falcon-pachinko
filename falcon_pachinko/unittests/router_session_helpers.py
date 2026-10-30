@@ -96,9 +96,11 @@ class SessionResource(WebSocketResource):
         self.disconnects.append((ws, close_code))
 
 
-def session_router(resource: SessionResource) -> WebSocketRouter:
+def session_router(
+    resource: SessionResource, *, receive_loop: bool = True
+) -> WebSocketRouter:
     """Mount a single resource for router-owned session lifecycle tests."""
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=receive_loop)
     router.add_route("/session", lambda: resource)
     router.mount("/")
     return router

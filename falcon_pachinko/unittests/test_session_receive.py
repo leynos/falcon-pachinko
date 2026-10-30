@@ -107,7 +107,7 @@ async def test_not_ready_native_socket_preserves_buffered_frame() -> None:
     )
     await websocket.accept()
     await asyncio.wait_for(disconnect_received.wait(), timeout=1)
-    session_websocket = SessionWebSocket(websocket, SessionState())
+    session_websocket = SessionWebSocket(websocket, websocket, SessionState())
 
     assert await receive_frame(session_websocket) == '{"type":"queued"}', (
         "a frame queued before disconnect must reach resource dispatch"
@@ -239,7 +239,8 @@ async def test_close_guard_overrides_wrapped_is_closed_probe() -> None:
     )
     hook_manager.bind_session(session)
     socket = ClosePendingSocket()
-    websocket = SessionWebSocket(typ.cast("typ.Any", socket), session)
+    native = typ.cast("typ.Any", socket)
+    websocket = SessionWebSocket(native, native, session)
     close_task = asyncio.create_task(websocket.close(4001))
 
     await asyncio.wait_for(socket.close_started.wait(), timeout=1)
@@ -271,7 +272,8 @@ async def test_failed_close_rolls_back_its_provisional_code() -> None:
     session = SessionState()
     session.establish()
     socket = FailingCloseSocket()
-    websocket = SessionWebSocket(typ.cast("typ.Any", socket), session)
+    native = typ.cast("typ.Any", socket)
+    websocket = SessionWebSocket(native, native, session)
 
     with pytest.raises(RuntimeError, match="failed"):
         await websocket.close(4002)

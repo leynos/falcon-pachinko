@@ -53,13 +53,13 @@ inside `on_connect()` and changes that hook order. After acceptance,
 then invokes `WebSocketResource.dispatch()` in order until the session ends.
 The driver handles Falcon's `WebSocketDisconnected` exception and the
 simulator's framework-independent package signal. It attempts `on_disconnect`
-once for each accepted session. A missing peer code uses `1006`; unexpected
-receive or dispatch failures close with `1011` and propagate. Session
-cancellation uses `1006` as cleanup metadata, sends no close frame with that
-reserved code, and propagates. If cancellation interrupts a
-`before_disconnect` hook, cleanup may use `1001` while retrying that hook. An
-`on_disconnect` callback that has already started is never retried. Rejected
-connections and failed `on_connect` calls do not call the callback.
+once for each accepted session when the router owns cleanup. A missing peer
+code uses `1006`; unexpected receive or dispatch failures close with `1011`
+and propagate. Cancellation preserves an already selected or reported code;
+otherwise it selects `1001` and attempts a best-effort close on the accepted
+transport. Shielded cleanup continues through each disconnect stage once, even
+when the caller is cancelled again. Rejected connections and failed
+`on_connect` calls do not call the callback.
 
 The diagrams below show the router-owned session path.
 
@@ -85,7 +85,7 @@ stateDiagram-v2
     Receiving --> Cancelled: task cancellation
     CleanDisconnect --> Disconnected: on_disconnect(peer code or 1006)
     Failed --> Disconnected: close(1011), on_disconnect(ws, 1011)
-    Cancelled --> Disconnected: on_disconnect(ws, 1006)
+    Cancelled --> Disconnected: best-effort close(1001), on_disconnect(ws, 1001)
     Closed --> [*]
     Disconnected --> [*]
 ```
@@ -388,12 +388,12 @@ logic.
     close the connection and still run disconnect cleanup.
 
   - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: The
-    router attempts this once for every accepted session, including failure in
-    `on_session_start()` or message dispatch. `close_code` is the peer's code or
-    1006 when missing. Session cancellation uses 1006 as cleanup metadata,
-    sends no close frame with that reserved code, and propagates. If cancellation
-    interrupts `before_disconnect`, cleanup may close with 1001 and retry that
-    hook. An `on_disconnect` callback already in progress is not retried.
+    router attempts this once whenever it owns cleanup for an accepted session,
+    including failure in `on_session_start()` or message dispatch. `close_code`
+    is the peer's code or 1006 when missing. Cancellation preserves an already
+    selected or reported code; otherwise it selects 1001 and attempts a
+    best-effort close on the accepted transport. Shielded cleanup continues
+    through each disconnect stage once, even when the caller is cancelled again.
     Unexpected receive or handler failures close with 1011 and propagate.
     Rejected negotiations and failed `on_connect()` calls do not call it.
 
@@ -1267,14 +1267,15 @@ sequenceDiagram
     end
 ```
 
-The router owns an established session through cleanup. Falcon's reported
-disconnect code is passed to `on_disconnect`; absent a code, the effective code
-is `1006`. A server-initiated `ws.close(code)` sends that code to the peer;
-cleanup uses the disconnect code Falcon reports to the router. Session
-cancellation records `1006` for cleanup and sends no close frame with that
-reserved code. If cancellation interrupts `before_disconnect`, cleanup may
-switch to `1001`, close the transport, and retry that hook. An
-`on_disconnect` callback that has started is attempted only once. An unexpected
+With `receive_loop=True`, the router owns an established session through
+cleanup; the default leaves later receives and cleanup to the application.
+Falcon's reported disconnect code is passed to `on_disconnect`; absent a code,
+the effective code is `1006`. A server-initiated `ws.close(code)` sends that
+code to the peer; cleanup uses the disconnect code Falcon reports to the
+router. Cancellation preserves an already selected or reported code; otherwise
+it selects `1001` and attempts a best-effort close if the accepted transport
+remains open. Shielded cleanup continues through each disconnect stage once,
+even if the caller is cancelled again. An unexpected
 ordinary failure triggers a best-effort `1011` close and reports `1011`.
 Cleanup runs in a shielded task without a timeout, so `on_disconnect` must
 terminate. The router invokes `before_disconnect` before `on_disconnect` and
@@ -1648,18 +1649,20 @@ This provides maximum control, allowing outer layers to act as setup/teardown
 guards for inner layers. An exception in a `before_*` hook should terminate the
 connection attempt immediately.
 
-The router accepts the connection before starting its single inline receive
-loop. It passes each text or binary frame to the selected resource's dispatcher
+With `receive_loop=True`, the router accepts the connection before starting its
+single inline receive loop. It passes each text or binary frame to the selected
+resource's dispatcher
 and waits for that dispatch to finish before receiving the next frame. The loop
-creates no task per frame. A normal peer close runs `before_disconnect` hooks
-and attempts `on_disconnect` once; a missing peer close code maps to 1006.
-Cancellation uses 1006 as cleanup metadata, sends no close frame with that
-reserved code, and propagates. An `on_disconnect` callback already in progress
-is not retried. An unexpected receive or handler exception closes with 1011, runs
-best-effort cleanup, and propagates the original exception. Failure during
-`after_connect` or `accept` uses 1006 for cleanup. If cancellation interrupts
-`before_disconnect`, cleanup uses 1001 and retries that hook; `on_disconnect`
-is attempted once and is not retried if interrupted. Returning normally from
+creates no task per frame. The default `receive_loop=False` returns after
+accepted setup and leaves subsequent reception and cleanup to the application.
+A normal peer close runs `before_disconnect` hooks and attempts `on_disconnect`
+once; a missing peer close code maps to 1006. Cancellation preserves an already
+selected or reported close code; otherwise it selects 1001 and attempts a
+best-effort close on the accepted transport. Shielded cleanup runs each
+disconnect stage once and propagates cancellation. An unexpected receive or
+handler exception closes with 1011, runs best-effort cleanup, and propagates the
+original exception. Failure during `after_connect` or `accept` uses 1006 for
+cleanup. Returning normally from
 `on_unhandled` leaves the session open. Manual negotiation returns a
 `WebSocketSession` after acceptance but before `on_session_start()`; `aclose()`
 waits without a timeout if `run()` is active, so bounded shutdown requires
@@ -1678,7 +1681,7 @@ stateDiagram-v2
     Active --> Cancelled: task cancellation
     Closing --> Disconnected: before_disconnect / on_disconnect
     Failed --> Disconnected: close(1011) / best-effort cleanup
-    Cancelled --> Disconnected: on_disconnect(1006) / best-effort cleanup
+    Cancelled --> Disconnected: close(1001) / on_disconnect(1001)
     Rejected --> [*]
     Disconnected --> [*]
 ```

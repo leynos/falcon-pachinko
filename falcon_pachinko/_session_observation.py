@@ -16,7 +16,18 @@ from ._session import MAX_CLOSE_CODE
 from .diagnostics import _type_name
 
 if typ.TYPE_CHECKING:
-    from ._session_driver import _SessionExecution
+    import collections.abc as cabc
+
+    from ._session import SessionState
+
+
+class _SessionObservationContext(typ.Protocol):
+    """Fields needed to emit bounded observations at lifecycle boundaries."""
+
+    session: SessionState
+    resource: object
+    observation_clock: cabc.Callable[[], float]
+    primary_error: BaseException | None
 
 logger = logging.getLogger("falcon_pachinko._session_driver")
 _OBSERVATION_OPERATIONS = frozenset({
@@ -48,7 +59,7 @@ class _SessionObservation:
 
 
 def _log_session_observation(
-    execution: _SessionExecution,
+    execution: _SessionObservationContext,
     observation: _SessionObservation,
 ) -> None:
     """Emit bounded lifecycle metadata without reflecting caller values."""

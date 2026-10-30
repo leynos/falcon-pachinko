@@ -239,7 +239,9 @@ resource and its hooks.
   - The router runs `before_disconnect` hooks then attempts this callback once
     for each accepted session, including `on_session_start()` or handler
     failures. Peer close codes pass through; a missing code uses `1006`.
-    Cancellation closes with `1001`, and unexpected receive or handler failures
+    Cancellation preserves an already selected close code; otherwise it uses
+    `1001`, attempts to close the accepted transport, and propagates
+    `CancelledError`. Unexpected receive or handler failures
     close with `1011` before the original error propagates. Rejected connections
     and failed `on_connect()` calls do not run disconnect cleanup.
 - For manual negotiation, call `await router.negotiate(req, ws)`. It returns

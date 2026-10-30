@@ -16,7 +16,6 @@ from falcon_pachinko import (
     WebSocketResource,
     WebSocketRouter,
 )
-from falcon_pachinko._disconnect import _PeerDisconnectedError
 from falcon_pachinko.unittests._router_test_resources import (
     AcceptingResource,
     DummyResource,
@@ -162,7 +161,7 @@ async def test_session_start_failure_closes_and_disconnects_once() -> None:
             del ws
             self.disconnect_codes.append(close_code)
 
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.add_route("/start-failure", FailingResource)
     router.mount("/")
     ws = RecordingWS()
@@ -345,7 +344,7 @@ async def test_peer_close_code_is_retained_by_session_guard() -> None:
     session = await router.negotiate(make_req("/peer-close"), ws)
     assert session is not None, "the router must return the accepted session"
 
-    with pytest.raises(_PeerDisconnectedError):
+    with pytest.raises(falcon.WebSocketDisconnected):
         await session.ws.receive_json()
     await session.aclose()
 
@@ -434,7 +433,7 @@ async def test_aclose_waits_for_run_completion_not_caller_completion() -> None:
 
 @pytest.mark.asyncio
 async def test_session_cancellation_closes_with_going_away_and_finalizes() -> None:
-    """Cancellation closes an accepted session with 1001 before cleanup."""
+    """Cancellation closes with going-away and completes disconnect cleanup."""
     started = asyncio.Event()
     disconnect_codes: list[int] = []
 
@@ -448,7 +447,7 @@ async def test_session_cancellation_closes_with_going_away_and_finalizes() -> No
             del ws
             disconnect_codes.append(close_code)
 
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.add_route("/cancel", BlockingResource)
     router.mount("/")
     ws = RecordingWS()
@@ -459,5 +458,5 @@ async def test_session_cancellation_closes_with_going_away_and_finalizes() -> No
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert ws.closed == [1001], "cancellation must close with going-away"
-    assert disconnect_codes == [1001], "disconnect must observe cancellation close"
+    assert ws.closed == [1001], "cancellation must send the going-away close code"
+    assert disconnect_codes == [1001], "disconnect must observe the selected code"

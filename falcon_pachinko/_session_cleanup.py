@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses as dc
+import contextvars
 import logging
 import typing as typ
 
-from ._observability import _observe_operation
+from ._observability import _observe_lifecycle, _observe_operation
+from ._session_instrumentation import (
+    _SessionInstrumentationRun,
+    finish_cleanup_instrumentation,
+    start_cleanup_instrumentation,
+)
 from ._session import (
-    GOING_AWAY,
+    MAX_CLOSE_CODE,
     SessionState,
     _report_session_failure,
     _wait_for_shielded_task,
@@ -20,20 +27,12 @@ from .hooks import HookContext, HookEvent
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    import falcon
-
+    from ._session_driver import SessionConnection
     from .hooks import HookManager
-    from .protocols import WebSocketLike
+    from .observability import LifecycleObserver
     from .resource import WebSocketResource
 
 logger = logging.getLogger(__name__)
-
-
-class _Dispatch(typ.Protocol):
-    """Router dispatch fields needed by disconnect cleanup."""
-
-    req: falcon.Request
-    ws: WebSocketLike
 
 
 @dc.dataclass(slots=True)
@@ -41,21 +40,23 @@ class CleanupContext:
     """Inputs shared by the cancellation-safe cleanup task."""
 
     resource: WebSocketResource
-    dispatch: _Dispatch
+    dispatch: SessionConnection
     hook_manager: HookManager
     session: SessionState
     params: dict[str, object]
     primary_error: BaseException | None
+    observer: LifecycleObserver | None = None
+    instrumentation_run: _SessionInstrumentationRun | None = None
 
 
 async def run_shielded_cleanup(
     context: CleanupContext,
 ) -> tuple[tuple[BaseException, ...], tuple[asyncio.CancelledError, ...]]:
     """Finish one cleanup task even if its caller receives more cancellation."""
-    cleanup_task = asyncio.create_task(_collect_cleanup_failures(context))
-    interruptions = await _wait_for_shielded_task(
-        cleanup_task, cancel_on_interrupt=True
+    cleanup_task = asyncio.create_task(
+        _collect_cleanup_failures(context), context=contextvars.copy_context()
     )
+    interruptions = await _wait_for_shielded_task(cleanup_task)
 
     if cleanup_task.cancelled():
         failures = (asyncio.CancelledError(),)
@@ -88,12 +89,23 @@ async def _cleanup_session(context: CleanupContext) -> tuple[BaseException, ...]
         return ()
 
     failures: list[BaseException] = []
-    with _observe_operation(logger, "disconnect"):
+    instrumentation = start_cleanup_instrumentation(context.instrumentation_run)
+    with (
+        _observe_operation(logger, "disconnect") as log_observation,
+        _observe_lifecycle(
+            context.observer, "cleanup", failure_category="cleanup"
+        ) as observation,
+    ):
         try:
             close_code = await _close_failed_session(context, failures)
             failures.extend(await _run_disconnect_hooks(context, close_code))
+            for failure in failures:
+                observation.record_failure(failure, "cleanup")
+                log_observation.record_failure(failure)
         finally:
+            observation.set_close_code(session.close_code)
             session.mark_closed()
+            finish_cleanup_instrumentation(instrumentation, tuple(failures))
 
     return tuple(failures)
 
@@ -106,11 +118,10 @@ async def _close_failed_session(
     recorded_code = getattr(context.dispatch.ws, "close_code", None)
     close_code = effective_close_code(recorded_code, context.session, primary_error)
     context.session.close_code = close_code
-    if primary_error is not None and not isinstance(
+    should_close = primary_error is not None and not isinstance(
         primary_error, asyncio.CancelledError
-    ) and not bool(
-        getattr(context.dispatch.ws, "closed", False)
-    ):
+    )
+    if should_close and not bool(getattr(context.dispatch.ws, "closed", False)):
         try:
             await context.dispatch.ws.close(close_code)
         except BaseException as exc:  # ruff: ignore[blind-except] - cleanup must continue
@@ -134,24 +145,9 @@ async def _run_disconnect_hooks(
         error=context.primary_error,
     )
     failures: list[BaseException] = []
-    try:
-        await context.hook_manager.notify_before_disconnect(hook_context)
-    except asyncio.CancelledError as error:
-        failures.append(error)
-        close_code = GOING_AWAY
-        context.session.close_code = close_code
-        hook_context.close_code = close_code
-        hook_context.error = error
-        try:
-            await dispatch.ws.close(close_code)
-        except BaseException as close_error:  # ruff: ignore[blind-except] - continue cleanup
-            failures.append(close_error)
-        await _attempt_cleanup(
-            lambda: context.hook_manager.notify_before_disconnect(hook_context),
-            failures,
-        )
-    except BaseException as error:  # ruff: ignore[blind-except] - preserve hook failures
-        failures.append(error)
+    await _attempt_cleanup(
+        lambda: context.hook_manager.notify_before_disconnect(hook_context), failures
+    )
     await _attempt_cleanup(
         lambda: context.resource.on_disconnect(dispatch.ws, close_code), failures
     )
@@ -173,14 +169,20 @@ def raise_session_failures(
     primary_error: BaseException | None,
     cleanup_failures: tuple[BaseException, ...],
     interruptions: tuple[asyncio.CancelledError, ...],
+    *,
+    session: SessionState | None = None,
 ) -> None:
     """Apply primary-first exception precedence after cleanup has completed."""
     if primary_error is not None:
-        _raise_primary_session_error(primary_error, cleanup_failures, interruptions)
+        _raise_primary_session_error(
+            primary_error, cleanup_failures, interruptions, session
+        )
 
     cancellation = _session_cancellation(primary_error, cleanup_failures, interruptions)
     if cancellation is not None:
-        _report_cancelled_session_failures(None, cleanup_failures, cancellation)
+        _report_cancelled_session_failures(
+            None, cleanup_failures, cancellation, session
+        )
         raise cancellation
 
     _raise_cleanup_failures(cleanup_failures)
@@ -190,10 +192,13 @@ def _raise_primary_session_error(
     primary_error: BaseException,
     cleanup_failures: tuple[BaseException, ...],
     interruptions: tuple[asyncio.CancelledError, ...],
+    session: SessionState | None,
 ) -> typ.NoReturn:
     """Keep the original session error ahead of every finalization failure."""
     if isinstance(primary_error, asyncio.CancelledError):
-        _report_cancelled_session_failures(None, cleanup_failures, primary_error)
+        _report_cancelled_session_failures(
+            None, cleanup_failures, primary_error, session
+        )
         raise primary_error
     for failure in cleanup_failures:
         _report_session_failure(
@@ -249,18 +254,44 @@ def _report_cancelled_session_failures(
     primary_error: BaseException | None,
     cleanup_failures: tuple[BaseException, ...],
     cancellation: asyncio.CancelledError,
+    session: SessionState | None,
 ) -> None:
     """Report failures hidden by cancellation through the running loop."""
     if primary_error is not None and primary_error is not cancellation:
-        _report_session_failure(
+        _report_cancelled_failure(
             primary_error,
             "A WebSocket session failure was superseded by cancellation",
-            suppress_handler_errors=True,
+            session,
         )
     for failure in cleanup_failures:
         if not isinstance(failure, asyncio.CancelledError):
-            _report_session_failure(
+            _report_cancelled_failure(
                 failure,
                 "WebSocket disconnect cleanup failed during cancellation",
-                suppress_handler_errors=True,
+                session,
             )
+
+
+def _report_cancelled_failure(
+    error: BaseException, message: str, session: SessionState | None
+) -> None:
+    """Report a hidden failure with bounded session context when available."""
+    if session is None:
+        _report_session_failure(error, message, suppress_handler_errors=True)
+        return
+    close_code = session.close_code
+    if type(close_code) is not int or not 0 <= close_code <= MAX_CLOSE_CODE:
+        close_code = None
+    with contextlib.suppress(Exception):
+        details: dict[str, object] = {"message": message, "exception": error}
+        details.update({
+            "operation": "cleanup",
+            "phase": session.phase.value,
+            "close_code": close_code,
+            "exception_type": type(error).__name__,
+        })
+        message = (
+            f"{message} (phase={session.phase.value}, close_code={close_code})"
+        )
+        details["message"] = message
+        asyncio.get_running_loop().call_exception_handler(details)
