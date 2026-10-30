@@ -127,6 +127,31 @@ async def test_transport_loss_is_a_completed_outcome_with_abnormal_close_categor
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("raise_cancellation", [False, True])
+async def test_clock_failure_before_cleanup_uses_fallback_and_runs_disconnect(
+    *,
+    raise_cancellation: bool,
+) -> None:
+    """A diagnostics clock cannot prevent promised disconnect cleanup."""
+    # The twelfth read is the cleanup-start observation after a clean receive
+    # close; a fault there used to escape before the shielded task was created.
+    clock = InjectedClock(fail_on_read=12, raise_cancellation=raise_cancellation)
+    resource = RecordingResource()
+    instrumentation = RecordingInstrumentation()
+    router = configured_router(resource, instrumentation, clock)
+
+    await drive_router(router, SessionSocket(falcon.WebSocketDisconnected(4000)))
+
+    assert resource.disconnect_codes == [4000], _ASSERTION_FAILURE
+    assert len(clock.readings) > 12, _ASSERTION_FAILURE
+    _, _, dimensions = session_counter(instrumentation)
+    assert dimensions.outcome is Outcome.COMPLETED, _ASSERTION_FAILURE
+    assert [span.end_count for span in instrumentation.spans] == [1, 1], (
+        _ASSERTION_FAILURE
+    )
+
+
+@pytest.mark.asyncio
 async def test_cancellation_records_going_away_and_finishes_both_spans() -> None:
     """Task cancellation remains cancellation while cleanup telemetry completes."""
     clock = InjectedClock()

@@ -343,7 +343,10 @@ Applications may configure a synchronous `SessionInstrumentation` adapter on a
 router before its first routed connection:
 
 ```python
-router.configure_session_instrumentation(instrumentation)
+router.configure_session_instrumentation(
+    instrumentation,
+    monotonic_clock=clock,
+)
 ```
 
 The protocol and its closed dimension enums are in
@@ -353,7 +356,11 @@ The default is a no-op. Falcon-Pachinko does not require a metrics or tracing
 SDK, install a global provider, own exporters, or change `WebSocketRouter`'s
 constructor. The host owns the adapter and its shutdown. Its callbacks run on
 the event-loop thread, so they must be non-blocking. Exporters should use
-bounded queues and drop or aggregate when full.
+bounded queues and drop or aggregate when full. The optional `monotonic_clock`
+supplies the same clock to lifecycle DEBUG observations and duration
+measurements. If it raises, the router falls back to `time.monotonic`; the
+failure cannot bypass disconnect cleanup or change session failure precedence.
+Keep this callback synchronous and non-blocking too.
 
 The adapter receives two counters and two duration measurements:
 
