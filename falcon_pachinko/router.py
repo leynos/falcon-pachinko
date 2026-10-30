@@ -234,7 +234,6 @@ class WebSocketRouter(_RouterResolutionMixin):
         path: str,
         resource: type[WebSocketResource] | cabc.Callable[..., WebSocketResource],
         *init_args: object,
-        name: str | None = None,
         **init_kwargs: object,
     ) -> None:
         """Register a WebSocketResource to handle ``path``.
@@ -254,6 +253,8 @@ class WebSocketRouter(_RouterResolutionMixin):
                 "/p", functools.partial(MyResource, name="alpha"), name="route"
             )
         """
+        name = typ.cast("str | None", init_kwargs.pop("name", None))
+
         self._validate_resource_type(resource)
         path, canonical = self._registration.normalize_path(path)
 

@@ -157,7 +157,6 @@ def add_route(
     path: str,
     resource: type[WebSocketResource] | cabc.Callable[..., WebSocketResource],
     *init_args: object,
-    name: str | None = None,
     **init_kwargs: object,
 ) -> None: ...
 ```
