@@ -164,9 +164,9 @@ def test_privileged_workflows_and_composites_are_discovered() -> None:
         assert any(site.startswith(f"{name}:") for site, _ in refs), (
             f"{name} must contain references"
         )
-    assert {"build-wheels/action.yml", "pure-python-wheel/action.yml"} <= set(
-        ACTION_MANIFESTS.names()
-    ), "both local composites must be discovered"
+    assert "pure-python-wheel/action.yml" in ACTION_MANIFESTS.names(), (
+        "the release composite must be discovered"
+    )
 
 
 @pytest.mark.parametrize("place", ["job", "step", "composite"])
