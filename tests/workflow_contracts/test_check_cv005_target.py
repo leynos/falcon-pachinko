@@ -280,75 +280,75 @@ def test_the_lane_runs_ci_tests_before_cv005() -> None:
         )
 
 
-def test_pytest_command_must_select_both_suites() -> None:
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param(
+            'uv run --locked --extra examples pytest -v -m "not lint_toolchain"',
+            id="configured-testpaths",
+        ),
+        pytest.param(
+            "uv run --locked --extra examples pytest -v "
+            'falcon_pachinko tests -m "not lint_toolchain"',
+            id="both-explicit-roots",
+        ),
+    ],
+)
+def test_pytest_command_must_select_both_suites(command: str) -> None:
     """Explicit paths must retain both configured test roots."""
-    configured_testpaths = (
-        'uv run --locked --extra examples pytest -v -m "not lint_toolchain"'
+    assert _pytest_command_selects_complete_suite(command), (
+        f"command must select the complete suite: {command!r}"
     )
-    both_roots = (
-        "uv run --locked --extra examples pytest -v "
-        'falcon_pachinko tests -m "not lint_toolchain"'
-    )
-    tests_only = (
-        'uv run --locked --extra examples pytest -v tests -m "not lint_toolchain"'
-    )
-    package_only = (
-        "uv run --locked --extra examples pytest -v falcon_pachinko "
-        '-m "not lint_toolchain"'
-    )
-    ignored_tests_attached = (
-        "uv run --locked --extra examples pytest -v --ignore=tests "
-        '-m "not lint_toolchain"'
-    )
-    ignored_tests_separate = (
-        "uv run --locked --extra examples pytest -v --ignore tests "
-        '-m "not lint_toolchain"'
-    )
-    ignored_tests_glob = (
-        'uv run --locked --extra examples pytest -v --ignore-glob="tests/**" '
-        '-m "not lint_toolchain"'
-    )
-    keyword_filter = (
-        'uv run --locked --extra examples pytest -v -k "selected tests" '
-        '-m "not lint_toolchain"'
-    )
-    keyword_filter_attached = (
-        "uv run --locked --extra examples pytest -v -k=selected-tests "
-        '-m "not lint_toolchain"'
-    )
-    keyword_filter_compact = (
-        "uv run --locked --extra examples pytest -v -kselected-tests "
-        '-m "not lint_toolchain"'
-    )
-    assert _pytest_command_selects_complete_suite(configured_testpaths), (
-        "configured testpaths must select the complete suite"
-    )
-    assert _pytest_command_selects_complete_suite(both_roots), (
-        "both explicit suite roots must be accepted"
-    )
-    assert not _pytest_command_selects_complete_suite(tests_only), (
-        "tests alone would omit falcon_pachinko"
-    )
-    assert not _pytest_command_selects_complete_suite(package_only), (
-        "falcon_pachinko alone would omit tests"
-    )
-    assert not _pytest_command_selects_complete_suite(ignored_tests_attached), (
-        "--ignore=tests would omit the tests root"
-    )
-    assert not _pytest_command_selects_complete_suite(ignored_tests_separate), (
-        "--ignore tests would omit the tests root"
-    )
-    assert not _pytest_command_selects_complete_suite(ignored_tests_glob), (
-        "--ignore-glob could omit a test root"
-    )
-    assert not _pytest_command_selects_complete_suite(keyword_filter), (
-        "-k could omit tests from the complete suite"
-    )
-    assert not _pytest_command_selects_complete_suite(keyword_filter_attached), (
-        "-k= could omit tests from the complete suite"
-    )
-    assert not _pytest_command_selects_complete_suite(keyword_filter_compact), (
-        "an attached -k value could omit tests from the complete suite"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param(
+            'uv run --locked --extra examples pytest -v tests -m "not lint_toolchain"',
+            id="tests-only",
+        ),
+        pytest.param(
+            "uv run --locked --extra examples pytest -v falcon_pachinko "
+            '-m "not lint_toolchain"',
+            id="package-only",
+        ),
+        pytest.param(
+            "uv run --locked --extra examples pytest -v --ignore=tests "
+            '-m "not lint_toolchain"',
+            id="attached-ignore",
+        ),
+        pytest.param(
+            "uv run --locked --extra examples pytest -v --ignore tests "
+            '-m "not lint_toolchain"',
+            id="separate-ignore",
+        ),
+        pytest.param(
+            'uv run --locked --extra examples pytest -v --ignore-glob="tests/**" '
+            '-m "not lint_toolchain"',
+            id="ignore-glob",
+        ),
+        pytest.param(
+            'uv run --locked --extra examples pytest -v -k "selected tests" '
+            '-m "not lint_toolchain"',
+            id="keyword-filter-separated",
+        ),
+        pytest.param(
+            "uv run --locked --extra examples pytest -v -k=selected-tests "
+            '-m "not lint_toolchain"',
+            id="keyword-filter-equals",
+        ),
+        pytest.param(
+            "uv run --locked --extra examples pytest -v -kselected-tests "
+            '-m "not lint_toolchain"',
+            id="keyword-filter-compact",
+        ),
+    ],
+)
+def test_pytest_command_rejects_incomplete_selections(command: str) -> None:
+    """Root exclusions and keyword filters must not pass as complete suites."""
+    assert not _pytest_command_selects_complete_suite(command), (
+        f"command must not select the complete suite: {command!r}"
     )
 
 
