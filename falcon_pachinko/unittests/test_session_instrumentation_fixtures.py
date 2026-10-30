@@ -31,13 +31,24 @@ _ASSERTION_FAILURE = "router instrumentation must preserve bounded lifecycle sem
 class InjectedClock:
     """Return a controlled monotonic value changed by resource callbacks."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        fail_on_read: int | None = None,
+        raise_cancellation: bool = False,
+    ) -> None:
         self.value = 0.0
         self.readings: list[float] = []
+        self.fail_on_read = fail_on_read
+        self.raise_cancellation = raise_cancellation
 
     def __call__(self) -> float:
         """Record and return the current injected monotonic value."""
         self.readings.append(self.value)
+        if len(self.readings) == self.fail_on_read:
+            if self.raise_cancellation:
+                raise asyncio.CancelledError
+            raise RuntimeError
         return self.value
 
 

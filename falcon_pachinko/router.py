@@ -9,6 +9,7 @@ Falcon app and used to generate URLs for registered routes.
 
 from __future__ import annotations
 
+import asyncio
 import collections.abc as cabc
 import contextlib
 import dataclasses as dc
@@ -64,6 +65,21 @@ type SimulatorFactory = cabc.Callable[
     [falcon.Request, WebSocketLike],
     WebSocketLike | cabc.Awaitable[WebSocketLike],
 ]
+
+
+def _guard_session_clock(
+    clock: cabc.Callable[[], float],
+) -> cabc.Callable[[], float]:
+    """Keep diagnostics clock failures from bypassing session cleanup."""
+
+    def read_clock() -> float:
+        try:
+            return clock()
+        except (Exception, asyncio.CancelledError):  # ruff: ignore[blind-except] - isolate timing failures so cleanup always runs
+            # Callback cancellation is telemetry failure, not task cancellation.
+            return time.monotonic()
+
+    return read_clock
 
 
 @dc.dataclass(slots=True)
@@ -149,7 +165,8 @@ class WebSocketRouter:
         adapter must use synchronous, non-blocking callbacks and bounded
         exporter work; it is invoked on the session's event-loop thread.
         An optional monotonic clock supplies lifecycle observation and
-        instrumentation durations.
+        instrumentation durations. If it raises, the router uses
+        ``time.monotonic`` so timing cannot bypass accepted-session cleanup.
 
         Parameters
         ----------
@@ -173,7 +190,7 @@ class WebSocketRouter:
                 if instrumentation is None
                 else instrumentation
             )
-            self._session_clock = (
+            self._session_clock = _guard_session_clock(
                 time.monotonic if monotonic_clock is None else monotonic_clock
             )
 
