@@ -15,6 +15,7 @@ import dataclasses as dc
 import functools
 import inspect
 import threading
+import time
 import typing as typ
 
 import falcon
@@ -36,6 +37,10 @@ from ._router_resources import _ResourceResolver
 from ._session_driver import _SessionOptions, run_session
 from ._uri_template import _compile_prefix_template, compile_uri_template
 from .hooks import HookCollection, HookManager
+from .observability import (
+    NOOP_SESSION_INSTRUMENTATION,
+    SessionInstrumentation,
+)
 from .protocols import WebSocketLike
 
 # Imported at runtime, not under TYPE_CHECKING: ``ResourceFactory`` below is a
@@ -126,6 +131,40 @@ class WebSocketRouter:
         self._simulator_factory = simulator_factory
         self._receive_loop = receive_loop
         self._attached = False
+        self._session_instrumentation: SessionInstrumentation = (
+            NOOP_SESSION_INSTRUMENTATION
+        )
+        self._session_started = False
+        self._session_instrumentation_clock = time.monotonic
+
+    def configure_session_instrumentation(
+        self, instrumentation: SessionInstrumentation | None
+    ) -> None:
+        """Configure optional host-owned metrics and tracing before first use.
+
+        The router has a no-op implementation by default. The configured
+        adapter must use synchronous, non-blocking callbacks and bounded
+        exporter work; it is invoked on the session's event-loop thread.
+
+        Parameters
+        ----------
+        instrumentation : SessionInstrumentation or None
+            Host adapter, or ``None`` to restore the no-op implementation.
+
+        Raises
+        ------
+        RuntimeError
+            If a routed session has already started on this router.
+        """
+        with self._mount_lock:
+            if self._session_started:
+                msg = "session instrumentation must be configured before first use"
+                raise RuntimeError(msg)
+            self._session_instrumentation = (
+                NOOP_SESSION_INSTRUMENTATION
+                if instrumentation is None
+                else instrumentation
+            )
 
     @staticmethod
     def _compile_route(
@@ -499,9 +538,17 @@ class WebSocketRouter:
         hook_manager: HookManager,
     ) -> bool:
         """Run connection setup, then own the accepted session until closure."""
+        with self._mount_lock:
+            self._session_started = True
+            instrumentation = self._session_instrumentation
+            instrumentation_clock = self._session_instrumentation_clock
         return await run_session(
             resource,
             dispatch,
             hook_manager=hook_manager,
-            options=_SessionOptions(receive_loop=self._receive_loop),
+            options=_SessionOptions(
+                receive_loop=self._receive_loop,
+                instrumentation_clock=instrumentation_clock,
+                instrumentation=instrumentation,
+            ),
         )

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import dataclasses as dc
+import time
 import typing as typ
 
+from . import observability as _observability
 from ._session import (
     ABNORMAL_CLOSURE,
     GOING_AWAY,
@@ -44,13 +47,21 @@ class CleanupContext:
     session: SessionState
     params: dict[str, object]
     primary_error: BaseException | None
+    instrumentation: _observability.SessionInstrumentation = (
+        _observability.NOOP_SESSION_INSTRUMENTATION
+    )
+    instrumentation_clock: cabc.Callable[[], float] = time.monotonic
 
 
 async def run_shielded_cleanup(
     context: CleanupContext,
 ) -> tuple[tuple[BaseException, ...], tuple[asyncio.CancelledError, ...]]:
     """Finish one cleanup task even if its caller receives more cancellation."""
-    cleanup_task = asyncio.create_task(_collect_cleanup_failures(context))
+    # Copy the active session span's context explicitly; the cleanup span must
+    # remain its child even as cleanup moves into the shield-owned task.
+    cleanup_task = asyncio.create_task(
+        _collect_cleanup_failures(context), context=contextvars.copy_context()
+    )
     interruptions = await _join_cleanup_task(cleanup_task)
     return _cleanup_task_failures(cleanup_task), interruptions
 
@@ -114,17 +125,98 @@ async def _cleanup_session(context: CleanupContext) -> tuple[BaseException, ...]
         return ()
 
     failures: list[BaseException] = []
+    observed_failures: list[BaseException] = []
+    started = context.instrumentation_clock()
+    close_code = session.close_code
+    span = _observability._start_span(
+        context.instrumentation,
+        _observability.SpanName.CLEANUP,
+        _cleanup_dimensions(
+            _observability.Outcome.STARTED,
+            close_code=close_code,
+            exception=None,
+            phase=_observability.Phase.DISCONNECTING,
+        ),
+    )
     try:
-        close_code = await _close_failed_session(context, failures)
-        failures.extend(await _run_disconnect_hooks(context, close_code))
+        try:
+            close_code = await _close_failed_session(
+                context, failures, observed_failures
+            )
+            failures.extend(
+                await _run_disconnect_hooks(context, close_code, observed_failures)
+            )
+        except BaseException as exc:  # ruff: ignore[blind-except] - run every cleanup stage
+            failures.append(exc)
+            observed_failures.append(exc)
     finally:
-        session.mark_closed()
+        try:
+            session.mark_closed()
+        except BaseException as exc:
+            observed_failures.append(exc)
+            raise
+        finally:
+            cleanup_duration = context.instrumentation_clock() - started
+            dimensions = _cleanup_dimensions(
+                _cleanup_instrumentation_outcome(observed_failures),
+                close_code=close_code,
+                exception=observed_failures[0] if observed_failures else None,
+                phase=_observability.Phase.CLOSED,
+            )
+            for failure in observed_failures:
+                _observability._increment(
+                    context.instrumentation,
+                    _observability.Counter.CLEANUP_FAILURES,
+                    _cleanup_dimensions(
+                        _observability.Outcome.FAILED,
+                        close_code=close_code,
+                        exception=failure,
+                        phase=_observability.Phase.DISCONNECTING,
+                    ),
+                )
+            _observability._observe_duration(
+                context.instrumentation,
+                _observability.Duration.CLEANUP,
+                cleanup_duration,
+                dimensions,
+            )
+            span.end(dimensions)
 
     return tuple(failures)
 
 
+def _cleanup_dimensions(
+    outcome: _observability.Outcome,
+    *,
+    close_code: int | None,
+    exception: BaseException | None,
+    phase: _observability.Phase,
+) -> _observability.SessionDimensions:
+    """Build cleanup dimensions from bounded lifecycle categories only."""
+    return _observability.SessionDimensions(
+        operation=_observability.Operation.CLEANUP,
+        outcome=outcome,
+        phase=phase,
+        close_code=_observability._close_code_category(close_code),
+        exception=_observability._exception_category(exception),
+    )
+
+
+def _cleanup_instrumentation_outcome(
+    failures: list[BaseException],
+) -> _observability.Outcome:
+    """Reflect cancellation or failure observed in a cleanup stage."""
+    if any(isinstance(failure, asyncio.CancelledError) for failure in failures):
+        return _observability.Outcome.CANCELLED
+    return (
+        _observability.Outcome.FAILED if failures else _observability.Outcome.COMPLETED
+    )
+
+
 async def _close_failed_session(
-    context: CleanupContext, failures: list[BaseException]
+    context: CleanupContext,
+    failures: list[BaseException],
+    observed_failures: list[BaseException],
 ) -> int:
     """Choose the effective close code and close a failed session best-effort."""
     should_send_close = _should_send_close(context)
@@ -133,10 +225,14 @@ async def _close_failed_session(
     if not should_send_close:
         return close_code
     try:
-        with contextlib.suppress(Exception):
-            await context.dispatch.ws.close(close_code)
+        await context.dispatch.ws.close(close_code)
+    except Exception as exc:  # ruff: ignore[blind-except] - closing is best-effort
+        # Close errors stay best-effort, but remain visible to the failure
+        # counter without changing the session's exception precedence.
+        observed_failures.append(exc)
     except BaseException as exc:  # ruff: ignore[blind-except] - cleanup must continue
         failures.append(exc)
+        observed_failures.append(exc)
     return close_code
 
 
@@ -196,7 +292,9 @@ def _should_send_close(context: CleanupContext) -> bool:
 
 
 async def _run_disconnect_hooks(
-    context: CleanupContext, close_code: int
+    context: CleanupContext,
+    close_code: int,
+    observed_failures: list[BaseException],
 ) -> tuple[BaseException, ...]:
     """Attempt both cleanup hooks and preserve every hook failure."""
     dispatch = context.dispatch
@@ -214,9 +312,12 @@ async def _run_disconnect_hooks(
     await _attempt_cleanup(
         lambda: context.hook_manager.notify_before_disconnect(hook_context),
         failures,
+        observed_failures,
     )
     await _attempt_cleanup(
-        lambda: context.resource.on_disconnect(dispatch.ws, close_code), failures
+        lambda: context.resource.on_disconnect(dispatch.ws, close_code),
+        failures,
+        observed_failures,
     )
     return tuple(failures)
 
@@ -224,12 +325,14 @@ async def _run_disconnect_hooks(
 async def _attempt_cleanup(
     cleanup: cabc.Callable[[], cabc.Awaitable[None]],
     failures: list[BaseException],
+    observed_failures: list[BaseException],
 ) -> None:
     """Record a cleanup failure so later cleanup stages still run."""
     try:
         await cleanup()
     except BaseException as exc:  # ruff: ignore[blind-except] - cleanup must continue
         failures.append(exc)
+        observed_failures.append(exc)
 
 
 def raise_session_failures(
