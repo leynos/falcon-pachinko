@@ -1087,13 +1087,13 @@ calls a reusable workflow and declares no runner of its own.
 A pull request from a fork cannot obtain an Ubicloud runner. `lint-test`,
 `falcon-minimum` and `build-dist` serve pull requests, so a fixed
 `ubicloud-standard-2` would leave a fork pull request queueing for a runner
-that never arrives. A pull request Dependabot opened also takes the hosted
-arm: hosted minutes cost nothing on a public repository, and Dependabot opens
-many pull requests, which therefore build cold on the hosted pool. The guard
-tests the pull request's author, not `github.actor`, because the actor is
-whoever triggered the run, so a person pushing to a Dependabot branch would
-flip the runner. All three jobs resolve their label from the head repository
-and the author instead:
+that never arrives. A pull request Dependabot opened also takes the hosted arm:
+hosted minutes cost nothing on a public repository, and Dependabot opens many
+pull requests, which therefore build cold on the hosted pool. The guard tests
+the pull request's author, not `github.actor`, because the actor is whoever
+triggered the run, so a person pushing to a Dependabot branch would flip the
+runner. All three jobs resolve their label from the head repository and the
+author instead:
 
 ```yaml
 runs-on: >-
@@ -1244,8 +1244,8 @@ rules rest on claims about events: that a fork can reach `lint-test`,
 `falcon-minimum` and `build-dist`, and that no fork can reach the remaining
 Ubicloud jobs. A contract reading only `runs-on` asserts the consequence and
 never the premise, so a silent change to a trigger would leave the consequence
-looking deliberate. Those contracts read the trigger block under the boolean
-key `True`, because YAML 1.1 parses the bare word `on` that way; a contract
+looking deliberate. Those contracts read the trigger block under the boolean key
+`True`, because YAML 1.1 parses the bare word `on` that way; a contract
 reading the string `"on"` finds nothing and passes on an empty mapping, which
 is itself asserted.
 
