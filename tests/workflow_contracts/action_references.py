@@ -40,6 +40,7 @@ def validate_reference(site: str, ref: object) -> None:
 
 
 def _is_pinned(ref: str) -> bool:
+    """Recognize supported local and immutable external references."""
     pattern = (
         r"(?:\./.+|docker://[^\s@]+@sha256:[0-9a-f]{64}"
         r"|[^/\s@]+/[^/\s@]+(?:/[^/\s@]+)*@[0-9a-f]{40})"
@@ -48,6 +49,7 @@ def _is_pinned(ref: str) -> bool:
 
 
 def _uses(site: str, mapping: dict[str, object]) -> cabc.Iterator[tuple[str, str]]:
+    """Yield a declared string reference with its site."""
     if "uses" in mapping:
         ref = mapping["uses"]
         if not isinstance(ref, str):
@@ -56,6 +58,7 @@ def _uses(site: str, mapping: dict[str, object]) -> cabc.Iterator[tuple[str, str
 
 
 def _steps(site: str, steps: object) -> cabc.Iterator[tuple[str, str]]:
+    """Read references from a required list of step mappings."""
     if not isinstance(steps, list):
         raise NotAListError(site)
     for index, value in enumerate(steps):
@@ -89,6 +92,7 @@ def action_references(
 
 
 def _workflow_references(workflows: WorkflowSource) -> cabc.Iterator[tuple[str, str]]:
+    """Read reusable workflow and step references from every workflow."""
     for name in workflows.names():
         for job_name, job in workflows.jobs(name).items():
             site = f"{name}:jobs.{job_name}"
@@ -100,6 +104,7 @@ def _workflow_references(workflows: WorkflowSource) -> cabc.Iterator[tuple[str, 
 def _manifest_references(
     actions: ActionManifestSource,
 ) -> cabc.Iterator[tuple[str, str]]:
+    """Read step references from each applicable action manifest."""
     for name in actions.names():
         runs = as_mapping(actions.document(name).get("runs"))
         if runs is None:
