@@ -56,10 +56,10 @@ simulator's framework-independent package signal. It attempts `on_disconnect`
 once for each accepted session. A missing peer code uses `1006`; unexpected
 receive or dispatch failures close with `1011` and propagate. Session
 cancellation uses `1006` as cleanup metadata, sends no close frame with that
-reserved code, and propagates. If cancellation interrupts a
-`before_disconnect` hook, cleanup uses `1006` while retrying that hook. An
-`on_disconnect` callback that has already started is never retried. Rejected
-connections and failed `on_connect` calls do not call the callback.
+reserved code, and propagates. If cancellation interrupts a `before_disconnect`
+hook, cleanup uses `1006` while retrying that hook. An `on_disconnect` callback
+that has already started is never retried. Rejected connections and failed
+`on_connect` calls do not call the callback.
 
 The diagrams below show the router-owned session path.
 
@@ -1193,13 +1193,13 @@ disconnect code is passed to `on_disconnect`; absent a code, the effective code
 is `1006`. A server-initiated `ws.close(code)` sends that code to the peer;
 cleanup uses the disconnect code Falcon reports to the router. Session
 cancellation records `1006` for cleanup and sends no close frame with that
-reserved code. If cancellation interrupts `before_disconnect`, cleanup may
-use `1006` and retry that hook without closing the transport. An
-`on_disconnect` callback that has started is attempted only once. An unexpected
-ordinary failure triggers a best-effort `1011` close and reports `1011`.
-Cleanup runs in a shielded task without a timeout, so `on_disconnect` must
-terminate. The router invokes `before_disconnect` before `on_disconnect` and
-prevents new receive or dispatch hooks once disconnect begins.
+reserved code. If cancellation interrupts `before_disconnect`, cleanup may use
+`1006` and retry that hook without closing the transport. An `on_disconnect`
+callback that has started is attempted only once. An unexpected ordinary
+failure triggers a best-effort `1011` close and reports `1011`. Cleanup runs in
+a shielded task without a timeout, so `on_disconnect` must terminate. The
+router invokes `before_disconnect` before `on_disconnect` and prevents new
+receive or dispatch hooks once disconnect begins.
 
 A lone session or cleanup failure is re-raised unchanged. Multiple ordinary
 failures are grouped in an `ExceptionGroup`, with the primary session failure
@@ -1463,9 +1463,9 @@ For each accepted connection, `WebSocketSession.run()` owns the receive loop.
 Its session driver calls `receive_media()` and awaits
 `WebSocketResource.dispatch()` for each value before receiving the next one.
 Manual callers can retain the accepted session returned by
-`WebSocketRouter.negotiate()` and manage dispatch explicitly. The native adapter
-preserves text and binary payloads before media decoding, so malformed JSON
-reaches `on_unhandled()`; injected transports retain the `receive_media()`
+`WebSocketRouter.negotiate()` and manage dispatch explicitly. The native
+adapter preserves text and binary payloads before media decoding, so malformed
+JSON reaches `on_unhandled()`; injected transports retain the `receive_media()`
 adapter and encode other values as JSON.
 
 1. Receive a raw message from the WebSocket.
@@ -1557,8 +1557,8 @@ creates no task per frame. A normal peer close runs `before_disconnect` hooks
 and attempts `on_disconnect` once; a missing peer close code maps to 1006.
 Cancellation uses 1006 as cleanup metadata, sends no close frame with that
 reserved code, and propagates. An `on_disconnect` callback already in progress
-is not retried. An unexpected receive or handler exception closes with 1011, runs
-best-effort cleanup, and propagates the original exception. Failure during
+is not retried. An unexpected receive or handler exception closes with 1011,
+runs best-effort cleanup, and propagates the original exception. Failure during
 `after_connect` or `accept` uses 1006 for cleanup. If cancellation interrupts
 `before_disconnect`, cleanup uses 1006 and retries that hook; `on_disconnect`
 is attempted once and is not retried if interrupted. Returning normally from
@@ -1959,8 +1959,8 @@ enables white-box testing of router behaviour without needing an ASGI server.
   emitted frames. Helper shortcuts (`send_json`, `pop_sent`) keep tests concise.
 
 - **Spying and Injection**: Tests enqueue inbound messages via
-  `await simulator.push_message({...})` before driving the router-owned session.
-  Outbound frames are recorded in `simulator.sent_messages`, enabling
+  `await simulator.push_message({...})` before driving the router-owned
+  session. Outbound frames are recorded in `simulator.sent_messages`, enabling
   assertions about order, payload, or metadata. Dependency injection lets tests
   exercise resources in isolation alongside fake connection or hook managers.
 
