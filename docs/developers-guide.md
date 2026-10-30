@@ -29,36 +29,187 @@ remains telemetry-agnostic. It propagates the original startup exception to the
 application startup caller, leaving application-specific logging and metrics to
 the lifespan owner.
 
-## WebSocket receive-loop lifecycle
+The Falcon composition boundary is `WebSocketRouter.attach(app, prefix)`: it
+registers the router mount and descendant catch-all routes and installs
+raw-frame media handlers. For routers built from relative paths,
+`router.mount(prefix)` followed by `router.attach(app)` is the two-step form.
 
-`WebSocketRouter(receive_loop=True)` opts into a router-owned receive loop.
-After `on_connect` returns an accepting result and the connection hooks finish,
-the router accepts the socket and calls `on_accepted`. It then dispatches raw
-text and binary frames in order until the peer disconnects or dispatch fails.
-The default is `False`; in that mode the router returns after accepting and the
-application retains receive and cleanup ownership.
+## WebSocket session lifecycle
 
-With the loop enabled, `on_disconnect` is attempted exactly once after a
-successful `on_connect`, including peer disconnect, dispatch failure,
-cancellation, or failure in `after_connect` or `accept`. A rejected connection
-or an `on_connect` failure does not invoke it. `before_disconnect` hooks run
-before the callback; a hook interrupted before the callback may be retried
-during cancellation cleanup. A callback interrupted by cancellation is not
-invoked a second time. `WebSocketDisconnected.code` is passed through for peer
-closure, with `1006` used when that code is missing or cancellation interrupts
-the session. Cancellation propagates without sending a close frame with
-reserved code `1006`; unexpected receive or handler failures close with `1011`
-and propagate the original exception. Failure during `after_connect` or
-`accept` runs cleanup with `1006`. An ordinary exception from `on_accepted`
-occurs after acceptance, closes with `1011`, and runs cleanup with `1011`.
+`WebSocketRouter.on_websocket()` negotiates the connection and runs the accepted
+`WebSocketSession` inline. `on_connect()` runs after `before_connect` hooks
+and before `after_connect` hooks. A falsey result rejects the connection;
+`True` accepts with defaults, and `AcceptOptions` selects the subprotocol and
+response headers. The router accepts after `after_connect` completes. Calling
+`ws.accept()` from `on_connect()` remains a deprecated compatibility path: it
+accepts immediately and changes the hook order.
 
-The private `falcon_pachinko._router_session` component owns the opt-in
-acceptance phase. After acceptance, it transfers frame reception and cleanup to
-the shared `session.drive_session()` loop; `WebSocketRouter` retains route
-resolution and connection setup. If cleanup fails during incomplete acceptance
-while a primary error is active, the wrapper adds a note containing only the
-cleanup exception type. After transfer, the shared session driver logs cleanup
-failure types and preserves the primary session failure.
+Once accepted, `WebSocketSession.run()` calls `on_session_start()` and then
+receives one frame at a time, awaiting `WebSocketResource.dispatch()` before it
+receives the next. No task is created per frame. Setup and dispatch use the
+same selected child resource, hook manager, injected services, and
+connection-scoped state. Manual callers can use
+`await router.negotiate(req, ws)`: rejection returns `None`, while acceptance
+returns a session that has not yet run `on_session_start()`. Call
+`session.run()` once to start it, or dispatch manually and call
+`session.aclose()` to finish. If `run()` is active in another task, `aclose()`
+waits without a timeout; cancel and await that task to bound shutdown.
+
+The session progresses through `CONNECTING`, `ESTABLISHED`, `DISCONNECTING`, and
+`CLOSED`. The cleanup promise starts when `on_connect()` approves the
+connection or the resource accepts the socket itself. A rejection before either
+event does not promise post-accept cleanup. If setup fails after resource-owned
+acceptance, the router still finalizes the session. A socket approved but never
+accepted skips receives and is closed with `1011` during cleanup.
+
+Native Falcon sockets use a forwarding lifecycle adapter that records
+acceptance history. Custom transports without an `unaccepted` property use the
+same adapter: missing state is initially unknown, and a completed `accept()`
+call establishes acceptance. This avoids inferring acceptance from Falcon's
+post-close `unaccepted` value, which is also false after a rejected handshake.
+Injected simulators keep their identity and expose their own acceptance state.
+
+The native receiver preserves raw TEXT and BINARY frames so malformed JSON can
+reach `on_unhandled()` instead of failing in Falcon's media decoder. Injected
+transports retain `receive_media()` compatibility; other media values are
+encoded as JSON with `msgspec`, and encoding failures fail the session. The
+application-wide raw-media setup provided by `router.attach()` is described in
+[the responder and live-harness boundaries](#websocket-responder-and-live-harness-boundaries).
+
+A peer disconnect retains Falcon's reported close code; a missing code uses
+`1006`. `WebSocketDisconnected` raised during accepted setup or by a resource
+is also a transport ending, not an application failure. An unexpected receive,
+handler, or `on_session_start()` exception closes the open socket with `1011`,
+then runs disconnect cleanup and propagates the original exception.
+Cancellation uses `1006` as cleanup metadata, sends no close frame with that
+reserved code, and propagates `CancelledError`. `on_disconnect()` is attempted
+exactly once for accepted sessions, including failures in `on_session_start()`
+or dispatch. `before_disconnect` hooks run first. Cleanup changes the phase to
+`DISCONNECTING`, preventing later receive hooks and handlers from starting, and
+runs in a shielded task without a timeout. An interrupted hook before
+`on_disconnect()` may be retried during cancellation cleanup; an interrupted
+`on_disconnect()` is never invoked again. Cleanup failures do not replace a
+primary session failure. A normal peer-close cleanup error propagates.
+
+The `on_connect`, `on_session_start`, `on_disconnect` and `on_unhandled`
+callbacks are driven by the connection lifecycle, never by an envelope `type`,
+so the dispatcher refuses to resolve them by convention.
+
+The conventional allowlist is `_conventional_handler_names` in
+`falcon_pachinko/resource.py`, computed once per class by
+`_init_conventional_handler_names`. Class creation inspects each `on_*`
+attribute with `inspect.getattr_static` rather than `getattr`, so a descriptor
+named `on_*` cannot run, or raise, while the class is being created; the raw
+attribute it returns means only a plain coroutine function is admitted. A
+`@staticmethod` is not: it has no `self` for the dispatcher to pass. A
+`@classmethod` is not either: it would receive the class in that position.
+`functools.partialmethod` is excluded explicitly, because from Python 3.13
+`inspect.iscoroutinefunction` unwraps it, so the raw descriptor would be
+admitted on some interpreters and not others, and because class access yields a
+generated wrapper rather than the function the test saw. The predicate still
+unwraps it for the reserved-name check, so a callback cannot hide behind one.
+
+`LIFECYCLE_CALLBACK_NAMES` and `is_lifecycle_callback`, both in
+`falcon_pachinko/handlers.py`, are the single source of truth: registration
+(`WebSocketResource.add_handler`, `@handles_message`) calls the predicate
+directly, and the conventional allowlist that
+`dispatcher.find_conventional_handler` consults is built from it, so the two
+paths cannot drift. `is_lifecycle_callback` unwraps both sides of every
+comparison with `_unwrap_handler`, then checks the callable's own `__name__`
+and, failing that, identity against the reserved entries in the owner's MRO,
+which is what catches a neutral alias such as `on_bye = on_disconnect` or a
+function copied from a parent resource under a new name.
+
+`_unwrap_handler` peels `functools.partial`, a `_HandlesMessageDescriptor` (the
+object `@handles_message` returns), the standard-library descriptor families
+(`functools.partialmethod`, `functools.singledispatchmethod`,
+`functools.cached_property`, `property`), `classmethod` and `staticmethod`
+objects, and bound methods. For the generated class-view of a `partialmethod` or
+`singledispatchmethod`, `_descriptor_view_owner` follows the descriptor
+backlink the view carries. A `functools.wraps` wrapper is deliberately *not*
+unwrapped: it is a distinct function that only borrows metadata, so following
+`__wrapped__` would over-reject an unrelated handler.
+
+Explicit registration takes precedence: dispatch looks up the exact envelope
+`type` first and falls back to convention only on a miss, so a reserved tag
+stays legal for a distinct method; see §3.6 of the
+[design document](falcon-websocket-extension-design.md).
+
+### Optional lifecycle metrics and tracing
+
+The host can assign an application-owned `LifecycleObserver` to
+`router.lifecycle_observer` before serving requests. The default is `None`;
+setting it to `None` disables metrics and tracing. Router constructor calls do
+not change, and no telemetry SDK, exporter, or global configuration is
+installed. Each connection retains the observer selected when negotiation
+starts, including its acceptance and later cleanup.
+
+```python
+from falcon_pachinko import WebSocketRouter
+
+router = WebSocketRouter()
+router.lifecycle_observer = application_observer
+```
+
+The structural adapter implements two synchronous methods:
+
+- `record_operation(event)` receives an immutable `LifecycleObservationEvent`.
+  The host increments the counter
+  `falcon_pachinko.websocket.lifecycle.operations` and records
+  `event.duration_seconds` in the histogram
+  `falcon_pachinko.websocket.lifecycle.operation.duration`, with unit `s`.
+  Durations use a monotonic clock. The remaining fields form the metric labels.
+- `start_span(name)` returns a host-owned `LifecycleSpan`, or `None` when
+  tracing is disabled. The framework calls `span.finish(result)` once with an
+  immutable `LifecycleSpanResult`. The host finishes the span and applies the
+  bounded outcome, failure category, and close-code category attributes.
+
+Both callbacks must return promptly and avoid blocking I/O. Adapter exceptions,
+including adapter-raised cancellation, are suppressed so instrumentation cannot
+change WebSocket error precedence, cancellation, or cleanup. Host adapters own
+SDK setup, sampling, aggregation, and export. The three span names are
+`falcon_pachinko.websocket.negotiation`, `falcon_pachinko.websocket.session`,
+and `falcon_pachinko.websocket.finalization`.
+
+| Field                 | Fixed values                                                                                   |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| `operation`           | `negotiation`, `acceptance`, `session_start`, `receive_termination`, `finalization`, `cleanup` |
+| `outcome`             | `succeeded`, `rejected`, `failed`, `cancelled`                                                 |
+| `failure_category`    | `none`, `application`, `transport`, `cleanup`, `cancelled`, `other`                            |
+| `close_code_category` | `unknown`, `normal`, `going_away`, `protocol_error`, `server_error`, `abnormal`, `other`       |
+
+The complete label space has at most `6 × 4 × 6 × 7 = 1,008` combinations per
+metric instrument. It includes no connection, room, node, or message IDs; raw
+paths or URLs; payloads; credentials; exception messages; or arbitrary
+exception class names. Close code `1000` maps to `normal`, `1001` to
+`going_away`, `1002`/`1003`/`1007`–`1010` to `protocol_error`, `1011`–`1014` to
+`server_error`, and `1006`/`1015` to `abnormal`. Missing codes use `unknown`;
+all remaining codes, including application codes, use `other`.
+
+The receive measurement describes termination of the whole receive loop.
+Successful frames emit no metric events or spans. Cleanup observes errors
+returned as values as well as raised errors, while its exactly-once gate keeps
+repeated close calls from emitting duplicate cleanup measurements.
+
+### Lifecycle test harnesses
+
+Test sockets must terminate receive loops. `DummyWS` and `RecordingWS` return
+their scripted frames in order and then signal peer disconnection. The
+simulator drains queued frames before reporting closure; `close(code)` wakes a
+pending receive. `SimulatorRouterHarness.connect()` starts
+`router.on_websocket()` as a task, waits for accept/close/readiness, and on
+exit closes the simulator and awaits the router task. Unit and simulator tests
+use this harness for fast lifecycle coverage.
+
+The public `LiveWebSocketServer` harness and `live_websocket_server` fixture
+run real Falcon ASGI apps under Uvicorn on ephemeral loopback ports. The
+two-node fan-out scenario uses a dedicated event loop and an `AsyncExitStack`
+for both servers, their workers, and real `WebSocketTestClient` sessions. Its
+stack closes sessions before workers and servers, then closes the loop. The
+real router-session scenarios prove frame order, binary handling, fallback
+continuation, replies, failure close codes, and peer disconnect callbacks over
+network sockets. Run those scenarios with `make test`; run the documentation
+gates with `make markdownlint` and `make spelling`.
 
 ## Cluster fan-out maintenance
 
@@ -117,37 +268,26 @@ host-configured, with no mandatory SDK, public constructor changes or
 
 ## Dependency bounds
 
-The package supports Falcon 4.x through `falcon>=4,<5`. Falcon follows
+The package supports Falcon releases from 4.0 up to, but not including, 4.5, as
+declared by `falcon>=4,<4.5`. This upper bound excludes Falcon 4.5 until
+compatibility is verified: `falcon_pachinko/_session_socket.py` uses Falcon's
+private `_receive()` method because there is no public raw receiver. Falcon
+documents
 [semantic versioning](https://falcon.readthedocs.io/en/stable/community/releases.html#semantic-versioning),
-so an incompatible API change can arrive with a new major release. This
-package uses Falcon's ASGI application and WebSocket APIs in
-`falcon_pachinko/router.py`, `falcon_pachinko/websocket.py`, and
-`falcon_pachinko/testing/harness.py`; the exclusive upper bound keeps a future
-major release out until compatibility is verified.
+so an incompatible API change can arrive with a new major release. This bound
+keeps unverified releases outside the supported range.
 
 The lower bound was checked on 2026-10-08 UTC (2026-10-09 in Europe/Berlin) by
 installing Falcon 4.0.0 with `uv pip install falcon==4.0.0` and running
-`uv run --no-sync pytest -v`: 770 tests passed and 2 were skipped. Run
-`make build` afterwards to restore the normal environment. `uv.lock` is
-committed and `.gitignore` does not exclude it. The dependency bounds above are
-deliberately wide, so the lockfile pins the Falcon release tested by
-`lint-test` and the shared coverage action; Dependabot keeps that release
-current. See "Dependency management with uv" below for how the lockfile is
-maintained.
+`uv run --no-sync pytest -v`: 770 tests passed and 2 were skipped. This records
+validation at the declared lower bound. Run `make build` afterwards to restore
+the normal environment.
 
-The `falcon-minimum` job in `.github/workflows/ci.yml` checks the lower bound
-on every pull request and every push to `main`. After `make build` installs the
-locked environment, the job overrides Falcon with `FALCON_MINIMUM_VERSION`,
-verifies the installed version, and runs the full suite with
-`uv run --no-sync pytest -v`. The `--no-sync` flag keeps uv from restoring the
-locked release; `make test` would run its `build` prerequisite and restore that
-release.
-
-When the lower bound changes, update the `falcon` bound in `pyproject.toml`,
-`FALCON_MINIMUM_VERSION` in the workflow, and `EXPECTED_FALCON_VERSION` in
-`tests/workflow_contracts/falcon_minimum_fixtures.py` together. Review
-`tests/workflow_contracts/test_falcon_minimum_lane.py` as well; its workflow
-contract keeps those values aligned.
+`uv.lock` is committed and `.gitignore` no longer excludes it. It selects a
+concrete resolution within the supported range; it currently resolves Falcon
+4.4.0. That selection does not expand the `pyproject.toml` support bound. See
+"Dependency management with uv" below for how the lockfile is kept current.
+Lower-bound coverage in CI stays tracked separately from this support policy.
 
 ## Dependency management with uv
 
@@ -219,15 +359,12 @@ marks failures that the scenario intentionally asserted.
 
 ## WebSocket responder and live-harness boundaries
 
-The Falcon composition flow is `router.mount(prefix)` followed by
-`router.attach(app)`. The compatibility form `router.attach(app, prefix)` also
-mounts and attaches in one call. Attachment registers the exact mount and
-descendant catch-all routes and installs raw-frame media handlers on the app.
-The router accepts a connection after `on_connect()` succeeds and calls
-`on_accepted()` immediately after acceptance. It starts
-`session.drive_session()` only when `receive_loop=True`; with the default
-`False`, it returns after acceptance and the application owns further receives
-and cleanup.
+`WebSocketRouter.attach(app, prefix)` is the Falcon composition boundary. It
+compiles the router's relative paths, registers the exact mount and descendant
+catch-all routes, and installs raw-frame media handlers on the app. For a
+router already mounted with `router.mount(prefix)`, call `router.attach(app)`.
+The session lifecycle and disconnect behaviour are described in
+[WebSocket session lifecycle](#websocket-session-lifecycle).
 
 `install_raw_websocket_media_handlers()` wraps the app-wide TEXT and BINARY
 handlers once. Inbound deserialization passes frames through as raw `str` or
@@ -238,19 +375,6 @@ app. `configure_raw_frame_media(app)` provides the same idempotent setup for
 manually mounted routers and other Falcon WebSocket routes. Either entry point
 warns when customized inbound handlers will be replaced. Repeated installation
 does not wrap a handler again.
-
-`session.drive_session()` receives one raw frame at a time and passes it to
-`WebSocketResource.dispatch()`. Falcon signals a peer disconnect with
-`falcon.WebSocketDisconnected`; the simulator uses the package's internal
-peer-disconnect signal. The driver preserves the peer close code, using `1006`
-when Falcon does not provide one. A receive or dispatch failure closes an open
-socket with `1011`, runs best-effort disconnect cleanup, and re-raises the
-original failure. Local cancellation runs best-effort cleanup with close-code
-metadata `1006`, sends no close frame with that reserved code, and re-raises
-`CancelledError`. Disconnect hooks precede the single `on_disconnect()`
-attempt. For an ordinary peer disconnect, cleanup errors propagate after both
-cleanup steps have been attempted; during failure or cancellation cleanup
-errors are logged and do not replace the primary outcome.
 
 The `ServerAdapter` protocol isolates the ASGI server. Its `task` property is
 the serve-loop task, `start(app, sock)` returns only after lifespan startup and
@@ -274,50 +398,10 @@ afterwards and call `server.record_error(ex)`.
 ## Validation error import boundary
 
 Use `from falcon_pachinko.utils import ValidationError` as the stable import
-path for validation exceptions. New package code must raise through
-`falcon_pachinko.utils.ValidationError`, keeping raise sites behind the
-package's stable path. It is the same class as `msgspec.ValidationError`,
-preserving existing exception handlers. The dispatcher routes validation
-failures to `on_unhandled`; a `ValidationError` raised inside a handler still
-propagates.
-
-The typed alias is a direct assignment to preserve the original class object.
-Ruff bans `from msgspec import ...`; PEP 695 syntax would not preserve class
-identity. The line-local Pylint `prefer-type-statement` and Ruff
-`non-pep695-type-alias` suppressions document those constraints.
-
-A malformed `schema` declared on a `WebSocketResource` subclass is a different
-kind of failure, and raises `TypeError` at class creation through
-`validate_schema_types`. That check runs from `__init_subclass__`, so it only
-sees a schema present at class creation. A `schema` assigned afterwards
-bypasses it: `msgspec` reports a union mixing integer and string tags when it
-first derives that union at decode time, and that configuration `TypeError`
-propagates instead of becoming an `on_unhandled` fallback. Reject the
-temptation to catch it at the decode site: widening the handler would leave the
-invalid schema in place and disguise a schema bug as a malformed message.
-
-## Safe diagnostics
-
-Framework diagnostics must not call `repr()` or `str()` on raw payloads,
-decoded caller values, or other caller-controlled objects. Use the shared
-bounded metadata helpers in `falcon_pachinko.diagnostics` for identifiers,
-types, frame kind and length, and safe scalar fields. Payload values stay
-available to runtime code; their default representations, errors, logs and
-trace summaries omit them.
-
-When translating a vendor decode failure, capture only its exception class in
-the `except` suite and raise the framework error after leaving that suite.
-`raise ... from None` suppresses traceback display of the preceding exception,
-but it does not remove the implicit `__context__` reference. Raising afterwards
-avoids retaining the vendor exception and its message in either chain
-attribute. Preserve application exceptions when they are propagated; diagnostic
-display suppression does not sanitize an exception object retained or logged by
-application code.
-
-Application hooks and handlers that read `HookContext.raw`, fallback raw
-arguments, or `TraceEvent.payload` cross a trusted boundary. Do not use payload
-`repr()` or `str()` for diagnostics there; UTF-8 decoding changes
-representation but does not remove secrets.
+path for validation exceptions. It is currently the same class as
+`msgspec.ValidationError`, preserving existing exception handlers. The
+dispatcher routes validation failures to `on_unhandled`; a `ValidationError`
+raised inside a handler still propagates.
 
 ## Spelling policy
 
@@ -345,20 +429,21 @@ where practical rather than adding broad word-level exceptions.
 
 ## Router Request Boundary
 
-`WebSocketRouter` installs a private Falcon responder adapter with
-`router.attach(app)` after `router.mount(prefix)`. Falcon routes the mounted
-prefix and nested paths to that adapter; resource dispatch still needs only a
-small request surface:
+`WebSocketRouter` is mounted as a Falcon resource, but its internal dispatch
+pipeline only needs a small request surface before handing control to resource
+callbacks:
 
 - `path`: the concrete request path used for route matching.
-- `path_template`: the Falcon mount template used to verify that the request
-  belongs to the mounted router prefix.
+- Optional Falcon `uri_template`: the mount template used to verify that the
+  request belongs to the mounted router prefix. Structural test requests may
+  expose `path_template` instead; the router defaults to the root template if
+  neither attribute exists.
 
-The router models that surface with the private `_RequestLike` protocol in
+The router models the concrete path with the private `_RequestLike` protocol in
 `falcon_pachinko/router.py`. Internal routing helpers should accept
-`_RequestLike` instead of broad `object` parameters. This keeps request-shaped
-test doubles type-checkable while documenting the attributes the router
-actually consumes.
+`_RequestLike` instead of broad `object` parameters. The optional mount
+template is probed at the boundary so Falcon requests and lightweight test
+doubles remain type-checkable.
 
 Keep casts to `falcon.Request` at the edge where the router calls APIs whose
 public contract is Falcon-specific, such as hook notification and
@@ -366,18 +451,9 @@ public contract is Falcon-specific, such as hook notification and
 `falcon.Request` unless those internals start depending on Falcon-only
 attributes.
 
-### URI-template compiler boundary
-
-`falcon_pachinko/_uri_template.py` is the private shared compiler for full-path
-and prefix matchers. The router uses both forms for top-level routes, while
-nested subroutes use the prefix form. The compiler escapes every literal run
-before building the regular expression, and validates placeholder braces,
-unique Python-identifier names, and parameter layouts first. Placeholders
-capture non-empty path segments; a segment may contain one placeholder or a
-terminal adjacent pair, while other multi-placeholder layouts are ambiguous.
-Compilation happens before router registration state is mutated, so invalid
-templates fail at registration or mount time with `ValueError` rather than
-being deferred to connection dispatch.
+Test request doubles should expose both `path` and `path_template`. Use an empty
+`path_template` for root-mounted router tests, matching the runtime default
+used by Falcon-style request objects that do not provide a template.
 
 ### `_RouteMatch` and `_Dispatch`
 
@@ -402,156 +478,16 @@ threaded positionally through each helper.
 `req` is cast to `falcon.Request` at the point `_Dispatch` is constructed in
 `_try_route`, consistent with the cast-at-the-edge policy described above.
 
-## Live WebSocket acceptance tests
-
-Use the public `LiveWebSocketServer` harness from `falcon_pachinko.testing`
-when a test must exercise Falcon's real responder lifecycle, including
-acceptance, middleware, message reception, and shutdown. It runs Uvicorn on an
-ephemeral loopback port with ASGI lifespan enabled. The `live_websocket_server`
-fixture provides loop-bound helpers for synchronous tests;
-`WebSocketTestClient` can also be managed directly with an `AsyncExitStack`. The
-`testing` extra and `dev` dependency group include `uvicorn>=0.34,<1` for this
-harness and the live routing tests. The test server imports Uvicorn lazily and
-uses its lifespan readiness and graceful-shutdown APIs; the behavioural
-contract belongs to Falcon-Pachinko's adapter protocol, not to Uvicorn.
-
-Run the reference application's live pytest-bdd scenarios with:
-
-```bash
-uv run pytest -q tests/behaviour/test_reference_example_live_steps.py
-```
-
-The feature covers the nested authenticated reference route, schema-decoded
-message dispatch, worker broadcast, connection cleanup, and a rejected
-handshake. Simulator tests remain useful supplementary coverage for isolated
-resource and routing behaviour. They do not prove Falcon's actual ASGI
-responder or lifespan behaviour.
-
-Test request doubles should expose both `path` and `path_template`. Use an empty
-`path_template` for root-mounted router tests, matching the runtime default
-used by Falcon-style request objects that do not provide a template.
-
-## Reserved lifecycle dispatch
-
-The `on_connect`, `on_accepted`, `on_disconnect` and `on_unhandled` callbacks
-are driven by the connection lifecycle, never by an envelope `type`, so the
-dispatcher refuses to resolve them by convention.
-
-The conventional allowlist is `_conventional_handler_names` in
-`falcon_pachinko/resource.py`, computed once per class by
-`_init_conventional_handler_names`. Class creation inspects each `on_*`
-attribute with `inspect.getattr_static` rather than `getattr`, so a descriptor
-named `on_*` cannot run, or raise, while the class is being created; the raw
-attribute it returns means only a plain coroutine function is admitted. A
-`@staticmethod` is not: it has no `self` for the dispatcher to pass. A
-`@classmethod` is not either: it would receive the class in that position.
-`functools.partialmethod` is excluded explicitly, because from Python 3.13
-`inspect.iscoroutinefunction` unwraps it, so the raw descriptor would be
-admitted on some interpreters and not others, and because class access yields a
-generated wrapper rather than the function the test saw. The predicate still
-unwraps it for the reserved-name check, so a callback cannot hide behind one.
-
-`LIFECYCLE_CALLBACK_NAMES` and `is_lifecycle_callback`, both in
-`falcon_pachinko/handlers.py`, are the single source of truth: registration
-(`WebSocketResource.add_handler`, `@handles_message`) calls the predicate
-directly, and the conventional allowlist that
-`dispatcher.find_conventional_handler` consults is built from it, so the two
-paths cannot drift. `is_lifecycle_callback` unwraps both sides of every
-comparison with `_unwrap_handler`, then checks the callable's own `__name__`
-and, failing that, identity against the reserved entries in the owner's MRO,
-which is what catches a neutral alias such as `on_bye = on_disconnect` or a
-function copied from a parent resource under a new name.
-
-`_unwrap_handler` peels `functools.partial`, a `_HandlesMessageDescriptor` (the
-object `@handles_message` returns), the standard-library descriptor families
-(`functools.partialmethod`, `functools.singledispatchmethod`,
-`functools.cached_property`, `property`), `classmethod` and `staticmethod`
-objects, and bound methods. For the generated class-view of a `partialmethod` or
-`singledispatchmethod`, `_descriptor_view_owner` follows the descriptor
-backlink the view carries. A `functools.wraps` wrapper is deliberately *not*
-unwrapped: it is a distinct function that only borrows metadata, so following
-`__wrapped__` would over-reject an unrelated handler.
-
-Explicit registration takes precedence: dispatch looks up the exact envelope
-`type` first and falls back to convention only on a miss, so a reserved tag
-stays legal for a distinct method; see §3.6 of the
-[design document](falcon-websocket-extension-design.md).
-
-## Opt-in router-owned WebSocket sessions
-
-With `receive_loop=True`, after route resolution, connection hooks,
-`on_connect`, and `after_connect` hooks succeed, `WebSocketRouter` accepts the
-socket and awaits the selected resource's session inline. The session
-repeatedly calls `receive_media()`, adapts decoded values to raw JSON frames
-when needed, and awaits `WebSocketResource.dispatch()` before reading the next
-frame. It creates no per-frame tasks. The selected child resource, bound hook
-manager, injected services, and connection-scoped state proxy are the same
-objects prepared for connection setup. With the default `receive_loop=False`,
-the router returns after acceptance and the application owns further receives
-and cleanup.
-
-Falcon may decode incoming media before `receive_media()` returns it, so
-`receive_loop=True` alone does not guarantee exact raw TEXT or BINARY input.
-`router.attach()` enables raw input for all WebSocket routes on the app while
-preserving the configured outgoing TEXT and BINARY serializers. For a manually
-mounted router or another Falcon WebSocket route, call
-`configure_raw_frame_media(app)` before Falcon constructs WebSockets. Both
-entry points use the same idempotent setup and warn when customized inbound
-handlers will be replaced; Falcon's default decoding applies when neither is
-used.
-
-An ordinary peer disconnect runs `before_disconnect` hooks and then attempts
-`on_disconnect(ws, peer_code)` once; a missing peer close code maps to 1006.
-Cancellation before disconnect cleanup starts uses close-code metadata 1006 and
-re-raises `CancelledError` without sending a close frame with that reserved
-code. If cancellation interrupts a peer-close callback already in progress,
-that callback is not retried; cancellation cleanup uses 1006 metadata. An
-unexpected receive or handler exception closes with 1011, runs best-effort
-disconnect cleanup, and re-raises the original exception. Failure in
-`after_connect` or `accept` before acceptance completes uses 1006 for cleanup.
-An ordinary exception from `on_accepted` happens after acceptance, closes with
-1011, and passes 1011 to cleanup even though the receive loop has not started.
-Cancellation during `on_accepted` uses 1006 as cleanup metadata and propagates
-without sending a close frame with that reserved code. Cancellation cleanup may
-retry a `before_disconnect` hook interrupted before the callback; an
-interruption inside the callback does not trigger a second attempt. A normal
-peer-cleanup lifecycle error propagates. During accepted-session failure
-cleanup, errors are logged by exception type and do not replace the session
-failure.
-
-Test sockets must terminate receive loops. `DummyWS` and `RecordingWS` return
-their scripted frames in order and then signal peer disconnection. The
-simulator drains queued frames before reporting closure; `close(code)` wakes a
-pending receive. `SimulatorRouterHarness.connect()` starts
-`router.on_websocket()` as a task, waits for accept/close/readiness, and on
-exit closes the simulator and awaits the router task. Unit and simulator tests
-use this harness for fast lifecycle coverage.
-
-The public `LiveWebSocketServer` harness and `live_websocket_server` fixture
-run real Falcon ASGI apps under Uvicorn on ephemeral loopback ports. The
-two-node fan-out scenario uses a dedicated event loop and an `AsyncExitStack`
-for both servers, their workers, and real `WebSocketTestClient` sessions. Its
-stack closes sessions before workers and servers, then closes the loop. The
-real router-session scenarios prove frame order, binary handling, fallback
-continuation, replies, failure close codes, and peer disconnect callbacks over
-network sockets. Run those scenarios with `make test`; run the documentation
-gates with `make markdownlint` and `make spelling`.
-
 ## Lint and Typecheck Toolchain
 
-`make lint` provisions nose, then runs Ruff, both Pylint passes, ambrleaks and
-the blocking nose duplication gate. `make typecheck` runs
-`ty check --extra-search-path .` against `falcon_pachinko`, `tests`, `tools`,
-and the release helpers `scripts/release_assets.py`,
-`scripts/release_assets_cli.py`, `scripts/release_version.py` and
-`scripts/release_provenance.py`. These are the complete local and CI checks;
-they need no wrapper or second manual step.
+`make lint` runs Ruff, then two Pylint passes, then ambrleaks. `make typecheck`
+runs `ty check falcon_pachinko tests tools`. Both perform their complete checks
+locally and in CI, and need no wrapper and no second manual step.
 
 Ruff is pinned at 0.16.4 via `RUFF_VERSION` in the Makefile, and the same
 version is installed in `.github/workflows/ci.yml` with
-`uv tool install ruff==0.16.4`. `make lint` runs `ruff check .`, covering the
-repository's Python sources, scripts and tests. Ruff runs in preview mode,
-targets py312, and also formats Python code blocks embedded in Markdown.
+`uv tool install ruff==0.16.4`. Ruff runs in preview mode, targets py312, and
+also formats Python code blocks embedded in Markdown.
 
 `ty` is pinned at 0.0.74 via `TY_VERSION` in the Makefile, with a matching
 `uv tool install ty==0.0.74` step in CI. `ty` is pre-1.0 and its diagnostics
@@ -669,26 +605,19 @@ enables W0012, so every pragma name is still checked for typos exactly once.
 
 Each pass keeps its persisted Pylint state in its own directory under
 `.cache/pylint`, named for its runtime, so neither reads the other's
-statistics. CI keys `.uv-python` by runner OS and architecture plus the
-Makefile and `tools/pypy-downloads.json`. It keys `.uv-cache` by runner OS and
-architecture plus the Makefile, `pylintrc-df12.toml`,
-`tools/pypy-downloads.json`, `pyproject.toml` and `scripts/**`. The
-`.tools/nose` cache key also includes runner OS and architecture,
-`pyproject.toml`, `scripts/install_nose.py` and
-`tools/nose-release-digests.json`; `make install-nose` verifies the cached
-binary's pinned version before use.
+statistics. CI caches `.uv-python` under a key derived from
+`tools/pypy-downloads.json`, and the lint tool environments in `.uv-cache`
+under a key that also covers the Makefile and `pylintrc-df12.toml`, so a pin
+change never restores a stale toolchain.
 
 #### Coverage and tests
 
 `PYLINT_TARGETS` covers `falcon_pachinko` (listing its `unittests` and
 `behaviour` directories explicitly, because they carry no `__init__.py`),
-`tests`, `examples`, `tools`, every top-level `scripts/*.py` module, and every
-`scripts/tests/*.py` helper-test module. Both Pylint passes use this same
-target list, so the scripts and tests receive classic and df12 checks.
-Recursive directory discovery covers nested test and tool packages. None of
-these Python files needs syntax newer than Python 3.12, so no separate CPython
-classic pass exists. The three inline script blocks under `examples` declare
-dependencies but no Python version.
+`tests`, `examples`, and `tools`, which is every tracked Python file. None
+needs syntax newer than Python 3.12, so no separate CPython classic pass
+exists. The three inline script blocks under `examples` declare dependencies
+but no Python version.
 
 `tests/test_lint_toolchain_integration.py` (marker `lint_toolchain`) runs the
 Makefile's own commands against the real interpreters. The tests provision PyPy
@@ -704,119 +633,6 @@ Every `noqa`, `pylint: disable`, or `type: ignore` pragma must carry a reason
 in the same comment. The df12-python-lints C9106 and C9107 checkers reject bare
 pragmas.
 
-### Nose code duplication gate
-
-`make lint` provisions and runs a blocking duplication gate. Its implementation
-and focused tests adapt the approach merged in
-[Episodic PR #276](https://github.com/leynos/episodic/pull/276), at immutable
-revision
-[`d9e5ac0d254f375e2986f52d91a3b88c117c833b`](https://github.com/leynos/episodic/commit/d9e5ac0d254f375e2986f52d91a3b88c117c833b).
-The detector is `corca-ai/nose` v0.20.0: the Rust-built `nose` executable, not
-the unrelated Python package of the same name. Adapted material retains its
-upstream attribution and is used under this repository's ISC licence. This
-repository downloads only official release archives and verifies their
-platform-specific SHA-256 digests; it does not use cargo-binstall. The wrapper
-validates that configured roots exist and contain Python candidates after the
-explicit exclusions. Before its single combined JSON query, the wrapper asks
-Nose for JSON stats on each root and fails with status 2 if any root has no
-effective Python sources. This uses the pinned detector's actual handling of
-`.ignore`, `.gitignore`, hidden paths, `.git/info/exclude`, and global Git
-ignore rules without trying to duplicate its ignore precedence in Python. The
-query's own warning remains a final check for a wholly empty scan. Stale
-allow-rule diagnostics say “unmatched in this capped scan” because absence from
-a ranked report does not prove that duplication has disappeared.
-
-The scan covers production modules under `falcon_pachinko/`. Setuptools uses
-package discovery with the `falcon_pachinko*` include pattern and excludes
-`falcon_pachinko.behaviour*` and `falcon_pachinko.unittests*`. The installed
-distribution therefore includes `falcon_pachinko.testing`, but omits the
-behaviour and unit-test support packages. These package-discovery rules are
-separate from the duplication gate's source exclusions for `testing/`,
-`unittests/`, and `behaviour/`. The gate also omits `examples/`, top-level
-`tests/`, `tools/`, and maintenance `scripts/`: these are examples, tests,
-tooling, and the gate itself, rather than shipped production modules. The
-configured roots are passed together in one detector invocation so cross-root
-families remain visible. The initial report selected only `__init__.py`,
-`exceptions.py`, `router.py`, and `websocket.py`, with no excluded paths.
-
-`make build` installs the `dev` dependency group with `uv sync --group dev`; it
-does not install the optional `examples` extra. Run
-`uv sync --group dev --extra examples` before running example programs or tests
-that require example-only dependencies such as `aiosqlite`.
-
-The detector runs `syntax,semantic,near`, with a minimum of 24 intermediate-
-language tokens, `surface = "all"`, and a top-30 ranked-family limit. `all`
-widens the report surface but does not make the ranking exhaustive: allowed
-families still use positions in the top 30, and lower-ranked families are not
-enforced by that scan. The initial selected surface contained three families
-and did not reach the cap. The semantic channel supplies a limited,
-witness-backed check; it is not a guarantee of finding every Type-4 clone.
-
-The gate and its tests use an isolated, explicitly selected CPython 3.14
-tooling environment with `--no-project`; the package's Python `>=3.12` floor,
-platform support, and runtime dependencies remain unchanged. The pinned
-official binaries cover Linux glibc and macOS on x86-64 and AArch64. The gate
-uses POSIX file locking and directory operations, so native Windows gate use is
-unsupported; use POSIX or WSL. Missing trusted binaries are provisioning
-errors, with no source-build fallback. `NOSE_BIN` may select another binary;
-relative paths resolve from the repository root, and the expected version is
-checked before every scan and after installation.
-
-Detector and installer operations receive explicit runtime contexts. The
-`DetectorContext` carries the repository root, environment, binary discoverer,
-and command runner. The `InstallerContext` carries repository, configuration,
-and manifest paths; environment and process runner; system, machine, and libc
-metadata; downloader; and output callback. The CLI composition boundaries
-assemble these contexts and snapshot process state, so detector and installer
-operations use supplied dependencies rather than reading ambient globals.
-
-The isolated helper-test environment pins Syrupy 6.1.1 for exact snapshots of
-the CLI report and detector argument vectors. It also installs nose before
-running the acceptance suite; real-detector canaries fail if the binary is
-missing or has drifted. Review snapshot changes with the test contract that
-produced them. The gate and test target both pin `pathspec` 1.1.1, and a
-toolchain contract test checks that they stay in sync. This matcher validates
-configured exclusion globs and is a tool-only dependency; it does not enter the
-application environment.
-
-Use these Make targets:
-
-```text
-make install-nose
-make duplication
-make duplication-test
-make duplication-allow FIRST='path[::name]' [SECOND='path[::name]'] REASON='...'
-```
-
-The allow target reads `FIRST`, `SECOND`, and `REASON` only when supplied on
-the Make command line. Each TOML entry must have a non-blank reason and cover
-every location in one family. Every key in a `members` entry must match at
-least one location, so unused keys cannot widen an exception. Partial entries
-cannot be combined to allow a family. A named key matches only the exact
-reported unit name, never an unnamed fragment. The CLI accepts repeated
-`--second` values for families with more than two members. Updates preserve
-TOML comments, are idempotent, and use an atomic writer protected by a stable
-sidecar advisory lock. That lock coordinates participating allow commands, not
-unrelated editors.
-
-Review an unmatched stale entry against source or a sufficiently widened
-relevant scan before removing it; do not delete it automatically. In this
-ranked report, “unmatched” can mean that a family fell below the cutoff.
-
-The repository's initial families were adjudicated as follows:
-
-| Family                                                                                    | Decision and reason                                                                                                                                                                                                                                                                                                                                                                                                                                           | Regression evidence                                                                                                                                               |
-| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `exceptions.py::__init__` and `websocket.py::__init__`                                    | Intentional. The constructors belong to independent exception base classes and preserve different parameter and message contracts. A shared base or formatter would couple separate error domains without shared validation logic.                                                                                                                                                                                                                            | `falcon_pachinko/unittests/test_exceptions.py`                                                                                                                    |
-| Import fragments in `router.py` and `__init__.py`                                         | Intentional. The router imports implementation dependencies; the package initializer re-exports the public package surface. A separate helper would add an import-only module, while routing router imports through the initializer would create a cycle. Nose gives this fragment no unit name, so exact path-only keys are necessary; a future unnamed family must include locations in both files, and every listed path must match at least one location. | `tests/test_package_exports.py`                                                                                                                                   |
-| `_uri_template.py::compile_uri_template` and `_uri_template.py::_compile_prefix_template` | Retained as separate thin variants of the existing `_compile_template_with_suffix`: complete URI matching permits an optional trailing slash, while prefix matching enforces segment boundaries. The main-branch extraction changed the module path but not these contracts.                                                                                                                                                                                  | `falcon_pachinko/unittests/test_router.py::test_template_compilers_keep_complete_and_prefix_match_semantics` and `falcon_pachinko/unittests/test_uri_template.py` |
-| Unnamed fragments in `diagnostics.py`                                                     | The sequence and mapping code emits different opening delimiters. Sequence traversal preserves list or tuple shape; mapping traversal filters and normalizes keys and reports omitted entries. A shared renderer would couple their distinct output and budget rules. Nose supplies no unit names, so this exact path-only key also covers future fragments in the file; review them rather than treating the entry as blanket approval.                      | `tests/test_diagnostics_unit.py`                                                                                                                                  |
-| `_session.py` and `websocket.py` unnamed guard fragments                                  | Intentional. Nose reports both empty-list guards as unnamed fragments, so path-only keys are required. Session cleanup raises the first failure and annotates later failures; room broadcasting re-raises one failure or groups several. Sharing the guard would couple distinct error contracts. The exception covers only families located in both named modules; review any future matching family.                                                        | `falcon_pachinko/unittests/test_router_session.py` and `tests/test_connection_manager_unit.py`                                                                    |
-
-No application code was changed to clear the initial report. The gate modules
-and tests are focused adoption evidence, not a detector benchmark; no benchmark
-result or performance claim from Episodic applies to this repository.
-
 ## Build Environment
 
 The `build` target owns the local virtual environment. It depends on the
@@ -826,96 +642,15 @@ The `build` target owns the local virtual environment. It depends on the
 uv venv --clear
 ```
 
-This deliberately replaces an existing `.venv` before
-`uv sync --group dev --locked`. The behaviour matches CI, where a previous step
-may already have created the directory. Without `--clear`, modern `uv` exits
-with an error when `.venv` exists, causing downstream gates such as
-`make typecheck` to fail before they reach analysis.
-
-`uv.lock` is a prerequisite of `build` for the same reason `pyproject.toml` is
-one of `.venv`: a lockfile change should visibly invalidate the environment
-rather than leave the build graph claiming nothing changed.
+This deliberately replaces an existing `.venv` before `uv sync --group dev`.
+The behaviour matches CI, where a previous step may already have created the
+directory. Without `--clear`, modern `uv` exits with an error when `.venv`
+exists, causing downstream gates such as `make typecheck` to fail before they
+reach analysis.
 
 Prefer Makefile targets over invoking tools directly. When changing the
 Makefile, run `mbake validate Makefile` and the relevant commit gates before
 committing.
-
-## Mutation testing
-
-Mutation testing asks a different question from the rest of the suite. The
-tests answer "does this behaviour work"; a mutation run answers "would the
-suite notice if `falcon_pachinko` were wrong". It is informational, it is slow,
-and it never gates a pull request.
-
-Run it locally with:
-
-```sh
-make mutation           # mutate the package against the whole suite
-make mutation-results   # list the last run's mutants and their statuses
-```
-
-`make mutation` runs `mutmut` through `uv run --with mutmut==3.6.0`, so the
-tool is injected at call time and is deliberately not a project dependency.
-`make mutation-results` prints one line per mutant, grouped by status. To see
-what a surviving mutant actually changed, ask mutmut directly:
-
-```sh
-UV_PYTHON=3.13 uv run --with mutmut==3.6.0 mutmut show <mutant-name>
-```
-
-A run leaves a generated `mutants/` tree in the working directory. It is
-untracked and ignored, and pytest is configured to skip it: mutmut runs the
-suite from inside that tree, so the copy holds a second file for every test
-module under the same import name, and collecting both aborts the repository's
-own `make test` with an `ImportPathMismatchError`. The `norecursedirs` entry in
-`[tool.pytest.ini_options]` is what prevents that; deleting `mutants/` is safe
-whenever its results are no longer needed.
-
-The `[tool.mutmut]` section in `pyproject.toml` is the whole configuration:
-
-- **`source_paths`** is `falcon_pachinko/`, so the CLI, the harness in
-  `falcon_pachinko/testing/` and the rest of the package are mutated.
-- **`do_not_mutate`** excludes `falcon_pachinko/unittests/` and
-  `falcon_pachinko/behaviour/`. Those are the package's own tests, and a
-  mutation in a test module can never be killed: mutmut pairs a mutant with the
-  tests that execute it, and a test module is not executed by the suite it
-  belongs to. Left in, they were 1951 of 4431 mutants, 1909 of them reported
-  `no tests`, and a mutation that raised on import — `test_app_install.py` is
-  loaded as a pytest plugin — stopped collection outright rather than failing a
-  test.
-- **`also_copy`** carries `tools/`, `examples/` and `docs/` into the `mutants/`
-  tree that mutmut runs in. mutmut copies only `tests/`, `pyproject.toml`,
-  `setup.cfg` and root `test*.py` by default. Two modules in `tests/` import
-  the first two trees through `sys.path`; the executable quick-start test reads
-  `docs/users-guide.md` relative to its copied file.
-- **`pytest_add_cli_args_test_selection`** names the three test trees the run
-  uses: `tests/`, `falcon_pachinko/unittests/` and `falcon_pachinko/behaviour/`.
-- **`pytest_add_cli_args`** drops four modules and one marker.
-  `--ignore=tests/workflow_contracts`,
-  `--ignore=tests/test_toolchain_versions.py` and
-  `--ignore=tests/test_uv_toolchain.py` are repository-tooling contracts that
-  read `.github/workflows/`, `Makefile`, `uv.lock`, `pylintrc-df12.toml` and
-  `.markdownlint-cli2.jsonc` — none of which mutmut copies into `mutants/`, so
-  all three fail the baseline there. They say nothing about
-  `falcon_pachinko/`'s behaviour, so excluding them costs the mutation score
-  nothing. `--ignore=tests/test_release_archives.py` excludes the distribution
-  archive test, which builds with `uv` and installs a wheel in a fresh virtual
-  environment that the `mutants/` tree cannot support.
-  `-m "not lint_toolchain"` drops the tests that provision a PyPy interpreter
-  and reach the network; `-p no:cacheprovider` keeps the run from writing a
-  cache into the copied tree. Mutmut has no `runner` key in 3.6.0, so these
-  arguments are the whole lever.
-
-`.github/workflows/mutation.yml` runs the estate's reusable workflow
-(`leynos/shared-actions/.github/workflows/mutation-mutmut.yml`) weekly and on
-manual dispatch. There is no pull-request trigger: a mutation run executes the
-whole suite once per mutant, which is not a per-commit cost. The caller passes
-`paths: "falcon_pachinko/"`, an empty `module-prefix-strip` (the package is
-top-level, not `src/`-layout) and `python-version: "3.13"` to match
-`.github/cv005.toml` and `ci.yml`. The scheduled run is scoped to files changed
-in the last week, so a quiet week finishes in seconds; a dispatch runs
-everything. Results land in the job summary and as the `mutation-report-mutmut`
-artefact.
 
 ## Coverage and CodeScene
 
@@ -1066,50 +801,38 @@ public-repository minutes are free and where this migration has nothing to gain.
 | Job                                   | Trigger            | Ceiling |
 | ------------------------------------- | ------------------ | ------- |
 | `ci.yml` `lint-test`                  | pull request, push | 15 min  |
-| `ci.yml` `falcon-minimum`             | pull request, push | 30 min  |
-| `ci.yml` `build-dist`                 | pull request, push | 15 min  |
 | `coverage-main.yml` `coverage-upload` | push to `main`     | 15 min  |
-| `release.yml` `check-version`         | tag push           | 30 min  |
-| `release.yml` `build-wheels`          | tag push           | 30 min  |
-| `release.yml` `attest`                | tag push           | 30 min  |
-| `release.yml` `draft-release`         | tag push           | 30 min  |
-| `release.yml` `publish-pypi`          | tag push           | 30 min  |
-| `release.yml` `publish-release`       | tag push           | 30 min  |
+| `release.yml` `pure-wheel`            | tag push           | 30 min  |
+| `release.yml` `release`               | tag push           | 30 min  |
 
 *Table: the lanes that run on Ubicloud.*
 
-Everything else stays GitHub-hosted. `delayed-pr-comment.yml`'s
+Everything else stays GitHub-hosted. `build-wheels.yml`'s `build` is a
+`workflow_call` matrix across Ubuntu, Windows and macOS, including aarch64
+under emulation, and Ubicloud offers Linux only. `delayed-pr-comment.yml`'s
 `delay_and_comment` is dispatch-only. `dependabot-automerge.yml`'s `automerge`
 calls a reusable workflow and declares no runner of its own.
 
-### Pull-request lanes use a fork-safe runner expression
+### The pull-request lane's label is an expression
 
-A pull request from a fork cannot obtain an Ubicloud runner. `lint-test`,
-`falcon-minimum` and `build-dist` serve pull requests, so a fixed
-`ubicloud-standard-2` would leave a fork pull request queueing for a runner
-that never arrives. A pull request Dependabot opened also takes the hosted arm:
-hosted minutes cost nothing on a public repository, and Dependabot opens many
-pull requests, which therefore build cold on the hosted pool. The guard tests
-the pull request's author, not `github.actor`, because the actor is whoever
-triggered the run, so a person pushing to a Dependabot branch would flip the
-runner. All three jobs resolve their label from the head repository and the
-author instead:
+A pull request from a fork cannot obtain an Ubicloud runner. `lint-test` serves
+pull requests, so a fixed `ubicloud-standard-2` would leave such a pull request
+queueing for a runner that never arrives. It resolves its label from the head
+repository instead:
 
 ```yaml
 runs-on: >-
-  ${{ (github.event.pull_request.head.repo.fork
-  || github.event.pull_request.user.login == 'dependabot[bot]')
+  ${{ github.event.pull_request.head.repo.fork
   && 'ubuntu-latest' || 'ubicloud-standard-2' }}
 ```
 
-The fork field takes three values. A pull request from a fork sets it to `true`
-and takes the GitHub-hosted arm. A pull request from a branch of this
-repository sets it to `false`. Any other event, `push` to `main` included,
-carries no `pull_request` object at all, and GitHub evaluates the missing
-property as an empty string. `false` and the empty string are both falsy, so
-both reach Ubicloud; the distinction matters only because a reader who believed
-non-fork pull requests left the field empty would conclude the expression had a
-case it does not handle.
+The guard reads one field, and it takes three values. A pull request from a
+fork sets it to `true` and takes the GitHub-hosted arm. A pull request from a
+branch of this repository sets it to `false`. Any other event, `push` to `main`
+included, carries no `pull_request` object at all, so the field is null.
+`false` and null are both falsy, so both reach Ubicloud; the distinction
+matters only because a reader who believed non-fork pull requests left the
+field null would conclude the expression had a case it does not handle.
 
 Two rules follow, and a green run demonstrates neither:
 
@@ -1118,7 +841,7 @@ Two rules follow, and a green run demonstrates neither:
   to a label with a newline inside the expression. The document still parses,
   `actionlint` still passes, and GitHub evaluates the newline-bearing
   expression anyway.
-- Do not copy the expression onto the remaining lanes. They trigger on a
+- Do not copy the expression onto the other three lanes. They trigger on a
   push or a tag, where `github.event.pull_request` is null, so the guard could
   never hold. A guard that cannot hold reads as protection and is not.
 
@@ -1141,13 +864,10 @@ The two measured ceilings are sized from real runs rather than chosen:
 *Table: the runs the ceilings are sized from.*
 
 Fifteen minutes is roughly twenty-five times the longest of these, which leaves
-room for a cold cache and for Ubicloud's two vCPUs. `falcon-minimum` has no
-recorded run yet; its thirty-minute ceiling gives the uncovered full suite
-extra headroom. `build-dist` also has no recorded run, so its fifteen-minute
-ceiling is provisional. The release lanes have no recorded runs either, so
-their thirty-minute ceilings are provisional and set wide because a release
-killed part-way is worse than one that runs long. Re-size each lane after its
-third Ubicloud run.
+room for a cold cache and for Ubicloud's two vCPUs. The release lanes have no
+recorded run at all, so their thirty minutes is not measured; it is set wide on
+the principle that a release killed part-way is worse than one that runs long.
+Re-size on the third Ubicloud run of each lane.
 
 The last row is the first run on Ubicloud, and it is slower than the
 GitHub-hosted run above it: 44 s against 36 s, on an 11 s queue against 2 s.
@@ -1224,9 +944,8 @@ contracts rather than derived from the workflows. The rule that every Ubicloud
 lane declares a ceiling says nothing about the number, so a ceiling widened to
 six hours would pass it while leaving this guide's table wrong; the same holds
 for `coverage-main.yml`'s `branches: [main]` and `release.yml`'s `v*.*.*` tags,
-which carry the rest of the placement argument. All six release jobs use the
-same 30-minute ceiling. Change a figure in a workflow and this guide in the
-same commit, or the contract fails.
+which carry the rest of the placement argument. Change a figure in a workflow
+and this guide in the same commit, or the contract fails.
 
 The registry in `.github/actionlint.yaml` is held to an equality with the
 labels actually in use, in both directions. A subset assertion would miss a
@@ -1235,24 +954,21 @@ play. The exemption is a named set of GitHub-hosted labels rather than a
 provider prefix: a prefix rule would silently exempt a second paid provider's
 labels, which is the question the registry exists to ask.
 
-The in-use set accounts for every workflow that declares a runner label. The
-contract names the workflows the traversal must reach, so dropping one fails
-there rather than silently shrinking what the registry is held to.
+The in-use set accounts for every workflow that declares a label, including
+`build-wheels.yml`, which is `workflow_call` and which nothing in this
+repository calls. The alternative was a rule excluding callerless
+`workflow_call` files, and it was rejected: such a file is one line away from
+gaining a caller, and "callerless" is not even a local property, since a caller
+may live in another repository. A rule that skipped it would quietly stop
+asking the registry question for a workflow that could run tomorrow. A contract
+names the workflows the traversal must reach, so dropping one fails there
+rather than silently shrinking what the registry is held to.
 
 Two contracts read the `on:` block rather than the jobs, because the placement
-rules rest on claims about events: that a fork can reach `lint-test`,
-`falcon-minimum` and `build-dist`, and that no fork can reach the remaining
-Ubicloud jobs. A contract reading only `runs-on` asserts the consequence and
-never the premise, so a silent change to a trigger would leave the consequence
-looking deliberate. Those contracts read the trigger block under the boolean key
-`True`, because YAML 1.1 parses the bare word `on` that way; a contract
-reading the string `"on"` finds nothing and passes on an empty mapping, which
-is itself asserted.
-
-## Publishing a release
-
-Pull requests build an sdist and a wheel from it. The tag workflow attests
-those distributions, publishes missing files through PyPI Trusted Publishing,
-then reconciles and publishes the GitHub Release after comparing digests.
-Follow the [release workflow guide](release-workflow.md) for versioning,
-repository settings, tag creation, retries, and mismatch recovery.
+rules rest on claims about events: that a fork can reach `lint-test`, and that
+no fork can reach the other three. A contract reading only `runs-on` asserts
+the consequence and never the premise, so a silent change to a trigger would
+leave the consequence looking deliberate. Those contracts read the trigger
+block under the boolean key `True`, because YAML 1.1 parses the bare word `on`
+that way; a contract reading the string `"on"` finds nothing and passes on an
+empty mapping, which is itself asserted.

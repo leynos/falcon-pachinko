@@ -210,7 +210,7 @@ class HookTestEnvironment:
         HookChild._events = self.events
         HookChild.instances = []
         HookParent.instances = []
-        self.router = WebSocketRouter(receive_loop=True)
+        self.router = WebSocketRouter()
         self._ws: DummyWS | None = None
         self._register_hooks()
 
@@ -291,7 +291,7 @@ async def test_hook_context_parameter_propagation(
     hook_test_environment: HookTestEnvironment,
 ) -> None:
     """Before-connect hooks may amend params passed to the resource."""
-    child = await hook_test_environment.open_connection()
+    child = await hook_test_environment.open_connection([b'{"type":"noop"}'])
 
     assert child.params["global"] is True, (
         "global before_connect hook should have set the global flag"
@@ -396,7 +396,7 @@ async def test_after_receive_reports_errors() -> None:
     global_hook = create_error_reporting_global_hook(events)
     resource_hook = create_error_reporting_resource_hook(events)
 
-    router = WebSocketRouter(receive_loop=True)
+    router = WebSocketRouter()
     router.global_hooks.add("before_receive", global_hook)
     router.global_hooks.add("after_receive", global_hook)
 

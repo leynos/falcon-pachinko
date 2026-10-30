@@ -22,6 +22,7 @@ from ._common import FrameKind, _decode_json
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from falcon_pachinko.lifecycle import WebSocketSession
     from falcon_pachinko.router import ResourceFactory
     from falcon_pachinko.testing.simulator import WebSocketSimulator
 
@@ -35,8 +36,9 @@ class SimulatorConnection:
     simulator: WebSocketSimulator
     request: object
     websocket: _OriginalWebSocket
-    _json_decoder: msjson.Decoder = dc.field(init=False, repr=False)
-    _decoders: dict[type[object], msjson.Decoder] = dc.field(
+    session: WebSocketSession | None = None
+    _json_decoder: msjson.Decoder[object] = dc.field(init=False, repr=False)
+    _decoders: dict[type[object], msjson.Decoder[object]] = dc.field(
         init=False, repr=False, default_factory=dict
     )
 
@@ -87,7 +89,7 @@ class SimulatorConnection:
         raw = self.pop_sent()
         return _decode_json(self._decoder_for(payload_type), raw, payload_type)
 
-    def _decoder_for(self, payload_type: type[object] | None) -> msjson.Decoder:
+    def _decoder_for(self, payload_type: type[object] | None) -> msjson.Decoder[object]:
         """Return a cached decoder for ``payload_type``."""
         if payload_type is None:
             return self._json_decoder
@@ -106,6 +108,19 @@ class SimulatorConnection:
     async def push_bytes(self, payload: bytes | bytearray | memoryview) -> None:
         """Queue a binary frame for the resource."""
         await self.simulator.push_bytes(payload)
+
+    async def next_sent(self) -> object:
+        """Wait for a response after the router processes inbound frames."""
+        return await self.simulator.next_sent()
+
+    async def wait_for_sent_count(self, count: int) -> None:
+        """Wait for a response count without consuming queued frames."""
+        await self.simulator.wait_for_sent_count(count)
+
+    async def next_sent_json(self, payload_type: type[object] | None = None) -> object:
+        """Wait for and decode the next JSON response."""
+        raw = await self.next_sent()
+        return _decode_json(self._decoder_for(payload_type), raw, payload_type)
 
     async def disconnect(self, code: int = 1000) -> None:
         """Queue a client disconnect after any pending inbound frames."""
@@ -128,7 +143,6 @@ class SimulatorRouterHarness:
         self.router = WebSocketRouter(
             resource_factory=resource_factory,
             simulator_factory=self._provide_simulator,
-            receive_loop=True,
         )
         self._mounted = False
         self.mount(self._mount_prefix)
@@ -197,13 +211,15 @@ class SimulatorRouterHarness:
             headers={key.lower(): value for key, value in (headers or {}).items()},
         )
         original = _OriginalWebSocket()
-        router_task = asyncio.create_task(self.router.on_websocket(request, original))
-        session = _ConnectionSession(
-            request_path, simulator, request, original, router_task
-        )
+        session = _ConnectionSession(request_path, simulator, request, original)
         try:
+            session.session = await self.router.negotiate(request, original)
+            if session.session is not None:
+                session.router_task = asyncio.create_task(session.session.run())
+                # Start post-accept setup before exposing the fixture handle.
+                await asyncio.sleep(0)
             await asyncio.wait_for(
-                self._wait_until_ready(simulator, router_task), timeout=5
+                self._wait_until_ready(simulator, session.router_task), timeout=5
             )
         except (Exception, asyncio.CancelledError):
             await self._rollback_startup(session)
@@ -213,22 +229,79 @@ class SimulatorRouterHarness:
     async def _rollback_startup(self, session: _ConnectionSession) -> None:
         """Clean up a failed setup while preserving its original exception."""
         self._pending_simulator = None
+        if session.session is not None:
+            with suppress(Exception, asyncio.CancelledError):
+                await session.session.ws.close()
+            with suppress(Exception, asyncio.CancelledError):
+                await session.session.aclose()
         with suppress(Exception, asyncio.CancelledError):
             await session.simulator.close()
         with suppress(Exception, asyncio.CancelledError):
             if not session.websocket.closed:
                 await session.websocket.close()
         with suppress(Exception, asyncio.CancelledError):
-            await self._await_router_task(session.router_task)
+            if session.router_task is not None:
+                await self._await_router_task(session.router_task)
 
     async def _finish_connection(self, session: _ConnectionSession) -> None:
         """Close test sockets and await the router's session task."""
         self._pending_simulator = None
-        if not session.simulator.closed:
+        if session.session is not None:
+            await self._close_accepted_session(session)
+        elif not session.simulator.closed:
             await session.simulator.close()
         if not session.websocket.closed:
             await session.websocket.close()
-        await self._await_router_task(session.router_task)
+
+    async def _close_accepted_session(self, session: _ConnectionSession) -> None:
+        """Finalize the accepted handle and retrieve its run-task result."""
+        accepted_session = session.session
+        if accepted_session is None:
+            return
+        await accepted_session.ws.close()
+        router_task = session.router_task
+        cancelled_for_exit = await self._stop_router_task(router_task)
+        self._retrieve_task_exception(router_task)
+        await self._close_session_handle(
+            accepted_session, cancelled_for_exit=cancelled_for_exit
+        )
+
+    @staticmethod
+    async def _stop_router_task(router_task: asyncio.Task[None] | None) -> bool:
+        """Wait briefly for routing to finish, then cancel it for fixture exit."""
+        if router_task is None or router_task.done():
+            return False
+        await asyncio.wait({router_task}, timeout=1.0)
+        if router_task.done():
+            return False
+        router_task.cancel()
+        with suppress(Exception, asyncio.CancelledError):
+            await router_task
+        return True
+
+    @staticmethod
+    async def _close_session_handle(
+        accepted_session: WebSocketSession, *, cancelled_for_exit: bool
+    ) -> None:
+        """Finalize the handle without swallowing caller cancellation."""
+        try:
+            await accepted_session.aclose()
+        except asyncio.CancelledError:
+            current_task = asyncio.current_task()
+            cancellation_is_requested = (
+                current_task is not None and current_task.cancelling() > 0
+            )
+            if not cancelled_for_exit or cancellation_is_requested:
+                raise
+
+    @staticmethod
+    def _retrieve_task_exception(router_task: asyncio.Task[None] | None) -> None:
+        """Retrieve a completed session error not consumed by ``aclose``."""
+        if router_task is None:
+            return
+        if not router_task.done() or router_task.cancelled():
+            return
+        router_task.exception()
 
     @asynccontextmanager
     async def connect(
@@ -269,6 +342,7 @@ class SimulatorRouterHarness:
                 simulator=session.simulator,
                 request=session.request,
                 websocket=session.websocket,
+                session=session.session,
             )
         finally:
             await self._finish_connection(session)
@@ -276,11 +350,12 @@ class SimulatorRouterHarness:
     @staticmethod
     async def _wait_until_ready(
         simulator: _HarnessSimulator,
-        router_task: asyncio.Task[None],
+        router_task: asyncio.Task[None] | None,
     ) -> None:
         """Wait until routing accepts, closes, or fails before yielding."""
+        await asyncio.sleep(0)
         await asyncio.wait_for(simulator.ready_event.wait(), timeout=5)
-        if simulator.closed or router_task.done():
+        if router_task is not None and router_task.done():
             await router_task
 
     @staticmethod
@@ -304,4 +379,5 @@ class _ConnectionSession:
     simulator: WebSocketSimulator
     request: object
     websocket: _OriginalWebSocket
-    router_task: asyncio.Task[None]
+    session: WebSocketSession | None = None
+    router_task: asyncio.Task[None] | None = None

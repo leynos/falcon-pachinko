@@ -10,11 +10,13 @@ import msgspec.json as msjson
 import pytest
 from pytest_bdd import given, scenario, then, when
 
-from falcon_pachinko import WebSocketResource, WebSocketRouter, WebSocketSimulator
-from tests._stubs import RecordingWebSocket
+from falcon_pachinko import SimulatorConnection, WebSocketResource, WebSocketSimulator
+from falcon_pachinko.testing import SimulatorRouterHarness
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing only
     import collections.abc as cabc
+
+    from falcon_pachinko.protocols import WebSocketLike
 
 
 class EchoResource(WebSocketResource):
@@ -23,32 +25,31 @@ class EchoResource(WebSocketResource):
     instances: typ.ClassVar[list[EchoResource]] = []
 
     def __init__(self) -> None:
-        self.websocket: WebSocketSimulator | None = None
+        self.websocket: object | None = None
         self.received: list[object] = []
         EchoResource.instances.append(self)
 
-    async def on_connect(self, req: object, ws: object, **_: object) -> bool:
-        """Capture the simulator and record the first inbound message."""
-        assert isinstance(ws, WebSocketSimulator), (
-            "the router must inject the simulator instance"
-        )
+    async def on_connect(self, req: object, ws: WebSocketLike, **_: object) -> bool:
+        """Capture the simulator; the router owns all later receives."""
         self.websocket = ws
-        raw = await ws.receive_media()
-        assert isinstance(raw, bytes), "push_json must queue an encoded JSON frame"
-        payload = msjson.decode(raw)
+        return True
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Echo one decoded simulator frame as an acknowledgement."""
+        payload = msjson.decode(message)
         self.received.append(payload)
         await ws.send_media({"type": "ack"})
-        return False
 
 
 @dc.dataclass(slots=True)
 class SimulatorScenario:
     """Container for scenario state."""
 
-    router: WebSocketRouter
-    simulator: WebSocketSimulator
+    harness: SimulatorRouterHarness
+    payload: dict[str, object] | None = None
+    simulator: WebSocketSimulator | None = None
+    connection: SimulatorConnection | None = None
     resource: EchoResource | None = None
-    original: RecordingWebSocket | None = None
 
 
 @pytest.fixture
@@ -71,13 +72,11 @@ def test_websocket_simulator() -> None:  # pragma: no cover - scenario registrat
     target_fixture="context",
 )
 def given_router() -> SimulatorScenario:
-    """Create a router that always injects the same simulator instance."""
+    """Create a mounted harness that injects a simulator per connection."""
     EchoResource.instances.clear()
-    simulator = WebSocketSimulator()
-    router = WebSocketRouter(simulator_factory=lambda *_: simulator)
-    router.add_route("/echo", EchoResource)
-    router.mount("/")
-    return SimulatorScenario(router=router, simulator=simulator)
+    harness = SimulatorRouterHarness()
+    harness.router.add_route("/echo", EchoResource)
+    return SimulatorScenario(harness=harness)
 
 
 @given(
@@ -85,10 +84,10 @@ def given_router() -> SimulatorScenario:
     target_fixture="context",
 )
 def given_message(
-    context: SimulatorScenario, event_loop: asyncio.AbstractEventLoop
+    context: SimulatorScenario,
 ) -> SimulatorScenario:
-    """Queue a payload that the resource will consume during connect."""
-    event_loop.run_until_complete(context.simulator.push_json({"type": "ping"}))
+    """Record the payload to seed before the router starts receiving."""
+    context.payload = {"type": "ping"}
     return context
 
 
@@ -99,21 +98,32 @@ def given_message(
 def when_connection(
     context: SimulatorScenario, event_loop: asyncio.AbstractEventLoop
 ) -> SimulatorScenario:
-    """Dispatch a connection through the router."""
-    req = type("Req", (), {"path": "/echo", "path_template": ""})()
-    original = RecordingWebSocket()
-    event_loop.run_until_complete(context.router.on_websocket(req, original))
-    context.original = original
+    """Run the router in the background and wait for its seeded reply."""
+    assert context.payload is not None, "the simulator payload must be prepared"
+
+    async def connect() -> SimulatorConnection:
+        async with context.harness.connect(
+            "/echo", initial_inbound=[(context.payload, "json")]
+        ) as connection:
+            await asyncio.wait_for(connection.wait_for_sent_count(1), timeout=5)
+            return connection
+
+    context.connection = event_loop.run_until_complete(connect())
+    context.simulator = context.connection.simulator
     context.resource = EchoResource.instances[-1]
     return context
 
 
-@then("the resource receives the simulator instance")
+@then("the resource receives the guarded session socket")
 def then_resource(context: SimulatorScenario) -> None:
     """Assert that the resource saw the injected simulator."""
     assert context.resource is not None, "the echo resource must have been constructed"
-    assert context.resource.websocket is context.simulator, (
-        "the resource must receive the injected simulator"
+    assert context.connection is not None, "the simulator must retain the connection"
+    assert context.connection.session is not None, (
+        "the connection must expose its session"
+    )
+    assert context.resource.websocket is context.connection.session.ws, (
+        "the resource must receive the guarded session socket"
     )
     assert context.resource.received == [{"type": "ping"}], (
         "the resource must have decoded the queued message"
@@ -123,6 +133,7 @@ def then_resource(context: SimulatorScenario) -> None:
 @then("the simulator records the acknowledged message")
 def then_ack(context: SimulatorScenario) -> None:
     """Ensure outbound frames are captured by the simulator."""
+    assert context.simulator is not None, "the connection must create a simulator"
     assert context.simulator.sent_messages == [{"type": "ack"}], (
         "the simulator must record the acknowledgement frame"
     )
@@ -134,5 +145,8 @@ def then_ack(context: SimulatorScenario) -> None:
 @then("the simulator closes the connection")
 def then_closed(context: SimulatorScenario) -> None:
     """Verify the simulator lifecycle is completed by the router."""
+    assert context.connection is not None, "the harness must yield a connection"
+    assert context.simulator is not None, "the connection must create a simulator"
+    assert context.connection.closed is True, "the harness must close the connection"
     assert context.simulator.closed is True, "the simulator must be closed"
     assert context.simulator.close_code == 1000, "the close code must be the default"

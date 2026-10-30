@@ -60,16 +60,12 @@ class WebSocketSimulator(_LifecycleSocket):
         self._decoders: dict[type[object], msjson.Decoder] = {}
         self.sent_messages: list[object] = []
         self.received_messages: list[object] = []
+        self._outbound_event = asyncio.Event()
 
     # pylint: disable-next=trivial-attribute-wrapper  # deliberate public API: the inbound queue is private, so callers need this accessor to inspect backlog depth
     def pending_inbound(self) -> int:
         """Return the number of queued inbound frames."""
         return self._inbound.qsize()
-
-    # pylint: disable-next=trivial-attribute-wrapper  # deliberate public API: the outbound queue is private, so callers need this accessor to inspect backlog depth
-    def pending_outbound(self) -> int:
-        """Return the number of queued outbound frames."""
-        return self._outbound.qsize()
 
     def _decoder_for(self, payload_type: type[object] | None) -> msjson.Decoder:
         """Return a cached decoder for ``payload_type``."""
@@ -79,16 +75,20 @@ class WebSocketSimulator(_LifecycleSocket):
             decoder = self._decoders[payload_type] = msjson.Decoder(payload_type)
         return decoder
 
-    async def send_media(self, data: object) -> None:
+    async def send_media(
+        self, data: object, payload_type: object | None = None
+    ) -> None:
         """Record ``data`` as an outbound frame."""
+        del payload_type
         await self._outbound.put(data)
         self.sent_messages.append(data)
+        self._outbound_event.set()
 
-    async def close(self, code: int = 1000) -> None:
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Close the socket and wake any pending receive operation."""
         if self.closed:
             return
-        await super().close(code)
+        await super().close(code, reason)
         self._inbound.put_nowait(_CLOSED_SENTINEL)
 
     async def receive_media(self) -> object:
@@ -106,6 +106,14 @@ class WebSocketSimulator(_LifecycleSocket):
     async def next_sent(self) -> object:
         """Await the next outbound frame emitted by the simulator."""
         return await self._outbound.get()
+
+    async def wait_for_sent_count(self, count: int) -> None:
+        """Wait until at least ``count`` outbound frames have been processed."""
+        while len(self.sent_messages) < count:
+            self._outbound_event.clear()
+            if len(self.sent_messages) >= count:
+                return
+            await self._outbound_event.wait()
 
     def pop_sent(self) -> object:
         """Pop the next outbound frame synchronously."""

@@ -28,16 +28,20 @@ class SessionSocket(WebSocketLike):
         self.accept_error = accept_error
         self.receiving = asyncio.Event()
 
-    async def accept(self, subprotocol: str | None = None) -> None:
+    async def accept(
+        self,
+        subprotocol: str | None = None,
+        headers: object = None,
+    ) -> None:
         """Accept unless the configured handshake failure is raised."""
         if self.accept_error is not None:
             raise self.accept_error
         self.accepted = True
 
-    async def close(self, code: int = 1000) -> None:
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Record session closure."""
         self.closed = True
-        self.close_codes.append(code)
+        self.close_codes.append(1000 if code is None else code)
 
     async def send_media(self, data: object) -> None:
         """Reject sends; these router tests record dispatch directly."""
@@ -61,10 +65,12 @@ class SessionResource(WebSocketResource):
         self.frames: list[str | bytes] = []
         self.disconnects: list[tuple[object, int]] = []
         self.dispatch_error = dispatch_error
+        self.websocket: object | None = None
 
     @typ.override
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
         """Accept the connection."""
+        self.websocket = ws
         return True
 
     @typ.override
@@ -80,9 +86,9 @@ class SessionResource(WebSocketResource):
         self.disconnects.append((ws, close_code))
 
 
-def session_router(resource: SessionResource, *, receive_loop: bool) -> WebSocketRouter:
-    """Mount a single resource for opt-in session lifecycle tests."""
-    router = WebSocketRouter(receive_loop=receive_loop)
+def session_router(resource: SessionResource) -> WebSocketRouter:
+    """Mount a single resource for router-owned session lifecycle tests."""
+    router = WebSocketRouter()
     router.add_route("/session", lambda: resource)
     router.mount("/")
     return router

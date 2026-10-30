@@ -168,15 +168,17 @@ def test_decorating_lifecycle_callback_is_rejected() -> None:
             ) -> None: ...
 
 
-def test_decorating_on_accepted_callback_is_rejected() -> None:
+def test_decorating_on_session_start_callback_is_rejected() -> None:
     """A decorated acceptance hook cannot be registered as a message."""
-    with pytest.raises(ReservedHandlerRegistrationError, match="on_accepted"):
+    with pytest.raises(ReservedHandlerRegistrationError, match="on_session_start"):
 
         class DecoratedAccepted(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
             WebSocketResource
         ):
             @handles_message("accepted")
-            async def on_accepted(self, ws: WebSocketLike, payload: object) -> None: ...
+            async def on_session_start(
+                self, ws: WebSocketLike, payload: object
+            ) -> None: ...
 
 
 def test_decorating_lifecycle_name_under_unrelated_tag_is_rejected() -> None:

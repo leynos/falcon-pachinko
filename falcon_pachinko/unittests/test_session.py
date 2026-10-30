@@ -100,7 +100,7 @@ def _router_for(
     resource_factory: cabc.Callable[..., WebSocketResource] | None = None,
 ) -> WebSocketRouter:
     """Return a mounted router that resolves to ``resource``."""
-    router = WebSocketRouter(resource_factory=resource_factory, receive_loop=True)
+    router = WebSocketRouter(resource_factory=resource_factory)
     router.add_route("/session", lambda: resource)
     router.mount("/")
     return router
@@ -440,9 +440,7 @@ async def test_nested_session_keeps_di_hooks_and_shared_state() -> None:
     )
     container = ServiceContainer()
     container.register("dependency", dependency)
-    router = WebSocketRouter(
-        resource_factory=container.create_resource, receive_loop=True
-    )
+    router = WebSocketRouter(resource_factory=container.create_resource)
     router.add_route("/parent", ParentResource)
     router.mount("/")
     router.global_hooks.add(

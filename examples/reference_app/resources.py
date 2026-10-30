@@ -172,6 +172,9 @@ class TaskStreamResource(WebSocketResource):
         self._feed = announcement_feed
         self._conn_mgr = conn_mgr
         self._conn_id: str | None = None
+        self._workspace_id: str | None = None
+        self._project_id: str | None = None
+        self._user: str | None = None
         self._complete_config = TaskOperationConfig(
             repo_operation=self._repo.complete_task,
             response_type="task.completed",
@@ -204,7 +207,7 @@ class TaskStreamResource(WebSocketResource):
         self.state["user"] = user
         return True
 
-    async def on_accepted(self, ws: WebSocketLike) -> None:
+    async def on_session_start(self, ws: WebSocketLike) -> None:
         """Register and announce the session after Falcon accepts the socket."""
         workspace_id: str = self.state["workspace_id"]
         project_id: str = self.state["project_id"]
@@ -243,9 +246,10 @@ class TaskStreamResource(WebSocketResource):
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Remove the websocket from the connection manager on disconnect."""
-        if self._conn_id is None:
-            return
         conn_id = self._conn_id
+        self._conn_id = None
+        if conn_id is None:
+            return
         await self._conn_mgr.remove_connection(conn_id)
         await self._audit.record(
             "session.closed",

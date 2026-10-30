@@ -187,7 +187,7 @@ def test_raw_helper_and_attach_share_idempotent_serialization_setup(
         falcon.WebSocketPayloadType.TEXT: text,
         falcon.WebSocketPayloadType.BINARY: binary,
     }
-    router = WebSocketRouter(receive_loop=True)
+    router = WebSocketRouter()
     router.add_route("/", WebSocketResource)
 
     with warnings.catch_warnings(record=True) as first_warnings:

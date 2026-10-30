@@ -6,36 +6,19 @@ router/resource model, then dives into advanced patterns such as dependency
 injection, shared state, custom connection manager backends, background
 workers, and testing utilities.
 
-## Installation
+## Requirements
 
-The distribution is named `falcon-pachinko`; Python code imports it as
-`falcon_pachinko`. Install it with pip or add it to a uv-managed project:
-
-```bash
-python -m pip install --pre falcon-pachinko
-uv add --prerelease allow falcon-pachinko
-```
-
-The current alpha is a pre-release. To install pre-releases, opt in explicitly
-with `python -m pip install --pre falcon-pachinko` or
-`uv add --prerelease allow falcon-pachinko`.
-
-Install the `examples` extra for the example application's dependencies or the
-`testing` extra for the package's testing utilities:
-
-```bash
-python -m pip install --pre 'falcon-pachinko[examples]'
-python -m pip install --pre 'falcon-pachinko[testing]'
-uv add --prerelease allow 'falcon-pachinko[examples]'
-uv add --prerelease allow 'falcon-pachinko[testing]'
-```
+Falcon-Pachinko supports `falcon>=4,<4.5`. Falcon 4.5 is not yet supported
+because the WebSocket adapter uses Falcon's private `_receive()` method. See the
+[migration guide](migration-guide.md#what-changed) before upgrading an
+existing installation.
 
 ## 1. Core Concepts
 
 - **WebSocketRouter** – Mountable Falcon resource that owns route definitions
   and orchestrates instantiation.
 - **WebSocketResource** – Per-connection handler exposing lifecycle hooks
-  (`on_connect`, `on_accepted`, `on_disconnect`) and message handlers.
+  (`on_connect`, `on_session_start`, `on_disconnect`) and message handlers.
 - **Composable hierarchy** – Resources can register child routes with
   `add_subroute`, passing context and shared state down the chain.
 - **Schema-driven dispatch** – Define a `msgspec` tagged union `schema` and
@@ -147,7 +130,7 @@ class RouterAdapter:
 
 app = falcon.asgi.App()
 configure_raw_frame_media(app)
-router = WebSocketRouter(receive_loop=True)
+router = WebSocketRouter()
 router.add_route("/chat/{room}", ChatResource)
 router.add_route("/", ChatResource)
 router.mount("/ws")
@@ -155,32 +138,16 @@ app.add_route("/ws", RouterAdapter(router))
 app.add_route("/ws/{rest:path}", RouterAdapter(router))
 ```
 
-- Falcon matches a connection to `/ws` against the exact mount route, or a
-  descendant path against `/ws/{rest:path}`, then forwards the connection to
-  `RouterAdapter`. The adapter presents the `/ws` mount template to the router
-  and delegates other request attributes and methods to Falcon's request. The
-  router then matches `/ws/chat/{room}` against its mounted routes.
-- `configure_raw_frame_media(app)` preserves inbound TEXT and BINARY frames
-  for schema dispatch when the router is mounted manually.
+- The router is mounted once (`router.mount("/ws")`). In Falcon, register it
+  both at the exact prefix and at one descendant route ending in
+  `/{pachinko_path:path}` so it receives descendant paths. The router matches
+  using the concrete request path.
+- `on_connect` runs before router acceptance. Return `True` to ask the router
+  to accept, or return a falsey value to reject the connection.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
-- The example opts into a router-owned receive-and-dispatch session with
-  `receive_loop=True`. The default is `False`, which returns after acceptance
-  and leaves receives and cleanup to the application.
-- When `payload` is present and valid, the `ChatPayload` annotation makes the
-  router pass a `ChatPayload` instance to the handler. When `payload` is
-  absent, the typed handler receives `None`; this example ignores it.
-- An unannotated handler receives the decoded JSON value directly, such as a
-  `dict` for an object, a list for an array, or `None` when the payload is
-  absent.
-
-Save the Python snippet as `quickstart.py`. An ASGI server is required to serve
-the WebSocket connection; Uvicorn is included in the `examples` extra or the
-`dev` dependency group.
-
-```sh
-uvicorn quickstart:app
-```
+- The router accepts approved connections, runs `on_session_start()`, then
+  receives and dispatches frames sequentially until the session ends.
 
 ### The `add_route` signature
 
@@ -190,7 +157,6 @@ def add_route(
     path: str,
     resource: type[WebSocketResource] | cabc.Callable[..., WebSocketResource],
     *init_args: object,
-    name: str | None = None,
     **init_kwargs: object,
 ) -> None: ...
 ```
@@ -213,55 +179,35 @@ def add_route(
   router.add_route("/p", functools.partial(MyResource, name="x"), name="route")
   ```
 
-### Route template syntax
-
-Route templates match their literal text exactly. Regular-expression
-metacharacters such as `.`, `+`, brackets, and parentheses have no special
-meaning in a route. A parameter written as `{name}` captures one or more
-non-`/` characters; parameter names must be valid Python identifiers. A path
-segment may contain one parameter or an adjacent pair at its end. Other
-multiple-parameter layouts are rejected to bound regex matching work.
-
-Braces are reserved for parameters. Empty, unmatched, nested, or doubled
-braces, invalid names, duplicate parameter names, and ambiguous multiple-
-parameter layouts raise `ValueError` during route or subroute registration. A
-conflict between a mount-prefix parameter and a route parameter raises
-`ValueError` when the router is mounted. Full routes and nested subroutes are
-checked in registration order, so the first matching registration selects the
-resource and its hooks.
-
 ## 3. Resource Lifecycle & State
 
-- `on_connect(req, ws, **params) -> bool | None`
-  - Inspect headers and seed `self.state`; return `False` to reject the
-    connection. The router runs `after_connect` hooks before it calls
-    `accept()`. With `receive_loop=True`, it then begins receiving frames; with
-    the default `False`, the application owns reception. If `on_connect()` sends
-    a frame itself, call `await ws.accept()` first.
-- `on_accepted(ws) -> None`
-  - Runs immediately after Falcon accepts an allowed connection. Put
-    accept-dependent I/O here, such as registering the socket with a connection
-    manager or sending an initial frame. Disconnect cleanup also covers
-    failures in this hook. It does not add a separate hook event.
+- `on_connect(req, ws, **params) -> bool | AcceptOptions`
+  - Inspect request metadata and seed `self.state`. Return a falsey value to
+    reject, `True` to accept with defaults, or `AcceptOptions` to select a
+    subprotocol and response headers. The router accepts after `after_connect`
+    hooks complete. Calling `ws.accept()` in this hook remains temporarily
+    supported for migration but emits a deprecation warning and accepts before
+    `after_connect` runs.
+- `on_session_start(ws) -> None`
+  - Runs after successful acceptance and before frame reception. Send a ready
+    frame, register the socket with a manager, or perform other active-session
+    setup here. Failure closes the accepted connection and still runs disconnect
+    cleanup.
 - `on_disconnect(ws, close_code) -> None`
-  - The router attempts this callback once when it owns cleanup after
-    `on_connect` permits the connection. With `receive_loop=True`, it also
-    owns cleanup after peer disconnect, cancellation, or receive failure. A
-    failure during `after_connect`, `accept`, or `on_accepted` is cleaned up
-    even when `receive_loop=False`. Peer disconnects use
-    `WebSocketDisconnected.code`; an unavailable code and cancellation use
-    `1006` as cleanup metadata. Cancellation propagates without sending a close
-    frame with reserved code `1006`. Unexpected receive or handler failures
-    close with `1011` and propagate the original exception. An ordinary
-    exception from `on_accepted` closes with `1011` and runs cleanup with
-    `1011`. Rejected
-    connections and failed `on_connect` calls do not run this lifecycle. With
-    successful setup and `receive_loop=False`, the application owns receive
-    and cleanup.
-- With `receive_loop=True`, the router passes values returned by
-  `ws.receive_media()` to `WebSocketResource.dispatch()` in order until the
-  peer disconnects. An attached router configures raw media handlers so the
-  dispatcher receives the original `str` or `bytes` frame.
+  - The router runs `before_disconnect` hooks then attempts this callback once
+    for each accepted session, including `on_session_start()` or handler
+    failures. Peer close codes pass through; a missing code uses `1006`.
+    Cancellation uses `1006` as cleanup metadata, sends no close frame with that
+    reserved code, and propagates `CancelledError`. An `on_disconnect()` callback
+    already in progress is not retried. Unexpected receive or handler failures
+    close with `1011` before the original error propagates. Rejected connections
+    and failed `on_connect()` calls do not run disconnect cleanup.
+- For manual negotiation, call `await router.negotiate(req, ws)`. It returns
+  `None` when the selected resource rejects, or an accepted `WebSocketSession`
+  that has not run `on_session_start()`. Call `await session.run()` to use the
+  router's ordered receive loop, or dispatch manually and finish with
+  `await session.aclose()`. If `run()` is active in another task, `aclose()`
+  waits without a timeout; cancel and await that task to bound shutdown.
 
 For an attached router, `attach()` installs pass-through TEXT and BINARY
 deserializers in the application's shared `ws_options.media_handlers` mapping.
@@ -275,6 +221,57 @@ point has enabled raw-frame handling.
   - Dict-like proxy shared across all resources in the same connection chain.
   - Override via `get_child_context()` to supply a custom state store (e.g.,
     Redis-backed proxy).
+
+### Disconnect and cleanup contract
+
+Once `on_connect` approves the connection or a resource accepts it, the router
+owns the session through disconnect cleanup. `on_disconnect(ws, close_code)`
+runs exactly once, including when setup fails after this establishment point.
+This lets a resource roll back registrations made during `on_connect`. A
+rejected connection that was never accepted skips this post-accept cleanup.
+This includes rejection by calling `ws.close()` during `on_connect`. Accepting
+and then closing during `on_connect` still promises cleanup. An approved socket
+that never becomes accepted is cleaned up with `1011` without receiving frames.
+
+Native Falcon sockets are wrapped in a `SessionWebSocket` proxy. Public methods
+and attribute reads are forwarded, but the proxy has its own identity:
+`isinstance(ws, falcon.asgi.WebSocket)` is false, and attributes assigned to
+`ws` are stored on the proxy. Its `unaccepted` property retains acceptance
+history, including after close, rather than mirroring Falcon's post-rejection
+state. Resources and connection managers should use the supplied socket's
+capabilities rather than rely on concrete type or identity checks.
+
+Custom transports keep the existing `WebSocketLike` protocol. Transports with an
+`unaccepted` property retain its authoritative state checks. Transports
+without it receive the same proxy treatment: missing state is initially
+unknown, and successful calls to `accept()` through the supplied socket
+establish the cleanup promise. Resource-owned acceptance is tracked even if
+`on_connect` then returns a falsey result or raises.
+
+| Session ending                                    | `close_code` passed to `on_disconnect`                                                               |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Client sends a close frame                        | The close code Falcon reports                                                                        |
+| Resource or server initiates a close              | Falcon's reported disconnect code, when available; the requested outbound code is sent to the client |
+| Transport disappears without a close frame        | `1006` (abnormal closure)                                                                            |
+| Task is cancelled                                 | `1006` cleanup metadata; no close frame is sent with this reserved code                              |
+| Handler or setup fails with an ordinary exception | `1011` (internal error); the router attempts to close with this code                                 |
+
+Falcon's `WebSocketDisconnected` is a transport ending even when a resource
+observes it while sending or during accepted setup; its reported code is
+retained. Cancellation after disconnect cleanup begins does not rewrite the
+close code already selected.
+
+The router runs `before_disconnect` before `on_disconnect`, then marks the
+session closed. Cancellation uses `1006` as cleanup metadata and sends no close
+frame with that reserved code. An `on_disconnect()` callback interrupted while
+already in progress is not retried. Once disconnect begins, receive and
+dispatch hooks do not run for later frames. Cleanup runs in a shielded task and
+has no timeout, so `on_disconnect` must terminate. A cleanup exception does not
+replace a lone session exception; when both are ordinary exceptions, they are
+raised in an `ExceptionGroup` with the session exception first. A single
+failure is raised unchanged. Cancellation remains a bare `CancelledError`;
+cleanup failures that cannot be grouped with it are reported to the event
+loop's exception handler.
 
 ### Nested resources
 
@@ -324,37 +321,20 @@ class ChatResource(WebSocketResource):
         await ws.send_media({"type": "joined", "room": payload.room})
 ```
 
-- Messages are decoded with `msgspec`.
-- Registered `@handles_message` handlers match by payload type and take
-  precedence over conventional handlers.
-- Conventional handlers use `on_<snake_case(str(tag))>`:
-  `tag="sendMessage"` maps to `on_send_message`, and `tag=1` maps to `on_1`.
-- Messages without a matching handler fall back to
-  `on_unhandled(self, ws, raw)`.
-- A schema must use one kind of tag throughout: either all string tags or all
-  integer tags. `msgspec` cannot decode a union that mixes them, so the
-  combination is rejected with a `TypeError` when the resource class is
-  defined. Note that `tag=True` asks `msgspec` to use the class name as the
-  tag, which is a string.
-- That check only covers the `schema` declared on the class. Assigning
-  `resource.schema` afterwards bypasses it, so a mixed-tag union installed that
-  way is not rejected until the first message is decoded, where it raises
-  `TypeError` rather than reaching `on_unhandled`. The failure is deliberate:
-  the schema is a configuration error, and routing it to `on_unhandled` would
-  hide it behind a bad-frame fallback while leaving the broken schema in place.
-  Fix the schema instead of handling the exception.
+- Messages are decoded with `msgspec`; unknown tags fall back to
+  `on_unhandled(self, ws, raw)` when defined.
 - The decorator supports `strict=False` to allow extra fields when required.
-- With `receive_loop=True`, the router dispatches frames sequentially on the
-  accepted connection. It does not start a task per frame, so one handler
-  completes before the next frame is dispatched. Returning normally from
-  `on_unhandled` keeps the session open; application code can call
-  `await ws.close(code=...)` when its policy requires closure.
+- The router dispatches frames sequentially on the accepted connection. It
+  does not start a task per frame, so one handler completes before the next
+  frame is dispatched. Returning normally from `on_unhandled` keeps the session
+  open; application code can call `await ws.close(code=...)` when its policy
+  requires closure.
 
 Falcon's default WebSocket media handlers may decode frames before
-`receive_media()` returns them; `receive_loop=True` alone does not guarantee
-that dispatch receives the exact raw frame. When schema dispatch needs the
-original TEXT or BINARY payload, configure the app before constructing
-WebSocket connections. `router.attach()` does this automatically; use
+`receive_media()` returns them. Raw-frame media setup is required when dispatch
+needs the exact TEXT or BINARY payload. When schema dispatch needs the original
+TEXT or BINARY payload, configure the app before constructing WebSocket
+connections. `router.attach()` does this automatically; use
 `configure_raw_frame_media(app)` for manually mounted routers or other Falcon
 WebSocket routes:
 
@@ -377,19 +357,25 @@ It is the same class as `msgspec.ValidationError`, so existing
 routes validation failures to `on_unhandled`; a `ValidationError` raised inside
 a handler propagates.
 
+Native text and binary frames reach the dispatcher unchanged. Malformed JSON
+can therefore reach `on_unhandled(self, ws, raw)` without Falcon's media
+decoder ending the connection first. Falcon's public media sending methods
+retain their usual arguments, including `send_media(media=...)`.
+
 ### Reserved lifecycle names
 
 A peer chooses the envelope `type`, so the set of method names the dispatcher
 is willing to resolve from that choice is fixed when the resource class is
-created. The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are
-driven by the connection lifecycle and are **never** dispatchable. An alias
-such as `on_bye = on_disconnect`, and a copy inherited from a parent resource,
-are excluded on the same terms. The same applies to the coroutine behind a
-descriptor — `@classmethod`, `@staticmethod`, `functools.partialmethod`,
-`functools.singledispatchmethod`, `functools.cached_property` or `property` —
-when the same function is also aliased under a neutral name, and to the bound
-method or generated wrapper that reading such an entry through the class
-yields, which explicit registration passes to `add_handler`.
+created. The `on_connect`, `on_session_start`, `on_disconnect` and
+`on_unhandled` callbacks are driven by the connection lifecycle and are
+**never** dispatchable. An alias such as `on_bye = on_disconnect`, and a copy
+inherited from a parent resource, are excluded on the same terms. The same
+applies to the coroutine behind a descriptor — `@classmethod`, `@staticmethod`,
+`functools.partialmethod`, `functools.singledispatchmethod`,
+`functools.cached_property` or `property` — when the same function is also
+aliased under a neutral name, and to the bound method or generated wrapper that
+reading such an entry through the class yields, which explicit registration
+passes to `add_handler`.
 
 A tag that normalizes to a reserved name — `disconnect`, `Disconnect` and
 `DISCONNECT` all reduce to `on_disconnect` — cannot select the lifecycle
@@ -486,16 +472,12 @@ values, so omission remains the default security boundary.
 
 1) **Choose a factory** – Pass `resource_factory` to `WebSocketRouter`.
 2) **Provide services** – Register shared services in the container.
-3) **Attach the router** – All route instantiation flows through the configured
-   factory.
+3) **Mount the router** – All route instantiation flows through your factory.
 
 ```python
-import falcon.asgi
+from falcon_pachinko import ServiceContainer, WebSocketRouter
 
-from falcon_pachinko import ServiceContainer, WebSocketRouter, install
-
-app = falcon.asgi.App()
-conn_mgr = install(app)
+conn_mgr = app.ws_connection_manager
 container = ServiceContainer()
 container.register("conn_mgr", conn_mgr)
 container.register("db", my_db_pool)
@@ -503,12 +485,7 @@ container.register("db", my_db_pool)
 router = WebSocketRouter(resource_factory=container.create_resource)
 router.add_route("/rooms/{room}", ChatResource)
 router.mount("/ws")
-router.attach(app)
 ```
-
-Configure the Falcon application and its services before calling `attach()`.
-`mount()` compiles the router's paths; `attach()` registers them on the real
-Falcon app and installs raw-frame media handlers.
 
 ### Test-friendly factories
 
@@ -545,27 +522,18 @@ class Parent(WebSocketResource):
 ## 8. Custom Connection Manager Backends (How-to)
 
 `WebSocketConnectionManager` delegates storage to a `ConnectionBackend`
-implementation. Use a custom backend for alternative local storage or
-instrumentation. The registry owns live `WebSocketLike` objects in one process;
-it never serializes, proxies or shares those sockets across processes.
+implementation. Swap in your own to support clustering or observability.
 
 ```python
 from falcon_pachinko.websocket import ConnectionBackend, WebSocketConnectionManager
-from falcon_pachinko import ServiceContainer, WebSocketRouter
 
 
-class InstrumentedBackend(ConnectionBackend): ...
+class RedisBackend(ConnectionBackend): ...
 
 
-conn_mgr = WebSocketConnectionManager(backend=InstrumentedBackend(...))
-container = ServiceContainer()
-container.register("conn_mgr", conn_mgr)
-router = WebSocketRouter(resource_factory=container.create_resource)
+conn_mgr = WebSocketConnectionManager(backend=RedisBackend(...))
+app.ws_connection_manager = conn_mgr  # before router mounts
 ```
-
-Pass a custom manager through the resource factory. `install(app)` creates a
-default manager and returns it; Falcon's slotted ASGI app does not expose it as
-`app.ws_connection_manager`.
 
 Backend requirements (see `ConnectionBackend` ABC):
 
@@ -601,12 +569,9 @@ await fanout.remove_connection(connection_id)  # on disconnect
 ```
 
 Start `fanout.run` with `WorkerController` in the application lifespan and stop
-the controller during shutdown. Mount the router with
-`WebSocketRouter(receive_loop=True)` so it keeps accepted sockets open,
+the controller during shutdown. The router keeps accepted sockets open,
 dispatches incoming frames and calls `on_disconnect` when the session ends.
-This receive loop is opt-in; the default returns after acceptance and leaves
-subsequent receives and cleanup to the application after successful setup. Each
-node subscribes while it has local members in a room. It removes the
+Each node subscribes while it has local members in a room. It removes the
 subscription when the last local member leaves, releases its memberships on
 graceful shutdown, and renews leases with a heartbeat (by default, every third
 of `lease_ttl`). If a process crashes, its remote membership expires after
@@ -633,21 +598,15 @@ and need no broker.
 ## 9. Background Workers
 
 - Use `WorkerController` to start/stop async tasks during ASGI lifespan.
-- Add middleware with Falcon's `process_startup(scope, event)` and
-  `process_shutdown(scope, event)` methods to wire startup and shutdown;
-  workers can depend on the same DI container used for WebSocket resources.
+- Prefer `@app.lifespan` to wire startup/shutdown; workers can depend on the
+  same DI container used for WebSocket resources.
 - If `start()` fails while creating or scheduling a worker, it closes any
   rejected coroutine, cancels and awaits tasks already scheduled, resets the
   controller and re-raises the original error. The same controller can then be
   started again. Rollback failures are attached to the original error as notes.
 
 ```python
-import falcon.asgi
-
-from falcon_pachinko import WorkerController, install, worker
-
-app = falcon.asgi.App()
-conn_mgr = install(app)
+from falcon_pachinko import WorkerController, worker
 
 controller = WorkerController()
 
@@ -658,17 +617,11 @@ async def broadcaster(*, conn_mgr):
         await ws.send_media({"type": "ping"})
 
 
-class WorkerLifecycleMiddleware:
-    async def process_startup(self, scope, event):
-        del scope, event
-        await controller.start(broadcaster, conn_mgr=conn_mgr)
-
-    async def process_shutdown(self, scope, event):
-        del scope, event
-        await controller.stop()
-
-
-app.add_middleware(WorkerLifecycleMiddleware())
+@app.lifespan
+async def lifespan(app):
+    await controller.start(broadcaster, conn_mgr=app.ws_connection_manager)
+    yield
+    await controller.stop()
 ```
 
 The `@worker` decorator is optional and marks intent only.
@@ -678,63 +631,11 @@ it. An undecorated async function works in the same way.
 ## 10. Testing Toolkit
 
 - **WebSocketTestClient** – Real websocket client powered by `websockets`,
-  designed for integration tests; captures original payloads for assertions,
-  while trace representations and `TraceEvent.summary()` show safe metadata.
+  designed for integration tests; captures traces for assertions.
 - **WebSocketSimulator** – In-memory fake implementing the WebSocket protocol
   for fast unit tests.
-- **Live server harness** – `LiveWebSocketServer` serves a real Falcon ASGI app
-  on an ephemeral localhost port. The `live_websocket_server` pytest fixture
-  provides `start(app)` and a loop-bound `run(awaitable, timeout=...)` helper.
-  Connect with `server.connect(path)` to use `WebSocketTestClient` over a real
-  RFC WebSocket connection and have the fixture track the client for teardown.
 - **Pytest fixtures** – See `tests/behaviour/*.feature` and
   `falcon_pachinko/unittests` helpers for factory utilities.
-
-An async test can use the server directly:
-
-```python
-import pytest
-
-from falcon_pachinko.testing import LiveWebSocketServer
-
-
-@pytest.mark.asyncio
-async def test_ping_reply() -> None:
-    app = build_app()
-
-    async with LiveWebSocketServer(app) as server:
-        async with server.connect("/ws/chat") as session:
-            await session.send_json({"type": "ping"})
-            assert await session.receive_json() == {"type": "pong"}
-
-        assert server.pop_errors() == ()
-```
-
-Entering the server waits for ASGI lifespan startup and listener readiness.
-`server.connect()` tracks each client, and server teardown closes any clients
-the test leaves open. `server.errors` returns a read-only snapshot of captured
-failures; `server.pop_errors()` returns and acknowledges them. The harness
-captures exceptions handled by Falcon, exceptions escaping the ASGI callable,
-and server-task failures. Unacknowledged failures are grouped in
-`LiveServerError` when the test body completed without an exception. If the
-test body is already raising, the harness adds captured failures as notes to
-that exception so the original failure stays primary.
-
-When `capture_errors=True`, use a fresh Falcon app for each server instance:
-the capture handler remains registered on the app after server shutdown.
-
-A startup timeout or ordinary startup exception raises
-`LiveServerStartupError`. A shutdown deadline is recorded as
-`LiveServerShutdownError` and reported during teardown using the same error
-handling. The harness installs its Falcon `Exception` capture handler when the
-server starts, replacing a handler registered earlier. If the application needs
-a custom handler, register it after startup and have it call
-`server.record_error(ex)`; otherwise Falcon may consume the exception before
-the harness can report it. For synchronous tests, use the
-`live_websocket_server` fixture's `start(app)` and
-`run(awaitable, timeout=...)` methods instead. See the
-[developer guide's WebSocket lifecycle guidance](developers-guide.md#websocket-lifecycle-acceptance-tests)
-for the fixture and custom-handler details.
 
 The `websocket_simulator` pytest fixture (from `falcon_pachinko.testing`) takes
 no parameters and yields a `SimulatorRouterHarness`: a pre-mounted router and
@@ -748,22 +649,20 @@ router and simulator by hand.
 Recommended strategy:
 
 - Unit test pure resource logic with `WebSocketSimulator`.
-- Use `pytest-bdd` live-server scenarios as the required acceptance path for
-  every WebSocket lifecycle feature. These prove that real Falcon ASGI
-  responders keep a socket open and exchange frames over a real connection.
-- Keep simulator tests for fast routing, hooks, DI, and connection-manager
-  coverage; they complement the live suite and do not replace it.
-- The `lifespan_workers.feature` BDD scenarios verify workers running during
-  application lifespan; the feature file is not a fixture.
+- Behavioural tests with `pytest-bdd` to exercise router composition, hooks,
+  DI, and connection manager flows.
+- Worker tests using the `WorkerController` fixture from
+  `tests/behaviour/lifespan_workers.feature`.
 
 ## 11. Reference Example
 
-`examples/reference_app` is a live Falcon ASGI demonstration of nested
-workspace, project, and task resources; header authentication; schema-driven
-message handling; dependency injection; hooks; a lifespan worker; and
-connection-manager cleanup.
+`examples/reference_app` wires together:
 
-Start it from the repository root on `127.0.0.1:8000` using either command:
+- Router mounted at `/ws`
+- Schema-driven resources composed as parent/child/grandchild
+- Router-level DI via `ServiceContainer`
+- Connection manager usage from both resources and workers
+- Behavioural coverage via `pytest-bdd`
 
 ```bash
 python -m examples.reference_app.server
@@ -773,8 +672,8 @@ uvicorn --factory examples.reference_app.server:create_app --host 127.0.0.1 --po
 
 Connect to `ws://127.0.0.1:8000/ws/workspaces/atlas/projects/triage/tasks` with
 headers `x-workspace-token: seekrit` and `x-user: casey`. After Falcon accepts
-the connection, `on_accepted` registers the socket in `workspace:atlas` and
-sends `session.ready`. Send a JSON text message such as:
+the connection, `on_session_start` registers the socket in `workspace:atlas`
+and sends `session.ready`. Send a JSON text message such as:
 
 ```json
 {"type":"task.add","task_id":"T-42","title":"Investigate live WebSockets"}
@@ -798,8 +697,7 @@ verifies that an invalid token rejects the handshake and records
 uv run pytest -q tests/behaviour/test_reference_example_live_steps.py
 ```
 
-The example's router uses `receive_loop=True`, so the library accepts the
-socket and owns ordered frame reception and dispatch. No application receive
-loop or direct `WebSocketResource.dispatch()` call is needed. Use the example
-as a blueprint. Adapt its authentication, services, and worker policy to the
-target application.
+The example router accepts the socket and owns ordered frame reception and
+dispatch through its session lifecycle. No application receive loop or direct
+`WebSocketResource.dispatch()` call is needed. Use the example as a blueprint.
+Adapt its authentication, services, and worker policy to the target application.

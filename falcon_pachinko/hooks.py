@@ -22,6 +22,7 @@ if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints only
 
     import falcon
 
+    from ._session import SessionState
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
 
@@ -50,7 +51,7 @@ class _HookContextKwargs(typ.TypedDict, total=False):
     params: dict[str, object]
     raw: str | bytes
     result: bool
-    error: BaseException
+    error: BaseException | None
     close_code: int
 
 
@@ -157,10 +158,15 @@ class HookCollection:
 
 
 async def _execute_hook_layer(
-    hooks: tuple[HookCallable, ...], context: HookContext
+    hooks: tuple[HookCallable, ...],
+    context: HookContext,
+    *,
+    may_run: cabc.Callable[[], bool],
 ) -> None:
     """Execute all hooks in a single layer."""
     for hook in hooks:
+        if not may_run():
+            return
         result = hook(context)
         if inspect.isawaitable(result):
             await result
@@ -180,6 +186,16 @@ class HookManager:
             raise ValueError(msg)
         self._global_hooks = global_hooks
         self._resources = list(resources)
+        self._session: SessionState | None = None
+
+    def bind_session(self, session: SessionState) -> None:
+        """Bind router-owned lifecycle state for receive dispatch guards."""
+        self._session = session
+
+    @property
+    def session(self) -> SessionState | None:
+        """Router-bound session state, if any."""
+        return self._session
 
     def _build_hook_layers(
         self, event_name: str, context: HookContext
@@ -208,8 +224,23 @@ class HookManager:
 
         for resource, hooks in layers:
             context.resource = resource
-            await _execute_hook_layer(hooks, context)
+            await _execute_hook_layer(
+                hooks, context, may_run=lambda: self._may_run_hook(event_name, context)
+            )
         context.resource = None
+
+    def _may_run_hook(self, event_name: str, context: HookContext) -> bool:
+        """Stop receive hooks when an earlier hook begins closing the session."""
+        if event_name not in {HookEvent.BEFORE_RECEIVE, HookEvent.AFTER_RECEIVE}:
+            return True
+        return self.can_receive(context.ws)
+
+    def can_receive(self, ws: WebSocketLike | None) -> bool:
+        """Apply one receive policy to router dispatch, resources, and hooks."""
+        session = self._session
+        if session is None:
+            return True
+        return session.can_receive and not getattr(ws, "closed", False)
 
     async def _notify_before_event(
         self,
@@ -262,14 +293,7 @@ class HookManager:
         context.event = HookEvent.AFTER_RECEIVE
         await self._run_hooks(HookEvent.AFTER_RECEIVE, context, reverse=True)
 
-    async def notify_before_disconnect(
-        self,
-        target: WebSocketResource,
-        *,
-        ws: WebSocketLike,
-        close_code: int,
-    ) -> HookContext:
-        """Run ``before_disconnect`` hooks and return the shared context."""
-        return await self._notify_before_event(
-            HookEvent.BEFORE_DISCONNECT, target, ws=ws, close_code=close_code
-        )
+    async def notify_before_disconnect(self, context: HookContext) -> None:
+        """Run ``before_disconnect`` with the final session outcome."""
+        context.event = HookEvent.BEFORE_DISCONNECT
+        await self._run_hooks(HookEvent.BEFORE_DISCONNECT, context)

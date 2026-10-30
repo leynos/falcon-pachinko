@@ -1,10 +1,11 @@
 """Coroutine-valued descriptor families cannot launder a lifecycle callback.
 
-``on_connect``, ``on_accepted``, ``on_disconnect`` and ``on_unhandled`` are
-reserved: no peer tag may select them, and no registration path may put them or
-an alias of them into the peer-reachable handler registry. The sibling suites
-cover the ``classmethod``/``staticmethod`` case and the plain-name and
-``partial`` cases; this module covers the remaining standard-library descriptor families
+``on_connect``, ``on_session_start``, ``on_disconnect`` and ``on_unhandled``
+are reserved: no peer tag may select them, and no registration path may put
+them or an alias of them into the peer-reachable handler registry. The sibling
+suites cover the
+``classmethod``/``staticmethod`` case and the plain-name and ``partial``
+cases; this module covers the remaining standard-library descriptor families
 that hold a coroutine but are not themselves one:
 
 - ``functools.partialmethod``

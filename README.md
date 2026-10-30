@@ -19,7 +19,7 @@ including the
 ## Requirements
 
 - Python 3.12 or newer
-- Falcon 4.x with ASGI support
+- Falcon `>=4,<4.5` with ASGI support
 
 ## Installation
 
@@ -45,11 +45,13 @@ uv add --prerelease allow 'falcon-pachinko[testing]'
 
 ## Key features
 
-- `WebSocketRouter` mounts nested WebSocket routes on Falcon with
-  `router.mount(prefix)` followed by `router.attach(app)`.
-- `WebSocketResource` provides `on_connect`, `on_accepted`, `on_disconnect`,
-  and `on_unhandled` lifecycle hooks. With `receive_loop=True`, the router owns
-  ordered receive and dispatch for raw text and binary frames.
+- `app.add_websocket_route()` maps WebSocket paths to `WebSocketResource`
+  classes, mirroring Falcon's HTTP routing. Initialization parameters can be
+  supplied, so one resource class supports multiple configurations.
+- `WebSocketRouter` also supports nested relative routes: mount a router with
+  `router.mount(prefix)` and then call `router.attach(app)`.
+- `WebSocketResource` provides `on_connect`, `on_session_start`,
+  `on_disconnect`, and `on_unhandled` lifecycle hooks.
 - Message payloads are parsed into `msgspec.Struct` classes for speed and type
   safety.
 - Define a `schema` union of tagged `msgspec.Struct` types to enable automatic

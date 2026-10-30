@@ -67,7 +67,7 @@ def test_reference_example() -> None:  # pragma: no cover - scenario registratio
 
 
 @given("the reference router with a recording factory", target_fixture="context")
-def given_reference_router(event_loop: asyncio.AbstractEventLoop) -> ReferenceScenario:
+def given_reference_router() -> ReferenceScenario:
     """Build the router wiring using the shared DI container."""
     conn_mgr = WebSocketConnectionManager()
     container = build_container(conn_mgr)

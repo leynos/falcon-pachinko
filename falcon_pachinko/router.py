@@ -10,32 +10,33 @@ Falcon app and used to generate URLs for registered routes.
 from __future__ import annotations
 
 import collections.abc as cabc
-import contextlib
-import dataclasses as dc
 import functools
-import inspect
 import threading
 import typing as typ
 
 import falcon
 import falcon.asgi
 
+from ._observability import _observe_lifecycle
 from ._route_support import (
     _CompiledRoute,
     _normalize_path,
-    _normalize_path_remaining,
     _RawRoute,
     _request_path_template,
     _RequestLike,
-    _RouteMatch,
     _RouteRegistrationService,
     _strip_terminal_greedy_path_field,
 )
 from ._router_attachment import attach_router
-from ._router_resources import _ResourceResolver
-from ._router_session import _ConnectionSession
+from ._router_lifecycle import (
+    _ConnectionPreparation,
+    _Dispatch,
+    execute_route_with_error_handling,
+)
+from ._router_resolution import _RouterResolutionMixin
 from ._uri_template import _compile_prefix_template, compile_uri_template
-from .hooks import HookCollection, HookContext, HookManager
+from .hooks import HookCollection, HookManager
+from .lifecycle import ConnectionPhase, WebSocketSession
 from .protocols import WebSocketLike
 
 # Imported at runtime, not under TYPE_CHECKING: ``ResourceFactory`` below is a
@@ -43,6 +44,10 @@ from .protocols import WebSocketLike
 # that raises NameError when introspected would be a trap for runtime
 # consumers, so the name it references has to resolve at runtime too.
 from .resource import WebSocketResource
+
+if typ.TYPE_CHECKING:
+    from ._session import SessionState
+    from .observability import LifecycleObserver
 
 __all__ = ["ResourceFactory", "SimulatorFactory", "WebSocketRouter"]
 
@@ -58,34 +63,7 @@ type SimulatorFactory = cabc.Callable[
 ]
 
 
-@dc.dataclass(slots=True)
-class _Dispatch:
-    """Mutable per-request state threaded through the routing pipeline."""
-
-    route: _CompiledRoute
-    req: falcon.Request
-    ws: WebSocketLike
-    match: _RouteMatch
-    session_close_attempted: bool = False
-
-    def mark_session_close_attempted(self) -> None:
-        """Record when the session driver owns the policy close."""
-        self.session_close_attempted = True
-
-
-@dc.dataclass(slots=True)
-class _ConnectionFinalization:
-    """Group the state needed to complete one connection handshake."""
-
-    resource: WebSocketResource
-    ws: WebSocketLike
-    should_accept: bool
-    context: HookContext
-    hook_manager: HookManager
-    on_accept: cabc.Callable[[], None] | None = None
-
-
-class WebSocketRouter:
+class WebSocketRouter(_RouterResolutionMixin):
     """Route WebSocket connections to resources.
 
     Routes are evaluated in the order they were added. If multiple patterns
@@ -101,9 +79,8 @@ class WebSocketRouter:
         name: str | None = None,
         resource_factory: ResourceFactory | None = None,
         simulator_factory: SimulatorFactory | None = None,
-        receive_loop: bool = False,
     ) -> None:
-        """Create a router and configure its accepted-session receive loop.
+        """Create a router and configure its resource factories.
 
         Parameters
         ----------
@@ -113,13 +90,6 @@ class WebSocketRouter:
             Optional factory used to create routed resources.
         simulator_factory : SimulatorFactory or None, default=None
             Optional factory used by simulator routing.
-        receive_loop : bool, default=False
-            If true, receive and dispatch frames in order after ``on_connect``
-            permits the session and attempt ``on_disconnect`` once, including
-            acceptance setup failure. ``attach()`` and
-            ``configure_raw_frame_media(app)`` share the User Guide's app-wide
-            raw-media setup. If false, return after acceptance; the application
-            owns receiving and cleanup.
         """
         self._raw: list[_RawRoute] = []
         self._routes: list[_CompiledRoute] = []
@@ -136,8 +106,31 @@ class WebSocketRouter:
         self._resource_factory: ResourceFactory
         self._resource_factory = resource_factory or (lambda factory: factory())
         self._simulator_factory = simulator_factory
-        self._receive_loop = receive_loop
         self._attached = False
+        self._lifecycle_observer: LifecycleObserver | None = None
+
+    @property
+    def lifecycle_observer(self) -> LifecycleObserver | None:
+        """Optional host adapter for lifecycle metrics and tracing.
+
+        Returns
+        -------
+        LifecycleObserver or None
+            The configured adapter, or ``None`` when instrumentation is disabled.
+        """
+        return self._lifecycle_observer
+
+    @lifecycle_observer.setter
+    def lifecycle_observer(self, observer: LifecycleObserver | None) -> None:
+        """Configure optional lifecycle instrumentation before serving requests.
+
+        Parameters
+        ----------
+        observer : LifecycleObserver or None
+            Synchronous host adapter, or ``None`` to disable instrumentation.
+            Existing sessions retain the adapter selected during negotiation.
+        """
+        self._lifecycle_observer = observer
 
     @staticmethod
     def _compile_route(
@@ -311,25 +304,89 @@ class WebSocketRouter:
 
     async def on_websocket(
         self, req: _RequestLike, ws: WebSocketLike, **params: object
-    ) -> None:  # pragma: no cover - simple wrapper
-        """Dispatch the connection to the first matching route.
+    ) -> None:
+        """Negotiate and run the session for the first matching route.
 
-        Falcon passes parameters captured by its path converter as keyword
-        arguments. They are ignored because the router re-matches ``req.path``
-        against its own route table, preserving nested-resource and hook
-        parameter handling. The selected Falcon template may be either the
-        mount itself or its descendant catch-all route.
+        Falcon's path parameters are ignored because the router re-matches
+        ``req.path`` and builds captures across nested resources.
+        """
+        session = await self.negotiate(req, ws, **params)
+        if session is not None:
+            await session.run()
 
-        Raises
-        ------
-        falcon.HTTPNotFound
-            If the Falcon route template does not match this router's mount point,
-            or if no registered route matches ``req.path``.
+    async def negotiate(
+        self, req: _RequestLike, ws: WebSocketLike, **params: object
+    ) -> WebSocketSession | None:
+        """Run pre-accept routing and return the accepted session handle.
+
+        ``on_connect`` and ``after_connect`` run before router acceptance. A
+        falsey decision rejects the upgrade; ``True`` accepts with defaults,
+        and ``AcceptOptions`` supplies the subprotocol and response headers.
+        The returned session is accepted but has not run
+        ``on_session_start``. Call :meth:`WebSocketSession.run` to own its
+        receive loop, or call :meth:`WebSocketSession.aclose` when dispatch is
+        managed manually.
+
+        Parameters
+        ----------
+        req : _RequestLike
+            The incoming request.
+        ws : WebSocketLike
+            The WebSocket transport supplied by Falcon.
+        **params : object
+            Falcon route parameters, ignored because the router re-matches the
+            request path and builds its own nested-resource captures.
+
+        Returns
+        -------
+        WebSocketSession or None
+            The accepted session, or ``None`` when the selected resource rejects.
         """
         del params
-        self._validate_mount_template(req)
-        if await self._dispatch_first_route(req, ws):
-            return
+        preparation = _ConnectionPreparation(observer=self._lifecycle_observer)
+        with _observe_lifecycle(
+            preparation.observer,
+            "negotiation",
+            span_name="falcon_pachinko.websocket.negotiation",
+        ) as observation:
+            try:
+                self._validate_mount_template(req)
+                session = await self._negotiate_route(req, ws, preparation)
+                if session is None:
+                    observation.reject()
+                return session
+            finally:
+                observation.set_close_code(preparation.session.close_code)
+
+    async def _negotiate_route(
+        self,
+        req: _RequestLike,
+        ws: WebSocketLike,
+        preparation: _ConnectionPreparation,
+    ) -> WebSocketSession | None:
+        """Resolve route candidates using one guarded transport and observer."""
+        for route in self._routes:
+            match = self._validate_and_normalize_path(route, req)
+            if match is None:
+                continue
+            dispatch = _Dispatch(
+                route=route,
+                req=typ.cast("falcon.Request", req),
+                ws=ws if preparation.websocket is None else preparation.websocket,
+                match=match,
+                session=preparation.session,
+            )
+            session = await execute_route_with_error_handling(
+                self, dispatch, preparation
+            )
+            if dispatch.matched:
+                return session
+
+        if (
+            preparation.websocket is not None
+            and preparation.websocket.phase is ConnectionPhase.PRE_ACCEPT
+        ):
+            await preparation.websocket.close()
         raise falcon.HTTPNotFound
 
     def _validate_mount_template(self, req: _RequestLike) -> None:
@@ -343,270 +400,45 @@ class WebSocketRouter:
             msg = f"route template '{template}' does not match router mount '{mount}'"
             raise falcon.HTTPNotFound(description=msg)
 
-    async def _dispatch_first_route(self, req: _RequestLike, ws: WebSocketLike) -> bool:
-        """Dispatch the first route matching the request path."""
-        # Routes are tested in the order they were added. Register more
-        # specific paths before general ones to control precedence.
-        for route in self._routes:
-            if await self._try_route(route, req, ws):
-                return True
-        return False
-
     async def _try_route(
         self, route: _CompiledRoute, req: _RequestLike, ws: WebSocketLike
     ) -> bool:
-        """Attempt to handle ``req`` using ``route``.
-
-        The routing sequence is as follows:
-
-        1. :meth:`_validate_and_normalize_path` ensures ``req.path`` matches the
-           route's prefix and returns any captured parameters plus the remaining
-           path.
-        2. A base resource instance is created from the route's factory.
-        3. :class:`_ResourceResolver` walks any nested subroutes on the base
-           resource using the remaining path, merging parameters at each level.
-        4. If a final resource and empty path are resolved, control is passed to
-           :meth:`_handle_websocket_connection` which accepts or closes the
-           connection via the resource's ``on_connect`` method.
-
-        Returns
-        -------
-        bool
-            ``True`` if the request was handled by this route, ``False``
-            otherwise.
-        """
+        """Attempt one route and run its accepted session when it matches."""
         match = self._validate_and_normalize_path(route, req)
         if match is None:
             return False
-        # cast: downstream hooks and ``on_connect`` are typed against
-        # ``falcon.Request``; the router accepts any ``_RequestLike`` so tests
-        # can supply structural stand-ins.
-        return await self._execute_route_with_error_handling(
-            _Dispatch(
-                route=route, req=typ.cast("falcon.Request", req), ws=ws, match=match
-            )
+        preparation = _ConnectionPreparation(observer=self._lifecycle_observer)
+        dispatch = _Dispatch(
+            route=route,
+            req=typ.cast("falcon.Request", req),
+            ws=ws,
+            match=match,
+            session=preparation.session,
         )
+        session = await execute_route_with_error_handling(self, dispatch, preparation)
+        if session is not None:
+            await session.run()
+        elif not dispatch.matched:
+            websocket = preparation.websocket
+            if websocket is not None and websocket.phase is ConnectionPhase.PRE_ACCEPT:
+                await websocket.close()
+        return dispatch.matched
 
-    async def _execute_route_with_error_handling(self, dispatch: _Dispatch) -> bool:
-        """Run the routing pipeline and close the socket on unexpected errors."""
-        ws_for_cleanup: WebSocketLike = dispatch.ws
-        try:
-            dispatch.ws = await self._prepare_websocket(dispatch.req, dispatch.ws)
-            ws_for_cleanup = dispatch.ws
-            return await self._process_route_resolution(dispatch)
-        except Exception as exc:
-            factory_closed = getattr(exc, "_pachinko_factory_closed", False)
-            if not dispatch.session_close_attempted and not factory_closed:
-                with contextlib.suppress(Exception):
-                    await ws_for_cleanup.close()
-            raise
-
-    async def _prepare_websocket(
-        self, req: falcon.Request, ws: WebSocketLike
-    ) -> WebSocketLike:
-        """Return the WebSocket to use for ``req``.
-
-        Returns
-        -------
-        WebSocketLike
-            The original socket, or the object produced by a configured
-            ``simulator_factory``.
-
-        Raises
-        ------
-        TypeError
-            If a configured ``simulator_factory`` returns an object that does
-            not expose the :class:`WebSocketLike` surface.
-        """
-        # When :attr:`_simulator_factory` is configured the factory may wrap or
-        # replace ``ws`` with an injectable simulator. The returned object is
-        # validated to expose the :class:`WebSocketLike` surface used by the
-        # router.
-        if self._simulator_factory is None:
-            return ws
-
-        candidate = self._simulator_factory(req, ws)
-        if inspect.isawaitable(candidate):
-            candidate = await candidate
-
-        for attr in ("accept", "close", "send_media", "receive_media"):
-            if not self._is_valid_websocket_method(candidate, attr):
-                msg = (
-                    "simulator_factory must return a WebSocketLike object; "
-                    f"missing attribute {attr!r}"
-                )
-                raise TypeError(msg)
-
-        # cast: the duck-type checks above establish the ``WebSocketLike``
-        # surface, which the checker cannot infer from getattr-based checks.
-        return typ.cast("WebSocketLike", candidate)
-
-    @staticmethod
-    def _is_valid_websocket_method(obj: object, attr_name: str) -> bool:
-        """Return ``True`` when ``obj`` exposes coroutine ``attr_name``."""
-        func = getattr(obj, attr_name, None)
-        if func is None or not callable(func):
-            return False
-        return inspect.iscoroutinefunction(func)
-
-    async def _process_route_resolution(self, dispatch: _Dispatch) -> bool:
-        """Resolve the final resource and dispatch the connection."""
-        resolver = _ResourceResolver(self._resource_factory)
-        base_resource = await resolver.instantiate(dispatch.route.factory, dispatch.ws)
-        chain = [base_resource]
-        resource = await resolver.resolve(
-            base_resource, dispatch.match, chain, dispatch.ws
-        )
-        if resource is None:
-            return False
-        if not self._validate_final_resource(
-            resource, base_resource, dispatch.route, dispatch.req
-        ):
-            return False
-        manager = self._setup_hook_management(chain)
-        return await self._handle_websocket_connection(
-            resource, dispatch, hook_manager=manager
-        )
-
-    @staticmethod
-    def _validate_final_resource(
-        resource: WebSocketResource,
-        base_resource: WebSocketResource,
-        route: _CompiledRoute,
-        req: falcon.Request,
-    ) -> bool:
-        """Return ``True`` if ``resource`` is usable for ``req``."""
-        return not (resource is base_resource and not route.pattern.fullmatch(req.path))
-
-    def _setup_hook_management(self, chain: list[WebSocketResource]) -> HookManager:
-        """Attach a :class:`HookManager` to every resource in ``chain``."""
+    def _setup_hook_management(
+        self, chain: list[WebSocketResource], session: SessionState
+    ) -> HookManager:
+        """Bind shared session state to hooks and each nested resource."""
         manager = HookManager(global_hooks=self.global_hooks, resources=chain)
+        manager.bind_session(session)
         for item in chain:
             item.bind_hook_manager(manager)
         return manager
 
-    @staticmethod
-    def _validate_and_normalize_path(
-        route: _CompiledRoute, req: _RequestLike
-    ) -> _RouteMatch | None:
-        """Return the path match for ``req`` or ``None`` if invalid."""
-        if not (prefix_match := route.prefix.match(req.path)):
-            return None
-        remaining = req.path[prefix_match.end() :]
-        if remaining and not remaining.startswith("/"):
-            normalized = _normalize_path_remaining(remaining, prefix_match)
-            if normalized is None:
-                return None
-            remaining = normalized
-        return _RouteMatch(params=prefix_match.groupdict(), remaining=remaining)
-
-    async def _handle_websocket_connection(
+    async def _instantiate_resource(
         self,
-        resource: WebSocketResource,
-        dispatch: _Dispatch,
-        *,
-        hook_manager: HookManager,
-    ) -> bool:
-        """Run connection setup, then own the accepted session until closure."""
-        context = await self._prepare_connection_context(
-            hook_manager, resource, dispatch
-        )
-        should_accept = await self._execute_resource_handler(
-            resource, dispatch, context, hook_manager
-        )
-        if should_accept:
-            connection_session = _ConnectionSession(resource, dispatch.ws, hook_manager)
-            acceptance = self._finalize_connection(
-                _ConnectionFinalization(
-                    resource=resource,
-                    ws=dispatch.ws,
-                    should_accept=True,
-                    context=context,
-                    hook_manager=hook_manager,
-                    on_accept=connection_session.mark_accepted,
-                )
-            )
-            await connection_session.run(
-                acceptance,
-                on_policy_close=dispatch.mark_session_close_attempted,
-                receive_loop=self._receive_loop,
-            )
-            return True
-
-        acceptance = self._finalize_connection(
-            _ConnectionFinalization(
-                resource=resource,
-                ws=dispatch.ws,
-                should_accept=False,
-                context=context,
-                hook_manager=hook_manager,
-            )
-        )
-        return await acceptance
-
-    @staticmethod
-    async def _prepare_connection_context(
-        hook_manager: HookManager,
-        resource: WebSocketResource,
-        dispatch: _Dispatch,
-    ) -> HookContext:
-        """Return the hook context with the handler parameters resolved."""
-        params_obj: dict[str, object] = dict(dispatch.match.params)
-        context = await hook_manager.notify_before_connect(
-            resource,
-            req=dispatch.req,
-            ws=dispatch.ws,
-            params=params_obj,
-        )
-        # ``before_connect`` hooks may rewrite the parameters; fall back to the
-        # route captures when they leave them untouched.
-        if context.params is None:
-            context.params = params_obj
-        return context
-
-    @staticmethod
-    async def _execute_resource_handler(
-        resource: WebSocketResource,
-        dispatch: _Dispatch,
-        context: HookContext,
-        hook_manager: HookManager,
-    ) -> bool:
-        """Invoke ``resource.on_connect`` handling hook error propagation."""
-        params = context.params if context.params is not None else {}
-        try:
-            return await resource.on_connect(dispatch.req, dispatch.ws, **params)
-        except Exception as exc:
-            context.error = exc
-            context.result = False
-            await hook_manager.notify_after_connect(context)
-            raise
-
-    @staticmethod
-    async def _finalize_connection(
-        finalization: _ConnectionFinalization,
-    ) -> bool:
-        """Complete the connection lifecycle and honour ``should_accept``."""
-        context = finalization.context
-        context.result = finalization.should_accept
-        await finalization.hook_manager.notify_after_connect(context)
-        if not finalization.should_accept:
-            await finalization.ws.close()
-            return True
-        if getattr(finalization.ws, "closed", False):
-            return True
-        if WebSocketRouter._is_socket_unaccepted(finalization.ws):
-            await finalization.ws.accept()
-        if getattr(finalization.ws, "closed", False):
-            return True
-        if finalization.on_accept is not None:
-            finalization.on_accept()
-        await finalization.resource.on_accepted(finalization.ws)
-        return True
-
-    @staticmethod
-    def _is_socket_unaccepted(ws: WebSocketLike) -> bool:
-        """Return whether the handshake still needs router-owned acceptance."""
-        unaccepted = getattr(ws, "unaccepted", None)
-        if isinstance(unaccepted, bool):
-            return unaccepted
-        return not bool(getattr(ws, "accepted", False))
+        route_factory: cabc.Callable[..., WebSocketResource],
+        ws: WebSocketLike,
+    ) -> WebSocketResource:
+        """Instantiate a resource; the route pipeline owns failure cleanup."""
+        del ws
+        return self._resource_factory(route_factory)
