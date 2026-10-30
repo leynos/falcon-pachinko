@@ -58,6 +58,8 @@ that call the manager directly need to migrate. The former target/socket/code
 call remains available for one release and emits `DeprecationWarning`.
 
 ```python
+from falcon_pachinko import HookContext
+
 # Former call; deprecated and still returns a HookContext during the
 # compatibility window.
 context = await manager.notify_before_disconnect(resource, ws=ws, close_code=close_code)
@@ -67,6 +69,8 @@ context = HookContext(
     event="before_disconnect",
     target=resource,
     resource=None,
+    req=req,
+    params=params,
     ws=ws,
     close_code=close_code,
     error=None,

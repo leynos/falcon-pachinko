@@ -234,10 +234,13 @@ class TaskStreamResource(WebSocketResource):
         -----
         If setup fails after registration, rollback removes connection-manager
         membership unless the router owns accepted-session cleanup. The
-        original setup failure propagates after rollback. Cancellation during
-        direct or unaccepted rollback propagates as ``CancelledError`` with the
-        setup failure retained as its cause. If rollback also fails, both
-        failures are preserved.
+        original setup failure propagates after rollback. If direct or
+        unaccepted rollback is cancelled after membership removal succeeds,
+        the setup failure is retained as ``CancelledError.__cause__``. If
+        removal also fails while cancellation is in progress, the removal
+        error is ``CancelledError.__cause__`` and the setup failure remains in
+        ``CancelledError.__context__``. Other rollback failures preserve both
+        failures.
         """
         session = _TaskStreamSession(
             conn_id=secrets.token_hex(12),
