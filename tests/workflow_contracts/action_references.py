@@ -40,11 +40,11 @@ def validate_reference(site: str, ref: object) -> None:
 
 
 def _is_pinned(ref: str) -> bool:
-    if ref.startswith("./"):
-        return ref != "./"
-    if ref.startswith("docker://"):
-        return bool(re.fullmatch(r"docker://[^\s@]+@sha256:[0-9a-f]{64}", ref))
-    return bool(re.fullmatch(r"[^/\s@]+/[^/\s@]+(?:/[^/\s@]+)*@[0-9a-f]{40}", ref))
+    pattern = (
+        r"(?:\./.+|docker://[^\s@]+@sha256:[0-9a-f]{64}"
+        r"|[^/\s@]+/[^/\s@]+(?:/[^/\s@]+)*@[0-9a-f]{40})"
+    )
+    return bool(re.fullmatch(pattern, ref, flags=re.DOTALL))
 
 
 def _uses(site: str, mapping: dict[str, object]) -> cabc.Iterator[tuple[str, str]]:
