@@ -21,11 +21,12 @@ if typ.TYPE_CHECKING:
     import pathlib
 
 from tests._makefile import MAKEFILE, REPO_ROOT
+from tests._shell_lines import ShellCommandSyntaxError, _logical_lines, _shell_commands
 from tests._uv_command_scanner import (
-    ShellCommandSyntaxError,
     UnsupportedCommandOptionError,
     UnsupportedEnvOptionError,
     UnsupportedUvOptionError,
+    _is_project_subcommand,
     run_step_scripts,
     unlocked_project_commands,
 )
@@ -220,6 +221,41 @@ def test_ci_command_contract_checks_each_shell_invocation(
 
 
 @pytest.mark.parametrize(
+    ("tokens", "index"),
+    [
+        (["run"], 0),
+        (["sync"], 0),
+        (["--locked", "run"], 1),
+    ],
+)
+def test_project_subcommand_predicate_accepts_run_and_sync(
+    tokens: list[str], index: int
+) -> None:
+    """The scanner recognises only project subcommands at valid indexes."""
+    assert _is_project_subcommand(tokens, index), (
+        f"run or sync must be recognised at index {index}: {tokens!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("tokens", "index"),
+    [
+        ([], 0),
+        (["run"], -1),
+        (["run"], 1),
+        (["build"], 0),
+    ],
+)
+def test_project_subcommand_predicate_rejects_other_tokens(
+    tokens: list[str], index: int
+) -> None:
+    """The scanner rejects unsupported or out-of-range subcommand tokens."""
+    assert not _is_project_subcommand(tokens, index), (
+        f"non-project subcommand must be rejected at index {index}: {tokens!r}"
+    )
+
+
+@pytest.mark.parametrize(
     "recipe_prefix",
     [
         "@",
@@ -331,6 +367,26 @@ def test_command_scanner_skips_heredoc_bodies() -> None:
     assert unlocked_project_commands(script) == [(4, "uv run pytest")], (
         "heredoc content must not be tokenized as a shell command, and the "
         "scanner must continue after the closing delimiter"
+    )
+
+
+def test_shell_logical_lines_preserve_source_locations_after_heredocs() -> None:
+    """Heredoc bodies leave the next executable line's source location intact."""
+    script = "cat <<'EOF'\nDon't run uv sync\nEOF\nuv run pytest"
+
+    assert _logical_lines(script) == [(1, "cat <<'EOF'"), (4, "uv run pytest")], (
+        "logical shell lines must skip heredoc data and retain physical locations"
+    )
+
+
+def test_shell_command_groups_preserve_quoted_parentheses() -> None:
+    """Quoted grouping characters remain argument data at command boundaries."""
+    commands = _shell_commands(
+        "echo '(uv sync)' && uv sync", line_number=7, is_makefile=False
+    )
+
+    assert commands == [["echo", "(uv sync)"], ["uv", "sync"]], (
+        "quoted parentheses must remain in one argument while shell separators split"
     )
 
 

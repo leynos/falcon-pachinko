@@ -163,7 +163,7 @@ This repository commits `uv.lock` to pin one reviewed dependency release set
 for development and CI, despite the wide runtime bounds declared in
 `pyproject.toml`. This decision supersedes the floating-resolution behaviour
 recorded in issue [#83](https://github.com/leynos/falcon-pachinko/issues/83).
-The [decision record](adr-002-commit-uv-lock-for-development-and-ci.md)
+The [decision record](adr-003-commit-uv-lock-for-development-and-ci.md)
 explains the rationale and compatibility trade-off. The lockfile resolves the
 runtime dependencies, development group and `examples` and `testing` extras
 across the declared `requires-python` range.
@@ -1183,31 +1183,32 @@ An Ubicloud runner registers as a just-in-time self-hosted runner, so GitHub's
 six-hour cap does not apply and an unbounded lane can run to the five-day
 limit. Every lane that can reach Ubicloud therefore declares `timeout-minutes`.
 
-The two measured ceilings are sized from real runs rather than chosen:
+The measured ceilings are sized from real runs rather than chosen:
 
-| Run                               | Job               | Queue | Run time |
-| --------------------------------- | ----------------- | ----- | -------- |
-| CI, pull request, 2026-09-17      | `lint-test`       | 2 s   | 36 s     |
-| CI, push, 2026-09-16              | `lint-test`       | 3 s   | 19 s     |
-| Coverage (main), push, 2026-09-16 | `coverage-upload` | 3 s   | 34 s     |
-| Coverage (main), push, 2026-08-13 | `coverage-upload` | 588 s | 30 s     |
-| CI, PR, 2026-09-17, Ubicloud      | `lint-test`       | 11 s  | 44 s     |
+| Run                                                                                                                      | Job               | Queue | Run time |
+| ------------------------------------------------------------------------------------------------------------------------ | ----------------- | ----- | -------- |
+| CI, pull request, 2026-09-17                                                                                             | `lint-test`       | 2 s   | 36 s     |
+| CI, push, 2026-09-16                                                                                                     | `lint-test`       | 3 s   | 19 s     |
+| Coverage (main), push, 2026-09-16                                                                                        | `coverage-upload` | 3 s   | 34 s     |
+| Coverage (main), push, 2026-08-13                                                                                        | `coverage-upload` | 588 s | 30 s     |
+| CI, PR, 2026-09-17, Ubicloud                                                                                             | `lint-test`       | 11 s  | 44 s     |
+| [CI, PR #261, 2026-10-30, Ubicloud](https://github.com/leynos/falcon-pachinko/actions/runs/40990972737/job/123853021889) | `lint-test`       | 19 s  | 226 s    |
 
 *Table: the runs the ceilings are sized from.*
 
-Fifteen minutes is roughly twenty-five times the longest of these, which leaves
-room for a cold cache and for Ubicloud's two vCPUs. `falcon-minimum` has no
-recorded run yet; its thirty-minute ceiling gives the uncovered full suite
+Fifteen minutes is roughly four times the longest recorded run (226 s), which
+leaves room for a cold cache and for Ubicloud's two vCPUs. `falcon-minimum` has
+no recorded run yet; its thirty-minute ceiling gives the uncovered full suite
 extra headroom. `build-dist` also has no recorded run, so its fifteen-minute
 ceiling is provisional. The release lanes have no recorded runs either, so
 their thirty-minute ceilings are provisional and set wide because a release
 killed part-way is worse than one that runs long. Re-size each lane after its
 third Ubicloud run.
 
-The last row is the first run on Ubicloud, and it is slower than the
-GitHub-hosted run above it: 44 s against 36 s, on an 11 s queue against 2 s.
-One sample decides nothing, but it is what the paragraph below predicts, and it
-is recorded rather than quietly dropped.
+The 30 October PR run is the latest Ubicloud sample. It includes the current
+`Run tests` and `Generate coverage` steps and supersedes the earlier 44 s
+maximum. One sample does not justify changing the timeout, but its 226 s run
+time remains within the current 15-minute ceiling.
 
 The second coverage sample is the reason this repository is worth moving at
 all. Its 588 s queue against a 30 s run is the queueing the migration targets;

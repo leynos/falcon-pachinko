@@ -130,12 +130,13 @@ environment settings.
 ## Build requirements and credentials
 
 The project currently builds with `setuptools>=61.0` and `wheel`. Constraining
-and hash-binding build requirements, and deciding how `uv.lock` is maintained,
-remain tracked by
-[issue #230](https://github.com/leynos/falcon-pachinko/issues/230) and
-[issue #209](https://github.com/leynos/falcon-pachinko/issues/209). The release
-workflow limits the build job to read access and passes its attested artefact
-to publication jobs, so those jobs do not rebuild with publication credentials.
+and hash-binding build requirements remain tracked by
+[issue #230](https://github.com/leynos/falcon-pachinko/issues/230). The
+committed `uv.lock` covers development and CI project environments, not the
+isolated build backend; see the Developer Guide's
+[lock-file policy](developers-guide.md#lock-file-policy). The release workflow
+limits the build job to read access and passes its attested artefact to
+publication jobs, so those jobs do not rebuild with publication credentials.
 
 The release process and the GitHub Release's role as a reconciled mirror are
 recorded in [ADR-002](adr-002-attested-reconciled-release-pipeline.md).
