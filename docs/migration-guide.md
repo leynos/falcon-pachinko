@@ -50,6 +50,30 @@ Close failures still propagate the original close exception. Their trace entry
 now records the exception class name instead of its message; caller-supplied
 close `code` and `reason` fields retain their values.
 
+## HookManager disconnect-hook compatibility
+
+`HookManager.notify_before_disconnect()` now accepts a prepared `HookContext`
+and returns `None`. The router prepares this context itself; only applications
+that call the manager directly need to migrate. The former target/socket/code
+call remains available for one release and emits `DeprecationWarning`.
+
+```python
+# Former call; deprecated and still returns a HookContext during the
+# compatibility window.
+context = await manager.notify_before_disconnect(resource, ws=ws, close_code=close_code)
+
+# Current call; keep the context you prepare because the method returns None.
+context = HookContext(
+    event="before_disconnect",
+    target=resource,
+    resource=None,
+    ws=ws,
+    close_code=close_code,
+    error=None,
+)
+await manager.notify_before_disconnect(context)
+```
+
 ## Schema tag kinds
 
 A `schema` must now use one kind of tag throughout: either all string tags or
