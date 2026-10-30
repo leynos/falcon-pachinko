@@ -14,6 +14,7 @@ from .fanout import ClusterFanout, FanoutMessage, FanoutTransport
 from .handlers import handles_message
 from .hooks import HookCollection, HookContext, HookManager
 from .media import configure_raw_frame_media
+from .observability import SessionDimensions, SessionInstrumentation, SessionSpan
 from .protocols import WebSocketLike
 from .resource import WebSocketResource
 from .router import ResourceFactory, WebSocketRouter
@@ -48,6 +49,9 @@ __all__ = (
     "ResourceFactory",
     "ServiceContainer",
     "ServiceNotFoundError",
+    "SessionDimensions",
+    "SessionInstrumentation",
+    "SessionSpan",
     "SimulatorConnection",
     "SimulatorRouterHarness",
     "TraceEvent",

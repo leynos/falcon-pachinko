@@ -8,12 +8,14 @@ hook manager, while shielded cleanup preserves failure and cancellation policy.
 from __future__ import annotations
 
 import abc
+import asyncio
 import dataclasses as dc
 import time
 import typing as typ
 
 import falcon
 
+from . import observability as _observability
 from ._disconnect import _PeerDisconnectedError
 from ._session import (
     ABNORMAL_CLOSURE,
@@ -70,6 +72,10 @@ class _SessionOptions:
 
     receive_loop: bool
     observation_clock: cabc.Callable[[], float] = time.monotonic
+    instrumentation_clock: cabc.Callable[[], float] = time.monotonic
+    instrumentation: _observability.SessionInstrumentation = (
+        _observability.NOOP_SESSION_INSTRUMENTATION
+    )
 
 
 @dc.dataclass(slots=True)
@@ -81,8 +87,11 @@ class _SessionExecution:
     session: SessionState
     hook_manager: HookManager
     observation_clock: cabc.Callable[[], float]
+    instrumentation_clock: cabc.Callable[[], float]
+    instrumentation: _observability.SessionInstrumentation
     context: HookContext | None = None
     primary_error: BaseException | None = None
+    cleanup_failures: tuple[BaseException, ...] = ()
 
 
 async def run_session(
@@ -119,24 +128,157 @@ async def run_session(
         SessionState(),
         hook_manager,
         observation_clock=options.observation_clock,
+        instrumentation_clock=options.instrumentation_clock,
+        instrumentation=options.instrumentation,
     )
     dispatch.session = execution.session
     dispatch.ws = track_session_socket(dispatch.ws, execution.session)
     hook_manager.bind_session(execution.session)
     started = options.observation_clock()
+    instrumentation_started = options.instrumentation_clock()
+    session_span = _observability._start_span(
+        options.instrumentation,
+        _observability.SpanName.SESSION,
+        _instrumentation_dimensions(
+            execution,
+            operation=_observability.Operation.SESSION,
+            outcome=_observability.Outcome.STARTED,
+            exception=None,
+        ),
+    )
     _log_session_observation(
         execution, _SessionObservation("session", "started", started)
     )
     handed_off_to_application = False
+    session_error: BaseException | None = None
+    session_outcome: _observability.Outcome | None = None
     try:
-        handed_off_to_application = await _drive_session(execution, options, started)
-        return True
-    finally:
-        _release_session_ownership(
+        try:
+            handed_off_to_application = await _drive_session(
+                execution, options, started
+            )
+        except BaseException as exc:
+            session_error = exc
+            session_outcome = _instrumentation_session_outcome(
+                execution,
+                exc,
+                handed_off_to_application=handed_off_to_application,
+            )
+            raise
+        session_outcome = _instrumentation_session_outcome(
             execution,
-            options,
+            None,
             handed_off_to_application=handed_off_to_application,
         )
+        return True
+    finally:
+        try:
+            _release_session_ownership(
+                execution,
+                options,
+                handed_off_to_application=handed_off_to_application,
+            )
+        except BaseException as exc:
+            session_error = exc
+            session_outcome = _instrumentation_session_outcome(
+                execution,
+                exc,
+                handed_off_to_application=handed_off_to_application,
+            )
+            raise
+        finally:
+            outcome = session_outcome or _instrumentation_session_outcome(
+                execution,
+                session_error,
+                handed_off_to_application=handed_off_to_application,
+            )
+            dimensions = _instrumentation_dimensions(
+                execution,
+                operation=_observability.Operation.SESSION,
+                outcome=outcome,
+                exception=_instrumentation_session_exception(execution, session_error),
+            )
+            session_duration = (
+                options.instrumentation_clock() - instrumentation_started
+                if execution.session.has_established and not handed_off_to_application
+                else None
+            )
+            _observability._increment(
+                options.instrumentation,
+                _observability.Counter.SESSION_OUTCOMES,
+                dimensions,
+            )
+            if session_duration is not None:
+                _observability._observe_duration(
+                    options.instrumentation,
+                    _observability.Duration.SESSION,
+                    session_duration,
+                    dimensions,
+                )
+            session_span.end(dimensions)
+
+
+def _instrumentation_session_outcome(
+    execution: _SessionExecution,
+    error: BaseException | None,
+    *,
+    handed_off_to_application: bool,
+) -> _observability.Outcome:
+    """Classify one router attempt without treating handoff as session end."""
+    if error is not None:
+        return (
+            _observability.Outcome.CANCELLED
+            if isinstance(error, asyncio.CancelledError)
+            else _observability.Outcome.FAILED
+        )
+    if execution.session.phase is SessionPhase.CONNECTING:
+        return _observability.Outcome.REJECTED
+    return (
+        _observability.Outcome.HANDED_OFF
+        if handed_off_to_application
+        else _observability.Outcome.COMPLETED
+    )
+
+
+def _instrumentation_session_exception(
+    execution: _SessionExecution,
+    session_error: BaseException | None,
+) -> BaseException | None:
+    """Prefer the original cause over grouped cleanup failures for dimensions."""
+    if execution.primary_error is not None:
+        return execution.primary_error
+    if execution.cleanup_failures:
+        return execution.cleanup_failures[0]
+    return session_error
+
+
+def _instrumentation_dimensions(
+    execution: _SessionExecution,
+    *,
+    operation: _observability.Operation,
+    outcome: _observability.Outcome,
+    exception: BaseException | None,
+) -> _observability.SessionDimensions:
+    """Build dimensions solely from fixed enums and effective close metadata."""
+    phase = {
+        SessionPhase.CONNECTING: _observability.Phase.CONNECTING,
+        SessionPhase.ESTABLISHED: _observability.Phase.ESTABLISHED,
+        SessionPhase.DISCONNECTING: _observability.Phase.DISCONNECTING,
+        SessionPhase.CLOSED: _observability.Phase.CLOSED,
+    }[execution.session.phase]
+    close_code = execution.session.close_code
+    return _observability.SessionDimensions(
+        operation=operation,
+        outcome=outcome,
+        phase=phase,
+        close_code=_observability._close_code_category(close_code),
+        exception=_observability._exception_category(
+            exception,
+            is_transport=isinstance(
+                exception, (falcon.WebSocketDisconnected, _PeerDisconnectedError)
+            ),
+        ),
+    )
 
 
 async def _drive_session(
@@ -385,12 +527,15 @@ async def _finish_established_session(
         session=execution.session,
         params=dict(params),
         primary_error=execution.primary_error,
+        instrumentation=execution.instrumentation,
+        instrumentation_clock=execution.instrumentation_clock,
     )
     cleanup_started = execution.observation_clock()
     _log_session_observation(
         execution, _SessionObservation("cleanup", "started", cleanup_started)
     )
     cleanup_failures, interrupted = await run_shielded_cleanup(cleanup_context)
+    execution.cleanup_failures = cleanup_failures
     _log_session_observation(
         execution,
         _SessionObservation(

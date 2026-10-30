@@ -87,6 +87,45 @@ reported close code; otherwise it selects `1001` and attempts a best-effort
 close while the accepted transport remains open. Code-less transport loss
 without cancellation uses `1006`.
 
+### Session instrumentation boundary
+
+`WebSocketRouter.configure_session_instrumentation()` installs an optional
+host-owned `SessionInstrumentation` adapter before the first routed session.
+The default adapter is a no-op. This is a per-router boundary: the package does
+not configure global metrics or tracing providers, own exporters, or alter the
+router or worker constructors. The host remains responsible for adapter and
+exporter lifetime.
+
+The adapter exposes fixed counters, duration measurements and span handles
+through synchronous methods. Those methods must be non-blocking on the event
+loop; an exporter adapter should enqueue to a bounded queue and drop or
+aggregate on saturation. The framework catches ordinary callback failures and
+`CancelledError` and continues the original session and cleanup policy. The
+existing detailed lifecycle DEBUG records and the original exception objects
+reported to the loop exception handler are unchanged.
+
+The outcome counter records one event per routed attempt. A successful
+setup-only call has `handed_off` as its outcome; the metric deliberately does
+not claim that the connection ended. Session duration is emitted only when the
+router owns an established session through completed cleanup, from immediately
+before setup through the final cleanup join. Cleanup duration starts after
+`begin_disconnect()` grants ownership and covers close, both disconnect stages,
+and the `CLOSED` transition. The cleanup-failure counter adds one for each
+cleanup stage error, including a best-effort close exception that is suppressed
+from application failure precedence.
+
+The session span encloses setup and all router-owned session work. A successful
+setup-only call ends that span at handoff. The cleanup span starts inside the
+shielded cleanup task and is a child of the session span. The driver explicitly
+copies the active `contextvars` context when creating the cleanup task. Both
+span handles are ended once on every normal, error, and repeated-cancellation
+path. Labels use the closed enums for operation, outcome, phase, close-code
+category and exception category; they omit resource types, IDs, paths,
+payloads, exception names and values, and tracebacks. The instrumentation clock
+is separate from the existing DEBUG observation clock so enabling metrics does
+not change diagnostic timing. The current enum sizes permit at most 2,880
+combinations per instrument, with fewer combinations reachable in practice.
+
 ## Cluster fan-out maintenance
 
 Keep `ConnectionBackend` and `WebSocketConnectionManager` as process-local

@@ -332,6 +332,57 @@ including connection setup. Use it to leave accepted-session membership removal
 to `on_disconnect`; it does not itself establish the cleanup promise. That
 promise begins only after `on_connect` approves or the socket is accepted.
 
+### Optional session instrumentation
+
+Applications may configure a synchronous `SessionInstrumentation` adapter on a
+router before its first routed connection:
+
+```python
+router.configure_session_instrumentation(instrumentation)
+```
+
+The protocol and its closed dimension enums are in
+`falcon_pachinko.observability`.
+
+The default is a no-op. Falcon-Pachinko does not require a metrics or tracing
+SDK, install a global provider, own exporters, or change `WebSocketRouter`'s
+constructor. The host owns the adapter and its shutdown. Its callbacks run on
+the event-loop thread, so they must be non-blocking. Exporters should use
+bounded queues and drop or aggregate when full.
+
+The adapter receives two counters and two duration measurements:
+
+| Instrument                   | Counting and timing semantics                                                                                                                                                                                                                                                                                        |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `websocket.session.outcomes` | One increment for each selected resource's routed attempt. Outcomes include `rejected`, `failed`, `cancelled`, `completed` and `handed_off`. `handed_off` means setup succeeded and `receive_loop=False` returned receive and disconnect ownership to the application; it does not mean the WebSocket session ended. |
+| `websocket.cleanup.failures` | One increment for each cleanup stage that raises. A best-effort close error is counted but remains suppressed, as before.                                                                                                                                                                                            |
+| `websocket.session.duration` | One observation for an established session the router owns through cleanup. It starts before setup and ends after the cleanup task completes. Rejections, pre-establishment failures and setup-only handoffs have no session duration.                                                                               |
+| `websocket.cleanup.duration` | One observation when the cleanup guard grants ownership. It covers the shielded close and disconnect hooks through the final `CLOSED` transition.                                                                                                                                                                    |
+
+Each routed attempt has a `websocket.session` span. When cleanup runs, its
+`websocket.cleanup` span is a child created inside the shielded cleanup task;
+the active context is copied into that task. Spans end once on success,
+failure, or cancellation. A setup-only span ends at handoff, and a rejected
+attempt ends without a cleanup child.
+
+Counters, measurements and spans receive only fixed `operation` (`session`,
+`cleanup`), `outcome` (`started`, `completed`, `rejected`, `handed_off`,
+`failed`, `cancelled`), `phase` (`connecting`, `established`, `disconnecting`,
+`closed`), close-code category, and exception category enumerations. Close-code
+categories include `normal`, `going_away`, `abnormal`, protocol categories,
+`application`, `other` and `unknown`; raw close codes are not labels. Exception
+categories are `none`, `cancellation`, `transport`, `ordinary`, `group` and
+`base`, without exposing class names or values. The current enum sizes cap each
+instrument at 2,880 possible combinations, before excluding combinations that
+cannot occur. Connection IDs, paths, payloads, exception values and tracebacks
+are never instrumentation dimensions.
+
+Ordinary adapter errors and callback-raised `CancelledError` are isolated from
+session failure precedence, cleanup, and cancellation propagation. Existing
+lifecycle DEBUG observations and loop exception-handler reports retain their
+current contents. Instrumentation does not add another cleanup owner or change
+connection-manager membership cleanup.
+
 - `self.state`
   - Dict-like proxy shared across all resources in the same connection chain.
   - Override via `get_child_context()` to supply a custom state store (e.g.,

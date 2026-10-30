@@ -427,10 +427,6 @@ unit = "falcon_pachinko/diagnostics.py"
 reason = "Nose reports the sequence and mapping opening-delimiter emissions as unnamed fragments in diagnostics.py. Their traversal contracts remain distinct: sequences preserve list or tuple shape, while mappings filter and normalize keys and account for omitted entries. A shared renderer would couple those output and budget rules for two one-line delimiters. The path-only key is required because the fragments have no unit names; it also covers future families within this file, which must be inspected rather than treated as blanket approval."
 
 [[tool.duplication_gate.allow]]
-members = ["falcon_pachinko/_session_cleanup.py", "falcon_pachinko/hooks.py"]
-reason = "Nose reports the reviewed TYPE_CHECKING import fragment as unnamed, so path-only keys are required. The imports are independent annotation dependencies; factoring them would add an import-only module or runtime coupling."
-
-[[tool.duplication_gate.allow]]
 members = ["falcon_pachinko/_router_attachment.py", "falcon_pachinko/_session_setup.py"]
 reason = "Nose reports these TYPE_CHECKING imports as unnamed fragments; each module needs independent annotation dependencies, and extracting them would add import-only coupling. Keep this exact pair reviewed rather than sharing runtime behavior."
 

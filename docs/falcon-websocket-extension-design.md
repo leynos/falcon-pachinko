@@ -81,6 +81,18 @@ peer-close response cannot replace it. If the close attempt fails while the
 transport remains open, the provisional code is rolled back; an already-closed
 transport contributes its reported code, or 1006 when none is available.
 
+The router may also use a host-configured `SessionInstrumentation` adapter. It
+is no-op by default and does not require a telemetry SDK or a global provider.
+The adapter receives one outcome counter for each routed attempt, cleanup
+failure counts, and session and cleanup durations with fixed operation,
+outcome, phase, close-code-category and exception-category dimensions. A
+setup-only `handed_off` outcome is distinct from an ended session; it has no
+session duration because the application owns the remaining connection life.
+The router creates one session span and, when cleanup is promised, a child span
+inside the shielded cleanup task with the parent context copied across task
+creation. Adapter callbacks are synchronous, non-blocking and failure-isolated;
+exporter lifetime and bounded asynchronous export belong to the host.
+
 The diagrams below show the opted-in `receive_loop=True` session path.
 
 ### WebSocket session lifecycle
