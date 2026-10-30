@@ -129,15 +129,25 @@ async def test_transport_loss_is_a_completed_outcome_with_abnormal_close_categor
 @pytest.mark.asyncio
 @pytest.mark.parametrize("raise_cancellation", [False, True])
 async def test_clock_failure_before_cleanup_uses_fallback_and_runs_disconnect(
+    caplog: pytest.LogCaptureFixture,
     *,
     raise_cancellation: bool,
 ) -> None:
     """A diagnostics clock cannot prevent promised disconnect cleanup."""
     # The twelfth read is the cleanup-start observation after a clean receive
     # close; a fault there used to escape before the shielded task was created.
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
     clock = InjectedClock(fail_on_read=12, raise_cancellation=raise_cancellation)
     resource = RecordingResource()
     instrumentation = RecordingInstrumentation()
+
+    async def on_disconnect(ws: object, close_code: int) -> None:
+        del ws
+        await asyncio.sleep(0)
+        resource.disconnect_codes.append(close_code)
+        clock.value = 1.25
+
+    typ.cast("typ.Any", resource).on_disconnect = on_disconnect
     router = configured_router(resource, instrumentation, clock)
 
     await drive_router(router, SessionSocket(falcon.WebSocketDisconnected(4000)))
@@ -149,6 +159,43 @@ async def test_clock_failure_before_cleanup_uses_fallback_and_runs_disconnect(
     assert [span.end_count for span in instrumentation.spans] == [1, 1], (
         _ASSERTION_FAILURE
     )
+    cleanup_observations = [
+        record.__dict__.get("duration_seconds")
+        for record in caplog.records
+        if record.name == "falcon_pachinko._session_driver"
+        and record.getMessage() == "WebSocket session observation"
+        and record.__dict__.get("operation") == "cleanup"
+        and record.__dict__.get("outcome") == "completed"
+    ]
+    assert cleanup_observations == [1.25], _ASSERTION_FAILURE
+
+
+@pytest.mark.asyncio
+async def test_initial_clock_failure_keeps_one_monotonic_time_base(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An initial clock failure cannot mix fallback and host clock epochs."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
+    clock = InjectedClock(fail_on_read=1)
+    clock.value = 1_000_000_000_000.0
+    resource = RecordingResource()
+    instrumentation = RecordingInstrumentation()
+    router = configured_router(resource, instrumentation, clock)
+
+    await drive_router(router, SessionSocket(falcon.WebSocketDisconnected(4000)))
+
+    durations = [
+        record.__dict__.get("duration_seconds")
+        for record in caplog.records
+        if record.name == "falcon_pachinko._session_driver"
+        and record.getMessage() == "WebSocket session observation"
+    ]
+    assert len(clock.readings) == 1, _ASSERTION_FAILURE
+    assert durations, _ASSERTION_FAILURE
+    for duration in durations:
+        assert isinstance(duration, float), _ASSERTION_FAILURE
+        assert 0.0 <= duration < 10.0, _ASSERTION_FAILURE
+    assert resource.disconnect_codes == [4000], _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio

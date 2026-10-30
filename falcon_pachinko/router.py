@@ -71,13 +71,25 @@ def _guard_session_clock(
     clock: cabc.Callable[[], float],
 ) -> cabc.Callable[[], float]:
     """Keep diagnostics clock failures from bypassing session cleanup."""
+    last_reading: float | None = None
+    use_fallback_clock = False
 
     def read_clock() -> float:
+        nonlocal last_reading, use_fallback_clock
+        if use_fallback_clock:
+            return time.monotonic()
         try:
-            return clock()
+            reading = clock()
         except (Exception, asyncio.CancelledError):  # ruff: ignore[blind-except] - isolate timing failures so cleanup always runs
             # Callback cancellation is telemetry failure, not task cancellation.
+            if last_reading is not None:
+                return last_reading
+            # Once fallback establishes the time base, don't switch epochs if
+            # a host clock that failed at startup later begins returning values.
+            use_fallback_clock = True
             return time.monotonic()
+        last_reading = reading
+        return reading
 
     return read_clock
 
@@ -165,8 +177,10 @@ class WebSocketRouter:
         adapter must use synchronous, non-blocking callbacks and bounded
         exporter work; it is invoked on the session's event-loop thread.
         An optional monotonic clock supplies lifecycle observation and
-        instrumentation durations. If it raises, the router uses
-        ``time.monotonic`` so timing cannot bypass accepted-session cleanup.
+        instrumentation durations. After a successful read, a failure returns
+        the last reading until the host clock recovers. If the first read
+        fails, the router uses ``time.monotonic`` for that router's lifetime,
+        keeping timing in one time base without bypassing session cleanup.
 
         Parameters
         ----------

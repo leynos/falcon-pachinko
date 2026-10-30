@@ -358,9 +358,11 @@ constructor. The host owns the adapter and its shutdown. Its callbacks run on
 the event-loop thread, so they must be non-blocking. Exporters should use
 bounded queues and drop or aggregate when full. The optional `monotonic_clock`
 supplies the same clock to lifecycle DEBUG observations and duration
-measurements. If it raises, the router falls back to `time.monotonic`; the
-failure cannot bypass disconnect cleanup or change session failure precedence.
-Keep this callback synchronous and non-blocking too.
+measurements. If it raises after a successful read, the router reuses the last
+reading until the host clock recovers. If the first read fails, the router uses
+`time.monotonic` for its lifetime, so timing never switches between clock
+epochs. A clock failure cannot bypass disconnect cleanup or change session
+failure precedence. Keep this callback synchronous and non-blocking too.
 
 The adapter receives two counters and two duration measurements:
 
