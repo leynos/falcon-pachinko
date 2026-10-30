@@ -107,6 +107,14 @@ class RecordingInstrumentation:
         return span
 
 
+class InstrumentationCancelledError(asyncio.CancelledError):
+    """Distinguish a telemetry cancellation from caller cancellation."""
+
+    def __init__(self) -> None:
+        """Supply a distinct message without weakening the test call site."""
+        super().__init__("instrumentation cancellation")
+
+
 class FailingInstrumentation:
     """Raise telemetry failures, including cancellation, at every boundary."""
 
@@ -118,7 +126,7 @@ class FailingInstrumentation:
     ) -> None:
         """Raise cancellation from a counter callback."""
         del counter, dimensions, amount
-        raise asyncio.CancelledError
+        raise InstrumentationCancelledError
 
     def observe_duration(
         self,

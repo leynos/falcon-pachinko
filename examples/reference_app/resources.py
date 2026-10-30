@@ -207,7 +207,36 @@ class TaskStreamResource(WebSocketResource):
         workspace_id: str,
         project_id: str,
     ) -> bool:
-        """Register, accept, and open the workspace session before returning."""
+        """Register, accept, and open a task-stream workspace session.
+
+        The socket is registered before acceptance. Acceptance precedes
+        workspace setup, pending-audit association, session recording, and
+        readiness delivery.
+
+        Parameters
+        ----------
+        req : falcon.Request
+            The WebSocket upgrade request. The ``X-User`` header or ``user``
+            query parameter identifies the session user.
+        ws : WebSocketLike
+            The socket to register and accept for the session.
+        workspace_id : str
+            Identifier of the workspace to join.
+        project_id : str
+            Identifier of the project for this session.
+
+        Returns
+        -------
+        bool
+            ``True`` after session setup and readiness delivery complete.
+
+        Notes
+        -----
+        If setup fails after registration, rollback removes connection-manager
+        membership unless the router owns accepted-session cleanup. The
+        original setup failure propagates after rollback; if rollback also
+        fails, both failures are preserved.
+        """
         session = _TaskStreamSession(
             conn_id=secrets.token_hex(12),
             workspace_id=workspace_id,

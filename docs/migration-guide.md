@@ -236,19 +236,19 @@ direct calls to `WebSocketResource.dispatch()`. Call `await ws.accept()` in
 in resource handlers and `on_unhandled`; frames are dispatched sequentially,
 and returning normally from `on_unhandled` keeps the session open. The router
 runs `before_disconnect` before attempting `on_disconnect` once. A missing peer
-close code or a failure before acceptance completes uses `1006` for cleanup.
-After acceptance, an ordinary exception from `on_accepted` uses `1011` while
-the transport remains open; a closed transport without a reported code uses
-`1006` and is not closed again. Cancellation preserves a previously selected or
-reported close code; otherwise, it selects `1001` and attempts a best-effort
-close if the accepted transport remains open. Code-less transport loss uses
-`1006`. Unexpected receive or handler failures use `1011` and propagate the
-original exception while the transport remains open. If transport loss has
-already closed the socket without a code, cleanup uses `1006` and skips the
-close attempt. The default `receive_loop=False` returns after successful,
-observed acceptance, leaving subsequent frame reception and cleanup to the
-application. Approval without completed acceptance is cleaned up by the router
-before it returns.
+close code or a failure while the socket remains unaccepted uses `1006` for
+cleanup. After acceptance, an ordinary exception from `on_accepted` uses `1011`
+while the transport remains open; a closed transport without a reported code
+uses `1006` and is not closed again. Cancellation preserves a previously
+selected or reported close code; otherwise, it selects `1001` and attempts a
+best-effort close if the accepted transport remains open. Code-less transport
+loss uses `1006`. Unexpected receive or handler failures use `1011` and
+propagate the original exception while the transport remains open. If transport
+loss has already closed the socket without a code, cleanup uses `1006` and
+skips the close attempt. The default `receive_loop=False` returns after
+successful, observed acceptance, leaving subsequent frame reception and cleanup
+to the application. Approval without completed acceptance is cleaned up by the
+router before it returns.
 
 1) **Wire dependency injection via `resource_factory`:**
 

@@ -332,11 +332,11 @@ async def test_instrumentation_cancellation_does_not_replace_task_cancellation()
     task = asyncio.create_task(drive_router(router, socket))
     await socket.receive_started.wait()
 
-    task.cancel()
+    task.cancel("caller cancellation")
     with pytest.raises(asyncio.CancelledError) as raised:
         await task
 
-    assert str(raised.value) != "instrumentation cancellation", _ASSERTION_FAILURE
+    assert str(raised.value) == "caller cancellation", _ASSERTION_FAILURE
     assert resource.disconnect_codes == [1001], _ASSERTION_FAILURE
 
 
