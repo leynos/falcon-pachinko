@@ -1680,8 +1680,10 @@ remains open, runs shielded cleanup, and propagates the original exception. A
 transport already closed without a code uses 1006 and is not closed again. An
 unaccepted failure during `after_connect` or `accept` uses 1006 for cleanup. An
 ordinary exception from `on_accepted` occurs after acceptance, so the router
-closes with 1011 and passes 1011 to cleanup, including when
-`receive_loop=False`. Cancellation during `on_accepted` preserves any selected
+attempts to close with 1011 only while the accepted transport remains open and
+passes 1011 to cleanup, including when `receive_loop=False`. If the transport
+is already closed without a reported code, cleanup uses 1006 and does not
+attempt another close. Cancellation during `on_accepted` preserves any selected
 or reported close code; otherwise, it selects 1001 and attempts a close while
 the accepted transport remains open. Code-less transport loss uses 1006.
 Cancellation that arrives while the cleanup task runs waits for the same task
