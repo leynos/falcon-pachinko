@@ -446,6 +446,38 @@ async def test_before_disconnect_prepared_context_keeps_current_api() -> None:
 
 
 @pytest.mark.asyncio
+async def test_before_disconnect_rejects_mixed_context_and_legacy_arguments() -> None:
+    """Keep prepared and deprecated call forms mutually exclusive."""
+    resource = WebSocketResource()
+    ws = DummyWS()
+    manager = HookManager(global_hooks=HookCollection(), resources=(resource,))
+    context = HookContext(
+        event="before_disconnect",
+        target=resource,
+        resource=None,
+        ws=ws,
+        close_code=4002,
+    )
+
+    with pytest.raises(TypeError, match="either a HookContext or legacy"):
+        await typ.cast("typ.Any", manager).notify_before_disconnect(
+            context, close_code=4002
+        )
+
+
+@pytest.mark.asyncio
+async def test_before_disconnect_rejects_incomplete_legacy_arguments() -> None:
+    """Require all values that the former call form needed."""
+    resource = WebSocketResource()
+    manager = HookManager(global_hooks=HookCollection(), resources=(resource,))
+
+    with pytest.raises(TypeError, match="require target, ws, and close_code"):
+        await typ.cast("typ.Any", manager).notify_before_disconnect(
+            resource, close_code=4002
+        )
+
+
+@pytest.mark.asyncio
 async def test_after_receive_reports_errors() -> None:
     """After hooks receive the raised exception."""
     events: list[tuple[str, str]] = []
