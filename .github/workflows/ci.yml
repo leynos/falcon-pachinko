@@ -31,7 +31,7 @@ jobs:
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     # Ubicloud runners register as just-in-time self-hosted runners, so
     # GitHub's six-hour limit does not apply and the lane needs its own
-    # ceiling. The longest observed run of this job is 44 s; see the runner
+    # ceiling. The longest observed run of this job is 226 s; see the runner
     # placement section of the developer guide for the measurements.
     timeout-minutes: 15
     env:

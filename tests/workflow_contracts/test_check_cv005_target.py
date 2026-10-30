@@ -100,7 +100,7 @@ def _pytest_command_ignores_paths(arguments: list[str]) -> bool:
     return any(
         argument == option or argument.startswith(f"{option}=")
         for argument in arguments
-        for option in ("--ignore", "--ignore-glob")
+        for option in ("--ignore", "--ignore-glob", "--deselect")
     )
 
 
@@ -118,6 +118,11 @@ def _pytest_command_filters_by_keyword(arguments: list[str]) -> bool:
         else:
             index += 1
     return False
+
+
+def _pytest_command_filters_by_marker(arguments: list[str]) -> bool:
+    """Detect marker options that can narrow the local test target."""
+    return any(argument == "-m" or argument.startswith("-m") for argument in arguments)
 
 
 def _pytest_command_selects_complete_suite(command: str) -> bool:
@@ -329,6 +334,17 @@ def test_pytest_command_must_select_both_suites(command: str) -> None:
             id="ignore-glob",
         ),
         pytest.param(
+            "uv run --locked --extra examples pytest -v --deselect "
+            "tests/test_example.py::test_case -m 'not lint_toolchain'",
+            id="deselect-separated",
+        ),
+        pytest.param(
+            "uv run --locked --extra examples pytest -v "
+            "--deselect=tests/test_example.py::test_case "
+            "-m 'not lint_toolchain'",
+            id="deselect-equals",
+        ),
+        pytest.param(
             'uv run --locked --extra examples pytest -v -k "selected tests" '
             '-m "not lint_toolchain"',
             id="keyword-filter-separated",
@@ -346,9 +362,40 @@ def test_pytest_command_must_select_both_suites(command: str) -> None:
     ],
 )
 def test_pytest_command_rejects_incomplete_selections(command: str) -> None:
-    """Root exclusions and keyword filters must not pass as complete suites."""
+    """Selection exclusions and keyword filters must not pass as complete suites."""
     assert not _pytest_command_selects_complete_suite(command), (
         f"command must not select the complete suite: {command!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        pytest.param(["-m", "smoke"], id="separated"),
+        pytest.param(["-m=smoke"], id="equals"),
+        pytest.param(["-msmoke"], id="compact"),
+    ],
+)
+def test_pytest_marker_filter_is_detected(arguments: list[str]) -> None:
+    """Marker selection can narrow the local target and must be detectable."""
+    assert _pytest_command_filters_by_marker(arguments), (
+        f"marker option must be detected: {arguments!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        pytest.param(["--maxfail=1"], id="long-option"),
+        pytest.param(["-v"], id="no-marker-filter"),
+    ],
+)
+def test_pytest_non_marker_options_are_not_marker_filters(
+    arguments: list[str],
+) -> None:
+    """Other pytest options do not look like marker selection."""
+    assert not _pytest_command_filters_by_marker(arguments), (
+        f"non-marker options must not look like marker filters: {arguments!r}"
     )
 
 
@@ -377,8 +424,8 @@ def test_local_and_ci_test_targets_keep_their_distinct_selections() -> None:
     )
     assert local_arguments, local_command
     assert local_arguments[0] == "-v", local_command
-    assert "lint_toolchain" not in local_arguments, (
-        f"make test must not exclude the lint_toolchain marker: {local_command}"
+    assert not _pytest_command_filters_by_marker(local_arguments), (
+        f"make test must not filter by pytest marker: {local_command}"
     )
     assert _pytest_command_selects_complete_suite(local_command), local_command
     assert ci_arguments[:3] == ["-v", "-m", "not lint_toolchain"], ci_command

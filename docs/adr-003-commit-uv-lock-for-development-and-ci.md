@@ -1,4 +1,4 @@
-# ADR 002: Commit uv.lock for development and CI
+# ADR-003: Commit uv.lock for development and CI
 
 Status: Accepted
 
