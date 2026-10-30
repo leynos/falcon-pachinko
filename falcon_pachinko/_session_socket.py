@@ -42,6 +42,7 @@ class SessionWebSocket:
         native_websocket: falcon.asgi.WebSocket,
         session: SessionState,
     ) -> None:
+        """Retain transport and acceptance history for the shared session."""
         self._websocket = websocket
         self._native_websocket = native_websocket
         self._session = session
