@@ -417,6 +417,15 @@ def test_command_scanner_does_not_treat_here_strings_as_heredocs() -> None:
     )
 
 
+def test_command_scanner_does_not_join_a_command_after_a_comment_backslash() -> None:
+    """A trailing backslash inside a comment does not continue the command."""
+    script = "echo ok # \\\nuv run pytest"
+
+    assert unlocked_project_commands(script) == [(2, "uv run pytest")], (
+        "a backslash in a comment must not hide the next physical command"
+    )
+
+
 def test_command_scanner_fails_closed_on_unknown_uv_global_options() -> None:
     """An unrecognized global option must not hide a project subcommand."""
     script = "echo ready\nuv --unrecognised sync"
@@ -442,6 +451,27 @@ def test_command_scanner_fails_closed_on_quoted_command_substitutions() -> None:
         match=r"Unsupported quoted command substitution at shell line 1",
     ):
         unlocked_project_commands(script)
+
+
+@pytest.mark.parametrize("script", ["echo `uv sync`", r"echo \\`uv sync`"])
+def test_command_scanner_fails_closed_on_backtick_substitutions(script: str) -> None:
+    """An active backtick substitution must not hide a project call."""
+    with pytest.raises(
+        ShellCommandSyntaxError,
+        match=r"Unsupported backtick command substitution at shell line 1",
+    ):
+        unlocked_project_commands(script)
+
+
+@pytest.mark.parametrize(
+    "script",
+    [r"echo '`uv sync`'", "echo ok # `uv sync`", r"echo \`uv sync\`"],
+)
+def test_command_scanner_ignores_inert_backtick_text(script: str) -> None:
+    """Literal backticks and comments do not contain shell substitutions."""
+    assert not unlocked_project_commands(script), (
+        f"inert backtick text must remain outside command analysis: {script!r}"
+    )
 
 
 def test_command_scanner_allows_nested_quotes_in_path_substitutions() -> None:

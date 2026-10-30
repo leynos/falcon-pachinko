@@ -122,7 +122,20 @@ def _pytest_command_filters_by_keyword(arguments: list[str]) -> bool:
 
 def _pytest_command_filters_by_marker(arguments: list[str]) -> bool:
     """Detect marker options that can narrow the local test target."""
-    return any(argument == "-m" or argument.startswith("-m") for argument in arguments)
+    return any(
+        argument == "-m" or argument.startswith("-m")
+        for argument in arguments
+        if not argument.startswith("--")
+    )
+
+
+def _pytest_ci_command_has_expected_selection(arguments: list[str]) -> bool:
+    """Require the CI marker expression exactly once, before any other args."""
+    return arguments[:3] == [
+        "-v",
+        "-m",
+        "not lint_toolchain",
+    ] and not _pytest_command_filters_by_marker(arguments[3:])
 
 
 def _pytest_command_selects_complete_suite(command: str) -> bool:
@@ -428,5 +441,20 @@ def test_local_and_ci_test_targets_keep_their_distinct_selections() -> None:
         f"make test must not filter by pytest marker: {local_command}"
     )
     assert _pytest_command_selects_complete_suite(local_command), local_command
-    assert ci_arguments[:3] == ["-v", "-m", "not lint_toolchain"], ci_command
+    assert _pytest_ci_command_has_expected_selection(ci_arguments), ci_command
     assert _pytest_command_selects_complete_suite(ci_command), ci_command
+
+
+@pytest.mark.parametrize(
+    "later_marker",
+    [("-m", "smoke"), ("-m=smoke",), ("-msmoke",)],
+)
+def test_ci_selection_rejects_a_later_marker_option(
+    later_marker: tuple[str, ...],
+) -> None:
+    """A later pytest marker option replaces the required CI exclusion."""
+    arguments = ["-v", "-m", "not lint_toolchain", *later_marker]
+
+    assert not _pytest_ci_command_has_expected_selection(arguments), (
+        f"CI selection must reject a second marker expression: {arguments!r}"
+    )
