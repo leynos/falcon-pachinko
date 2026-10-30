@@ -109,6 +109,9 @@ class WebSocketSimulator(  # ruff: ignore[too-many-public-methods] -- harness wa
         message = await self._inbound.get()
         match message:
             case DisconnectSentinel(code=code):
+                # Separate router and harness readers may be waiting together.
+                if not self._inbound.full():
+                    self._inbound.put_nowait(message)
                 raise falcon.WebSocketDisconnected(code)
             case _DisconnectMarker(code=code):
                 await self.close(code=code)

@@ -149,6 +149,24 @@ async def test_close_wakes_pending_receive_and_preserves_first_code() -> None:
 
 
 @pytest.mark.asyncio
+async def test_close_wakes_every_pending_receive_with_the_first_code() -> None:
+    """A single close must release all receivers sharing the simulator."""
+    simulator = WebSocketSimulator()
+    receive_tasks = [asyncio.create_task(simulator.receive_media()) for _ in range(2)]
+    await asyncio.sleep(0)
+
+    await simulator.close(4001)
+
+    results = await asyncio.wait_for(
+        asyncio.gather(*receive_tasks, return_exceptions=True), timeout=1
+    )
+    assert all(
+        isinstance(result, falcon.WebSocketDisconnected) and result.code == 4001
+        for result in results
+    ), _ASSERTION_FAILURE
+
+
+@pytest.mark.asyncio
 async def test_queued_disconnect_race_preserves_first_close_code() -> None:
     """A disconnect marker queued during close cannot replace its code."""
     inbound: asyncio.Queue[object] = asyncio.Queue(maxsize=1)
