@@ -65,7 +65,8 @@ def _preserve_setup_failure(
     """Keep setup primary while exposing a failed membership rollback."""
     if isinstance(error, Exception):
         raise ExceptionGroup("rollback", [error, removal_error]) from None
-    error.add_note(f"Connection rollback also failed: {removal_error!r}")
+    error.__cause__ = removal_error
+    error.add_note(f"Connection rollback also failed: {type(removal_error).__name__}")
 
 
 async def _rollback_connection(
