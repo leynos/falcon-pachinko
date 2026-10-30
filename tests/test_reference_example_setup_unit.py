@@ -26,6 +26,7 @@ if typ.TYPE_CHECKING:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("receive_loop", [False, True])
 @pytest.mark.parametrize(
     ("stage", "failure", "expected_code"),
     [
@@ -50,7 +51,7 @@ if typ.TYPE_CHECKING:
     ],
 )
 async def test_accepted_setup_failure_is_removed_and_audited_by_router(
-    stage: str, failure: BaseException, expected_code: int
+    stage: str, failure: BaseException, expected_code: int, *, receive_loop: bool
 ) -> None:
     """Preserve accepted session identity until the framework runs cleanup."""
     manager = WebSocketConnectionManager()
@@ -72,7 +73,7 @@ async def test_accepted_setup_failure_is_removed_and_audited_by_router(
     socket = FailingSetupSocket()
     router = WebSocketRouter(
         resource_factory=lambda _factory: resource,
-        receive_loop=True,
+        receive_loop=receive_loop,
     )
     router.add_route(
         "/workspaces/{workspace_id}/projects/{project_id}/tasks", TaskStreamResource
@@ -84,44 +85,13 @@ async def test_accepted_setup_failure_is_removed_and_audited_by_router(
         )
     assert raised.value is failure, "cleanup must preserve the original setup failure"
     assert not manager.websockets, "accepted setup failures must release membership"
+    assert resource._conn_id is None, "cleanup must clear the resource identity"
     closed = [record for record in audit.records if record["event"] == "session.closed"]
     assert len(closed) == 1, "accepted setup failure must be audited exactly once"
     metadata = typ.cast("dict[str, object]", closed[0]["metadata"])
     assert metadata["close_code"] == expected_code, (
         "closure must retain the session policy code"
     )
-
-
-@pytest.mark.asyncio
-async def test_accepted_ready_failure_is_removed_and_audited_by_router() -> None:
-    """An accepted setup failure reaches router-owned disconnect cleanup."""
-    manager = WebSocketConnectionManager()
-    resource, _repo, audit, _feed = _build_resource(manager)
-    failure = RuntimeError("ready send failed")
-
-    class FailingReadySocket(RecordingWebSocket):
-        async def send_media(self, data: object) -> None:
-            """Fail readiness after accepting under the default router mode."""
-            del data
-            raise failure
-
-    router = WebSocketRouter(resource_factory=lambda _factory: resource)
-    router.add_route(
-        "/workspaces/{workspace_id}/projects/{project_id}/tasks", TaskStreamResource
-    )
-    router.mount("/ws")
-    with pytest.raises(RuntimeError, match="ready send failed") as raised:
-        await asyncio.wait_for(
-            router.on_websocket(_connect_request(), FailingReadySocket()), timeout=1
-        )
-
-    assert raised.value is failure, "rollback must preserve the original failure"
-    assert manager.websockets == {}, "failed setup must not retain manager membership"
-    assert resource._conn_id is None, "rollback must clear the resource identity"
-    closed = [record for record in audit.records if record["event"] == "session.closed"]
-    assert len(closed) == 1, "accepted setup failure must be audited exactly once"
-    metadata = typ.cast("dict[str, object]", closed[0]["metadata"])
-    assert metadata["close_code"] == 1011, "setup failure must use code 1011"
 
 
 class FailingJoinBackend(InProcessBackend):

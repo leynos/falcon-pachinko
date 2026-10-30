@@ -77,9 +77,7 @@ def _log_session_observation(
                 if execution.primary_error is not None
                 else None
             ),
-            "cleanup_failure_count": min(
-                len(observation.cleanup_failures), _MAX_CLEANUP_FAILURE_TYPES
-            ),
+            "cleanup_failure_count": len(observation.cleanup_failures),
             "cleanup_failures_truncated": (
                 len(observation.cleanup_failures) > _MAX_CLEANUP_FAILURE_TYPES
             ),

@@ -11,7 +11,13 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from falcon_pachinko._session import SessionState
 from falcon_pachinko._session_cleanup import raise_session_failures
+from falcon_pachinko._session_driver import _SessionExecution
+from falcon_pachinko._session_observation import (
+    _log_session_observation,
+    _SessionObservation,
+)
 from falcon_pachinko.hooks import HookEvent
 from falcon_pachinko.unittests._session_fixtures import (
     RecordingResource,
@@ -22,6 +28,46 @@ from falcon_pachinko.unittests._session_fixtures import (
 
 _ASSERTION_FAILURE = "lifecycle expectation failed"
 _ORDINARY_FAILURE_TYPES = (ValueError, RuntimeError, LookupError)
+
+
+def test_cleanup_observation_reports_uncapped_failure_count(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Bounded type metadata must not cap the scalar failure count."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
+    execution = _SessionExecution(
+        resource=typ.cast("typ.Any", object()),
+        dispatch=typ.cast("typ.Any", object()),
+        session=SessionState(),
+        hook_manager=typ.cast("typ.Any", object()),
+        observation_clock=lambda: 0.0,
+        instrumentation_clock=lambda: 0.0,
+        instrumentation=typ.cast("typ.Any", object()),
+    )
+    failures = tuple(RuntimeError(f"cleanup-{index}") for index in range(5))
+
+    _log_session_observation(
+        execution,
+        _SessionObservation(
+            operation="cleanup",
+            outcome="failed",
+            started=0.0,
+            cleanup_failures=failures,
+        ),
+    )
+
+    record = caplog.records[-1]
+    assert vars(record)["cleanup_failure_count"] == 5, (
+        "the count must include every failure"
+    )
+    assert vars(record)["cleanup_failure_types"] == (
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+    ), "only the type dimension should be capped"
+    assert vars(record)["cleanup_failures_truncated"] is True, (
+        "the cap must be explicit"
+    )
 
 
 @given(
