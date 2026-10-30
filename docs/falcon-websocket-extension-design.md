@@ -1275,8 +1275,8 @@ code to the peer; cleanup uses the disconnect code Falcon reports to the
 router. Cancellation preserves an already selected or reported code; otherwise
 it selects `1001` and attempts a best-effort close if the accepted transport
 remains open. Shielded cleanup continues through each disconnect stage once,
-even if the caller is cancelled again. An unexpected
-ordinary failure triggers a best-effort `1011` close and reports `1011`.
+even if the caller is cancelled again. An unexpected ordinary failure triggers
+a best-effort `1011` close and reports `1011`.
 Cleanup runs in a shielded task without a timeout, so `on_disconnect` must
 terminate. The router invokes `before_disconnect` before `on_disconnect` and
 prevents new receive or dispatch hooks once disconnect begins.
@@ -1548,9 +1548,9 @@ For each accepted connection, `WebSocketSession.run()` owns the receive loop.
 Its session driver calls `receive_media()` and awaits
 `WebSocketResource.dispatch()` for each value before receiving the next one.
 Manual callers can retain the accepted session returned by
-`WebSocketRouter.negotiate()` and manage dispatch explicitly. The native adapter
-preserves text and binary payloads before media decoding, so malformed JSON
-reaches `on_unhandled()`; injected transports retain the `receive_media()`
+`WebSocketRouter.negotiate()` and manage dispatch explicitly. The native
+adapter preserves text and binary payloads before media decoding, so malformed
+JSON reaches `on_unhandled()`; injected transports retain the `receive_media()`
 adapter and encode other values as JSON.
 
 1. Receive a raw message from the WebSocket.
@@ -1651,8 +1651,8 @@ connection attempt immediately.
 
 With `receive_loop=True`, the router accepts the connection before starting its
 single inline receive loop. It passes each text or binary frame to the selected
-resource's dispatcher
-and waits for that dispatch to finish before receiving the next frame. The loop
+resource's dispatcher and waits for that dispatch to finish before receiving
+the next frame. The loop
 creates no task per frame. The default `receive_loop=False` returns after
 accepted setup and leaves subsequent reception and cleanup to the application.
 A normal peer close runs `before_disconnect` hooks and attempts `on_disconnect`
@@ -2151,8 +2151,8 @@ enables white-box testing of router behaviour without needing an ASGI server.
   Helper shortcuts (`send_json`, `pop_sent`) keep tests concise.
 
 - **Spying and Injection**: Tests enqueue inbound messages via
-  `await simulator.push_message({...})` before driving the router-owned session.
-  Outbound frames are recorded in `simulator.sent_messages`, enabling
+  `await simulator.push_message({...})` before driving the router-owned
+  session. Outbound frames are recorded in `simulator.sent_messages`, enabling
   assertions about order, payload, or metadata. Dependency injection lets tests
   exercise resources in isolation alongside fake connection or hook managers.
 
