@@ -31,6 +31,7 @@ class _FailingClosedState(SessionState):
     """Raise after hooks finish to exercise an unexpected cleanup task failure."""
 
     def __init__(self, failure: RuntimeError) -> None:
+        """Establish a session whose final state transition raises the test error."""
         super().__init__(close_code=4000)
         self.failure = failure
         self.establish()
@@ -52,6 +53,7 @@ class _CleanupDispatch:
 def _cleanup_context(
     failure: RuntimeError, primary_error: Exception | None = None
 ) -> CleanupContext:
+    """Assemble the real cleanup path with one injected housekeeping failure."""
     resource = RecordingResource()
     # The lightweight request supplies the fields exercised by these tests.
     dispatch = _CleanupDispatch(
@@ -117,6 +119,7 @@ async def test_unexpected_cleanup_task_failure_retains_cancellation() -> None:
     loop.set_exception_handler(lambda _loop, details: reported.append(details))
 
     async def finish_cleanup() -> None:
+        """Apply failure precedence after the shielded cleanup task completes."""
         failures, interruptions = await run_shielded_cleanup(context)
         raise_session_failures(None, failures, interruptions)
 

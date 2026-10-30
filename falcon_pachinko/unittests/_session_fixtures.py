@@ -22,6 +22,7 @@ class SessionSocket:
         *frames: object,
         block_receive: bool = False,
     ) -> None:
+        """Seed deterministic frames and events for blocked receive schedules."""
         self.unaccepted = True
         self.closed = False
         self.accepted = asyncio.Event()
@@ -90,6 +91,7 @@ class RecordingResource(WebSocketResource):
     instances: typ.ClassVar[list[RecordingResource]] = []
 
     def __init__(self, *, accepted: bool = True) -> None:
+        """Retain setup decisions and synchronization points for cleanup tests."""
         self.accept_on_connect = accepted
         self.disconnect_codes: list[int] = []
         self.disconnect_started = asyncio.Event()

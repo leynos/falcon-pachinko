@@ -14,6 +14,7 @@ class _SuspendedAcceptanceWebSocket:
     """Transport whose accept call remains in flight until released."""
 
     def __init__(self) -> None:
+        """Create the events that expose and release an in-flight acceptance."""
         self.accept_calls = 0
         self.accept_started = asyncio.Event()
         self.release_accept = asyncio.Event()
@@ -59,6 +60,7 @@ async def test_overlapping_acceptance_reaches_transport_once() -> None:
     guard = LifecycleGuard(websocket, SessionState())
 
     async def accept_with_warning() -> None:
+        """Start the compatibility handshake while checking its warning."""
         with pytest.warns(
             DeprecationWarning, match="WebSocket acceptance is router-owned"
         ):
@@ -70,6 +72,7 @@ async def test_overlapping_acceptance_reaches_transport_once() -> None:
     second_attempted = asyncio.Event()
 
     async def accept_again() -> None:
+        """Expose the overlapping attempt before it reaches the guard."""
         second_attempted.set()
         with pytest.warns(
             DeprecationWarning, match="WebSocket acceptance is router-owned"

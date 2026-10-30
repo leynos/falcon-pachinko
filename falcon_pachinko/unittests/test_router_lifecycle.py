@@ -434,7 +434,7 @@ async def test_aclose_waits_for_run_completion_not_caller_completion() -> None:
 
 @pytest.mark.asyncio
 async def test_session_cancellation_closes_with_going_away_and_finalizes() -> None:
-    """Cancellation closes an accepted session with 1001 before cleanup."""
+    """Cancellation reports 1006 without sending a close frame."""
     started = asyncio.Event()
     disconnect_codes: list[int] = []
 
@@ -459,5 +459,5 @@ async def test_session_cancellation_closes_with_going_away_and_finalizes() -> No
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert ws.closed == [1001], "cancellation must close with going-away"
-    assert disconnect_codes == [1001], "disconnect must observe cancellation close"
+    assert not ws.closed, "cancellation must not send a reserved close code"
+    assert disconnect_codes == [1006], "disconnect must observe cancellation metadata"

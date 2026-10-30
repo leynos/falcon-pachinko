@@ -17,6 +17,7 @@ import typing as typ
 import falcon
 import falcon.asgi
 
+from ._observability import _observe_lifecycle
 from ._route_support import (
     _CompiledRoute,
     _normalize_path,
@@ -46,6 +47,7 @@ from .resource import WebSocketResource
 
 if typ.TYPE_CHECKING:
     from ._session import SessionState
+    from .observability import LifecycleObserver
 
 __all__ = ["ResourceFactory", "SimulatorFactory", "WebSocketRouter"]
 
@@ -105,6 +107,30 @@ class WebSocketRouter(_RouterResolutionMixin):
         self._resource_factory = resource_factory or (lambda factory: factory())
         self._simulator_factory = simulator_factory
         self._attached = False
+        self._lifecycle_observer: LifecycleObserver | None = None
+
+    @property
+    def lifecycle_observer(self) -> LifecycleObserver | None:
+        """Optional host adapter for lifecycle metrics and tracing.
+
+        Returns
+        -------
+        LifecycleObserver or None
+            The configured adapter, or ``None`` when instrumentation is disabled.
+        """
+        return self._lifecycle_observer
+
+    @lifecycle_observer.setter
+    def lifecycle_observer(self, observer: LifecycleObserver | None) -> None:
+        """Configure optional lifecycle instrumentation before serving requests.
+
+        Parameters
+        ----------
+        observer : LifecycleObserver or None
+            Synchronous host adapter, or ``None`` to disable instrumentation.
+            Existing sessions retain the adapter selected during negotiation.
+        """
+        self._lifecycle_observer = observer
 
     @staticmethod
     def _compile_route(
@@ -314,15 +340,30 @@ class WebSocketRouter(_RouterResolutionMixin):
         -------
         WebSocketSession or None
             The accepted session, or ``None`` when the selected resource rejects.
-
-        Raises
-        ------
-        falcon.HTTPNotFound
-            If the request does not match this router's mount point or routes.
         """
         del params
-        self._validate_mount_template(req)
-        preparation = _ConnectionPreparation()
+        preparation = _ConnectionPreparation(observer=self._lifecycle_observer)
+        with _observe_lifecycle(
+            preparation.observer,
+            "negotiation",
+            span_name="falcon_pachinko.websocket.negotiation",
+        ) as observation:
+            try:
+                self._validate_mount_template(req)
+                session = await self._negotiate_route(req, ws, preparation)
+                if session is None:
+                    observation.reject()
+                return session
+            finally:
+                observation.set_close_code(preparation.session.close_code)
+
+    async def _negotiate_route(
+        self,
+        req: _RequestLike,
+        ws: WebSocketLike,
+        preparation: _ConnectionPreparation,
+    ) -> WebSocketSession | None:
+        """Resolve route candidates using one guarded transport and observer."""
         for route in self._routes:
             match = self._validate_and_normalize_path(route, req)
             if match is None:
@@ -365,7 +406,7 @@ class WebSocketRouter(_RouterResolutionMixin):
         match = self._validate_and_normalize_path(route, req)
         if match is None:
             return False
-        preparation = _ConnectionPreparation()
+        preparation = _ConnectionPreparation(observer=self._lifecycle_observer)
         dispatch = _Dispatch(
             route=route,
             req=typ.cast("falcon.Request", req),

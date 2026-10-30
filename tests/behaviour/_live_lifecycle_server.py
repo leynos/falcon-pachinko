@@ -35,6 +35,7 @@ class DisconnectRecorder:
     """Record accepted connections, failures, and completed disconnects."""
 
     def __init__(self) -> None:
+        """Create independent observations and readiness events for one live app."""
         self.connection_ids: list[str] = []
         self.disconnect_records: list[tuple[str, int]] = []
         self.disconnect_events: dict[str, asyncio.Event] = {}
@@ -66,6 +67,7 @@ class AcceptanceCountingWebSocket:
     """Delegate to Falcon while counting each real handshake acceptance."""
 
     def __init__(self, websocket: WebSocketLike, recorder: DisconnectRecorder) -> None:
+        """Retain Falcon's native socket while making real acceptance countable."""
         self._websocket = websocket
         self._pachinko_native_websocket = websocket
         self._recorder = recorder
@@ -121,6 +123,7 @@ class RecordingResource(WebSocketResource):
         recorder: DisconnectRecorder,
         options: RecordingOptions | None = None,
     ) -> None:
+        """Bind the manager and recorder used to prove live session cleanup."""
         self._manager = manager
         self._recorder = recorder
         self._conn_id: str | None = None
@@ -223,6 +226,7 @@ class RejectingResource(WebSocketResource):
     def __init__(
         self, *, recorder: DisconnectRecorder, close_on_connect: bool = False
     ) -> None:
+        """Select metadata rejection or explicit pre-accept closure for the test."""
         self._recorder = recorder
         self._close_on_connect = close_on_connect
         self._conn_id: str | None = None
@@ -280,6 +284,7 @@ class LifecycleChildResource(RecordingResource):
         manager: WebSocketConnectionManager,
         recorder: DisconnectRecorder,
     ) -> None:
+        """Attach a child hook layer to the live manager and recorder."""
         super().__init__(manager=manager, recorder=recorder)
         object.__setattr__(self, "hooks", HookCollection())
         _bind_hook_events(self.hooks, recorder, "child")
@@ -314,6 +319,7 @@ class LifecycleParentResource(WebSocketResource):
     def __init__(
         self, *, manager: WebSocketConnectionManager, recorder: DisconnectRecorder
     ) -> None:
+        """Build the parent layer and inject shared context into its child."""
         self._manager = manager
         self._recorder = recorder
         self.add_subroute("child", LifecycleChildResource)
@@ -321,6 +327,7 @@ class LifecycleParentResource(WebSocketResource):
         _bind_hook_events(self.hooks, recorder, "parent")
 
     def get_child_context(self) -> dict[str, object]:
+        """Supply the same manager and recorder to the nested child resource."""
         return {"manager": self._manager, "recorder": self._recorder}
 
 
@@ -422,6 +429,7 @@ def _add_global_hooks(router: WebSocketRouter, recorder: DisconnectRecorder) -> 
         if event == "before_disconnect":
 
             def record_disconnect(context: HookContext) -> None:
+                """Capture the cleanup error while recording the global hook order."""
                 recorder.events.append("global.before_disconnect")
                 recorder.before_disconnect_errors.append(context.error)
 
@@ -538,6 +546,7 @@ def _exception_recorder(
     def record_loop_error(
         _loop: asyncio.AbstractEventLoop, context: dict[str, typ.Any]
     ) -> None:
+        """Retain unexpected ASGI task failures for live test assertions."""
         loop_errors.append(context)
 
     return record_loop_error

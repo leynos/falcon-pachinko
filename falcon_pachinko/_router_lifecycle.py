@@ -22,6 +22,7 @@ if typ.TYPE_CHECKING:
 
     from ._route_support import _RouteMatch
     from .hooks import HookContext, HookManager
+    from .observability import LifecycleObserver
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
 
@@ -43,6 +44,7 @@ class _Dispatch:
     match: _RouteMatch
     session: SessionState | None = None
     matched: bool = False
+    observer: LifecycleObserver | None = None
 
 
 @dc.dataclass(slots=True)
@@ -51,6 +53,7 @@ class _ConnectionPreparation:
 
     session: SessionState = dc.field(default_factory=SessionState)
     websocket: LifecycleGuard | None = None
+    observer: LifecycleObserver | None = None
 
 
 class _RouterServices(typ.Protocol):
@@ -93,6 +96,7 @@ class _RouteLifecycle:
     session: SessionState
     hook_manager: HookManager
     params: dict[str, object]
+    observer: LifecycleObserver | None
 
     @property
     def websocket(self) -> LifecycleGuard:
@@ -109,9 +113,10 @@ async def execute_route_with_error_handling(
     ws_for_cleanup: WebSocketLike = dispatch.ws
     try:
         session = _session_state(dispatch)
+        dispatch.observer = preparation.observer
         if preparation.websocket is None:
             dispatch.ws = await _prepare_websocket(
-                router, dispatch.req, dispatch.ws, session
+                router, dispatch, session, preparation
             )
             preparation.websocket = dispatch.ws
         else:
@@ -131,14 +136,14 @@ async def execute_route_with_error_handling(
 
 async def _prepare_websocket(
     router: _RouterServices,
-    req: falcon.Request,
-    ws: WebSocketLike,
+    dispatch: _Dispatch,
     session: SessionState,
+    preparation: _ConnectionPreparation,
 ) -> LifecycleGuard:
     """Adapt and guard the socket before constructing route resources."""
-    candidate = await _simulator_candidate(router, req, ws)
+    candidate = await _simulator_candidate(router, dispatch.req, dispatch.ws)
     adapted = track_session_socket(typ.cast("WebSocketLike", candidate), session)
-    return LifecycleGuard(adapted, session)
+    return LifecycleGuard(adapted, session, observer=preparation.observer)
 
 
 async def _simulator_candidate(
@@ -201,6 +206,7 @@ async def _process_route_resolution(
         session=session,
         hook_manager=manager,
         params=dict(dispatch.match.params),
+        observer=dispatch.observer,
     )
     return await _negotiate_connection(lifecycle)
 
@@ -363,6 +369,7 @@ def _new_session(lifecycle: _RouteLifecycle) -> WebSocketSession:
             session_state=lifecycle.session,
             hook_manager=lifecycle.hook_manager,
             params=lifecycle.params,
+            observer=lifecycle.observer,
         )
     )
 

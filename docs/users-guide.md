@@ -32,26 +32,110 @@ existing installation.
 ## 2. Quickstart (Composable Routing)
 
 ```python
+"""Composable Falcon ASGI WebSocket chat quick-start.
+
+Run this app with ``uvicorn quickstart:app``.
+"""
+
+import dataclasses as dc
+import typing as typ
+
 import falcon.asgi
-from falcon_pachinko import WebSocketResource, WebSocketRouter, handles_message
+import msgspec as ms
+
+from falcon_pachinko import (
+    WebSocketResource,
+    WebSocketRouter,
+    configure_raw_frame_media,
+    handles_message,
+)
+
+if typ.TYPE_CHECKING:
+    from falcon_pachinko.protocols import WebSocketLike
+
+
+class ChatPayload(ms.Struct):
+    """Typed message body for a chat message."""
+
+    text: str
 
 
 class ChatResource(WebSocketResource):
-    async def on_connect(self, req, ws, room: str) -> bool:
+    async def on_connect(self, req, ws, room: str = "lobby") -> bool:
         self.state["room"] = room
         return True  # continue to message handling
 
     @handles_message("chat.message")
-    async def handle_message(self, ws, payload):
+    async def handle_message(self, ws, payload: ChatPayload) -> None:
+        # The router leaves an absent payload as None.
+        if payload is None:
+            return
         await ws.send_media({"type": "echo", "text": payload.text})
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _RouterRequest:
+    """Present the mount template while delegating to Falcon's request."""
+
+    request: falcon.asgi.Request
+    path: str
+    path_template: str
+    uri_template: str
+
+    def __getattr__(self, name: str) -> object:
+        """Delegate access to the original Falcon request."""
+        return getattr(self.request, name)
+
+
+class RouterAdapter:
+    """Route Falcon WebSocket connections to a mounted router.
+
+    Parameters
+    ----------
+    router : WebSocketRouter
+        Router that matches paths beneath its mount point.
+    """
+
+    def __init__(self, router: WebSocketRouter) -> None:
+        """Retain the router for incoming connections."""
+        self._router = router
+
+    async def on_websocket(
+        self,
+        req: falcon.asgi.Request,
+        ws: falcon.asgi.WebSocket,
+        rest: str = "",
+    ) -> None:
+        """Forward one handshake using the router's mount template.
+
+        Parameters
+        ----------
+        req : falcon.asgi.Request
+            Falcon request for the incoming WebSocket handshake.
+        ws : falcon.asgi.WebSocket
+            Falcon WebSocket for the incoming connection.
+        rest : str
+            Path captured below the ``/ws`` route prefix.
+        """
+        await self._router.on_websocket(
+            _RouterRequest(
+                request=req,
+                path=req.path,
+                path_template="/ws",
+                uri_template="/ws",
+            ),
+            typ.cast("WebSocketLike", ws),
+        )
+
+
 app = falcon.asgi.App()
+configure_raw_frame_media(app)
 router = WebSocketRouter()
 router.add_route("/chat/{room}", ChatResource)
+router.add_route("/", ChatResource)
 router.mount("/ws")
-app.add_route("/ws", router)
-app.add_route("/ws/{pachinko_path:path}", router)
+app.add_route("/ws", RouterAdapter(router))
+app.add_route("/ws/{rest:path}", RouterAdapter(router))
 ```
 
 - The router is mounted once (`router.mount("/ws")`). In Falcon, register it
@@ -114,7 +198,9 @@ def add_route(
   - The router runs `before_disconnect` hooks then attempts this callback once
     for each accepted session, including `on_session_start()` or handler
     failures. Peer close codes pass through; a missing code uses `1006`.
-    Cancellation closes with `1001`, and unexpected receive or handler failures
+    Cancellation uses `1006` as cleanup metadata, sends no close frame with that
+    reserved code, and propagates `CancelledError`. An `on_disconnect()` callback
+    already in progress is not retried. Unexpected receive or handler failures
     close with `1011` before the original error propagates. Rejected connections
     and failed `on_connect()` calls do not run disconnect cleanup.
 - For manual negotiation, call `await router.negotiate(req, ws)`. It returns
@@ -168,7 +254,7 @@ establish the cleanup promise. Resource-owned acceptance is tracked even if
 | Client sends a close frame                        | The close code Falcon reports                                                                        |
 | Resource or server initiates a close              | Falcon's reported disconnect code, when available; the requested outbound code is sent to the client |
 | Transport disappears without a close frame        | `1006` (abnormal closure)                                                                            |
-| Task is cancelled                                 | `1001` (going away); the router attempts to close with this code                                     |
+| Task is cancelled                                 | `1006` cleanup metadata; no close frame is sent with this reserved code                              |
 | Handler or setup fails with an ordinary exception | `1011` (internal error); the router attempts to close with this code                                 |
 
 Falcon's `WebSocketDisconnected` is a transport ending even when a resource
@@ -177,13 +263,16 @@ retained. Cancellation after disconnect cleanup begins does not rewrite the
 close code already selected.
 
 The router runs `before_disconnect` before `on_disconnect`, then marks the
-session closed. Once disconnect begins, receive and dispatch hooks do not run
-for later frames. Cleanup runs in a shielded task and has no timeout, so
-`on_disconnect` must terminate. A cleanup exception does not replace a lone
-session exception; when both are ordinary exceptions, they are raised in an
-`ExceptionGroup` with the session exception first. A single failure is raised
-unchanged. Cancellation remains a bare `CancelledError`; cleanup failures that
-cannot be grouped with it are reported to the event loop's exception handler.
+session closed. Cancellation uses `1006` as cleanup metadata and sends no close
+frame with that reserved code. An `on_disconnect()` callback interrupted while
+already in progress is not retried. Once disconnect begins, receive and
+dispatch hooks do not run for later frames. Cleanup runs in a shielded task and
+has no timeout, so `on_disconnect` must terminate. A cleanup exception does not
+replace a lone session exception; when both are ordinary exceptions, they are
+raised in an `ExceptionGroup` with the session exception first. A single
+failure is raised unchanged. Cancellation remains a bare `CancelledError`;
+cleanup failures that cannot be grouped with it are reported to the event
+loop's exception handler.
 
 ### Nested resources
 

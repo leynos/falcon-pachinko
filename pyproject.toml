@@ -442,10 +442,7 @@ reason = "send_text and send_json are distinct public operations with different 
 members = ["falcon_pachinko/_testing_harness.py::accept", "falcon_pachinko/_testing_harness.py::close"]
 reason = "The simulator harness must preserve separate accept and close protocol methods. Each signals readiness after its corresponding simulator transition, and _signal_ready_after already centralizes the shared behavior."
 [[tool.duplication_gate.allow]]
-members = ["falcon_pachinko/_session_cleanup.py", "falcon_pachinko/hooks.py"]
-reason = "Each module owns its TYPE_CHECKING imports for local annotations; sharing them would add coupling and risk import cycles."
-[[tool.duplication_gate.allow]]
-members = ["falcon_pachinko/_session_driver.py", "falcon_pachinko/_router_lifecycle.py"]
+members = ["falcon_pachinko/_session_cleanup.py", "falcon_pachinko/lifecycle.py"]
 reason = "Each module owns its TYPE_CHECKING imports for local annotations; sharing them would add coupling and risk import cycles."
 [tool.mutmut]
 # Only the package is mutated. `tests/`, `tools/` and `examples/` would

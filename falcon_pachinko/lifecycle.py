@@ -12,12 +12,14 @@ import warnings
 import falcon
 
 from ._disconnect import _PeerDisconnectedError
+from ._observability import _observe_lifecycle
 from ._session import _report_session_failure, _wait_for_shielded_task
 from ._session_driver import SessionDriverContext, finalize_session, run_session
 from ._session_socket import _accept_arguments
 
 if typ.TYPE_CHECKING:
     from ._session import SessionState
+    from .observability import LifecycleObserver
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
 
@@ -67,13 +69,32 @@ class LifecycleGuard:
         "_accepting",
         "_close_code",
         "_close_started",
+        "_observer",
         "_phase",
         "_session",
         "_websocket",
     )
 
-    def __init__(self, websocket: WebSocketLike, session: SessionState) -> None:
+    def __init__(
+        self,
+        websocket: WebSocketLike,
+        session: SessionState,
+        *,
+        observer: LifecycleObserver | None = None,
+    ) -> None:
+        """Guard one transport and retain its optional lifecycle observer.
+
+        Parameters
+        ----------
+        websocket : WebSocketLike
+            Transport whose acceptance and data operations are guarded.
+        session : SessionState
+            Shared exactly-once disconnect state for this connection.
+        observer : LifecycleObserver or None, default=None
+            Optional synchronous host metrics and tracing adapter.
+        """
         self._websocket = websocket
+        self._observer = observer
         self._session = session
         self._phase = ConnectionPhase.PRE_ACCEPT
         self._accepting = False
@@ -136,7 +157,13 @@ class LifecycleGuard:
         # pass the phase check while the first handshake is still in flight.
         self._accepting = True
         try:
-            await self._accept_transport(options)
+            with _observe_lifecycle(
+                self._observer, "acceptance", failure_category="transport"
+            ) as observation:
+                try:
+                    await self._accept_transport(options)
+                finally:
+                    observation.set_close_code(self._session.close_code)
         finally:
             self._accepting = False
 
@@ -355,6 +382,13 @@ class WebSocketSession:
     """
 
     def __init__(self, context: SessionDriverContext) -> None:
+        """Retain the accepted connection and its one-run finalization state.
+
+        Parameters
+        ----------
+        context : SessionDriverContext
+            Selected resources, transport, hooks, state, and optional observer.
+        """
         self._resource = context.resource
         self._resources = tuple(context.resources)
         self._websocket: LifecycleGuard = context.websocket
@@ -362,6 +396,7 @@ class WebSocketSession:
         self._dispatch = context.dispatch
         self._session_state = context.session_state
         self._params = dict(context.params)
+        self._observer = context.observer
         self._run_task: asyncio.Task[object] | None = None
         self._run_completion: asyncio.Future[BaseException | None] | None = None
         self._finalization_task: asyncio.Task[None] | None = None
@@ -398,14 +433,18 @@ class WebSocketSession:
         self._run_completion = run_completion
         context = self._driver_context()
         run_error: BaseException | None = None
-        try:
-            await run_session(context, self._finalize)
-        except BaseException as error:
-            run_error = error
-            raise
-        finally:
-            if not run_completion.done():
-                run_completion.set_result(run_error)
+        with _observe_lifecycle(
+            self._observer, span_name="falcon_pachinko.websocket.session"
+        ) as observation:
+            try:
+                await run_session(context, self._finalize)
+            except BaseException as error:
+                run_error = error
+                raise
+            finally:
+                observation.set_close_code(self._session_state.close_code)
+                if not run_completion.done():
+                    run_completion.set_result(run_error)
 
     async def aclose(self, code: int = 1000) -> None:
         """Close and finalize the session once, including manual sessions.
@@ -485,6 +524,7 @@ class WebSocketSession:
             params=self._params,
             primary_error=primary_error,
             finalization_error=finalization_error,
+            observer=self._observer,
         )
 
     async def _wait_for_finalization(self) -> list[asyncio.CancelledError]:

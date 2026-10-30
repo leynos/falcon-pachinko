@@ -15,6 +15,12 @@ from .handlers import handles_message
 from .hooks import HookCollection, HookContext, HookManager
 from .lifecycle import AcceptOptions, LifecycleError, WebSocketSession
 from .media import configure_raw_frame_media
+from .observability import (
+    LifecycleObservationEvent,
+    LifecycleObserver,
+    LifecycleSpan,
+    LifecycleSpanResult,
+)
 from .protocols import WebSocketLike
 from .resource import WebSocketResource
 from .router import ResourceFactory, WebSocketRouter
@@ -47,6 +53,10 @@ __all__ = (
     "HookManager",
     "InProcessBackend",
     "LifecycleError",
+    "LifecycleObservationEvent",
+    "LifecycleObserver",
+    "LifecycleSpan",
+    "LifecycleSpanResult",
     "MissingDependencyError",
     "ResourceFactory",
     "ServiceContainer",

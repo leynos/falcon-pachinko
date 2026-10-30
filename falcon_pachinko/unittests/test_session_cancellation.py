@@ -20,7 +20,7 @@ _ASSERTION_FAILURE = "lifecycle expectation failed"
 
 @pytest.mark.asyncio
 async def test_cancellation_during_receive_closes_and_runs_cleanup() -> None:
-    """Cancellation closes with 1001 and is re-raised after cleanup."""
+    """Cancellation reports 1006 and is re-raised after cleanup."""
     router = make_session_router()
     socket = SessionSocket(block_receive=True)
     task = asyncio.create_task(
@@ -34,8 +34,8 @@ async def test_cancellation_during_receive_closes_and_runs_cleanup() -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert socket.close_codes == [1001], _ASSERTION_FAILURE
-    assert RecordingResource.instances[0].disconnect_codes == [1001], _ASSERTION_FAILURE
+    assert not socket.close_codes, _ASSERTION_FAILURE
+    assert RecordingResource.instances[0].disconnect_codes == [1006], _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio
@@ -98,7 +98,7 @@ async def test_repeated_cancellation_waits_for_same_cleanup_task() -> None:
     resource.finish_disconnect.set()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert resource.disconnect_codes == [1001], _ASSERTION_FAILURE
+    assert resource.disconnect_codes == [1006], _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio

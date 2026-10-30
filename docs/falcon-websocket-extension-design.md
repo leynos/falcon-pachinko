@@ -57,7 +57,7 @@ once for each accepted session. A missing peer code uses `1006`; unexpected
 receive or dispatch failures close with `1011` and propagate. Session
 cancellation uses `1006` as cleanup metadata, sends no close frame with that
 reserved code, and propagates. If cancellation interrupts a
-`before_disconnect` hook, cleanup may use `1001` while retrying that hook. An
+`before_disconnect` hook, cleanup uses `1006` while retrying that hook. An
 `on_disconnect` callback that has already started is never retried. Rejected
 connections and failed `on_connect` calls do not call the callback.
 
@@ -394,7 +394,7 @@ logic.
     `on_session_start()` or message dispatch. `close_code` is the peer's code or
     1006 when missing. Session cancellation uses 1006 as cleanup metadata,
     sends no close frame with that reserved code, and propagates. If cancellation
-    interrupts `before_disconnect`, cleanup may close with 1001 and retry that
+    interrupts `before_disconnect`, cleanup uses 1006 and retries that
     hook. An `on_disconnect` callback already in progress is not retried.
     Unexpected receive or handler failures close with 1011 and propagate.
     Rejected negotiations and failed `on_connect()` calls do not call it.
@@ -1194,7 +1194,7 @@ is `1006`. A server-initiated `ws.close(code)` sends that code to the peer;
 cleanup uses the disconnect code Falcon reports to the router. Session
 cancellation records `1006` for cleanup and sends no close frame with that
 reserved code. If cancellation interrupts `before_disconnect`, cleanup may
-switch to `1001`, close the transport, and retry that hook. An
+use `1006` and retry that hook without closing the transport. An
 `on_disconnect` callback that has started is attempted only once. An unexpected
 ordinary failure triggers a best-effort `1011` close and reports `1011`.
 Cleanup runs in a shielded task without a timeout, so `on_disconnect` must
@@ -1560,7 +1560,7 @@ reserved code, and propagates. An `on_disconnect` callback already in progress
 is not retried. An unexpected receive or handler exception closes with 1011, runs
 best-effort cleanup, and propagates the original exception. Failure during
 `after_connect` or `accept` uses 1006 for cleanup. If cancellation interrupts
-`before_disconnect`, cleanup uses 1001 and retries that hook; `on_disconnect`
+`before_disconnect`, cleanup uses 1006 and retries that hook; `on_disconnect`
 is attempted once and is not retried if interrupted. Returning normally from
 `on_unhandled` leaves the session open. Manual negotiation returns a
 `WebSocketSession` after acceptance but before `on_session_start()`; `aclose()`
