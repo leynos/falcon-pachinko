@@ -363,6 +363,8 @@ jobs:
           echo "is-draft=true" >> "${GITHUB_OUTPUT}"
       - name: Fetch the PyPI index
         id: index
+        env:
+          EXPECTED_PUBLISH: dist/publish
         run: *fetch-index
       - name: List the release assets
         id: assets

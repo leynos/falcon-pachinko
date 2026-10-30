@@ -457,6 +457,51 @@ def test_bytes_that_do_not_match_the_index_are_never_uploaded(
     assert _PYPI_ONLY not in _holdings(fake.github), "Release contract failed"
 
 
+def test_initial_index_waits_for_pypi_before_staging(fake: FakeRelease) -> None:
+    """A stale first index must not stage rebuilt bytes as canonical."""
+    _draft_and_publish_pypi(fake)
+    cwd, env = _job_directory(fake, "publish-release")
+    env.update(
+        FAKE_CURL_STALE_AFTER="1",
+        FAKE_CURL_STALE_CALLS="1",
+        FAKE_CURL_STALE_NAMES=_PYPI_ONLY,
+    )
+    _step("publish-release", _DRAFT_STEP, cwd, env)
+    before = len(fake.calls("curl"))
+
+    _step("publish-release", "Fetch the PyPI index", cwd, env)
+    assert len(fake.calls("curl")) - before == 2, "retry the stale first listing"
+    _step("publish-release", "List the release assets", cwd, env)
+    _step("publish-release", "Stage the assets the release lacks", cwd, env)
+    _step("publish-release", "Check the fetched PyPI bytes", cwd, env)
+
+    assert (cwd / "github-upload" / _PYPI_ONLY).read_bytes() == b"pypi", (
+        "stage PyPI's canonical bytes rather than the different rebuilt bytes"
+    )
+
+
+def test_initial_index_stays_bounded_when_cache_never_catches_up(
+    fake: FakeRelease,
+) -> None:
+    """Exhausting index retries stops the job before release assets are staged."""
+    _draft_and_publish_pypi(fake)
+    cwd, env = _job_directory(fake, "publish-release")
+    env.update(
+        FAKE_CURL_STALE_AFTER="1",
+        FAKE_CURL_STALE_CALLS="99",
+        FAKE_CURL_STALE_NAMES=_PYPI_ONLY,
+    )
+    _step("publish-release", _DRAFT_STEP, cwd, env)
+    before = len(fake.calls("curl"))
+
+    completed = _run_step("publish-release", "Fetch the PyPI index", cwd, env)
+
+    assert completed.returncode != 0, "a stale initial index must stop the job"
+    assert len(fake.calls("curl")) - before == 6, "index retries must be bounded"
+    assert not (cwd / "github-upload").exists(), "do not stage with an incomplete index"
+    assert _PYPI_ONLY not in _holdings(fake.github), "do not publish rebuilt bytes"
+
+
 def test_the_re_fetch_polls_past_a_cached_index(fake: FakeRelease) -> None:
     """A CDN cache that still predates the upload must not fail the release.
 
