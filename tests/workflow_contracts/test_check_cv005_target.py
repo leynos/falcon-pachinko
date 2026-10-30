@@ -104,12 +104,30 @@ def _pytest_command_ignores_paths(arguments: list[str]) -> bool:
     )
 
 
+def _pytest_command_filters_by_keyword(arguments: list[str]) -> bool:
+    """Reject keyword filters that can exclude tests from the complete suite."""
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            break
+        if argument == "-k" or argument.startswith("-k"):
+            return True
+        if argument in PYTEST_OPTIONS_WITH_ARGUMENTS:
+            index += 2
+        else:
+            index += 1
+    return False
+
+
 def _pytest_command_selects_complete_suite(command: str) -> bool:
     """Allow configured testpaths or both explicit roots, never one root."""
     parsed = _parse_pytest_command(command)
     if parsed is None:
         return False
     _, arguments = parsed
+    if _pytest_command_filters_by_keyword(arguments):
+        return False
     if _pytest_command_ignores_paths(arguments):
         return False
     return _pytest_path_arguments(arguments) in ([], ["falcon_pachinko", "tests"])
@@ -290,6 +308,18 @@ def test_pytest_command_must_select_both_suites() -> None:
         'uv run --locked --extra examples pytest -v --ignore-glob="tests/**" '
         '-m "not lint_toolchain"'
     )
+    keyword_filter = (
+        'uv run --locked --extra examples pytest -v -k "selected tests" '
+        '-m "not lint_toolchain"'
+    )
+    keyword_filter_attached = (
+        "uv run --locked --extra examples pytest -v -k=selected-tests "
+        '-m "not lint_toolchain"'
+    )
+    keyword_filter_compact = (
+        "uv run --locked --extra examples pytest -v -kselected-tests "
+        '-m "not lint_toolchain"'
+    )
     assert _pytest_command_selects_complete_suite(configured_testpaths), (
         "configured testpaths must select the complete suite"
     )
@@ -310,6 +340,15 @@ def test_pytest_command_must_select_both_suites() -> None:
     )
     assert not _pytest_command_selects_complete_suite(ignored_tests_glob), (
         "--ignore-glob could omit a test root"
+    )
+    assert not _pytest_command_selects_complete_suite(keyword_filter), (
+        "-k could omit tests from the complete suite"
+    )
+    assert not _pytest_command_selects_complete_suite(keyword_filter_attached), (
+        "-k= could omit tests from the complete suite"
+    )
+    assert not _pytest_command_selects_complete_suite(keyword_filter_compact), (
+        "an attached -k value could omit tests from the complete suite"
     )
 
 

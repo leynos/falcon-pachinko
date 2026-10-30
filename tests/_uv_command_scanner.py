@@ -83,6 +83,7 @@ SHELL_HEREDOC_PART = re.compile(
 SHELL_QUOTED_TEXT = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 SHELL_COMMAND_SUBSTITUTION = re.compile(r"\$\((?!\()")
 MAKE_COMMAND_SUBSTITUTION = re.compile(r"\$\$\((?!\()")
+UV_COMMAND_IN_SUBSTITUTION = re.compile(r"\buv\b|\$\$?\(?UV\)?|\$\{UV\}")
 QUOTED_OPEN_PARENTHESIS = "\ue000"
 QUOTED_CLOSE_PARENTHESIS = "\ue001"
 # Keep global option arity aligned with `uv --help`; their values must not be
@@ -432,17 +433,28 @@ def _shell_command_tokens(
         raise ShellCommandSyntaxError(message) from error
 
 
+def _quoted_substitution_contains_uv_command(
+    quoted: str, substitution: re.Pattern[str]
+) -> bool:
+    """Return whether a quoted shell substitution contains a uv command."""
+    if not quoted.startswith('"'):
+        return False
+    if not substitution.search(quoted):
+        return False
+    return bool(UV_COMMAND_IN_SUBSTITUTION.search(quoted))
+
+
 def _protect_quoted_parentheses(
     line: str, *, line_number: int, is_makefile: bool
 ) -> str:
-    """Keep literal quoted parentheses out of shell command boundaries."""
+    """Protect quoted parentheses and reject substitutions that can hide uv."""
 
     def replace(match: re.Match[str]) -> str:
         quoted = match.group(0)
         substitution = (
             MAKE_COMMAND_SUBSTITUTION if is_makefile else SHELL_COMMAND_SUBSTITUTION
         )
-        if quoted.startswith('"') and substitution.search(quoted):
+        if _quoted_substitution_contains_uv_command(quoted, substitution):
             message = (
                 f"Unsupported quoted command substitution at shell line "
                 f"{line_number}: {line!r}"
