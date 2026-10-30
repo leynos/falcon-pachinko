@@ -28,6 +28,16 @@ class SessionSocket(WebSocketLike):
         self.accept_error = accept_error
         self.receiving = asyncio.Event()
 
+    @property
+    def close_code(self) -> int | None:
+        """Expose the transport's first close code like Falcon's socket."""
+        return self.close_codes[0] if self.close_codes else None
+
+    @property
+    def unaccepted(self) -> bool:
+        """Expose Falcon's public handshake state to the session driver."""
+        return not self.accepted
+
     async def accept(self, subprotocol: str | None = None) -> None:
         """Accept unless the configured handshake failure is raised."""
         if self.accept_error is not None:

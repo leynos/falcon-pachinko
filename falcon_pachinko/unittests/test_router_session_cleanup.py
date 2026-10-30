@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import typing as typ
 
 import falcon
 import pytest
 
-from falcon_pachinko._router_session import _ConnectionSession
-from falcon_pachinko.hooks import HookCollection, HookManager
+from falcon_pachinko import WebSocketResource, WebSocketRouter
 from falcon_pachinko.testing import WebSocketSimulator
 from falcon_pachinko.unittests.helpers import make_req
 from falcon_pachinko.unittests.router_session_helpers import (
@@ -105,8 +105,8 @@ async def test_receive_loop_cancellation_disconnects_once(
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert resource.disconnects == [(socket, 1006)], (
-            "cancellation must trigger cleanup with abnormal-close metadata"
+        assert resource.disconnects == [(socket, 1001)], (
+            "cancellation must trigger cleanup with going-away metadata"
         )
     finally:
         task.cancel()
@@ -115,11 +115,11 @@ async def test_receive_loop_cancellation_disconnects_once(
 
 @pytest.mark.parametrize("receive_loop", [False, True])
 @pytest.mark.asyncio
-async def test_accepted_setup_cancellation_reports_1006_without_closing(
+async def test_accepted_setup_cancellation_reports_1001_and_closes(
     *,
     receive_loop: bool,
 ) -> None:
-    """Cancellation after acceptance cleans up without sending reserved 1006."""
+    """Cancellation after acceptance attempts a going-away close and cleans up."""
     resource = CancellingAcceptedResource()
     socket = SessionSocket()
     router = session_router(resource, receive_loop=receive_loop)
@@ -132,9 +132,9 @@ async def test_accepted_setup_cancellation_reports_1006_without_closing(
         await router.on_websocket(make_req("/session"), socket)
 
     assert socket.accepted, "accepted setup cancellation must follow ws.accept()"
-    assert not socket.closed, "cancellation must not send reserved close code 1006"
-    assert observed_codes == [1006], "disconnect hooks must receive code 1006"
-    assert resource.disconnects == [(socket, 1006)], (
+    assert socket.close_codes == [1001], "cancellation must attempt close code 1001"
+    assert observed_codes == [1001], "disconnect hooks must receive code 1001"
+    assert resource.disconnects == [(socket, 1001)], (
         "resource cleanup must receive cancellation metadata exactly once"
     )
 
@@ -185,7 +185,7 @@ async def test_receive_loop_acceptance_failure_disconnects_once() -> None:
     assert resource.disconnects == [(socket, 1006)], (
         "accept failure must clean up registered state once"
     )
-    assert socket.closed, "accept failure must use the existing error close path"
+    assert not socket.closed, "an unaccepted socket cannot send a close frame"
 
 
 @pytest.mark.parametrize("receive_loop", [False, True])
@@ -257,7 +257,7 @@ async def test_receive_loop_after_connect_failure_disconnects_once() -> None:
     assert resource.disconnects == [(socket, 1006)], (
         "hook failure must clean up registered state once"
     )
-    assert socket.closed, "hook failure must use the existing error close path"
+    assert not socket.closed, "an unaccepted socket cannot send a close frame"
 
 
 @pytest.mark.asyncio
@@ -305,18 +305,22 @@ async def test_receive_loop_failing_disconnect_hook_cannot_skip_cleanup() -> Non
 
 
 @pytest.mark.asyncio
-async def test_receive_loop_logs_dispatch_failure_without_exception_values(
+async def test_receive_loop_propagates_dispatch_failure_without_duplicate_logging(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Failure diagnostics expose the exception type without reflecting payloads."""
-    resource = SessionResource(dispatch_error=RuntimeError("CANARY-dispatch-secret"))
+    """The router propagates failures for the outer request boundary to log."""
+    failure = RuntimeError("CANARY-dispatch-secret")
+    resource = SessionResource(dispatch_error=failure)
     socket = SessionSocket(("first",))
     router = session_router(resource, receive_loop=True)
-    with pytest.raises(RuntimeError, match="CANARY-dispatch-secret"):
+    with pytest.raises(RuntimeError, match="CANARY-dispatch-secret") as captured:
         await router.on_websocket(make_req("/session"), socket)
-    assert "RuntimeError" in caplog.text, "dispatch failures must leave a diagnostic"
+    assert captured.value is failure, "dispatch failure must propagate unchanged"
+    assert not any(
+        record.name == "falcon_pachinko._session_driver" for record in caplog.records
+    ), "the session driver must not duplicate the request boundary's error log"
     assert "CANARY-dispatch-secret" not in caplog.text, (
-        "diagnostics must omit exception values"
+        "the router must not log exception values before propagation"
     )
 
 
@@ -369,8 +373,40 @@ async def test_disabled_receive_loop_preserves_immediate_return() -> None:
 
 
 @pytest.mark.asyncio
-async def test_receive_loop_opt_out_keeps_setup_close_cleanup_app_owned() -> None:
-    """A setup-time close does not transfer cleanup to the router opt-out path."""
+async def test_setup_only_handoff_allows_application_owned_dispatch() -> None:
+    """Application-owned receives can dispatch after setup returns."""
+
+    class ApplicationOwnedDispatchResource(WebSocketResource):
+        def __init__(self) -> None:
+            self.websocket: WebSocketLike | None = None
+            self.unhandled: list[str | bytes] = []
+
+        @typ.override
+        async def on_accepted(self, ws: WebSocketLike) -> None:
+            self.websocket = ws
+
+        @typ.override
+        async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+            self.unhandled.append(message)
+
+    resource = ApplicationOwnedDispatchResource()
+    router = WebSocketRouter(receive_loop=False)
+    router.add_route("/session", lambda: resource)
+    router.mount("/")
+    await router.on_websocket(make_req("/session"), SessionSocket())
+
+    websocket = resource.websocket
+    assert websocket is not None, "setup must retain the accepted application socket"
+    await resource.dispatch(websocket, "application-owned frame")
+
+    assert resource.unhandled == ["application-owned frame"], (
+        "the completed router setup must release its receive guard to the app"
+    )
+
+
+@pytest.mark.asyncio
+async def test_receive_loop_opt_out_cleans_up_a_setup_closed_socket() -> None:
+    """A setup-time close ends router-owned setup and requires cleanup."""
     resource = ClosingAcceptedResource()
     socket = SessionSocket()
     router = session_router(resource, receive_loop=False)
@@ -379,29 +415,30 @@ async def test_receive_loop_opt_out_keeps_setup_close_cleanup_app_owned() -> Non
 
     assert socket.accepted, "accepted setup must run after the handshake"
     assert socket.close_codes == [4013], "setup must retain its close operation"
-    assert not resource.disconnects, (
-        "the application must retain cleanup ownership with receive_loop disabled"
+    assert resource.disconnects == [(socket, 4013)], (
+        "cleanup must retain the transport's reported close code"
     )
 
 
 @pytest.mark.asyncio
-async def test_session_owner_cleanup_failure_is_idempotent() -> None:
-    """A failed cleanup callback is not retried when the owner exits again."""
-    resource = FailingCleanupResource()
+async def test_session_cleanup_observation_is_emitted_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Production routing emits one completed cleanup observation."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
+    resource = SessionResource()
     socket = SessionSocket()
-    hook_manager = HookManager(
-        global_hooks=HookCollection(),
-        resources=[resource],
+    await session_router(resource, receive_loop=True).on_websocket(
+        make_req("/session"), socket
     )
-    session = _ConnectionSession(resource, socket, hook_manager)
 
-    with pytest.raises(RuntimeError, match="cleanup failed"):
-        async with session:
-            pass
-
-    async with session:
-        pass
-
-    assert resource.disconnects == [(socket, 1006)], (
-        "the cleanup callback must run only once despite its failure"
+    completed = [
+        record
+        for record in caplog.records
+        if getattr(record, "operation", None) == "cleanup"
+        and vars(record)["outcome"] == "completed"
+    ]
+    assert len(completed) == 1, "production routing must report one cleanup"
+    assert resource.disconnects == [(socket, 4000)], (
+        "production routing must invoke resource cleanup once"
     )

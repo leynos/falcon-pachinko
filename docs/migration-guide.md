@@ -50,6 +50,34 @@ Close failures still propagate the original close exception. Their trace entry
 now records the exception class name instead of its message; caller-supplied
 close `code` and `reason` fields retain their values.
 
+## HookManager disconnect-hook compatibility
+
+`HookManager.notify_before_disconnect()` now accepts a prepared `HookContext`
+and returns `None`. The router prepares this context itself; only applications
+that call the manager directly need to migrate. The former target/socket/code
+call remains available for one release and emits `DeprecationWarning`.
+
+```python
+from falcon_pachinko import HookContext
+
+# Former call; deprecated and still returns a HookContext during the
+# compatibility window.
+context = await manager.notify_before_disconnect(resource, ws=ws, close_code=close_code)
+
+# Current call; retain the prepared context because the method returns None.
+context = HookContext(
+    event="before_disconnect",
+    target=resource,
+    resource=None,
+    req=req,
+    params=params,
+    ws=ws,
+    close_code=close_code,
+    error=None,
+)
+await manager.notify_before_disconnect(context)
+```
+
 ## Schema tag kinds
 
 A `schema` must now use one kind of tag throughout: either all string tags or
@@ -155,16 +183,36 @@ router.attach(app)
   is reserved for the lifecycle callback, so handler registration will reject
   it and the router would call a legacy handler with an incompatible signature.
 - Set `receive_loop=True` for router-owned, ordered frame reception and
-  dispatch. Its default is `False`, which returns after successful acceptance
-  and leaves subsequent receives and cleanup to the application.
+  dispatch. Its default is `False`, which returns after successful, observed
+  acceptance and leaves subsequent receives and cleanup to the application.
+  Approval without completed acceptance is cleaned up by the router before
+  returning.
 - `on_disconnect(ws, close_code)` runs once when the router owns cleanup after
   `on_connect` permits the connection. With `receive_loop=True`, the router
   owns cleanup after peer disconnect, cancellation, and receive failure.
   Failures in `after_connect`, `accept`, or `on_accepted` are cleaned up even
   when `receive_loop=False`. Peer closure uses `WebSocketDisconnected.code`; a
-  missing code and cancellation use `1006` as callback metadata. Cancellation
-  propagates without sending a close frame with reserved code `1006`.
-  Unexpected receive or handler failures close with `1011` and propagate.
+  missing peer code uses `1006` as callback metadata. Cancellation preserves an
+  earlier effective close code; otherwise it selects `1001` and attempts a
+  best-effort close while the accepted transport remains open. Unexpected
+  receive or handler failures use `1011` while the transport is open, then
+  propagate. If the transport is already closed without a reported code,
+  cleanup uses `1006` and does not attempt another close.
+- In either receive mode, lifecycle hooks and handlers receive the
+  `SessionWebSocket` forwarding adapter around native Falcon sockets. It
+  forwards socket operations and attributes, but
+  `isinstance(ws, falcon.asgi.WebSocket)` is false. With `receive_loop=False`,
+  the application receives this adapter during setup and owns later reception
+  and cleanup after successful setup and observed acceptance. The router cleans
+  up an approved session when acceptance does not complete.
+- The cleanup promise begins when `on_connect` approves or the socket is
+  accepted. A rejection that remains unaccepted and an `on_connect` failure
+  before approval or acceptance do not call `on_disconnect`; roll back any
+  partial registration in those paths. Once setup crosses that boundary,
+  failures still call `on_disconnect` once.
+- An exception from `on_accepted` uses close code `1011` while the transport is
+  open. If the transport has already closed without a reported code, cleanup
+  receives `1006` and skips another close.
 
 `router.attach()` also enables raw TEXT and BINARY input for all WebSocket
 routes on the app, preserving its outgoing serializers. For manually mounted
@@ -192,14 +240,19 @@ direct calls to `WebSocketResource.dispatch()`. Call `await ws.accept()` in
 in resource handlers and `on_unhandled`; frames are dispatched sequentially,
 and returning normally from `on_unhandled` keeps the session open. The router
 runs `before_disconnect` before attempting `on_disconnect` once. A missing peer
-close code or failure during `after_connect` or `accept` uses `1006` for
-cleanup. An ordinary exception from `on_accepted` occurs after acceptance,
-closes with `1011`, and runs cleanup with `1011`. Cancellation uses `1006` as
-cleanup metadata and propagates without sending a close frame with the reserved
-code. Unexpected receive or handler failures close with `1011` and propagate
-the original exception. The default `receive_loop=False` returns after
-successful acceptance, leaving subsequent frame reception and cleanup to the
-application.
+close code or a failure while the socket remains unaccepted uses `1006` for
+cleanup. After acceptance, an ordinary exception from `on_accepted` uses `1011`
+while the transport remains open; a closed transport without a reported code
+uses `1006` and is not closed again. Cancellation preserves a previously
+selected or reported close code; otherwise, it selects `1001` and attempts a
+best-effort close if the accepted transport remains open. Code-less transport
+loss uses `1006`. Unexpected receive or handler failures use `1011` and
+propagate the original exception while the transport remains open. If transport
+loss has already closed the socket without a code, cleanup uses `1006` and
+skips the close attempt. The default `receive_loop=False` returns after
+successful, observed acceptance, leaving subsequent frame reception and cleanup
+to the application. Approval without completed acceptance is cleaned up by the
+router before it returns.
 
 1) **Wire dependency injection via `resource_factory`:**
 
@@ -279,6 +332,9 @@ registration or mounting, before the route can handle a connection.
 - Calling `router.mount(prefix)` without registering the router on the Falcon
   app leaves requests unrouted. Follow it with `router.attach(app)` to register
   the exact and descendant paths.
+- When registering Falcon routes manually, use a terminal `{name:path}` route
+  for descendants. The converter name may be any valid field name; prefer
+  `router.attach(app, prefix)` when manual registration is not required.
 - Custom backends must implement *all* methods from `ConnectionBackend`,
   raising `ValueError` on duplicate IDs and ignoring stale room entries in
   `snapshot` or documenting alternative semantics.

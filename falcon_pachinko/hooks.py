@@ -14,6 +14,7 @@ import dataclasses as dc
 import enum
 import inspect
 import typing as typ
+import warnings
 
 from .diagnostics import _frame_metadata, _identifiers, _safe_scalar, _type_name
 
@@ -22,6 +23,7 @@ if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints only
 
     import falcon
 
+    from ._session import SessionState
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
 
@@ -50,7 +52,7 @@ class _HookContextKwargs(typ.TypedDict, total=False):
     params: dict[str, object]
     raw: str | bytes
     result: bool
-    error: BaseException
+    error: BaseException | None
     close_code: int
 
 
@@ -157,10 +159,15 @@ class HookCollection:
 
 
 async def _execute_hook_layer(
-    hooks: tuple[HookCallable, ...], context: HookContext
+    hooks: tuple[HookCallable, ...],
+    context: HookContext,
+    *,
+    may_run: cabc.Callable[[], bool],
 ) -> None:
     """Execute all hooks in a single layer."""
     for hook in hooks:
+        if not may_run():
+            return
         result = hook(context)
         if inspect.isawaitable(result):
             await result
@@ -180,6 +187,21 @@ class HookManager:
             raise ValueError(msg)
         self._global_hooks = global_hooks
         self._resources = list(resources)
+        self._session: SessionState | None = None
+
+    def bind_session(self, session: SessionState) -> None:
+        """Bind router-owned lifecycle state for receive dispatch guards."""
+        self._session = session
+
+    def release_session(self, session: SessionState) -> None:
+        """Release the router guard when application receive ownership begins."""
+        if self._session is session:
+            self._session = None
+
+    @property
+    def session(self) -> SessionState | None:
+        """Router-bound session state, if any."""
+        return self._session
 
     def _build_hook_layers(
         self, event_name: str, context: HookContext
@@ -208,8 +230,24 @@ class HookManager:
 
         for resource, hooks in layers:
             context.resource = resource
-            await _execute_hook_layer(hooks, context)
+            await _execute_hook_layer(
+                hooks, context, may_run=lambda: self._may_run_hook(event_name, context)
+            )
         context.resource = None
+
+    def _may_run_hook(self, event_name: str, context: HookContext) -> bool:
+        """Stop receive hooks when an earlier hook begins closing the session."""
+        if event_name not in {HookEvent.BEFORE_RECEIVE, HookEvent.AFTER_RECEIVE}:
+            return True
+        return self.can_receive(context.ws)
+
+    def can_receive(self, ws: WebSocketLike | None) -> bool:
+        """Apply one receive policy to router dispatch, resources, and hooks."""
+        session = self._session
+        if session is None:
+            return True
+        is_closed = getattr(ws, "is_closed", getattr(ws, "closed", False))
+        return session.can_receive and not is_closed
 
     async def _notify_before_event(
         self,
@@ -262,14 +300,122 @@ class HookManager:
         context.event = HookEvent.AFTER_RECEIVE
         await self._run_hooks(HookEvent.AFTER_RECEIVE, context, reverse=True)
 
+    @typ.overload
+    async def notify_before_disconnect(self, context: HookContext) -> None: ...
+
+    @typ.overload
     async def notify_before_disconnect(
         self,
-        target: WebSocketResource,
+        context: WebSocketResource,
+        /,
         *,
         ws: WebSocketLike,
         close_code: int,
-    ) -> HookContext:
-        """Run ``before_disconnect`` hooks and return the shared context."""
-        return await self._notify_before_event(
-            HookEvent.BEFORE_DISCONNECT, target, ws=ws, close_code=close_code
+    ) -> HookContext: ...
+
+    @typ.overload
+    async def notify_before_disconnect(
+        self,
+        *,
+        target: WebSocketResource,
+        ws: WebSocketLike,
+        close_code: int,
+    ) -> HookContext: ...
+
+    async def notify_before_disconnect(
+        self,
+        context: HookContext | WebSocketResource | None = None,
+        *,
+        target: WebSocketResource | None = None,
+        ws: WebSocketLike | None = None,
+        close_code: int | None = None,
+    ) -> HookContext | None:
+        """Run disconnect hooks with a prepared or legacy context.
+
+        The target/socket/code form remains available for one release and emits
+        ``DeprecationWarning``. New callers should prepare a ``HookContext``.
+        Mixed forms and incomplete legacy calls are rejected.
+
+        Returns
+        -------
+        HookContext | None
+            The deprecated form returns its created context. The prepared form
+            mutates the supplied context and returns ``None``.
+        """
+        if isinstance(context, HookContext):
+            return await self._notify_prepared_disconnect(
+                context, target=target, ws=ws, close_code=close_code
+            )
+        return await self._notify_legacy_disconnect(
+            context, target=target, ws=ws, close_code=close_code
         )
+
+    async def _notify_prepared_disconnect(
+        self,
+        context: HookContext,
+        *,
+        target: WebSocketResource | None,
+        ws: WebSocketLike | None,
+        close_code: int | None,
+    ) -> None:
+        """Run hooks with a context prepared by the session driver."""
+        if any(value is not None for value in (target, ws, close_code)):
+            msg = "pass either a HookContext or legacy disconnect arguments"
+            raise TypeError(msg)
+        context.event = HookEvent.BEFORE_DISCONNECT
+        await self._run_hooks(HookEvent.BEFORE_DISCONNECT, context)
+
+    async def _notify_legacy_disconnect(
+        self,
+        context: WebSocketResource | None,
+        *,
+        target: WebSocketResource | None,
+        ws: WebSocketLike | None,
+        close_code: int | None,
+    ) -> HookContext:
+        """Preserve the former call shape while callers migrate."""
+        target = _resolve_legacy_disconnect_target(context, target)
+        target, ws, close_code = _require_legacy_disconnect_arguments(
+            target, ws, close_code
+        )
+        warnings.warn(
+            "The target/ws/close_code form of notify_before_disconnect is "
+            "deprecated; pass a prepared HookContext instead.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return await self._notify_before_event(
+            HookEvent.BEFORE_DISCONNECT,
+            target,
+            ws=ws,
+            close_code=close_code,
+        )
+
+
+def _resolve_legacy_disconnect_target(
+    context: WebSocketResource | None,
+    target: WebSocketResource | None,
+) -> WebSocketResource | None:
+    """Resolve the former positional target without accepting two targets."""
+    if context is None:
+        return target
+    if target is not None:
+        msg = "pass the target either positionally or by keyword"
+        raise TypeError(msg)
+    return context
+
+
+def _require_legacy_disconnect_arguments(
+    target: WebSocketResource | None,
+    ws: WebSocketLike | None,
+    close_code: int | None,
+) -> tuple[WebSocketResource, WebSocketLike, int]:
+    """Narrow required values for the deprecated public call form."""
+    msg = "legacy notify_before_disconnect calls require target, ws, and close_code"
+    if target is None:
+        raise TypeError(msg)
+    if ws is None:
+        raise TypeError(msg)
+    if close_code is None:
+        raise TypeError(msg)
+    return target, ws, close_code

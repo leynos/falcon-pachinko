@@ -25,6 +25,7 @@ if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints
 
     from .protocols import WebSocketLike
 
+from ._session import SessionPhase
 from .dispatcher import dispatch
 from .exceptions import ReservedHandlerRegistrationError
 from .handlers import (
@@ -68,6 +69,18 @@ class WebSocketResource:
     def bind_hook_manager(self, manager: HookManager) -> None:
         """Associate ``manager`` with this resource instance."""
         self._hook_manager = manager
+
+    @property
+    def has_router_session(self) -> bool:
+        """Whether a router receive session currently owns this resource.
+
+        This is true from connection setup through disconnect cleanup, including
+        while the session is still connecting. The cleanup promise itself begins
+        only after ``on_connect`` approves or the resource accepts the socket.
+        """
+        manager = getattr(self, "_hook_manager", None)
+        session = manager.session if manager is not None else None
+        return session is not None and session.phase is not SessionPhase.CLOSED
 
     def bind_default_hook_manager(self) -> HookManager:
         """Bind a standalone manager for direct resource usage."""
@@ -323,18 +336,24 @@ class WebSocketResource:
         ``after_connect`` or ``accept`` fails. A peer close code is passed
         through, or 1006 when the peer close code is unavailable or acceptance
         does not complete. An ordinary exception from ``on_accepted`` occurs
-        after acceptance: the socket closes with 1011, and cleanup receives
-        1011. Cancellation uses 1006 as cleanup metadata and propagates without
-        sending a close frame with that reserved code. If cancellation
-        interrupts peer-close cleanup, remaining cleanup switches to 1006; a
-        callback already invoked is not attempted again. Unexpected receive or
-        handler failures close with 1011 and pass 1011 here. These failures
-        propagate after cleanup.
+        after acceptance: an open socket closes with 1011, and cleanup receives
+        1011. If the transport is already closed without a reported code,
+        cleanup uses 1006 and does not attempt another close. Cancellation as
+        the session-ending cause preserves any selected or reported code;
+        otherwise it selects 1001 and attempts a best-effort close while the
+        accepted transport remains open. If cancellation
+        arrives while peer-close cleanup is already running, the shielded task
+        keeps the selected peer code and finishes without restarting either
+        cleanup stage. Unexpected receive or handler failures use the same
+        1011-on-open, 1006-on-closed rule and propagate after cleanup.
 
-        Rejected connections and failed ``on_connect`` calls do not invoke this
-        method. Cancellation inside this callback does not cause a second
-        callback attempt. With the default ``receive_loop=False``, the
-        application owns session reception and cleanup.
+        A falsey, unaccepted rejection and a failure before approval or
+        acceptance do not invoke this method. If ``on_connect`` accepts the
+        socket and then fails, cleanup still runs. Cancellation inside this
+        callback does not cause a second callback attempt. With the default
+        ``receive_loop=False``, the application owns reception and cleanup
+        after successful setup and observed acceptance. If approval does not
+        complete acceptance, the router runs cleanup before returning.
 
         Parameters
         ----------
@@ -386,7 +405,11 @@ class WebSocketResource:
     async def dispatch(self, ws: WebSocketLike, raw: str | bytes) -> None:
         """Decode ``raw`` and route it to the appropriate handler."""
         manager = self._require_hook_manager()
-        async with _receive_hooks(manager, self, ws=ws, raw=raw):
+        if not manager.can_receive(ws):
+            return
+        async with _receive_hooks(manager, self, ws=ws, raw=raw) as should_dispatch:
+            if not should_dispatch:
+                return
             await dispatch(self, ws, raw)
 
 
@@ -397,17 +420,20 @@ async def _receive_hooks(
     *,
     ws: WebSocketLike,
     raw: str | bytes,
-) -> cabc.AsyncGenerator[None, None]:
+) -> cabc.AsyncGenerator[bool, None]:
     """Balance before/after receive hooks while guarding original errors."""
     context = await manager.notify_before_receive(target, ws=ws, raw=raw)
+    should_dispatch = manager.can_receive(ws)
     try:
-        yield
+        yield should_dispatch
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         context.error = exc
-        with suppress(Exception):
-            await manager.notify_after_receive(context)
+        if manager.can_receive(ws):
+            with suppress(Exception):
+                await manager.notify_after_receive(context)
         raise
     # Every handler above re-raises, so reaching here means the body succeeded.
-    await manager.notify_after_receive(context)
+    if manager.can_receive(ws):
+        await manager.notify_after_receive(context)
