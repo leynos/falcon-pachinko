@@ -37,12 +37,12 @@ def valid_workflow() -> dict[str, object]:
             {"run": "make build"},
             {"run": f'{INSTALL_MARKER} "falcon==${{{FALCON_ENV}}}"'},
             {
-                "run": "uv run --no-sync python -c "
+                "run": "uv run --locked --no-sync python -c "
                 "'import importlib.metadata, os, sys; "
                 'sys.exit(importlib.metadata.version("falcon") != '
                 f'os.environ["{FALCON_ENV}"])\'',
             },
-            {"run": f"uv run --no-sync {PYTEST_MARKER}"},
+            {"run": f"uv run --locked --no-sync {PYTEST_MARKER}"},
         ],
     }
     return {
@@ -178,6 +178,12 @@ def _drop_sync_from_version_check(workflow: dict[str, object]) -> None:
     step["run"] = run.replace(" --no-sync", "")
 
 
+def _drop_locked_from_version_check(workflow: dict[str, object]) -> None:
+    """Remove only the locked flag from the version-check command."""
+    step, run = _command_step(workflow, VERSION_CHECK_MARKER)
+    step["run"] = run.replace(" --locked", "", 1)
+
+
 def _check_wrong_package(workflow: dict[str, object]) -> None:
     """Point the version check at a package other than Falcon."""
     step, run = _command_step(workflow, VERSION_CHECK_MARKER)
@@ -229,40 +235,44 @@ REGRESSION_MUTATIONS: typ.Final[dict[str, WorkflowMutator]] = {
         workflow, VERSION_CHECK_MARKER
     ),
     "no-sync-dropped-from-pytest": lambda workflow: _set_step_command(
-        workflow, PYTEST_MARKER, "uv run pytest -v"
+        workflow, PYTEST_MARKER, "uv run --locked pytest -v"
+    ),
+    "locked-dropped-from-pytest": lambda workflow: _set_step_command(
+        workflow, PYTEST_MARKER, "uv run --no-sync pytest -v"
     ),
     "pytest-filter-added": lambda workflow: _set_step_command(
-        workflow, PYTEST_MARKER, "uv run --no-sync pytest -v tests"
+        workflow, PYTEST_MARKER, "uv run --locked --no-sync pytest -v tests"
     ),
     "version-check-no-sync-dropped": _drop_sync_from_version_check,
+    "version-check-locked-dropped": _drop_locked_from_version_check,
     "version-check-wrong-package": _check_wrong_package,
     "version-check-failure-masked": lambda workflow: _append_to_step_command(
         workflow, VERSION_CHECK_MARKER, " || true"
     ),
     "pytest-empty-single-quote-hash": lambda workflow: _set_step_command(
-        workflow, PYTEST_MARKER, "uv run --no-sync pytest -v ''# || true"
+        workflow, PYTEST_MARKER, "uv run --locked --no-sync pytest -v ''# || true"
     ),
     "pytest-empty-double-quote-hash": lambda workflow: _set_step_command(
-        workflow, PYTEST_MARKER, 'uv run --no-sync pytest -v ""# || true'
+        workflow, PYTEST_MARKER, 'uv run --locked --no-sync pytest -v ""# || true'
     ),
     "pytest-hash-masks-failure": lambda workflow: _set_step_command(
-        workflow, PYTEST_MARKER, "uv run --no-sync pytest -v# || true"
+        workflow, PYTEST_MARKER, "uv run --locked --no-sync pytest -v# || true"
     ),
     "pytest-pipeline-skipped-by-or": lambda workflow: _set_step_command(
         workflow,
         PYTEST_MARKER,
-        "true || printf unused | uv run --no-sync pytest -v",
+        "true || printf unused | uv run --locked --no-sync pytest -v",
     ),
     "pytest-pipeline-skipped-by-and": lambda workflow: _set_step_command(
         workflow,
         PYTEST_MARKER,
-        "false && printf unused | uv run --no-sync pytest -v",
+        "false && printf unused | uv run --locked --no-sync pytest -v",
     ),
     "pytest-skipped-by-and": lambda workflow: _set_step_command(
-        workflow, PYTEST_MARKER, "false && uv run --no-sync pytest -v"
+        workflow, PYTEST_MARKER, "false && uv run --locked --no-sync pytest -v"
     ),
     "pytest-skipped-by-or": lambda workflow: _set_step_command(
-        workflow, PYTEST_MARKER, "true || uv run --no-sync pytest -v"
+        workflow, PYTEST_MARKER, "true || uv run --locked --no-sync pytest -v"
     ),
     "pytest-failure-masked": lambda workflow: _append_to_step_command(
         workflow, PYTEST_MARKER, " || true"
@@ -278,7 +288,7 @@ REGRESSION_MUTATIONS: typ.Final[dict[str, WorkflowMutator]] = {
         workflow, "uv pip install falcon==4.4.0"
     ),
     "make-test-through-no-sync-uv-run": lambda workflow: _append_step(
-        workflow, "uv run --no-sync make test"
+        workflow, "uv run --locked --no-sync make test"
     ),
     "continue-on-error-expression": lambda workflow: _set_job_value(
         workflow,
@@ -327,8 +337,10 @@ EXPECTED_REGRESSION_VIOLATIONS: typ.Final[dict[str, str]] = {
     "install-step-removed": "must install falcon==",
     "verification-step-removed": "must verify Falcon",
     "no-sync-dropped-from-pytest": "must run pytest",
+    "locked-dropped-from-pytest": "must run pytest",
     "pytest-filter-added": "must run pytest",
     "version-check-no-sync-dropped": "must verify Falcon",
+    "version-check-locked-dropped": "must verify Falcon",
     "version-check-wrong-package": "must verify Falcon",
     "version-check-failure-masked": "verify command must not be followed",
     "pytest-empty-single-quote-hash": "must run pytest",

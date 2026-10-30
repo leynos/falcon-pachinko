@@ -105,12 +105,8 @@ ipython_config.py
 #Pipfile.lock
 
 # UV
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries. This repository commits uv.lock anyway: the runtime
-#   dependency bounds are deliberately wide, so the lockfile is what pins an actual release,
-#   and `make build` refuses to resolve past it with `uv sync --locked`.
-#uv.lock
+#   This repository commits its project lock file to pin development and CI
+#   dependencies. See docs/developers-guide.md#lock-file-policy.
 
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.

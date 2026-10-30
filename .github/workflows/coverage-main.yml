@@ -63,6 +63,11 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v10.3.2
 
+      # The pinned shared action owns this environment's sync. Check the
+      # repository lock here so a stale lock fails before that external step.
+      - name: Check project lock
+        run: uv lock --check
+
       - name: Generate coverage
         uses: leynos/shared-actions/.github/actions/generate-coverage@8e6a325765ba382691d1b1c65fcccf1fc1d1b00c
         with:

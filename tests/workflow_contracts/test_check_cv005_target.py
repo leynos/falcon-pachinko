@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - the tests drive make itself
 import tomllib
@@ -34,6 +35,16 @@ PUBLISHER_SELECTION: typ.Final[dict[str, str]] = {
 }
 MAKE = shutil.which("make")
 FULL_COMMIT = re.compile(r"[0-9a-f]{40}")
+PYTEST_OPTIONS_WITH_ARGUMENTS = frozenset({
+    "-k",
+    "-m",
+    "-o",
+    "--confcutdir",
+    "--deselect",
+    "--ignore",
+    "--ignore-glob",
+    "--rootdir",
+})
 
 pytestmark = pytest.mark.skipif(MAKE is None, reason="make is not installed")
 
@@ -47,6 +58,109 @@ def _make(*args: str) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
     )
+
+
+def _parse_pytest_command(command: str) -> tuple[list[str], list[str]] | None:
+    """Split a shell command into its prefix and pytest arguments."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    try:
+        pytest_index = words.index("pytest")
+    except ValueError:
+        return None
+    return words[:pytest_index], words[pytest_index + 1 :]
+
+
+def _pytest_path_arguments(arguments: list[str]) -> list[str]:
+    """Return positional pytest paths without option values."""
+    paths = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            paths.extend(arguments[index + 1 :])
+            break
+        if argument in PYTEST_OPTIONS_WITH_ARGUMENTS:
+            index += 2
+        elif any(
+            argument.startswith(f"{option}=")
+            for option in PYTEST_OPTIONS_WITH_ARGUMENTS
+        ) or argument.startswith("-"):
+            index += 1
+        else:
+            paths.append(argument)
+            index += 1
+    return paths
+
+
+def _pytest_command_ignores_paths(arguments: list[str]) -> bool:
+    """Reject options that can exclude files from the complete test suite."""
+    return any(
+        argument == option or argument.startswith(f"{option}=")
+        for argument in arguments
+        for option in ("--ignore", "--ignore-glob", "--deselect")
+    )
+
+
+def _pytest_command_filters_by_keyword(arguments: list[str]) -> bool:
+    """Reject keyword filters that can exclude tests from the complete suite."""
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            break
+        if argument == "-k" or argument.startswith("-k"):
+            return True
+        if argument in PYTEST_OPTIONS_WITH_ARGUMENTS:
+            index += 2
+        else:
+            index += 1
+    return False
+
+
+def _pytest_command_filters_by_marker(arguments: list[str]) -> bool:
+    """Detect marker options that can narrow the local test target."""
+    return any(
+        argument == "-m" or argument.startswith("-m")
+        for argument in arguments
+        if not argument.startswith("--")
+    )
+
+
+def _pytest_ci_command_has_expected_selection(arguments: list[str]) -> bool:
+    """Require the CI marker expression exactly once, before any other args."""
+    return arguments[:3] == [
+        "-v",
+        "-m",
+        "not lint_toolchain",
+    ] and not _pytest_command_filters_by_marker(arguments[3:])
+
+
+def _pytest_command_selects_complete_suite(command: str) -> bool:
+    """Allow configured testpaths or both explicit roots, never one root."""
+    parsed = _parse_pytest_command(command)
+    if parsed is None:
+        return False
+    _, arguments = parsed
+    if _pytest_command_filters_by_keyword(arguments):
+        return False
+    if _pytest_command_ignores_paths(arguments):
+        return False
+    return _pytest_path_arguments(arguments) in ([], ["falcon_pachinko", "tests"])
+
+
+def _pytest_command_line(output: str) -> str | None:
+    """Find a Make dry-run line that invokes pytest."""
+    for line in output.splitlines():
+        parsed = _parse_pytest_command(line)
+        if parsed is None:
+            continue
+        prefix, _ = parsed
+        if prefix[:2] == ["uv", "run"] and "which" not in prefix:
+            return line
+    return None
 
 
 def test_the_target_runs_the_check_from_a_full_commit_under_python_313() -> None:
@@ -154,3 +268,201 @@ def test_the_lane_runs_the_check_as_its_own_step() -> None:
     assert isinstance(steps, list), "ci.yml:lint-test must declare its steps"
     runs = [step.get("run") for step in steps if isinstance(step, dict)]
     assert "make check-cv005" in runs, "the lane must run make check-cv005"
+
+
+def test_the_lane_runs_ci_tests_before_cv005() -> None:
+    """Scenario: ``ci.yml`` runs the remaining suite after lint-toolchain.
+
+    Invariant: the locked ``make test-ci`` target runs before the CV-005 check.
+    """
+    steps = REPOSITORY.jobs("ci.yml")["lint-test"].get("steps")
+
+    assert isinstance(steps, list), "ci.yml:lint-test must declare its steps"
+    workflow_steps = [step for step in steps if isinstance(step, dict)]
+    named_commands = [(step.get("name"), step.get("run")) for step in workflow_steps]
+    test_step = ("Run tests", "make test-ci")
+    cv005_step = ("Check the CV-005 contracts", "make check-cv005")
+    assert test_step in named_commands, "the lane must run the CI test target"
+    assert cv005_step in named_commands, "the lane must run the CV-005 check"
+    assert named_commands.index(test_step) < named_commands.index(cv005_step), (
+        "the CI test target must run before the CV-005 check"
+    )
+    required_steps = [
+        workflow_steps[named_commands.index(command)]
+        for command in (test_step, cv005_step)
+    ]
+    for step, (name, _) in zip(required_steps, (test_step, cv005_step), strict=True):
+        assert "if" not in step, f"the {name!r} step must run unconditionally"
+        assert "continue-on-error" not in step, (
+            f"the {name!r} step must be able to fail"
+        )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param(
+            'uv run --locked --extra examples pytest -v -m "not lint_toolchain"',
+            id="configured-testpaths",
+        ),
+        pytest.param(
+            "uv run --locked --extra examples pytest -v "
+            'falcon_pachinko tests -m "not lint_toolchain"',
+            id="both-explicit-roots",
+        ),
+    ],
+)
+def test_pytest_command_must_select_both_suites(command: str) -> None:
+    """Explicit paths must retain both configured test roots."""
+    assert _pytest_command_selects_complete_suite(command), (
+        f"command must select the complete suite: {command!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param(
+            'uv run --locked --extra examples pytest -v tests -m "not lint_toolchain"',
+            id="tests-only",
+        ),
+        pytest.param(
+            "uv run --locked --extra examples pytest -v falcon_pachinko "
+            '-m "not lint_toolchain"',
+            id="package-only",
+        ),
+        pytest.param(
+            "uv run --locked --extra examples pytest -v --ignore=tests "
+            '-m "not lint_toolchain"',
+            id="attached-ignore",
+        ),
+        pytest.param(
+            "uv run --locked --extra examples pytest -v --ignore tests "
+            '-m "not lint_toolchain"',
+            id="separate-ignore",
+        ),
+        pytest.param(
+            'uv run --locked --extra examples pytest -v --ignore-glob="tests/**" '
+            '-m "not lint_toolchain"',
+            id="ignore-glob",
+        ),
+        pytest.param(
+            "uv run --locked --extra examples pytest -v --deselect "
+            "tests/test_example.py::test_case -m 'not lint_toolchain'",
+            id="deselect-separated",
+        ),
+        pytest.param(
+            "uv run --locked --extra examples pytest -v "
+            "--deselect=tests/test_example.py::test_case "
+            "-m 'not lint_toolchain'",
+            id="deselect-equals",
+        ),
+        pytest.param(
+            'uv run --locked --extra examples pytest -v -k "selected tests" '
+            '-m "not lint_toolchain"',
+            id="keyword-filter-separated",
+        ),
+        pytest.param(
+            "uv run --locked --extra examples pytest -v -k=selected-tests "
+            '-m "not lint_toolchain"',
+            id="keyword-filter-equals",
+        ),
+        pytest.param(
+            "uv run --locked --extra examples pytest -v -kselected-tests "
+            '-m "not lint_toolchain"',
+            id="keyword-filter-compact",
+        ),
+    ],
+)
+def test_pytest_command_rejects_incomplete_selections(command: str) -> None:
+    """Selection exclusions and keyword filters must not pass as complete suites."""
+    assert not _pytest_command_selects_complete_suite(command), (
+        f"command must not select the complete suite: {command!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        pytest.param(["-m", "smoke"], id="separated"),
+        pytest.param(["-m=smoke"], id="equals"),
+        pytest.param(["-msmoke"], id="compact"),
+    ],
+)
+def test_pytest_marker_filter_is_detected(arguments: list[str]) -> None:
+    """Marker selection can narrow the local target and must be detectable."""
+    assert _pytest_command_filters_by_marker(arguments), (
+        f"marker option must be detected: {arguments!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        pytest.param(["--maxfail=1"], id="long-option"),
+        pytest.param(["-v"], id="no-marker-filter"),
+    ],
+)
+def test_pytest_non_marker_options_are_not_marker_filters(
+    arguments: list[str],
+) -> None:
+    """Other pytest options do not look like marker selection."""
+    assert not _pytest_command_filters_by_marker(arguments), (
+        f"non-marker options must not look like marker filters: {arguments!r}"
+    )
+
+
+def test_local_and_ci_test_targets_keep_their_distinct_selections() -> None:
+    """Scenario: Make exposes complete local and post-marker CI test targets.
+
+    Invariant: ``test`` includes every test, while ``test-ci`` excludes only
+    the ``lint_toolchain`` marker already run as a dedicated CI step.
+    """
+    local = _make("-n", "test")
+    ci = _make("-n", "test-ci")
+
+    assert local.returncode == 0, f"make -n test must succeed: {local.stderr}"
+    assert ci.returncode == 0, f"make -n test-ci must succeed: {ci.stderr}"
+    local_command = _pytest_command_line(local.stdout)
+    ci_command = _pytest_command_line(ci.stdout)
+    assert local_command is not None, f"make test must run pytest: {local.stdout}"
+    assert ci_command is not None, f"make test-ci must run pytest: {ci.stdout}"
+
+    expected_prefix = ["uv", "run", "--locked", "--extra", "examples"]
+    local_prefix, local_arguments = _parse_pytest_command(local_command) or ([], [])
+    ci_prefix, ci_arguments = _parse_pytest_command(ci_command) or ([], [])
+    assert local_prefix == ci_prefix == expected_prefix, (
+        f"both test targets must use the locked examples environment: "
+        f"local={local_prefix!r}, ci={ci_prefix!r}"
+    )
+    assert local_arguments, f"make test must pass pytest arguments: {local_command}"
+    assert local_arguments[0] == "-v", (
+        f"make test must start its pytest arguments with -v: {local_command}"
+    )
+    assert not _pytest_command_filters_by_marker(local_arguments), (
+        f"make test must not filter by pytest marker: {local_command}"
+    )
+    assert _pytest_command_selects_complete_suite(local_command), (
+        f"make test must select the complete suite: {local_command}"
+    )
+    assert _pytest_ci_command_has_expected_selection(ci_arguments), (
+        f"make test-ci must exclude only lint_toolchain: {ci_command}"
+    )
+    assert _pytest_command_selects_complete_suite(ci_command), (
+        f"make test-ci must select the complete suite: {ci_command}"
+    )
+
+
+@pytest.mark.parametrize(
+    "later_marker",
+    [("-m", "smoke"), ("-m=smoke",), ("-msmoke",)],
+)
+def test_ci_selection_rejects_a_later_marker_option(
+    later_marker: tuple[str, ...],
+) -> None:
+    """A later pytest marker option replaces the required CI exclusion."""
+    arguments = ["-v", "-m", "not lint_toolchain", *later_marker]
+
+    assert not _pytest_ci_command_has_expected_selection(arguments), (
+        f"CI selection must reject a second marker expression: {arguments!r}"
+    )

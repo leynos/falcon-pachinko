@@ -7,6 +7,13 @@ uses the same sdist-first build as pull-request CI: plain
 sdist. The attested files are carried between jobs; publication jobs do not
 rebuild them.
 
+`uv build` uses an isolated environment for the backend declared in
+`[build-system]`; that backend environment is outside the project's lock-file
+policy. Published wheels and source distributions retain the dependency ranges
+declared in `pyproject.toml`, so consumers resolve those ranges in their own
+environments. See the Developer Guide's
+[lock-file policy](developers-guide.md#lock-file-policy).
+
 ## Release jobs
 
 A push of a tag matching `v*.*.*` starts these jobs:
@@ -123,12 +130,13 @@ environment settings.
 ## Build requirements and credentials
 
 The project currently builds with `setuptools>=61.0` and `wheel`. Constraining
-and hash-binding build requirements, and deciding how `uv.lock` is maintained,
-remain tracked by
-[issue #230](https://github.com/leynos/falcon-pachinko/issues/230) and
-[issue #209](https://github.com/leynos/falcon-pachinko/issues/209). The release
-workflow limits the build job to read access and passes its attested artefact
-to publication jobs, so those jobs do not rebuild with publication credentials.
+and hash-binding build requirements remain tracked by
+[issue #230](https://github.com/leynos/falcon-pachinko/issues/230). The
+committed `uv.lock` covers development and CI project environments, not the
+isolated build backend; see the Developer Guide's
+[lock-file policy](developers-guide.md#lock-file-policy). The release workflow
+limits the build job to read access and passes its attested artefact to
+publication jobs, so those jobs do not rebuild with publication credentials.
 
 The release process and the GitHub Release's role as a reconciled mirror are
 recorded in [ADR-002](adr-002-attested-reconciled-release-pipeline.md).

@@ -1,11 +1,16 @@
 # 1. Overview of `uv` and `pyproject.toml`
 
 Astral's `uv` is a Rust-based project and package manager that uses
-`pyproject.toml` as its central configuration file. When commands like
-`uv init`, `uv sync` or `uv run` are run, `uv` will:
+`pyproject.toml` as its central configuration file. `uv init` creates a new
+project and its `pyproject.toml`. For this repository, use `uv lock` to create
+or refresh `uv.lock`, then `uv sync --locked` to install the reviewed
+environment. `uv run --locked` applies the same lock check before running a
+project command.
 
-1. Look for a `pyproject.toml` in the project root and keep a lockfile
-   (`uv.lock`) in sync with it.
+After a project has been initialized, project environment commands will:
+
+1. Look for a `pyproject.toml` in the project root and check or update its
+   lockfile as required by the command and its flags.
 2. Create a virtual environment (`.venv`) if one does not already exist.
 3. Read dependency specifications (and any build-system directives) to
    install or update packages accordingly. (Astral Docs[^1], RidgeRun.ai[^2])
@@ -69,9 +74,9 @@ dependencies = [
   indexes. Classifiers must follow the exact trove list defined by PyPA.
   (Python Packaging[^4], Reddit[^5])
 - **`dependencies`:** A list of PEP 508-style requirements (e.g.,
-  `"requests>=2.25"`). `uv sync` resolves compatible versions from the declared
-  ranges and installs the versions recorded in `uv.lock`, updating the lockfile
-  as needed. (Astral Docs[^1], RidgeRun.ai[^2])
+  `"requests>=2.25"`). `uv sync --locked` installs the versions recorded in
+  `uv.lock` and fails if the lockfile needs an update. Run `uv lock` after
+  changing dependency declarations. (Astral Docs[^1], RidgeRun.ai[^2])
 
 ______________________________________________________________________
 
@@ -136,9 +141,9 @@ dev = [
 ]
 ```
 
-**`uv` installs the `dev` group automatically by default.** `uv run` and
-`uv sync` include the `dev` group with no extra flags, so a bare `uv sync`
-gives a contributor the full toolchain. Adjust this with:
+**`uv` installs the `dev` group automatically by default.** `uv run --locked`
+and `uv sync --locked` include the `dev` group with no extra flags, so the
+locked sync gives a contributor the full toolchain. Adjust this with:
 
 - `--no-dev` or `--no-default-groups` to exclude development dependencies
   (for example, when building a wheel or a production install).
@@ -225,9 +230,9 @@ package = true
 ```
 
 - **`tool.uv.package = true`:** Forces `uv` to build and install the
-  project into its virtual environment every time `uv sync` or `uv run` is run.
-  Without this, `uv` only installs dependencies (not the project's own package)
-  if `[build-system]` is missing. (Astral Docs[^7])
+  project into its virtual environment every time `uv sync --locked` or
+  `uv run --locked` is run. Without this, `uv` only installs dependencies (not
+  the project's own package) if `[build-system]` is missing. (Astral Docs[^7])
 - Other `uv`-specific keys (e.g., custom indexes, resolver policies) may
   also be set under `[tool.uv]`, but `package` is the most common. (Python
   Packaging[^4], Astral Docs[^7])
@@ -309,8 +314,8 @@ package = true
      (`fast`), installed by end users via `my_project[fast]`. (Python
      Packaging[^4])
    - `[dependency-groups]` (PEP 735) holds development-only tooling (`dev`,
-     `docs`) that is never published; `uv sync` installs the `dev` group by
-     default. (Astral Docs[^6])
+     `docs`) that is never published; `uv sync --locked` installs the `dev`
+     group by default. (Astral Docs[^6])
 
 3. **Entry Points (`[project.scripts]`):**
 
@@ -329,8 +334,8 @@ package = true
 
 5. **`[tool.uv]`:**
 
-   - `package = true` ensures that `uv sync` will build and install the
-     project itself (in editable mode) every time dependencies change.
+   - `package = true` ensures that `uv sync --locked` will build and install
+     the project itself (in editable mode) every time dependencies change.
      Otherwise, `uv` treats the project as a collection of scripts only
      (no package). (Astral Docs[^7])
 
@@ -342,9 +347,12 @@ ______________________________________________________________________
    Modern editors (VS Code, PyCharm) offer TOML syntax highlighting and PEP 621
    autocompletion. (Python Packaging[^4])
 
-2. **Lockfile Discipline:** After modifying `dependencies` or any
-   `[project]` fields, always run `uv sync` (or `uv lock`) to update `uv.lock`.
-   This guarantees reproducible environments. (Astral Docs[^1])
+2. **Lockfile Discipline:** Install the reviewed project environment with
+   `uv sync --locked`. After changing dependency declarations, run `uv lock` to
+   refresh the lockfile; use `uv lock --upgrade-package <name>` for a targeted
+   upgrade. Commit the refreshed lockfile with the dependency change. See the
+   Developer Guide's
+   [lock-file policy](../docs/developers-guide.md#lock-file-policy).
 
 3. **Semantic Versioning:** Follow [semver](https://semver.org/) for
    `version` values (e.g., `1.2.3`). Bump patch versions for bug fixes, minor
