@@ -251,14 +251,15 @@ resource and its hooks.
     owns cleanup after peer disconnect, cancellation, or receive failure. A
     failure during `after_connect`, `accept`, or `on_accepted` is cleaned up
     even when `receive_loop=False`. Peer disconnects use
-    `WebSocketDisconnected.code`; an unavailable code or an already-closed
-    transport without a reported code uses `1006` as cleanup metadata.
-    Cancellation on an accepted, open transport attempts a `1001` close before
-    cleanup; an already selected or reported code takes precedence. Unexpected
-    receive or handler failures
-    use `1011` and propagate the original exception while the transport stays
-    open. If the transport has already closed without a reported code, cleanup
-    uses `1006` and skips another close attempt. An ordinary exception from
+    `WebSocketDisconnected.code`; a peer disconnect without a code and
+    code-less transport loss without cancellation use `1006` as cleanup
+    metadata. Cancellation on an accepted session keeps an already selected or
+    reported code, or uses `1001` if no code is available. With no earlier
+    code, it attempts a `1001` close before cleanup while the transport remains
+    open. Unexpected receive or handler failures use `1011` and propagate the
+    original exception while the transport stays open. If the transport has
+    already closed without a reported code, a non-cancellation failure uses
+    `1006` and skips another close attempt. An ordinary exception from
     `on_accepted` uses `1011` while the transport remains open; a closed
     transport without a reported code uses `1006`. A rejection that remains
     unaccepted does not run cleanup. If `on_connect` accepts the socket before
