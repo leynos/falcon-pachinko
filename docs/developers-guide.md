@@ -94,7 +94,9 @@ host-owned `SessionInstrumentation` adapter before the first routed session.
 The default adapter is a no-op. This is a per-router boundary: the package does
 not configure global metrics or tracing providers, own exporters, or alter the
 router or worker constructors. The host remains responsible for adapter and
-exporter lifetime.
+exporter lifetime. The optional keyword-only `monotonic_clock` supplies the
+clock used for both lifecycle DEBUG observations and instrumentation durations;
+omitting it keeps `time.monotonic`.
 
 The adapter exposes fixed counters, duration measurements and span handles
 through synchronous methods. Those methods must be non-blocking on the event
@@ -121,10 +123,10 @@ copies the active `contextvars` context when creating the cleanup task. Both
 span handles are ended once on every normal, error, and repeated-cancellation
 path. Labels use the closed enums for operation, outcome, phase, close-code
 category and exception category; they omit resource types, IDs, paths,
-payloads, exception names and values, and tracebacks. The instrumentation clock
-is separate from the existing DEBUG observation clock so enabling metrics does
-not change diagnostic timing. The current enum sizes permit at most 2,880
-combinations per instrument, with fewer combinations reachable in practice.
+payloads, exception names and values, and tracebacks. Both timing paths share
+the configured monotonic clock, so logs and telemetry use the same time source.
+The current enum sizes permit at most 2,880 combinations per instrument, with
+fewer combinations reachable in practice.
 
 ## Cluster fan-out maintenance
 

@@ -135,21 +135,29 @@ class WebSocketRouter:
             NOOP_SESSION_INSTRUMENTATION
         )
         self._session_started = False
-        self._session_instrumentation_clock = time.monotonic
+        self._session_clock: cabc.Callable[[], float] = time.monotonic
 
     def configure_session_instrumentation(
-        self, instrumentation: SessionInstrumentation | None
+        self,
+        instrumentation: SessionInstrumentation | None,
+        *,
+        monotonic_clock: cabc.Callable[[], float] | None = None,
     ) -> None:
-        """Configure optional host-owned metrics and tracing before first use.
+        """Configure optional host-owned metrics and timing before first use.
 
         The router has a no-op implementation by default. The configured
         adapter must use synchronous, non-blocking callbacks and bounded
         exporter work; it is invoked on the session's event-loop thread.
+        An optional monotonic clock supplies lifecycle observation and
+        instrumentation durations.
 
         Parameters
         ----------
         instrumentation : SessionInstrumentation or None
             Host adapter, or ``None`` to restore the no-op implementation.
+        monotonic_clock : collections.abc.Callable or None, default=None
+            Monotonic clock used for lifecycle observations and instrumentation.
+            ``None`` restores ``time.monotonic``.
 
         Raises
         ------
@@ -164,6 +172,9 @@ class WebSocketRouter:
                 NOOP_SESSION_INSTRUMENTATION
                 if instrumentation is None
                 else instrumentation
+            )
+            self._session_clock = (
+                time.monotonic if monotonic_clock is None else monotonic_clock
             )
 
     @staticmethod
@@ -541,14 +552,15 @@ class WebSocketRouter:
         with self._mount_lock:
             self._session_started = True
             instrumentation = self._session_instrumentation
-            instrumentation_clock = self._session_instrumentation_clock
+            session_clock = self._session_clock
         return await run_session(
             resource,
             dispatch,
             hook_manager=hook_manager,
             options=_SessionOptions(
                 receive_loop=self._receive_loop,
-                instrumentation_clock=instrumentation_clock,
+                observation_clock=session_clock,
+                instrumentation_clock=session_clock,
                 instrumentation=instrumentation,
             ),
         )
