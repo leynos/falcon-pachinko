@@ -94,6 +94,20 @@ class _SessionExecution:
     cleanup_failures: tuple[BaseException, ...] = ()
 
 
+@dc.dataclass(slots=True)
+class _SessionRun:
+    """Keep timing, span, and terminal state for one router-owned attempt."""
+
+    execution: _SessionExecution
+    options: _SessionOptions
+    started: float
+    instrumentation_started: float
+    session_span: _observability._SpanOwner
+    handed_off_to_application: bool = False
+    error: BaseException | None = None
+    outcome: _observability.Outcome | None = None
+
+
 async def run_session(
     resource: WebSocketResource,
     dispatch: SessionDispatch,
@@ -122,6 +136,40 @@ async def run_session(
     bool
         ``True`` after this matched route handles the connection attempt.
     """
+    run = _start_session_run(resource, dispatch, hook_manager, options)
+    try:
+        await _drive_session_with_observation(run)
+        return True
+    finally:
+        _release_and_observe_session(run)
+
+
+def _start_session_run(
+    resource: WebSocketResource,
+    dispatch: SessionDispatch,
+    hook_manager: HookManager,
+    options: _SessionOptions,
+) -> _SessionRun:
+    """Bind session guards and start timing before setup invokes user code."""
+    execution = _prepare_session_execution(resource, dispatch, hook_manager, options)
+    started = options.observation_clock()
+    instrumentation_started = options.instrumentation_clock()
+    session_span = _start_session_span(execution, options)
+    _log_session_observation(
+        execution, _SessionObservation("session", "started", started)
+    )
+    return _SessionRun(
+        execution, options, started, instrumentation_started, session_span
+    )
+
+
+def _prepare_session_execution(
+    resource: WebSocketResource,
+    dispatch: SessionDispatch,
+    hook_manager: HookManager,
+    options: _SessionOptions,
+) -> _SessionExecution:
+    """Bind receive guards before setup can invoke any resource hooks."""
     execution = _SessionExecution(
         resource,
         dispatch,
@@ -134,9 +182,14 @@ async def run_session(
     dispatch.session = execution.session
     dispatch.ws = track_session_socket(dispatch.ws, execution.session)
     hook_manager.bind_session(execution.session)
-    started = options.observation_clock()
-    instrumentation_started = options.instrumentation_clock()
-    session_span = _observability._start_span(
+    return execution
+
+
+def _start_session_span(
+    execution: _SessionExecution, options: _SessionOptions
+) -> _observability._SpanOwner:
+    """Create the session span before setup and receive work begin."""
+    return _observability._start_span(
         options.instrumentation,
         _observability.SpanName.SESSION,
         _instrumentation_dimensions(
@@ -146,76 +199,83 @@ async def run_session(
             exception=None,
         ),
     )
-    _log_session_observation(
-        execution, _SessionObservation("session", "started", started)
-    )
-    handed_off_to_application = False
-    session_error: BaseException | None = None
-    session_outcome: _observability.Outcome | None = None
+
+
+async def _drive_session_with_observation(
+    run: _SessionRun,
+) -> None:
+    """Retain classification data while preserving the original traceback."""
     try:
-        try:
-            handed_off_to_application = await _drive_session(
-                execution, options, started
-            )
-        except BaseException as exc:
-            session_error = exc
-            session_outcome = _instrumentation_session_outcome(
-                execution,
-                exc,
-                handed_off_to_application=handed_off_to_application,
-            )
-            raise
-        session_outcome = _instrumentation_session_outcome(
-            execution,
-            None,
-            handed_off_to_application=handed_off_to_application,
+        run.handed_off_to_application = await _drive_session(
+            run.execution, run.options, run.started
         )
-        return True
+    except BaseException as exc:
+        run.error = exc
+        run.outcome = _instrumentation_session_outcome(
+            run.execution,
+            exc,
+            handed_off_to_application=run.handed_off_to_application,
+        )
+        raise
+    run.outcome = _instrumentation_session_outcome(
+        run.execution,
+        None,
+        handed_off_to_application=run.handed_off_to_application,
+    )
+
+
+def _release_and_observe_session(run: _SessionRun) -> None:
+    """Release session ownership before emitting its one terminal observation."""
+    try:
+        _release_session_ownership(
+            run.execution,
+            run.options,
+            handed_off_to_application=run.handed_off_to_application,
+        )
+    except BaseException as exc:
+        run.error = exc
+        run.outcome = _instrumentation_session_outcome(
+            run.execution,
+            exc,
+            handed_off_to_application=run.handed_off_to_application,
+        )
+        raise
     finally:
-        try:
-            _release_session_ownership(
-                execution,
-                options,
-                handed_off_to_application=handed_off_to_application,
-            )
-        except BaseException as exc:
-            session_error = exc
-            session_outcome = _instrumentation_session_outcome(
-                execution,
-                exc,
-                handed_off_to_application=handed_off_to_application,
-            )
-            raise
-        finally:
-            outcome = session_outcome or _instrumentation_session_outcome(
-                execution,
-                session_error,
-                handed_off_to_application=handed_off_to_application,
-            )
-            dimensions = _instrumentation_dimensions(
-                execution,
-                operation=_observability.Operation.SESSION,
-                outcome=outcome,
-                exception=_instrumentation_session_exception(execution, session_error),
-            )
-            session_duration = (
-                options.instrumentation_clock() - instrumentation_started
-                if execution.session.has_established and not handed_off_to_application
-                else None
-            )
-            _observability._increment(
-                options.instrumentation,
-                _observability.Counter.SESSION_OUTCOMES,
-                dimensions,
-            )
-            if session_duration is not None:
-                _observability._observe_duration(
-                    options.instrumentation,
-                    _observability.Duration.SESSION,
-                    session_duration,
-                    dimensions,
-                )
-            session_span.end(dimensions)
+        _finish_session_instrumentation(run)
+
+
+def _finish_session_instrumentation(run: _SessionRun) -> None:
+    """Count one attempt outcome and end its span after ownership is released."""
+    execution = run.execution
+    outcome = run.outcome or _instrumentation_session_outcome(
+        execution,
+        run.error,
+        handed_off_to_application=run.handed_off_to_application,
+    )
+    dimensions = _instrumentation_dimensions(
+        execution,
+        operation=_observability.Operation.SESSION,
+        outcome=outcome,
+        exception=_instrumentation_session_exception(execution, run.error),
+    )
+    session_duration = (
+        run.options.instrumentation_clock() - run.instrumentation_started
+        if execution.session.has_established and not run.handed_off_to_application
+        else None
+    )
+    _observability._increment(
+        run.options.instrumentation,
+        _observability.Counter.SESSION_OUTCOMES,
+        dimensions,
+    )
+    if session_duration is not None:
+        _observability._observe_duration(
+            run.options.instrumentation,
+            _observability.Duration.SESSION,
+            session_duration,
+            dimensions,
+        )
+    run.session_span.end(dimensions)
 
 
 def _instrumentation_session_outcome(
