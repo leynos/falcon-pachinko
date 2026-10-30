@@ -178,6 +178,12 @@ def _drop_sync_from_version_check(workflow: dict[str, object]) -> None:
     step["run"] = run.replace(" --no-sync", "")
 
 
+def _drop_locked_from_version_check(workflow: dict[str, object]) -> None:
+    """Remove only the locked flag from the version-check command."""
+    step, run = _command_step(workflow, VERSION_CHECK_MARKER)
+    step["run"] = run.replace(" --locked", "", 1)
+
+
 def _check_wrong_package(workflow: dict[str, object]) -> None:
     """Point the version check at a package other than Falcon."""
     step, run = _command_step(workflow, VERSION_CHECK_MARKER)
@@ -231,10 +237,14 @@ REGRESSION_MUTATIONS: typ.Final[dict[str, WorkflowMutator]] = {
     "no-sync-dropped-from-pytest": lambda workflow: _set_step_command(
         workflow, PYTEST_MARKER, "uv run pytest -v"
     ),
+    "locked-dropped-from-pytest": lambda workflow: _set_step_command(
+        workflow, PYTEST_MARKER, "uv run --no-sync pytest -v"
+    ),
     "pytest-filter-added": lambda workflow: _set_step_command(
         workflow, PYTEST_MARKER, "uv run --locked --no-sync pytest -v tests"
     ),
     "version-check-no-sync-dropped": _drop_sync_from_version_check,
+    "version-check-locked-dropped": _drop_locked_from_version_check,
     "version-check-wrong-package": _check_wrong_package,
     "version-check-failure-masked": lambda workflow: _append_to_step_command(
         workflow, VERSION_CHECK_MARKER, " || true"
@@ -327,8 +337,10 @@ EXPECTED_REGRESSION_VIOLATIONS: typ.Final[dict[str, str]] = {
     "install-step-removed": "must install falcon==",
     "verification-step-removed": "must verify Falcon",
     "no-sync-dropped-from-pytest": "must run pytest",
+    "locked-dropped-from-pytest": "must run pytest",
     "pytest-filter-added": "must run pytest",
     "version-check-no-sync-dropped": "must verify Falcon",
+    "version-check-locked-dropped": "must verify Falcon",
     "version-check-wrong-package": "must verify Falcon",
     "version-check-failure-masked": "verify command must not be followed",
     "pytest-empty-single-quote-hash": "must run pytest",

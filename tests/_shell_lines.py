@@ -28,6 +28,9 @@ SHELL_QUOTED_TEXT = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 SHELL_COMMAND_SUBSTITUTION = re.compile(r"\$\((?!\()")
 
 
+SHELL_BACKTICK_SUBSTITUTION = re.compile(r"`(?:\\.|[^`\\])*`")
+
+
 MAKE_COMMAND_SUBSTITUTION = re.compile(r"\$\$\((?!\()")
 
 
@@ -107,7 +110,8 @@ def _append_shell_fragment(line: str, fragments: list[str]) -> bool:
     """Append a physical line and report whether its shell continuation remains open."""
     stripped = line.rstrip()
     trailing_backslashes = len(stripped) - len(stripped.rstrip("\\"))
-    continues = trailing_backslashes % 2 == 1
+    contains_comment = _strip_shell_comment(line) != line
+    continues = trailing_backslashes % 2 == 1 and not contains_comment
     fragments.append(stripped[:-1].strip() if continues else line.strip())
     return continues
 
@@ -276,10 +280,48 @@ def _quoted_substitution_contains_uv_command(
     return bool(UV_COMMAND_IN_SUBSTITUTION.search(quoted))
 
 
+def _backtick_substitution_contains_uv_command(line: str) -> bool:
+    """Return whether active backticks contain a command that may invoke uv."""
+    source = _strip_shell_comment(line)
+    single_quoted_spans = [
+        match.span()
+        for match in SHELL_QUOTED_TEXT.finditer(source)
+        if match.group().startswith("'")
+    ]
+    return any(
+        _backtick_match_contains_uv_command(source, match, single_quoted_spans)
+        for match in SHELL_BACKTICK_SUBSTITUTION.finditer(source)
+    )
+
+
+def _backtick_match_contains_uv_command(
+    source: str,
+    match: re.Match[str],
+    single_quoted_spans: list[tuple[int, int]],
+) -> bool:
+    """Return whether one active backtick substitution may invoke uv."""
+    prefix = source[: match.start()]
+    preceding_backslashes = len(prefix) - len(prefix.rstrip("\\"))
+    if preceding_backslashes % 2:
+        return False
+    if any(
+        start <= match.start() and match.end() <= end
+        for start, end in single_quoted_spans
+    ):
+        return False
+    return bool(UV_COMMAND_IN_SUBSTITUTION.search(match.group()[1:-1]))
+
+
 def _protect_quoted_parentheses(
     line: str, *, line_number: int, is_makefile: bool
 ) -> str:
     """Protect quoted parentheses and reject substitutions that can hide uv."""
+    if _backtick_substitution_contains_uv_command(line):
+        message = (
+            f"Unsupported backtick command substitution at shell line "
+            f"{line_number}: {line!r}"
+        )
+        raise ShellCommandSyntaxError(message)
 
     def replace(match: re.Match[str]) -> str:
         quoted = match.group(0)
