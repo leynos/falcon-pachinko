@@ -400,3 +400,40 @@ async def test_on_connect_groups_setup_and_rollback_failures_primary_first() -> 
     )
     assert resource._conn_id is not None, "failed removal must retain its identity"
     await InProcessBackend.remove_connection(backend, resource._conn_id)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_acceptance_keeps_rollback_failure_as_cause() -> None:
+    """Preserve rollback failure identity without copying its message to notes."""
+    backend = FailingRollbackBackend()
+    backend.removal_error = RuntimeError("private backend detail")
+    conn_mgr = WebSocketConnectionManager(backend=backend)
+    resource, _repo, _audit, _feed = _build_resource(conn_mgr)
+    cancellation = asyncio.CancelledError("acceptance cancelled")
+
+    class CancelledAcceptanceSocket(RecordingWebSocket):
+        async def accept(self, subprotocol: str | None = None) -> None:
+            """Raise cancellation before the handshake completes."""
+            del subprotocol
+            raise cancellation
+
+    try:
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await resource.on_connect(
+                _connect_request(),
+                CancelledAcceptanceSocket(),
+                workspace_id=_WORKSPACE,
+                project_id=_PROJECT,
+            )
+
+        assert raised.value is cancellation, "setup cancellation must stay primary"
+        assert raised.value.__cause__ is backend.removal_error, (
+            "the failed removal object must remain in the exception chain"
+        )
+        assert raised.value.__notes__ == [
+            "Connection rollback also failed: RuntimeError"
+        ], "the diagnostic note must omit the backend message"
+    finally:
+        if resource._conn_id is not None:
+            await InProcessBackend.remove_connection(backend, resource._conn_id)
+            resource._conn_id = None
