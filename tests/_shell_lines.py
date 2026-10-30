@@ -43,7 +43,7 @@ QUOTED_OPEN_PARENTHESIS = "\ue000"
 QUOTED_CLOSE_PARENTHESIS = "\ue001"
 
 
-def _logical_lines(text: str) -> list[tuple[int, str]]:
+def logical_lines(text: str) -> list[tuple[int, str]]:
     """Return source lines joined across shell or Make continuations.
 
     Returns
@@ -218,7 +218,7 @@ def _consume_heredoc_line(
     return True
 
 
-def _shell_commands(
+def shell_commands(
     line: str, *, line_number: int, is_makefile: bool
 ) -> list[list[str]]:
     """Split a logical shell line at command separators.

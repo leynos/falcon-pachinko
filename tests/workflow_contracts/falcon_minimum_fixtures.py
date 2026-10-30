@@ -235,7 +235,7 @@ REGRESSION_MUTATIONS: typ.Final[dict[str, WorkflowMutator]] = {
         workflow, VERSION_CHECK_MARKER
     ),
     "no-sync-dropped-from-pytest": lambda workflow: _set_step_command(
-        workflow, PYTEST_MARKER, "uv run pytest -v"
+        workflow, PYTEST_MARKER, "uv run --locked pytest -v"
     ),
     "locked-dropped-from-pytest": lambda workflow: _set_step_command(
         workflow, PYTEST_MARKER, "uv run --no-sync pytest -v"

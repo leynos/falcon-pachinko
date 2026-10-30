@@ -21,12 +21,12 @@ if typ.TYPE_CHECKING:
     import pathlib
 
 from tests._makefile import MAKEFILE, REPO_ROOT
-from tests._shell_lines import ShellCommandSyntaxError, _logical_lines, _shell_commands
+from tests._shell_lines import ShellCommandSyntaxError, logical_lines, shell_commands
 from tests._uv_command_scanner import (
     UnsupportedCommandOptionError,
     UnsupportedEnvOptionError,
     UnsupportedUvOptionError,
-    _is_project_subcommand,
+    is_project_subcommand,
     run_step_scripts,
     unlocked_project_commands,
 )
@@ -103,12 +103,40 @@ def _workflow_lock_violations(path: pathlib.Path) -> list[str]:
     ]
 
 
+def test_run_step_scripts_finds_nested_commands_in_document_order() -> None:
+    """Workflow extraction retains nested locked and unlocked run scripts."""
+    document = {
+        "jobs": {
+            "test": {
+                "steps": [
+                    {"name": "locked", "run": "uv run --locked pytest"},
+                    {"uses": "actions/checkout@v7"},
+                ]
+            },
+            "build": {"steps": [{"name": "unlocked", "run": "uv sync"}]},
+        }
+    }
+
+    assert run_step_scripts(document) == [
+        "uv run --locked pytest",
+        "uv sync",
+    ], "nested workflow run steps must retain their document order"
+
+
 def test_ci_run_steps_require_the_project_lockfile() -> None:
     """Repository-owned CI run steps must reject stale project locks."""
+    paths = _ci_workflow_and_action_paths()
+    scripts = [
+        script
+        for path in paths
+        for script in run_step_scripts(_strict_workflow_document(path))
+    ]
+    assert scripts, (
+        "repository-owned workflows must expose run: scripts to the lock scan"
+    )
+
     violations = [
-        violation
-        for path in _ci_workflow_and_action_paths()
-        for violation in _workflow_lock_violations(path)
+        violation for path in paths for violation in _workflow_lock_violations(path)
     ]
     assert not violations, (
         "CI project commands must use --locked (each entry names its file and "
@@ -231,9 +259,9 @@ def test_ci_command_contract_checks_each_shell_invocation(
 def test_project_subcommand_predicate_accepts_run_and_sync(
     tokens: list[str], index: int
 ) -> None:
-    """The scanner recognises only project subcommands at valid indexes."""
-    assert _is_project_subcommand(tokens, index), (
-        f"run or sync must be recognised at index {index}: {tokens!r}"
+    """The scanner recognizes only project subcommands at valid indexes."""
+    assert is_project_subcommand(tokens, index), (
+        f"run or sync must be recognized at index {index}: {tokens!r}"
     )
 
 
@@ -250,7 +278,7 @@ def test_project_subcommand_predicate_rejects_other_tokens(
     tokens: list[str], index: int
 ) -> None:
     """The scanner rejects unsupported or out-of-range subcommand tokens."""
-    assert not _is_project_subcommand(tokens, index), (
+    assert not is_project_subcommand(tokens, index), (
         f"non-project subcommand must be rejected at index {index}: {tokens!r}"
     )
 
@@ -374,14 +402,14 @@ def test_shell_logical_lines_preserve_source_locations_after_heredocs() -> None:
     """Heredoc bodies leave the next executable line's source location intact."""
     script = "cat <<'EOF'\nDon't run uv sync\nEOF\nuv run pytest"
 
-    assert _logical_lines(script) == [(1, "cat <<'EOF'"), (4, "uv run pytest")], (
+    assert logical_lines(script) == [(1, "cat <<'EOF'"), (4, "uv run pytest")], (
         "logical shell lines must skip heredoc data and retain physical locations"
     )
 
 
 def test_shell_command_groups_preserve_quoted_parentheses() -> None:
     """Quoted grouping characters remain argument data at command boundaries."""
-    commands = _shell_commands(
+    commands = shell_commands(
         "echo '(uv sync)' && uv sync", line_number=7, is_makefile=False
     )
 
@@ -428,9 +456,9 @@ def test_command_scanner_does_not_join_a_command_after_a_comment_backslash() -> 
 
 def test_command_scanner_fails_closed_on_unknown_uv_global_options() -> None:
     """An unrecognized global option must not hide a project subcommand."""
-    script = "echo ready\nuv --unrecognised sync"
+    script = "echo ready\nuv --unrecognized sync"
 
-    with pytest.raises(UnsupportedUvOptionError, match=r"line 2.*uv --unrecognised"):
+    with pytest.raises(UnsupportedUvOptionError, match=r"line 2.*uv --unrecognized"):
         unlocked_project_commands(script)
 
 

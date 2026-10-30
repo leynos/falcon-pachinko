@@ -132,8 +132,8 @@ installing Falcon 4.0.0 with `uv pip install falcon==4.0.0` and running
 committed and `.gitignore` does not exclude it. The dependency bounds above are
 deliberately wide, so the lockfile pins the Falcon release tested by
 `lint-test` and the shared coverage action; Dependabot keeps that release
-current. See "Dependency management with uv" below for how the lockfile is
-maintained.
+current. See the [lock-file policy](#lock-file-policy) below for how the
+lockfile is maintained.
 
 The `falcon-minimum` job in `.github/workflows/ci.yml` checks the lower bound
 on every pull request and every push to `main`. After `make build` installs and
@@ -151,11 +151,6 @@ When the lower bound changes, update the `falcon` bound in `pyproject.toml`,
 `tests/workflow_contracts/falcon_minimum_fixtures.py` together. Review
 `tests/workflow_contracts/test_falcon_minimum_lane.py` as well; its workflow
 contract keeps those values aligned.
-
-The dependency bounds above are deliberately wide. See the
-[lock-file policy](#lock-file-policy) for how project environments are pinned
-and updated. Lower-bound coverage in CI stays tracked separately from this
-support policy.
 
 ## Lock-file policy
 
@@ -198,17 +193,21 @@ uv sync --group dev --extra examples --extra testing --locked
 
 `--locked` requires the lockfile to match `pyproject.toml`; a stale or missing
 lockfile makes the command fail rather than silently resolving a different
-release set. Repository-owned CI project-environment commands use `--locked`,
-fail when the lock is stale and never regenerate it. The main coverage lane runs
-`uv lock --check` before its pinned shared coverage action, whose project sync
-is maintained outside this repository. The separate scheduled/manual mutation
-workflow also delegates to a pinned shared workflow; that workflow runs
-`uv run --with` without `--locked`, so uv automatically updates an out-of-date
-lock while preparing that job's project environment. This mutation workflow is
-not a pull-request check. `make test` runs the complete suite and requests the
-`examples` extra in its locked `uv run` command. After the CI lane runs the
-dedicated `lint_toolchain` step, it uses `make test-ci` to avoid running those
-integration tests twice while keeping them in the local suite.
+release set. Repository-owned CI project-environment commands use `--locked`
+and never regenerate the lock. Commands that sync the project environment fail
+when the lock is stale. The `falcon-minimum` lane's `uv run --no-sync` commands
+skip lock freshness checks; they run only after `make build` has checked and
+synced the locked environment, then preserve the deliberate Falcon override.
+The main coverage lane runs `uv lock --check` before its pinned shared coverage
+action, whose project sync is maintained outside this repository. The separate
+scheduled/manual mutation workflow also delegates to a pinned shared workflow;
+that workflow runs `uv run --with` without `--locked`, so uv automatically
+updates an out-of-date lock while preparing that job's project environment.
+This mutation workflow is not a pull-request check. `make test` runs the
+complete suite and requests the `examples` extra in its locked `uv run`
+command. After the CI lane runs the dedicated `lint_toolchain` step, it uses
+`make test-ci` to avoid running those integration tests twice while keeping
+them in the local suite.
 
 ### Refreshing the lockfile
 
@@ -244,6 +243,13 @@ lockfile refresh path. It groups minor and patch updates into pull requests; CI
 validates each candidate against the committed lock with `--locked`.
 `tests/test_uv_toolchain.py` holds the updater configuration and the lockfile
 contract in place.
+
+`tests/test_uv_command_contracts.py` enforces this policy in Makefile recipes,
+GitHub Actions `run:` steps and composite-action `action.yml` files, using
+`tests/_uv_command_scanner.py`. The scanner reports unlocked project commands
+with source lines and fails closed on unsupported shell syntax or uv and env
+options that could hide a command. When adding a supported option, update the
+scanner's option tables and the focused command-contract tests together.
 
 The auto-merge workflow needs no change for this: `dependabot-automerge.yml`
 keys on the actor `dependabot[bot]`, not on the ecosystem that opened the pull

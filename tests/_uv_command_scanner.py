@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from tests._shell_lines import _logical_lines, _shell_commands
+from tests._shell_lines import logical_lines, shell_commands
 
 
 class UnsupportedCommandOptionError(ValueError):
@@ -249,12 +249,12 @@ def _uv_executable_index(tokens: list[str], *, is_makefile: bool) -> int | None:
 def _uv_project_subcommand_index(tokens: list[str], index: int) -> int | None:
     """Return the project subcommand after recognized uv global options."""
     command_index = _uv_global_option_end(tokens, index)
-    if command_index is None or not _is_project_subcommand(tokens, command_index):
+    if command_index is None or not is_project_subcommand(tokens, command_index):
         return None
     return command_index
 
 
-def _is_project_subcommand(tokens: list[str], index: int) -> bool:
+def is_project_subcommand(tokens: list[str], index: int) -> bool:
     """Return whether a valid token index names a project uv subcommand."""
     return 0 <= index < len(tokens) and tokens[index] in {"run", "sync"}
 
@@ -425,7 +425,7 @@ def unlocked_project_commands(
     specific uv or env option type retained.
     """
     violations: list[tuple[int, str]] = []
-    for line_number, line in _logical_lines(text):
+    for line_number, line in logical_lines(text):
         violations.extend(
             _unlocked_commands_on_line(
                 line, line_number=line_number, is_makefile=is_makefile
@@ -439,7 +439,7 @@ def _unlocked_commands_on_line(
 ) -> list[tuple[int, str]]:
     """Find unlocked invocations in one logical line with useful errors."""
     violations: list[tuple[int, str]] = []
-    for command in _shell_commands(
+    for command in shell_commands(
         line, line_number=line_number, is_makefile=is_makefile
     ):
         command_text = " ".join(command)
