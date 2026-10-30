@@ -14,6 +14,7 @@ import dataclasses as dc
 import enum
 import inspect
 import typing as typ
+import warnings
 
 from .diagnostics import _frame_metadata, _identifiers, _safe_scalar, _type_name
 
@@ -299,7 +300,85 @@ class HookManager:
         context.event = HookEvent.AFTER_RECEIVE
         await self._run_hooks(HookEvent.AFTER_RECEIVE, context, reverse=True)
 
-    async def notify_before_disconnect(self, context: HookContext) -> None:
-        """Run ``before_disconnect`` with the final session outcome."""
-        context.event = HookEvent.BEFORE_DISCONNECT
-        await self._run_hooks(HookEvent.BEFORE_DISCONNECT, context)
+    @typ.overload
+    async def notify_before_disconnect(self, context: HookContext) -> None: ...
+
+    @typ.overload
+    async def notify_before_disconnect(
+        self,
+        context: WebSocketResource,
+        /,
+        *,
+        ws: WebSocketLike,
+        close_code: int,
+    ) -> HookContext: ...
+
+    @typ.overload
+    async def notify_before_disconnect(
+        self,
+        *,
+        target: WebSocketResource,
+        ws: WebSocketLike,
+        close_code: int,
+    ) -> HookContext: ...
+
+    async def notify_before_disconnect(
+        self,
+        context: HookContext | WebSocketResource | None = None,
+        *,
+        target: WebSocketResource | None = None,
+        ws: WebSocketLike | None = None,
+        close_code: int | None = None,
+    ) -> HookContext | None:
+        """Run disconnect hooks with a prepared or legacy context.
+
+        The target/socket/code form remains available for one release and emits
+        ``DeprecationWarning``. New callers should prepare a ``HookContext``.
+
+        Returns
+        -------
+        HookContext | None
+            The deprecated form returns its created context. The prepared form
+            mutates the supplied context and returns ``None``.
+
+        Raises
+        ------
+        TypeError
+            If arguments from both call forms are mixed or required legacy
+            values are missing.
+        """
+        if isinstance(context, HookContext):
+            if any(value is not None for value in (target, ws, close_code)):
+                msg = "pass either a HookContext or legacy disconnect arguments"
+                raise TypeError(msg)
+            context.event = HookEvent.BEFORE_DISCONNECT
+            await self._run_hooks(HookEvent.BEFORE_DISCONNECT, context)
+            return None
+
+        if context is not None:
+            if target is not None:
+                msg = "pass the target either positionally or by keyword"
+                raise TypeError(msg)
+            target = typ.cast("WebSocketResource", context)
+        if not all(value is not None for value in (target, ws, close_code)):
+            msg = (
+                "legacy notify_before_disconnect calls require target, ws, "
+                "and close_code"
+            )
+            raise TypeError(msg)
+        target = typ.cast("WebSocketResource", target)
+        ws = typ.cast("WebSocketLike", ws)
+        close_code = typ.cast("int", close_code)
+
+        warnings.warn(
+            "The target/ws/close_code form of notify_before_disconnect is "
+            "deprecated; pass a prepared HookContext instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return await self._notify_before_event(
+            HookEvent.BEFORE_DISCONNECT,
+            target,
+            ws=ws,
+            close_code=close_code,
+        )

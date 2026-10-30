@@ -390,6 +390,62 @@ async def test_receive_hooks_skip_cancelled_error() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("target_style", ["positional", "keyword"])
+async def test_before_disconnect_legacy_call_is_deprecated_and_returns_context(
+    target_style: str,
+) -> None:
+    """Preserve the former public call shape for one migration window."""
+    resource = WebSocketResource()
+    ws = DummyWS()
+    received: list[HookContext] = []
+    global_hooks = HookCollection()
+    global_hooks.add("before_disconnect", received.append)
+    manager = HookManager(global_hooks=global_hooks, resources=(resource,))
+
+    async def invoke_legacy_call() -> HookContext:
+        if target_style == "keyword":
+            return await manager.notify_before_disconnect(
+                target=resource, ws=ws, close_code=4002
+            )
+        return await manager.notify_before_disconnect(resource, ws=ws, close_code=4002)
+
+    with pytest.warns(DeprecationWarning, match="notify_before_disconnect"):
+        context = await invoke_legacy_call()
+
+    assert isinstance(context, HookContext), (
+        "the deprecated call form must retain its HookContext return value"
+    )
+    assert received == [context], "the compatibility form must execute hooks once"
+    assert context.event == "before_disconnect", "the event should retain its name"
+    assert context.target is resource, "the context should target the supplied resource"
+    assert context.ws is ws, "the context should retain the supplied socket"
+    assert context.close_code == 4002, "the context should retain the supplied code"
+
+
+@pytest.mark.asyncio
+async def test_before_disconnect_prepared_context_keeps_current_api() -> None:
+    """Keep the prepared-context form silent and return no new context."""
+    resource = WebSocketResource()
+    ws = DummyWS()
+    global_hooks = HookCollection()
+    manager = HookManager(global_hooks=global_hooks, resources=(resource,))
+    context = HookContext(
+        event="before_disconnect",
+        target=resource,
+        resource=None,
+        ws=ws,
+        close_code=4002,
+    )
+    received: list[HookContext] = []
+    global_hooks.add("before_disconnect", received.append)
+
+    result = await manager.notify_before_disconnect(context)
+
+    assert result is None, "the prepared-context API should not create a return value"
+    assert received == [context], "the prepared context should be delivered once"
+
+
+@pytest.mark.asyncio
 async def test_after_receive_reports_errors() -> None:
     """After hooks receive the raised exception."""
     events: list[tuple[str, str]] = []

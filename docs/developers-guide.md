@@ -31,7 +31,7 @@ the lifespan owner.
 
 ## WebSocket receive-loop lifecycle
 
-When `receive_loop=True`, `WebSocketRouter.on_websocket()` awaits
+In both receive modes, `WebSocketRouter.on_websocket()` awaits
 `_session_driver.run_session()` after route resolution. `ConnectionSetup`
 preserves the setup order: `before_connect` hooks, `on_connect`,
 `after_connect` hooks, then router acceptance or rejection. A resource may
