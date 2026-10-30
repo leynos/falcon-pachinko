@@ -374,13 +374,14 @@ Counters, measurements and spans receive only fixed `operation` (`session`,
 `cleanup`), `outcome` (`started`, `completed`, `rejected`, `handed_off`,
 `failed`, `cancelled`), `phase` (`connecting`, `established`, `disconnecting`,
 `closed`), close-code category, and exception category enumerations. Close-code
-categories include `normal`, `going_away`, `abnormal`, protocol categories,
-`application`, `other` and `unknown`; raw close codes are not labels. Exception
-categories are `none`, `cancellation`, `transport`, `ordinary`, `group` and
-`base`, without exposing class names or values. The current enum sizes cap each
-instrument at 2,880 possible combinations, before excluding combinations that
-cannot occur. Connection IDs, paths, payloads, exception values and tracebacks
-are never instrumentation dimensions.
+categories are `normal`, `going_away`, `abnormal`, `protocol`,
+`unsupported_data`, `policy`, `internal_error`, `application`, `other` and
+`unknown`; raw close codes are not labels. Exception categories are `none`,
+`cancellation`, `transport`, `ordinary`, `group` and `base`, without exposing
+class names or values. The current enum sizes cap each instrument at 2,880
+possible combinations, before excluding combinations that cannot occur.
+Connection IDs, paths, payloads, exception values and tracebacks are never
+instrumentation dimensions.
 
 Ordinary adapter errors and callback-raised `CancelledError` are isolated from
 session failure precedence, cleanup, and cancellation propagation. Existing

@@ -62,7 +62,7 @@ call remains available for one release and emits `DeprecationWarning`.
 # compatibility window.
 context = await manager.notify_before_disconnect(resource, ws=ws, close_code=close_code)
 
-# Current call; keep the context you prepare because the method returns None.
+# Current call; retain the prepared context because the method returns None.
 context = HookContext(
     event="before_disconnect",
     target=resource,
