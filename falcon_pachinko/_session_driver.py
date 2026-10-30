@@ -7,18 +7,12 @@ hook manager, while shielded cleanup preserves failure and cancellation policy.
 
 from __future__ import annotations
 
-import abc
-import asyncio
 import dataclasses as dc
 import time
 import typing as typ
 
-import falcon
-
 from . import observability as _observability
-from ._disconnect import _PeerDisconnectedError
 from ._session import (
-    ABNORMAL_CLOSURE,
     SessionPhase,
     SessionState,
 )
@@ -27,43 +21,31 @@ from ._session_cleanup import (
     raise_session_failures,
     run_shielded_cleanup,
 )
+from ._session_instrumentation import (
+    _drive_session_with_observation,
+    _release_and_observe_session,
+    _start_session_span,
+)
 from ._session_observation import (
     _cleanup_outcome,
     _log_session_observation,
-    _outcome_for_error,
     _SessionObservation,
 )
-from ._session_setup import ConnectionSetup
-from ._session_socket import receive_frame, track_session_socket
+from ._session_socket import track_session_socket
+from ._session_work import (
+    _is_websocket_accepted,
+    _log_session_failure,
+    _run_setup_and_receive,
+)
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
-    from .hooks import HookContext, HookManager
-    from .protocols import WebSocketLike
-    from .resource import WebSocketResource
-
-
-class SessionRouteMatch(typ.Protocol):
-    """Route captures read by session setup without depending on router internals."""
-
-    @property
-    @abc.abstractmethod
-    def params(self) -> cabc.Mapping[str, str]:
-        """Captured URI parameters for the selected resource."""
-
-
-class SessionDispatch(typ.Protocol):
-    """Mutable socket and lifecycle fields supplied by the routing pipeline."""
-
-    req: falcon.Request
-    ws: WebSocketLike
-    session: SessionState | None
-
-    @property
-    @abc.abstractmethod
-    def match(self) -> SessionRouteMatch:
-        """Selected route parameters consumed by the session driver."""
+    from ._session_setup import (
+        HookContext,
+        HookManager,
+        SessionDispatch,
+        WebSocketResource,
+        cabc,
+    )
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -138,10 +120,10 @@ async def run_session(
     """
     run = _start_session_run(resource, dispatch, hook_manager, options)
     try:
-        await _drive_session_with_observation(run)
+        await _drive_session_with_observation(run, _drive_session)
         return True
     finally:
-        _release_and_observe_session(run)
+        _release_and_observe_session(run, _release_session_ownership)
 
 
 def _start_session_run(
@@ -183,162 +165,6 @@ def _prepare_session_execution(
     dispatch.ws = track_session_socket(dispatch.ws, execution.session)
     hook_manager.bind_session(execution.session)
     return execution
-
-
-def _start_session_span(
-    execution: _SessionExecution, options: _SessionOptions
-) -> _observability._SpanOwner:
-    """Create the session span before setup and receive work begin."""
-    return _observability._start_span(
-        options.instrumentation,
-        _observability.SpanName.SESSION,
-        _instrumentation_dimensions(
-            execution,
-            operation=_observability.Operation.SESSION,
-            outcome=_observability.Outcome.STARTED,
-            exception=None,
-        ),
-    )
-
-
-async def _drive_session_with_observation(
-    run: _SessionRun,
-) -> None:
-    """Retain classification data while preserving the original traceback."""
-    try:
-        run.handed_off_to_application = await _drive_session(
-            run.execution, run.options, run.started
-        )
-    except BaseException as exc:
-        run.error = exc
-        run.outcome = _instrumentation_session_outcome(
-            run.execution,
-            exc,
-            handed_off_to_application=run.handed_off_to_application,
-        )
-        raise
-    run.outcome = _instrumentation_session_outcome(
-        run.execution,
-        None,
-        handed_off_to_application=run.handed_off_to_application,
-    )
-
-
-def _release_and_observe_session(run: _SessionRun) -> None:
-    """Release session ownership before emitting its one terminal observation."""
-    try:
-        _release_session_ownership(
-            run.execution,
-            run.options,
-            handed_off_to_application=run.handed_off_to_application,
-        )
-    except BaseException as exc:
-        run.error = exc
-        run.outcome = _instrumentation_session_outcome(
-            run.execution,
-            exc,
-            handed_off_to_application=run.handed_off_to_application,
-        )
-        raise
-    finally:
-        _finish_session_instrumentation(run)
-
-
-def _finish_session_instrumentation(run: _SessionRun) -> None:
-    """Count one attempt outcome and end its span after ownership is released."""
-    execution = run.execution
-    outcome = run.outcome or _instrumentation_session_outcome(
-        execution,
-        run.error,
-        handed_off_to_application=run.handed_off_to_application,
-    )
-    dimensions = _instrumentation_dimensions(
-        execution,
-        operation=_observability.Operation.SESSION,
-        outcome=outcome,
-        exception=_instrumentation_session_exception(execution, run.error),
-    )
-    session_duration = (
-        run.options.instrumentation_clock() - run.instrumentation_started
-        if execution.session.has_established and not run.handed_off_to_application
-        else None
-    )
-    _observability._increment(
-        run.options.instrumentation,
-        _observability.Counter.SESSION_OUTCOMES,
-        dimensions,
-    )
-    if session_duration is not None:
-        _observability._observe_duration(
-            run.options.instrumentation,
-            _observability.Duration.SESSION,
-            session_duration,
-            dimensions,
-        )
-    run.session_span.end(dimensions)
-
-
-def _instrumentation_session_outcome(
-    execution: _SessionExecution,
-    error: BaseException | None,
-    *,
-    handed_off_to_application: bool,
-) -> _observability.Outcome:
-    """Classify one router attempt without treating handoff as session end."""
-    if error is not None:
-        return (
-            _observability.Outcome.CANCELLED
-            if isinstance(error, asyncio.CancelledError)
-            else _observability.Outcome.FAILED
-        )
-    if execution.session.phase is SessionPhase.CONNECTING:
-        return _observability.Outcome.REJECTED
-    return (
-        _observability.Outcome.HANDED_OFF
-        if handed_off_to_application
-        else _observability.Outcome.COMPLETED
-    )
-
-
-def _instrumentation_session_exception(
-    execution: _SessionExecution,
-    session_error: BaseException | None,
-) -> BaseException | None:
-    """Prefer the original cause over grouped cleanup failures for dimensions."""
-    if execution.primary_error is not None:
-        return execution.primary_error
-    if execution.cleanup_failures:
-        return execution.cleanup_failures[0]
-    return session_error
-
-
-def _instrumentation_dimensions(
-    execution: _SessionExecution,
-    *,
-    operation: _observability.Operation,
-    outcome: _observability.Outcome,
-    exception: BaseException | None,
-) -> _observability.SessionDimensions:
-    """Build dimensions solely from fixed enums and effective close metadata."""
-    phase = {
-        SessionPhase.CONNECTING: _observability.Phase.CONNECTING,
-        SessionPhase.ESTABLISHED: _observability.Phase.ESTABLISHED,
-        SessionPhase.DISCONNECTING: _observability.Phase.DISCONNECTING,
-        SessionPhase.CLOSED: _observability.Phase.CLOSED,
-    }[execution.session.phase]
-    close_code = execution.session.close_code
-    return _observability.SessionDimensions(
-        operation=operation,
-        outcome=outcome,
-        phase=phase,
-        close_code=_observability._close_code_category(close_code),
-        exception=_observability._exception_category(
-            exception,
-            is_transport=isinstance(
-                exception, (falcon.WebSocketDisconnected, _PeerDisconnectedError)
-            ),
-        ),
-    )
 
 
 async def _drive_session(
@@ -428,147 +254,6 @@ def _should_handoff_setup_session(
     return not receive_loop and execution.session.phase is SessionPhase.ESTABLISHED
 
 
-async def _run_setup_and_receive(
-    execution: _SessionExecution,
-    *,
-    receive_loop: bool,
-) -> bool:
-    """Run setup, receiving only when configured, and report setup completion."""
-    setup_completed = await _run_setup(execution)
-    if not setup_completed:
-        return setup_completed
-    if not receive_loop:
-        return setup_completed
-    if not execution.session.can_receive:
-        return setup_completed
-    await _run_receive(execution)
-    return setup_completed
-
-
-async def _run_setup(execution: _SessionExecution) -> bool:
-    """Run ordered setup and report whether receive processing may follow."""
-    resource = execution.resource
-    dispatch = execution.dispatch
-    session = execution.session
-    hook_manager = execution.hook_manager
-    setup_started = execution.observation_clock()
-    _log_session_observation(
-        execution, _SessionObservation("setup", "started", setup_started)
-    )
-    try:
-        setup = ConnectionSetup(
-            hook_manager=hook_manager,
-            resource=resource,
-            req=dispatch.req,
-            ws=dispatch.ws,
-            route_params=dispatch.match.params,
-            is_accepted=_is_websocket_accepted,
-            is_unaccepted=_is_websocket_unaccepted,
-            on_approval=session.establish,
-        )
-        execution.context = await setup.prepare()
-        await setup.execute()
-        await setup.finalize()
-        if session.phase is SessionPhase.ESTABLISHED and _is_websocket_accepted(
-            dispatch.ws
-        ):
-            _log_session_observation(
-                execution,
-                _SessionObservation(
-                    "acceptance", "completed", execution.observation_clock()
-                ),
-            )
-        setup_outcome = (
-            "rejected" if session.phase is SessionPhase.CONNECTING else "completed"
-        )
-        _log_session_observation(
-            execution, _SessionObservation("setup", setup_outcome, setup_started)
-        )
-    except BaseException as exc:
-        was_connecting = session.phase is SessionPhase.CONNECTING
-        _establish_after_resource_acceptance(session, dispatch.ws)
-        if was_connecting and session.phase is SessionPhase.ESTABLISHED:
-            _log_session_observation(
-                execution,
-                _SessionObservation(
-                    "acceptance", "completed", execution.observation_clock()
-                ),
-            )
-        if session.phase is SessionPhase.ESTABLISHED:
-            _record_and_log_session_ending(execution, "setup", setup_started, exc)
-            return False
-        _log_session_failure(execution, "setup", setup_started, exc)
-        raise
-
-    return True
-
-
-async def _run_receive(execution: _SessionExecution) -> None:
-    """Drive receive processing and record its established-session ending."""
-    receive_started = execution.observation_clock()
-    _log_session_observation(
-        execution, _SessionObservation("receive", "started", receive_started)
-    )
-    try:
-        await _receive_session(
-            execution.resource,
-            execution.dispatch,
-            execution.session,
-            execution.hook_manager,
-        )
-    except BaseException as exc:
-        session_remains_established = _record_and_log_session_ending(
-            execution, "receive", receive_started, exc
-        )
-        if session_remains_established:
-            return
-        raise
-    _log_session_observation(
-        execution, _SessionObservation("receive", "completed", receive_started)
-    )
-
-
-def _log_session_failure(
-    execution: _SessionExecution,
-    operation: str,
-    started: float,
-    error: BaseException,
-) -> None:
-    """Keep failure observations consistent before their original re-raise."""
-    _log_session_observation(
-        execution,
-        _SessionObservation(operation, _outcome_for_error(error), started, error=error),
-    )
-
-
-def _record_and_log_session_ending(
-    execution: _SessionExecution,
-    operation: str,
-    started: float,
-    error: BaseException,
-) -> bool:
-    """Record an established session's ending and report its effective outcome."""
-    execution.primary_error = _record_session_ending(execution.session, error)
-    _log_session_observation(
-        execution,
-        _SessionObservation(
-            operation,
-            _outcome_for_error(execution.primary_error),
-            started,
-            error=execution.primary_error,
-        ),
-    )
-    return execution.session.phase is SessionPhase.ESTABLISHED
-
-
-def _establish_after_resource_acceptance(
-    session: SessionState, ws: WebSocketLike
-) -> None:
-    """Honour resource-owned acceptance even when its setup then fails."""
-    if session.phase is SessionPhase.CONNECTING and _is_websocket_accepted(ws):
-        session.establish()
-
-
 async def _finish_established_session(
     execution: _SessionExecution,
 ) -> None:
@@ -612,71 +297,3 @@ async def _finish_established_session(
         interrupted,
         session=execution.session,
     )
-
-
-async def _receive_session(
-    resource: WebSocketResource,
-    dispatch: SessionDispatch,
-    session: SessionState,
-    hook_manager: HookManager,
-) -> None:
-    """Receive and route frames until Falcon reports a disconnect."""
-    if not _is_websocket_accepted(dispatch.ws):
-        # An approved handshake that never completed has no close-frame channel.
-        session.close_code = ABNORMAL_CLOSURE
-        return
-    while session.can_receive:
-        try:
-            raw = await receive_frame(dispatch.ws)
-        except (falcon.WebSocketDisconnected, _PeerDisconnectedError) as exc:
-            _record_session_disconnect_code(session, exc)
-            return
-
-        # A close can be initiated by another task while receive_media is
-        # suspended. Do not dispatch the late frame into receive hooks.
-        if not session.can_receive:
-            return
-        # An overridden dispatcher may bypass the resource's guard. Drop
-        # late buffered frames here while retaining the disconnect code.
-        if not hook_manager.can_receive(dispatch.ws):
-            continue
-        await resource.dispatch(dispatch.ws, raw)
-
-
-def _is_websocket_accepted(ws: WebSocketLike) -> bool:
-    """Probe Falcon's public acceptance state without changing the protocol."""
-    try:
-        unaccepted = typ.cast("typ.Any", ws).unaccepted
-    except AttributeError:
-        return False
-    return unaccepted is False
-
-
-def _is_websocket_unaccepted(ws: WebSocketLike) -> bool:
-    """Treat missing Falcon acceptance state as not yet accepted."""
-    return not _is_websocket_accepted(ws)
-
-
-def _effective_disconnect_code(error: BaseException) -> int:
-    """Return the effective close code, using abnormal closure when absent."""
-    close_code = getattr(error, "code", None)
-    return close_code if isinstance(close_code, int) else ABNORMAL_CLOSURE
-
-
-def _record_session_ending(
-    session: SessionState, error: BaseException
-) -> BaseException | None:
-    """Distinguish a transport ending from an unexpected session failure."""
-    if isinstance(error, (falcon.WebSocketDisconnected, _PeerDisconnectedError)):
-        _record_session_disconnect_code(session, error)
-        return None
-    session.primary_error = error
-    return error
-
-
-def _record_session_disconnect_code(
-    session: SessionState, error: BaseException
-) -> None:
-    """Keep an earlier local close selection ahead of disconnect metadata."""
-    if session.close_code is None:
-        session.close_code = _effective_disconnect_code(error)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import abc
 import dataclasses as dc
 import typing as typ
 
@@ -12,9 +13,32 @@ if typ.TYPE_CHECKING:
 
     import falcon
 
+    from ._session import SessionState
     from .hooks import HookContext, HookManager
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
+
+
+class SessionRouteMatch(typ.Protocol):
+    """Route captures read by session setup without depending on router internals."""
+
+    @property
+    @abc.abstractmethod
+    def params(self) -> cabc.Mapping[str, str]:
+        """Captured URI parameters for the selected resource."""
+
+
+class SessionDispatch(typ.Protocol):
+    """Mutable socket and lifecycle fields supplied by the routing pipeline."""
+
+    req: falcon.Request
+    ws: WebSocketLike
+    session: SessionState | None
+
+    @property
+    @abc.abstractmethod
+    def match(self) -> SessionRouteMatch:
+        """Selected route parameters consumed by the session driver."""
 
 
 class _ConnectionSetupOrderError(RuntimeError):
