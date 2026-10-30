@@ -435,14 +435,22 @@ def test_local_and_ci_test_targets_keep_their_distinct_selections() -> None:
         f"both test targets must use the locked examples environment: "
         f"local={local_prefix!r}, ci={ci_prefix!r}"
     )
-    assert local_arguments, local_command
-    assert local_arguments[0] == "-v", local_command
+    assert local_arguments, f"make test must pass pytest arguments: {local_command}"
+    assert local_arguments[0] == "-v", (
+        f"make test must start its pytest arguments with -v: {local_command}"
+    )
     assert not _pytest_command_filters_by_marker(local_arguments), (
         f"make test must not filter by pytest marker: {local_command}"
     )
-    assert _pytest_command_selects_complete_suite(local_command), local_command
-    assert _pytest_ci_command_has_expected_selection(ci_arguments), ci_command
-    assert _pytest_command_selects_complete_suite(ci_command), ci_command
+    assert _pytest_command_selects_complete_suite(local_command), (
+        f"make test must select the complete suite: {local_command}"
+    )
+    assert _pytest_ci_command_has_expected_selection(ci_arguments), (
+        f"make test-ci must exclude only lint_toolchain: {ci_command}"
+    )
+    assert _pytest_command_selects_complete_suite(ci_command), (
+        f"make test-ci must select the complete suite: {ci_command}"
+    )
 
 
 @pytest.mark.parametrize(
