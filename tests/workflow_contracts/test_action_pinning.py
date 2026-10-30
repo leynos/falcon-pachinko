@@ -12,7 +12,13 @@ import hypothesis.strategies as st
 import pytest
 import yaml
 
-from .action_references import action_references, validate_reference
+from .action_references import (
+    _is_pinned,
+    _manifest_references,
+    _workflow_references,
+    action_references,
+    validate_reference,
+)
 from .workflow_support import (
     ACTION_MANIFESTS,
     REPOSITORY,
@@ -203,3 +209,20 @@ def test_missing_ref_is_rejected() -> None:
     """External references must carry an explicit immutable revision."""
     with pytest.raises(UnsupportedUsesError):
         validate_reference("test", "owner/repo")
+
+
+def test_extracted_readers_preserve_sites(tmp_path: pathlib.Path) -> None:
+    """Each reader returns its own declaration and the pin classifier rejects tags."""
+    workflow, actions = sources(
+        tmp_path,
+        {"jobs": {"x": {"uses": "owner/repo@main"}}},
+        {"runs": {"using": "composite", "steps": [{"uses": "./local"}]}},
+    )
+    assert list(_workflow_references(workflow)) == [
+        ("ci.yml:jobs.x", "owner/repo@main")
+    ], "workflow site must be retained"
+    assert list(_manifest_references(actions)) == [
+        ("example/action.yml:runs.steps[0]", "./local")
+    ], "manifest site must be retained"
+    assert not _is_pinned("owner/repo@main"), "mutable tags must fail"
+    assert _is_pinned("./local"), "local actions must pass"
