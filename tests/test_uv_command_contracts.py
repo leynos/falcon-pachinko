@@ -123,6 +123,22 @@ def test_run_step_scripts_finds_nested_commands_in_document_order() -> None:
     ], "nested workflow run steps must retain their document order"
 
 
+def test_workflow_run_step_fails_closed_on_backtick_uv_sync() -> None:
+    """The workflow lock check rejects a hidden uv call in shell backticks."""
+    document = {
+        "jobs": {"test": {"steps": [{"name": "unsafe", "run": "echo `uv sync`"}]}}
+    }
+    scripts = run_step_scripts(document)
+    workflow_path = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+
+    assert len(scripts) == 1, "the workflow run step must be included in lock checks"
+    with pytest.raises(
+        ShellCommandSyntaxError,
+        match=r"ci\.yml: Unsupported backtick command substitution at shell line 1",
+    ):
+        _workflow_script_violations(workflow_path, scripts[0])
+
+
 def test_ci_run_steps_require_the_project_lockfile() -> None:
     """Repository-owned CI run steps must reject stale project locks."""
     paths = _ci_workflow_and_action_paths()
