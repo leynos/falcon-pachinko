@@ -2390,3 +2390,15 @@ traditional API development and emerging real-time use cases.
 [^6]: <https://channels.readthedocs.io/en/stable/topics/consumers.html>
 [^7]: <https://fastapi.tiangolo.com/advanced/websockets/>
 [^8]: <https://websockets.readthedocs.io>
+
+## 8. Packaging and Distribution
+
+The published distribution is named `falcon-pachinko` and installs the
+`falcon_pachinko` import package. Setuptools discovers packages matching
+`falcon_pachinko*`, excluding the internal `falcon_pachinko.behaviour` and
+`falcon_pachinko.unittests` test trees. The `falcon_pachinko.testing` package
+is included in the distribution because it provides public testing utilities
+for consumers.
+
+The release pipeline and its attested PyPI and GitHub Release destinations are
+recorded in [ADR-002](adr-002-attested-reconciled-release-pipeline.md).

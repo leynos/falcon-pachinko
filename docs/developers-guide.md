@@ -541,8 +541,11 @@ gates with `make markdownlint` and `make spelling`.
 
 `make lint` provisions nose, then runs Ruff, both Pylint passes, ambrleaks and
 the blocking nose duplication gate. `make typecheck` runs
-`ty check falcon_pachinko tests tools`. These are the complete local and CI
-checks; they need no wrapper or second manual step.
+`ty check --extra-search-path .` against `falcon_pachinko`, `tests`, `tools`,
+and the release helpers `scripts/release_assets.py`,
+`scripts/release_assets_cli.py`, `scripts/release_version.py` and
+`scripts/release_provenance.py`. These are the complete local and CI checks;
+they need no wrapper or second manual step.
 
 Ruff is pinned at 0.16.4 via `RUFF_VERSION` in the Makefile, and the same
 version is installed in `.github/workflows/ci.yml` with
@@ -887,7 +890,7 @@ The `[tool.mutmut]` section in `pyproject.toml` is the whole configuration:
   `docs/users-guide.md` relative to its copied file.
 - **`pytest_add_cli_args_test_selection`** names the three test trees the run
   uses: `tests/`, `falcon_pachinko/unittests/` and `falcon_pachinko/behaviour/`.
-- **`pytest_add_cli_args`** drops three modules and one marker.
+- **`pytest_add_cli_args`** drops four modules and one marker.
   `--ignore=tests/workflow_contracts`,
   `--ignore=tests/test_toolchain_versions.py` and
   `--ignore=tests/test_uv_toolchain.py` are repository-tooling contracts that
@@ -895,10 +898,13 @@ The `[tool.mutmut]` section in `pyproject.toml` is the whole configuration:
   `.markdownlint-cli2.jsonc` — none of which mutmut copies into `mutants/`, so
   all three fail the baseline there. They say nothing about
   `falcon_pachinko/`'s behaviour, so excluding them costs the mutation score
-  nothing. `-m "not lint_toolchain"` drops the tests that provision a PyPy
-  interpreter and reach the network; `-p no:cacheprovider` keeps the run from
-  writing a cache into the copied tree. Mutmut has no `runner` key in 3.6.0, so
-  these arguments are the whole lever.
+  nothing. `--ignore=tests/test_release_archives.py` excludes the distribution
+  archive test, which builds with `uv` and installs a wheel in a fresh virtual
+  environment that the `mutants/` tree cannot support.
+  `-m "not lint_toolchain"` drops the tests that provision a PyPy interpreter
+  and reach the network; `-p no:cacheprovider` keeps the run from writing a
+  cache into the copied tree. Mutmut has no `runner` key in 3.6.0, so these
+  arguments are the whole lever.
 
 `.github/workflows/mutation.yml` runs the estate's reusable workflow
 (`leynos/shared-actions/.github/workflows/mutation-mutmut.yml`) weekly and on
@@ -1061,29 +1067,33 @@ public-repository minutes are free and where this migration has nothing to gain.
 | ------------------------------------- | ------------------ | ------- |
 | `ci.yml` `lint-test`                  | pull request, push | 15 min  |
 | `ci.yml` `falcon-minimum`             | pull request, push | 30 min  |
+| `ci.yml` `build-dist`                 | pull request, push | 15 min  |
 | `coverage-main.yml` `coverage-upload` | push to `main`     | 15 min  |
-| `release.yml` `pure-wheel`            | tag push           | 30 min  |
-| `release.yml` `release`               | tag push           | 30 min  |
+| `release.yml` `check-version`         | tag push           | 30 min  |
+| `release.yml` `build-wheels`          | tag push           | 30 min  |
+| `release.yml` `attest`                | tag push           | 30 min  |
+| `release.yml` `draft-release`         | tag push           | 30 min  |
+| `release.yml` `publish-pypi`          | tag push           | 30 min  |
+| `release.yml` `publish-release`       | tag push           | 30 min  |
 
 *Table: the lanes that run on Ubicloud.*
 
-Everything else stays GitHub-hosted. `build-wheels.yml`'s `build` is a
-`workflow_call` matrix across Ubuntu, Windows and macOS, including aarch64
-under emulation, and Ubicloud offers Linux only. `delayed-pr-comment.yml`'s
+Everything else stays GitHub-hosted. `delayed-pr-comment.yml`'s
 `delay_and_comment` is dispatch-only. `dependabot-automerge.yml`'s `automerge`
 calls a reusable workflow and declares no runner of its own.
 
 ### Pull-request lanes use a fork-safe runner expression
 
-A pull request from a fork cannot obtain an Ubicloud runner. `lint-test` and
-`falcon-minimum` serve pull requests, so a fixed `ubicloud-standard-2` would
-leave such a pull request queueing for a runner that never arrives. A pull
-request Dependabot opened also takes the hosted arm: hosted minutes cost
-nothing on a public repository, and Dependabot opens many pull requests, which
-therefore build cold on the hosted pool. The guard tests the pull request's
-author, not `github.actor`, because the actor is whoever triggered the run, so
-a person pushing to a Dependabot branch would flip the runner. Both jobs
-resolve their label from the head repository and the author instead:
+A pull request from a fork cannot obtain an Ubicloud runner. `lint-test`,
+`falcon-minimum` and `build-dist` serve pull requests, so a fixed
+`ubicloud-standard-2` would leave a fork pull request queueing for a runner
+that never arrives. A pull request Dependabot opened also takes the hosted arm:
+hosted minutes cost nothing on a public repository, and Dependabot opens many
+pull requests, which therefore build cold on the hosted pool. The guard tests
+the pull request's author, not `github.actor`, because the actor is whoever
+triggered the run, so a person pushing to a Dependabot branch would flip the
+runner. All three jobs resolve their label from the head repository and the
+author instead:
 
 ```yaml
 runs-on: >-
@@ -1108,7 +1118,7 @@ Two rules follow, and a green run demonstrates neither:
   to a label with a newline inside the expression. The document still parses,
   `actionlint` still passes, and GitHub evaluates the newline-bearing
   expression anyway.
-- Do not copy the expression onto the other three lanes. They trigger on a
+- Do not copy the expression onto the remaining lanes. They trigger on a
   push or a tag, where `github.event.pull_request` is null, so the guard could
   never hold. A guard that cannot hold reads as protection and is not.
 
@@ -1133,10 +1143,11 @@ The two measured ceilings are sized from real runs rather than chosen:
 Fifteen minutes is roughly twenty-five times the longest of these, which leaves
 room for a cold cache and for Ubicloud's two vCPUs. `falcon-minimum` has no
 recorded run yet; its thirty-minute ceiling gives the uncovered full suite
-extra headroom. The release lanes have no recorded runs either, so their
-thirty-minute ceilings are not measured; they are set wide on the principle
-that a release killed part-way is worse than one that runs long. Re-size each
-lane on its third Ubicloud run.
+extra headroom. `build-dist` also has no recorded run, so its fifteen-minute
+ceiling is provisional. The release lanes have no recorded runs either, so
+their thirty-minute ceilings are provisional and set wide because a release
+killed part-way is worse than one that runs long. Re-size each lane after its
+third Ubicloud run.
 
 The last row is the first run on Ubicloud, and it is slower than the
 GitHub-hosted run above it: 44 s against 36 s, on an 11 s queue against 2 s.
@@ -1213,8 +1224,9 @@ contracts rather than derived from the workflows. The rule that every Ubicloud
 lane declares a ceiling says nothing about the number, so a ceiling widened to
 six hours would pass it while leaving this guide's table wrong; the same holds
 for `coverage-main.yml`'s `branches: [main]` and `release.yml`'s `v*.*.*` tags,
-which carry the rest of the placement argument. Change a figure in a workflow
-and this guide in the same commit, or the contract fails.
+which carry the rest of the placement argument. All six release jobs use the
+same 30-minute ceiling. Change a figure in a workflow and this guide in the
+same commit, or the contract fails.
 
 The registry in `.github/actionlint.yaml` is held to an equality with the
 labels actually in use, in both directions. A subset assertion would miss a
@@ -1223,21 +1235,24 @@ play. The exemption is a named set of GitHub-hosted labels rather than a
 provider prefix: a prefix rule would silently exempt a second paid provider's
 labels, which is the question the registry exists to ask.
 
-The in-use set accounts for every workflow that declares a label, including
-`build-wheels.yml`, which is `workflow_call` and which nothing in this
-repository calls. The alternative was a rule excluding callerless
-`workflow_call` files, and it was rejected: such a file is one line away from
-gaining a caller, and "callerless" is not even a local property, since a caller
-may live in another repository. A rule that skipped it would quietly stop
-asking the registry question for a workflow that could run tomorrow. A contract
-names the workflows the traversal must reach, so dropping one fails there
-rather than silently shrinking what the registry is held to.
+The in-use set accounts for every workflow that declares a runner label. The
+contract names the workflows the traversal must reach, so dropping one fails
+there rather than silently shrinking what the registry is held to.
 
 Two contracts read the `on:` block rather than the jobs, because the placement
-rules rest on claims about events: that a fork can reach `lint-test` and
-`falcon-minimum`, and that no fork can reach the remaining Ubicloud jobs. A
-contract reading only `runs-on` asserts the consequence and never the premise,
-so a silent change to a trigger would leave the consequence looking deliberate.
-Those contracts read the trigger block under the boolean key `True`, because
-YAML 1.1 parses the bare word `on` that way; a contract reading the string
-`"on"` finds nothing and passes on an empty mapping, which is itself asserted.
+rules rest on claims about events: that a fork can reach `lint-test`,
+`falcon-minimum` and `build-dist`, and that no fork can reach the remaining
+Ubicloud jobs. A contract reading only `runs-on` asserts the consequence and
+never the premise, so a silent change to a trigger would leave the consequence
+looking deliberate. Those contracts read the trigger block under the boolean key
+`True`, because YAML 1.1 parses the bare word `on` that way; a contract
+reading the string `"on"` finds nothing and passes on an empty mapping, which
+is itself asserted.
+
+## Publishing a release
+
+Pull requests build an sdist and a wheel from it. The tag workflow attests
+those distributions, publishes missing files through PyPI Trusted Publishing,
+then reconciles and publishes the GitHub Release after comparing digests.
+Follow the [release workflow guide](release-workflow.md) for versioning,
+repository settings, tag creation, retries, and mismatch recovery.

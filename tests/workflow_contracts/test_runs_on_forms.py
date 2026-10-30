@@ -57,7 +57,7 @@ def test_every_accepted_runs_on_form_is_read(
 
 def test_a_reusable_workflow_caller_declares_no_runner() -> None:
     """Read nothing from a job that calls a workflow, rather than refusing it."""
-    job = {"uses": "./.github/workflows/build-wheels.yml"}
+    job = {"uses": "./.github/workflows/example.yml"}
 
     assert job_labels("ci.yml", "call", job) == frozenset(), (
         "a caller places no job of its own"

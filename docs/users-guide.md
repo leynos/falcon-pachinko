@@ -6,6 +6,30 @@ router/resource model, then dives into advanced patterns such as dependency
 injection, shared state, custom connection manager backends, background
 workers, and testing utilities.
 
+## Installation
+
+The distribution is named `falcon-pachinko`; Python code imports it as
+`falcon_pachinko`. Install it with pip or add it to a uv-managed project:
+
+```bash
+python -m pip install --pre falcon-pachinko
+uv add --prerelease allow falcon-pachinko
+```
+
+The current alpha is a pre-release. To install pre-releases, opt in explicitly
+with `python -m pip install --pre falcon-pachinko` or
+`uv add --prerelease allow falcon-pachinko`.
+
+Install the `examples` extra for the example application's dependencies or the
+`testing` extra for the package's testing utilities:
+
+```bash
+python -m pip install --pre 'falcon-pachinko[examples]'
+python -m pip install --pre 'falcon-pachinko[testing]'
+uv add --prerelease allow 'falcon-pachinko[examples]'
+uv add --prerelease allow 'falcon-pachinko[testing]'
+```
+
 ## 1. Core Concepts
 
 - **WebSocketRouter** – Mountable Falcon resource that owns route definitions

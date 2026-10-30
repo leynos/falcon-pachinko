@@ -596,7 +596,7 @@ class TestWorkflowBaseline:
         Scoped to pull-request-reachable workflows deliberately. A `workflow_call`
         file inherits its caller's permissions, so declaring a block there would
         narrow what a caller intended rather than tightening anything, and
-        `build-wheels.yml` is such a file.
+        reusable workflows are treated separately.
         """
         reachable = _pull_request_workflows()
         unscoped = sorted(

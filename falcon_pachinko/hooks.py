@@ -15,8 +15,6 @@ import enum
 import inspect
 import typing as typ
 
-import typing_extensions as tpe
-
 from .diagnostics import _frame_metadata, _identifiers, _safe_scalar, _type_name
 
 if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints only
@@ -217,7 +215,7 @@ class HookManager:
         self,
         event: EventType,
         target: WebSocketResource,
-        **kwargs: tpe.Unpack[_HookContextKwargs],
+        **kwargs: typ.Unpack[_HookContextKwargs],
     ) -> HookContext:
         """Dispatch before-* lifecycle events."""
         context = HookContext(
