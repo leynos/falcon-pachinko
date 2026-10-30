@@ -194,8 +194,9 @@ def configured_router(
     router = WebSocketRouter(receive_loop=receive_loop)
     router.add_route("/session", lambda: resource)
     router.mount("/")
-    router.configure_session_instrumentation(typ.cast("typ.Any", instrumentation))
-    router._session_instrumentation_clock = clock.__call__
+    router.configure_session_instrumentation(
+        typ.cast("typ.Any", instrumentation), monotonic_clock=clock
+    )
     return router
 
 

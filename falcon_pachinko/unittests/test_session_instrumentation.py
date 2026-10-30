@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import typing as typ
 
 import falcon
@@ -33,9 +34,24 @@ from falcon_pachinko.unittests.test_session_instrumentation_fixtures import (
 _ASSERTION_FAILURE = "router instrumentation must preserve bounded lifecycle semantics"
 
 
+def _assert_observation_durations(caplog: pytest.LogCaptureFixture) -> None:
+    """Check the router's exact setup and session observation timings."""
+    assert [
+        (record.__dict__.get("operation"), record.__dict__.get("duration_seconds"))
+        for record in caplog.records
+        if record.name == "falcon_pachinko._session_driver"
+        and record.getMessage() == "WebSocket session observation"
+        and record.__dict__.get("outcome") == "completed"
+        and record.__dict__.get("operation") in {"setup", "session"}
+    ] == [("setup", 2.0), ("session", 7.0)], _ASSERTION_FAILURE
+
+
 @pytest.mark.asyncio
-async def test_normal_close_records_once_with_exact_durations_and_child_span() -> None:
+async def test_normal_close_records_once_with_exact_durations_and_child_span(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """A normal close emits one outcome and a cleanup span under its session."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
     clock = InjectedClock()
     resource = RecordingResource()
     instrumentation = RecordingInstrumentation()
@@ -69,7 +85,7 @@ async def test_normal_close_records_once_with_exact_durations_and_child_span() -
         (Duration.CLEANUP, 5.0),
         (Duration.SESSION, 7.0),
     ], _ASSERTION_FAILURE
-    assert clock.readings == [0.0, 2.0, 7.0, 7.0], _ASSERTION_FAILURE
+    _assert_observation_durations(caplog)
     assert [span.name for span in instrumentation.spans] == [
         SpanName.SESSION,
         SpanName.CLEANUP,
