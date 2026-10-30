@@ -39,13 +39,11 @@ from ._session_work import (
 )
 
 if typ.TYPE_CHECKING:
-    from ._session_setup import (
-        HookContext,
-        HookManager,
-        SessionDispatch,
-        WebSocketResource,
-        cabc,
-    )
+    import collections.abc as cabc
+
+    from ._session_setup import SessionDispatch
+    from .hooks import HookContext, HookManager
+    from .resource import WebSocketResource
 
 
 @dc.dataclass(frozen=True, slots=True)
