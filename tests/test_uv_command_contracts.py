@@ -388,6 +388,18 @@ def test_command_scanner_fails_closed_on_quoted_command_substitutions() -> None:
         unlocked_project_commands(script)
 
 
+def test_command_scanner_allows_nested_quotes_in_path_substitutions() -> None:
+    """Quoted paths inside ordinary substitutions are valid shell syntax."""
+    script = (
+        'if [ "$(realpath "$OUT_DIR")" != "$(realpath release-dist)" ]; '
+        'then cp -- "${files[@]}" release-dist/; fi'
+    )
+
+    assert not unlocked_project_commands(script), (
+        "safe path substitutions must not prevent scanning the surrounding run step"
+    )
+
+
 def test_makefile_scanner_fails_closed_on_quoted_shell_substitutions() -> None:
     """Escaped Make dollars identify shell substitutions after Make expands."""
     source = 'TARGET = "$$(uv sync)"'
