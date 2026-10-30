@@ -158,7 +158,7 @@ class FailingSpan:
 
 
 class FailingSpanInstrumentation(FailingInstrumentation):
-    """Return spans whose finalisation callbacks fail independently."""
+    """Return spans whose finalization callbacks fail independently."""
 
     def __init__(self) -> None:
         self.spans: list[FailingSpan] = []
@@ -168,7 +168,7 @@ class FailingSpanInstrumentation(FailingInstrumentation):
         name: SpanName,
         dimensions: SessionDimensions,
     ) -> SessionSpan:
-        """Create a span that fails during finalisation."""
+        """Create a span that fails during finalization."""
         del name, dimensions
         span = FailingSpan()
         self.spans.append(span)

@@ -341,7 +341,7 @@ async def test_instrumentation_cancellation_does_not_replace_task_cancellation()
 
 
 @pytest.mark.asyncio
-async def test_span_finalisation_failures_do_not_interrupt_cleanup() -> None:
+async def test_span_finalization_failures_do_not_interrupt_cleanup() -> None:
     """Failing attribute and span-end callbacks cannot abort disconnect hooks."""
     clock = InjectedClock()
     resource = RecordingResource()

@@ -271,6 +271,10 @@ resource and its hooks.
   `ws.receive_media()` to `WebSocketResource.dispatch()` in order until the
   peer disconnects. An attached router configures raw media handlers so the
   dispatcher receives the original `str` or `bytes` frame.
+- `self.state`
+  - Dict-like proxy shared across all resources in the same connection chain.
+  - Override via `get_child_context()` to supply a custom state store (e.g.,
+    Redis-backed proxy).
 
 For an attached router, `attach()` installs pass-through TEXT and BINARY
 deserializers in the application's shared `ws_options.media_handlers` mapping.
@@ -382,11 +386,6 @@ session failure precedence, cleanup, and cancellation propagation. Existing
 lifecycle DEBUG observations and loop exception-handler reports retain their
 current contents. Instrumentation does not add another cleanup owner or change
 connection-manager membership cleanup.
-
-- `self.state`
-  - Dict-like proxy shared across all resources in the same connection chain.
-  - Override via `get_child_context()` to supply a custom state store (e.g.,
-    Redis-backed proxy).
 
 ### Nested resources
 
