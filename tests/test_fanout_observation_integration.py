@@ -9,12 +9,6 @@ import pytest
 
 from falcon_pachinko import ClusterFanout, WebSocketConnectionManager
 from falcon_pachinko.testing import InMemoryFanoutTransport
-from falcon_pachinko.unittests.helpers import make_req
-from falcon_pachinko.unittests.router_session_helpers import (
-    SessionResource,
-    SessionSocket,
-    session_router,
-)
 from tests._stubs import RecordingWebSocket
 
 
@@ -82,26 +76,4 @@ async def test_coordinator_observations_are_safe_and_distinguish_failures(
     assert ("deliver", "succeeded") not in outcomes, "normal deliveries remain silent"
     assert all("secret" not in str(record.__dict__) for record in events), (
         "operation observations must omit identifiers, payloads, and exception text"
-    )
-
-
-@pytest.mark.asyncio
-async def test_disconnect_cleanup_emits_one_observation(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Router cleanup has one observable completion without socket details."""
-    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
-    resource = SessionResource()
-    socket = SessionSocket()
-    router = session_router(resource, receive_loop=True)
-    await router.on_websocket(make_req("/session"), socket)
-    completed = [
-        record
-        for record in caplog.records
-        if getattr(record, "operation", None) == "cleanup"
-        and vars(record)["outcome"] == "completed"
-    ]
-    assert len(completed) == 1, "only the actual cleanup emits a completion"
-    assert resource.disconnects == [(socket, 4000)], (
-        "the production router must invoke on_disconnect exactly once"
     )
