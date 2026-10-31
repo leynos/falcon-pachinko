@@ -21,128 +21,48 @@ class RecordingResource(WebSocketResource):
         self.fallback: list[str | bytes] = []
 
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Record the rejected frame.
-
-        Parameters
-        ----------
-        ws : WebSocketLike
-            The connection receiving the frame.
-        message : str | bytes
-            The original frame.
-        """
+        """Record the frame the dispatcher rejected."""
         self.fallback.append(message)
 
     async def on_integer(self, ws: WebSocketLike, payload: int) -> None:
-        """Record the delivered payload.
-
-        Parameters
-        ----------
-        ws : WebSocketLike
-            The connection receiving the frame.
-        payload : object
-            The converted payload.
-        """
+        """Record a required integer payload."""
         self.seen.append(payload)
 
     async def on_struct(self, ws: WebSocketLike, payload: Payload) -> None:
-        """Record the delivered payload.
-
-        Parameters
-        ----------
-        ws : WebSocketLike
-            The connection receiving the frame.
-        payload : object
-            The converted payload.
-        """
+        """Record a converted struct payload."""
         self.seen.append(payload)
 
     async def on_optional(self, ws: WebSocketLike, payload: int | None) -> None:
-        """Record the delivered payload.
-
-        Parameters
-        ----------
-        ws : WebSocketLike
-            The connection receiving the frame.
-        payload : object
-            The converted payload.
-        """
+        """Record an optional payload, for which ``None`` is valid."""
         self.seen.append(payload)
 
     async def on_defaulted(self, ws: WebSocketLike, payload: int = 7) -> None:
-        """Record the delivered payload.
-
-        Parameters
-        ----------
-        ws : WebSocketLike
-            The connection receiving the frame.
-        payload : object
-            The converted payload.
-        """
+        """Record a payload whose parameter declares a default."""
         self.seen.append(payload)
 
     @handles_message("decorated_integer")
     async def decorated_integer(self, ws: WebSocketLike, payload: int) -> None:
-        """Record the delivered payload.
-
-        Parameters
-        ----------
-        ws : WebSocketLike
-            The connection receiving the frame.
-        payload : object
-            The converted payload.
-        """
+        """Record a required integer payload selected by decorator."""
         self.seen.append(payload)
 
     @handles_message("decorated_struct")
     async def decorated_struct(self, ws: WebSocketLike, payload: Payload) -> None:
-        """Record the delivered payload.
-
-        Parameters
-        ----------
-        ws : WebSocketLike
-            The connection receiving the frame.
-        payload : object
-            The converted payload.
-        """
+        """Record a converted struct payload selected by decorator."""
         self.seen.append(payload)
 
     @handles_message("decorated_optional")
     async def decorated_optional(self, ws: WebSocketLike, payload: int | None) -> None:
-        """Record the delivered payload.
-
-        Parameters
-        ----------
-        ws : WebSocketLike
-            The connection receiving the frame.
-        payload : object
-            The converted payload.
-        """
+        """Record an optional payload selected by decorator."""
         self.seen.append(payload)
 
     @handles_message("decorated_defaulted")
     async def decorated_defaulted(self, ws: WebSocketLike, payload: int = 7) -> None:
-        """Record the delivered payload.
-
-        Parameters
-        ----------
-        ws : WebSocketLike
-            The connection receiving the frame.
-        payload : object
-            The converted payload.
-        """
+        """Record a defaulted payload selected by decorator."""
         self.seen.append(payload)
 
     @handles_message("lenient", strict=False)
     async def lenient(self, ws: WebSocketLike, payload: int) -> None:
-        """Record the delivered payload.
-
-        Parameters
-        ----------
-        ws : WebSocketLike
-            The connection receiving the frame.
-        payload : object
-            The converted payload.
-        """
+        """Record a payload converted with ``strict=False``."""
         self.seen.append(payload)
 
 
