@@ -215,6 +215,10 @@ router = WebSocketRouter(resource_factory=container.create_resource)
 - Tests can supply alternate factories (see
   `falcon_pachinko.unittests.resource_factories.resource_factory`).
 
+Envelope handlers whose payload annotations reject `None` no longer receive
+`None` for omitted or JSON `null` payloads. These messages now reach
+`on_unhandled`; annotate the payload as optional to accept them.
+
 1) **Update connection manager usage:**
 
 - Instantiate `WebSocketConnectionManager` with a backend when needed:

@@ -104,7 +104,11 @@ cleanup may emit standard DEBUG events with fixed fields `operation`, `outcome`,
 fixed operation and outcome values for publication, membership maintenance,
 listener termination and disconnect cleanup. Keep successful message decoding
 and local delivery silent, distinguish decode failures from delivery failures,
-and emit no unconditional per-frame events. Exclude identifiers, payloads,
+and emit no unconditional per-frame events. Typed payload validation is
+observed too: a rejected payload emits one DEBUG `Operation observation` record
+whose `operation` is `dispatch` and `outcome` is `rejected`, carrying the
+bounded `expected_type` label and `exception_type`. Accepted payloads,
+including optional payloads, emit nothing. Exclude identifiers, payloads,
 exception values and tracebacks. Host logging handlers may aggregate metrics or
 start and end spans using task or context; broker decorators may measure queue
 waits and operations, while existing lifecycle hooks support resource
@@ -297,6 +301,10 @@ temptation to catch it at the decode site: widening the handler would leave the
 invalid schema in place and disguise a schema bug as a malformed message.
 
 ## Safe diagnostics
+
+`convert_and_invoke_handler` converts every typed envelope payload, including
+`None` from omission or JSON `null`. Validation failures reach `on_unhandled`;
+handler defaults are not applied.
 
 Framework diagnostics must not call `repr()` or `str()` on raw payloads,
 decoded caller values, or other caller-controlled objects. Use the shared

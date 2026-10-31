@@ -84,9 +84,7 @@ class ChatResource(WebSocketResource):
 
     @handles_message("chat.message")
     async def handle_message(self, ws, payload: ChatPayload) -> None:
-        # The router leaves an absent payload as None.
-        if payload is None:
-            return
+        # An omitted or null payload is rejected before this handler runs.
         await ws.send_media({"type": "echo", "text": payload.text})
 
 
@@ -168,8 +166,9 @@ app.add_route("/ws/{rest:path}", RouterAdapter(router))
   `receive_loop=True`. The default is `False`, which returns after acceptance
   and leaves receives and cleanup to the application.
 - When `payload` is present and valid, the `ChatPayload` annotation makes the
-  router pass a `ChatPayload` instance to the handler. When `payload` is
-  absent, the typed handler receives `None`; this example ignores it.
+  router pass a `ChatPayload` instance to the handler. An omitted or JSON
+  `null` payload is rejected before the handler runs, so no frame is sent and
+  the connection stays usable.
 - An unannotated handler receives the decoded JSON value directly, such as a
   `dict` for an object, a list for an array, or `None` when the payload is
   absent.
@@ -349,6 +348,13 @@ class ChatResource(WebSocketResource):
   completes before the next frame is dispatched. Returning normally from
   `on_unhandled` keeps the session open; application code can call
   `await ws.close(code=...)` when its policy requires closure.
+
+For messages without a schema, the envelope's `payload` may be omitted or set
+to JSON `null`; both decode to `None` and cannot be distinguished. A typed
+handler validates either value against its annotation. Annotations that reject
+`None` send both to `on_unhandled`; use `T | None` to accept a missing payload.
+`T | None` and `typing.Any` accept both values as `None`. Parameter defaults
+are never applied, and untyped handlers still receive `None`.
 
 Falcon's default WebSocket media handlers may decode frames before
 `receive_media()` returns them; `receive_loop=True` alone does not guarantee
