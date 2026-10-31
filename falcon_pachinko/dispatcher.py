@@ -129,7 +129,7 @@ async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
     """
     payload_type = context.handler_info.payload_type
     payload = context.payload
-    failed = False
+    rejected = False
     if payload_type is not None:
         try:
             validate_strict_payload(
@@ -140,9 +140,24 @@ async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
                 type=payload_type,
                 strict=context.handler_info.strict,
             )
-        except ms.ValidationError:
-            failed = True
-    if failed:
+        except ms.ValidationError as exc:
+            # Application telemetry can count rejections without seeing frames
+            # or payload values; the default on_unhandled is silent.
+            logger.debug(
+                "Operation observation",
+                extra={
+                    "operation": "dispatch",
+                    "outcome": "rejected",
+                    "duration_seconds": 0.0,
+                    "exception_type": _type_name(exc),
+                    "expected_type": _expected_type_label(context.handler_info),
+                },
+            )
+            rejected = True
+    if rejected:
+        # The fallback runs outside the ``except`` block so an error it raises
+        # does not retain the vendor validation error as its implicit
+        # ``__context__``; diagnostics tests rely on that detachment.
         await context.resource.on_unhandled(context.ws, context.raw)
         return
     await context.handler_info.handler(context.resource, context.ws, payload)
