@@ -33,6 +33,7 @@ _OPERATIONS = frozenset({
     "publish",
     "decode",
     "deliver",
+    "dispatch",
     "listen",
     "receive",
     "disconnect",
