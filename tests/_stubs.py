@@ -59,6 +59,7 @@ class DisconnectingWebSocket(RecordingWebSocket):
         super().__init__()
         self.close_code = close_code
 
+    @typ.override
     async def send_media(self, data: object) -> None:
         """Fail the send the way an abandoned recipient does."""
         raise falcon.WebSocketDisconnected(code=self.close_code)
@@ -72,6 +73,7 @@ class SignallingWebSocket(RecordingWebSocket):
         self._expected = expected
         self._received = received
 
+    @typ.override
     async def send_media(self, data: object) -> None:
         """Record data and signal once the expected count is reached."""
         await super().send_media(data)
@@ -86,6 +88,7 @@ class FailingOnceWebSocket(RecordingWebSocket):
         super().__init__()
         self.sends_attempted = 0
 
+    @typ.override
     async def send_media(self, data: object) -> None:
         """Raise on the first attempt and record subsequent data."""
         self.sends_attempted += 1
@@ -102,6 +105,7 @@ class BlockingWebSocket(RecordingWebSocket):
         super().__init__()
         self._started = started
 
+    @typ.override
     async def send_media(self, data: object) -> None:
         """Signal that the send is in flight, then wait for cancellation."""
         self._started.set()
