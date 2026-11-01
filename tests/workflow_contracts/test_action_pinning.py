@@ -13,9 +13,6 @@ import pytest
 import yaml
 
 from .action_references import (
-    _is_pinned,
-    _manifest_references,
-    _workflow_references,
     action_references,
     validate_reference,
 )
@@ -29,7 +26,6 @@ from .workflow_support import (
     UnreadableWorkflowError,
     UnsupportedUsesError,
     WorkflowSource,
-    _raise_unreadable_directory,
 )
 
 
@@ -98,6 +94,18 @@ def test_discovery_and_references(tmp_path: pathlib.Path) -> None:
     )
     refs = list(action_references(workflow, actions))
     assert len(refs) == 3, "all three declarations must be read"
+    assert (
+        "ci.yml:jobs.reuse",
+        f"owner/repo/.github/workflows/a.yml@{sha}",
+    ) in refs, "reusable workflow job site must be retained"
+    assert (
+        "ci.yml:jobs.run.steps[1]",
+        "./local",
+    ) in refs, "workflow step site must be retained"
+    assert (
+        "example/action.yml:runs.steps[0]",
+        f"owner/repo@{sha}",
+    ) in refs, "composite step site must be retained"
     for site, ref in refs:
         validate_reference(site, ref)
 
@@ -149,10 +157,12 @@ def test_non_composite_docker_manifests_without_steps_are_ignored(
     )
 
 
-def test_directory_walk_errors_use_the_contract_error() -> None:
-    """Translate inaccessible nested directories to the named shape error."""
+def test_directory_walk_errors_use_the_contract_error(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Translate an unreadable action directory through the public reader."""
     with pytest.raises(UnreadableWorkflowError):
-        _raise_unreadable_directory(PermissionError("directory is unreadable"))
+        ActionManifestSource(tmp_path / "missing").names()
 
 
 @pytest.mark.parametrize(
@@ -264,20 +274,3 @@ def test_missing_ref_is_rejected() -> None:
     """External references must carry an explicit immutable revision."""
     with pytest.raises(UnsupportedUsesError):
         validate_reference("test", "owner/repo")
-
-
-def test_extracted_readers_preserve_sites(tmp_path: pathlib.Path) -> None:
-    """Each reader returns its own declaration and the pin classifier rejects tags."""
-    workflow, actions = sources(
-        tmp_path,
-        {"jobs": {"x": {"uses": "owner/repo@main"}}},
-        {"runs": {"using": "composite", "steps": [{"uses": "./local"}]}},
-    )
-    assert list(_workflow_references(workflow)) == [
-        ("ci.yml:jobs.x", "owner/repo@main")
-    ], "workflow site must be retained"
-    assert list(_manifest_references(actions)) == [
-        ("example/action.yml:runs.steps[0]", "./local")
-    ], "manifest site must be retained"
-    assert not _is_pinned("owner/repo@main"), "mutable tags must fail"
-    assert _is_pinned("./local"), "local actions must pass"

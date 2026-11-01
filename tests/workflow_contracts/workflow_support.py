@@ -250,7 +250,8 @@ class WorkflowSource:
         except OSError as error:
             raise UnreadableWorkflowError(path) from error
 
-    def _load(self, path: pathlib.Path, subject: str) -> object:
+    @staticmethod
+    def load(path: pathlib.Path, subject: str) -> object:
         """Read and parse one YAML file.
 
         Parameters
@@ -273,7 +274,7 @@ class WorkflowSource:
             the last of two equal keys in silence, so a lane could carry a
             paid label in the discarded half and read as hosted here.
         """
-        text = self.text(path)
+        text = WorkflowSource.text(path)
         try:
             return yaml.load(text, Loader=StrictLoader)  # ruff: ignore[unsafe-yaml-load] - strict SafeLoader subclass
         except yaml.YAMLError as error:
@@ -283,7 +284,7 @@ class WorkflowSource:
         """Parse one workflow document.
 
         A file that cannot be read, is not valid UTF-8, or is not parsable
-        YAML fails through the errors `_load` raises.
+        YAML fails through the errors :meth:`load` raises.
 
         Parameters
         ----------
@@ -302,7 +303,7 @@ class WorkflowSource:
         NotAMappingError
             If the document does not parse to a mapping.
         """
-        document = self._load(self.workflow_dir / name, name)
+        document = self.load(self.workflow_dir / name, name)
         if not isinstance(document, dict):
             raise NotAMappingError(name)
         # Copied rather than returned as parsed, so the declared type is true
@@ -375,7 +376,7 @@ class WorkflowSource:
         Routed through the source rather than read at its global path, so the
         registry contract can be driven over a temporary pair of directory
         and configuration. A configuration that is not parsable YAML fails
-        through the error `_load` raises.
+        through the error :meth:`load` raises.
 
         Returns
         -------
@@ -394,7 +395,7 @@ class WorkflowSource:
         """
         subject = self.actionlint_config.name
         section = self._runner_section(
-            self._load(self.actionlint_config, subject), subject
+            self.load(self.actionlint_config, subject), subject
         )
         registered = section.get("labels")
         if not isinstance(registered, list):
@@ -494,8 +495,7 @@ class ActionManifestSource:
         NotAMappingError
             If the manifest does not parse as a mapping.
         """
-        source = WorkflowSource(self.action_dir, self.action_dir / "unused")
-        document = as_mapping(source._load(self.action_dir / name, name))
+        document = as_mapping(WorkflowSource.load(self.action_dir / name, name))
         if document is None:
             raise NotAMappingError(name)
         return document
