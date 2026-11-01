@@ -144,6 +144,47 @@ class _LifecycleOptions:
     monotonic_clock: cabc.Callable[[], float] | None = None
 
 
+def _record_lifecycle_exception(
+    observation: _LifecycleObservation,
+    error: BaseException,
+    failure_category: LifecycleFailureCategory,
+) -> None:
+    """Record a propagated error without replacing an earlier failure."""
+    if isinstance(error, asyncio.CancelledError) or observation.outcome == "succeeded":
+        observation.record_failure(error, failure_category)
+
+
+def _record_lifecycle_operation(
+    observer: LifecycleObserver,
+    observation: _LifecycleObservation,
+    operation: LifecycleOperation,
+    clock: cabc.Callable[[], float],
+) -> None:
+    """Send one bounded duration event while isolating the host adapter."""
+    event = LifecycleObservationEvent(
+        operation=operation,
+        outcome=observation.outcome,
+        duration_seconds=max(0.0, clock() - observation.started),
+        failure_category=observation.failure_category,
+        close_code_category=observation.close_code_category,
+    )
+    with contextlib.suppress(Exception, asyncio.CancelledError):
+        observer.record_operation(event)
+
+
+def _finish_lifecycle_span(
+    span: LifecycleSpan, observation: _LifecycleObservation
+) -> None:
+    """Finish one span without allowing host adapter failures to escape."""
+    result = LifecycleSpanResult(
+        outcome=observation.outcome,
+        failure_category=observation.failure_category,
+        close_code_category=observation.close_code_category,
+    )
+    with contextlib.suppress(Exception, asyncio.CancelledError):
+        span.finish(result)
+
+
 @contextlib.contextmanager
 def _observe_lifecycle(
     observer: LifecycleObserver | None,
@@ -180,31 +221,13 @@ def _observe_lifecycle(
     try:
         yield observation
     except BaseException as error:
-        if (
-            isinstance(error, asyncio.CancelledError)
-            or observation.outcome == "succeeded"
-        ):
-            observation.record_failure(error, options.failure_category)
+        _record_lifecycle_exception(observation, error, options.failure_category)
         raise
     finally:
         if operation is not None:
-            event = LifecycleObservationEvent(
-                operation=operation,
-                outcome=observation.outcome,
-                duration_seconds=max(0.0, clock() - observation.started),
-                failure_category=observation.failure_category,
-                close_code_category=observation.close_code_category,
-            )
-            with contextlib.suppress(Exception, asyncio.CancelledError):
-                observer.record_operation(event)
+            _record_lifecycle_operation(observer, observation, operation, clock)
         if span is not None:
-            result = LifecycleSpanResult(
-                outcome=observation.outcome,
-                failure_category=observation.failure_category,
-                close_code_category=observation.close_code_category,
-            )
-            with contextlib.suppress(Exception, asyncio.CancelledError):
-                span.finish(result)
+            _finish_lifecycle_span(span, observation)
 
 
 def _close_code_category(code: int | None) -> LifecycleCloseCodeCategory:
