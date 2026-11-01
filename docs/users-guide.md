@@ -993,9 +993,11 @@ Announcement delivery is best effort, and each broadcast uses the room
 membership captured at broadcast time. A recipient that has already
 disconnected makes `broadcast_to_room` re-raise
 `falcon.WebSocketDisconnected` — directly for a single recipient, or grouped
-when several fail. The worker logs each such failure at debug level and keeps
-consuming, so the remaining recipients still receive the announcement and later
-announcements still reach their workspaces.
+when several fail. Each send is also bounded by a timeout, so a recipient that
+stops accepting frames cannot stall the shared consumer. The worker logs these
+expected delivery failures at debug level and keeps consuming, so the remaining
+recipients still receive the announcement and later announcements still reach
+their workspaces.
 
 Other failures are treated as unexpected. The worker logs them with a traceback
 and restarts its consuming loop after a fixed delay. An event that was dequeued

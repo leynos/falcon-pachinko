@@ -29,6 +29,7 @@ if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
 
 EVENT_WAIT_TIMEOUT = 2.0
 RESTART_DELAY = 0.25
+SEND_TIMEOUT = 0.05
 WORKER_LOGGER = "examples.reference_app.workers"
 
 
@@ -171,6 +172,50 @@ async def test_grouped_disconnects_keep_announcements_flowing(
     )
     assert _error_records(caplog) == [], (
         "grouped disconnects must not be logged as errors"
+    )
+
+
+@pytest.mark.asyncio
+async def test_unresponsive_recipient_does_not_stall_the_consumer(
+    controller: WorkerController,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A recipient that never accepts a send must not block the shared feed."""
+    feed = AnnouncementFeed()
+    conn_mgr = WebSocketConnectionManager()
+    started = asyncio.Event()
+    await _register(
+        conn_mgr, "atlas-blocking", BlockingWebSocket(started=started), "atlas"
+    )
+    atlas_received = asyncio.Event()
+    atlas_healthy = SignallingWebSocket(expected=1, received=atlas_received)
+    await _register(conn_mgr, "atlas-healthy", atlas_healthy, "atlas")
+    zephyr_received = asyncio.Event()
+    zephyr_healthy = SignallingWebSocket(expected=1, received=zephyr_received)
+    await _register(conn_mgr, "zephyr-healthy", zephyr_healthy, "zephyr")
+
+    caplog.set_level(logging.DEBUG, logger=WORKER_LOGGER)
+    await controller.start(
+        announcement_worker,
+        conn_mgr=conn_mgr,
+        announcement_feed=feed,
+        send_timeout=SEND_TIMEOUT,
+    )
+    await feed.publish("atlas", {"seq": 1})
+    await feed.publish("zephyr", {"seq": 2})
+
+    await _wait_for(atlas_received, "the healthy atlas recipient")
+    await _wait_for(zephyr_received, "delivery after the send timeout")
+    await controller.stop()
+
+    assert atlas_healthy.messages == [{"seq": 1}], (
+        "the healthy atlas recipient must still receive the announcement"
+    )
+    assert zephyr_healthy.messages == [{"seq": 2}], (
+        "consumption must continue after an unresponsive recipient"
+    )
+    assert _error_records(caplog) == [], (
+        "a send timeout must be treated as a best-effort delivery failure"
     )
 
 
