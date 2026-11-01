@@ -20,6 +20,14 @@ if typ.TYPE_CHECKING:
     from falcon_pachinko.protocols import WebSocketLike
 
 
+from falcon_pachinko._disconnect import _PeerDisconnectedError
+
+"""Shared test doubles used by the unit and behaviour suites."""
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    from falcon_pachinko.protocols import WebSocketLike
+
+
 class RecordingWebSocket:
     """WebSocket stub that records lifecycle changes and sent payloads."""
 
@@ -82,6 +90,62 @@ class RecordingWebSocket:
             msg = "expected a text WebSocket frame"
             raise TypeError(msg)
         return message
+
+
+class DisconnectingWebSocket(RecordingWebSocket):
+    """WebSocket stub whose recipient has already dropped the connection."""
+
+    def __init__(self, close_code: int = 1001) -> None:
+        super().__init__()
+        self.close_code = close_code
+
+    async def send_media(self, data: object) -> None:
+        """Fail the send the way an abandoned recipient does."""
+        raise falcon.WebSocketDisconnected(code=self.close_code)
+
+
+class SignallingWebSocket(RecordingWebSocket):
+    """WebSocket stub that signals after receiving an expected message count."""
+
+    def __init__(self, *, expected: int, received: asyncio.Event) -> None:
+        super().__init__()
+        self._expected = expected
+        self._received = received
+
+    async def send_media(self, data: object) -> None:
+        """Record data and signal once the expected count is reached."""
+        await super().send_media(data)
+        if len(self.messages) >= self._expected:
+            self._received.set()
+
+
+class FailingOnceWebSocket(RecordingWebSocket):
+    """WebSocket stub that fails its first send, then records later ones."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sends_attempted = 0
+
+    async def send_media(self, data: object) -> None:
+        """Raise on the first attempt and record subsequent data."""
+        self.sends_attempted += 1
+        if self.sends_attempted == 1:
+            msg = "recipient send failed"
+            raise RuntimeError(msg)
+        await super().send_media(data)
+
+
+class BlockingWebSocket(RecordingWebSocket):
+    """WebSocket stub that blocks inside ``send_media`` until cancelled."""
+
+    def __init__(self, *, started: asyncio.Event) -> None:
+        super().__init__()
+        self._started = started
+
+    async def send_media(self, data: object) -> None:
+        """Signal that the send is in flight, then wait for cancellation."""
+        self._started.set()
+        await asyncio.Event().wait()
 
 
 class RequestStub:
