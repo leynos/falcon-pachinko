@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses as dc
 import typing as typ
 
@@ -14,6 +15,7 @@ from examples.reference_app.resources import (
     AddTask,
     TaskStreamResource,
     WorkspaceResource,
+    _workspace_room,
     register_reference_hooks,
 )
 from examples.reference_app.server import _require_token_hook
@@ -22,14 +24,21 @@ from examples.reference_app.services import (
     AuditTrail,
     TokenAuthenticator,
 )
+from examples.reference_app.workers import announcement_worker
 from falcon_pachinko.hooks import HookEvent
 from falcon_pachinko.testing import SimulatorConnection, SimulatorRouterHarness
 from falcon_pachinko.websocket import WebSocketConnectionManager
+from falcon_pachinko.workers import WorkerController
+from tests._stubs import DisconnectingWebSocket, SignallingWebSocket
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers, string-only annotations
     import collections.abc as cabc
 
-    from falcon_pachinko import ServiceContainer, WebSocketResource
+    from falcon_pachinko import (
+        ServiceContainer,
+        WebSocketLike,
+        WebSocketResource,
+    )
 
 
 @dc.dataclass(slots=True)
@@ -170,4 +179,123 @@ def then_feed_capture(context: ReferenceScenario) -> None:
     assert isinstance(nested, dict), "the broadcast event must nest a payload mapping"
     assert nested["kind"] == "task_added", (
         "the nested payload must be a task_added event"
+    )
+
+
+ANNOUNCEMENT_TIMEOUT = 5.0
+
+
+@dc.dataclass(slots=True)
+class AnnouncementScenario:
+    """State for the announcement worker's recipient-failure scenario."""
+
+    loop: asyncio.AbstractEventLoop
+    controller: WorkerController
+    feed: AnnouncementFeed
+    disconnecting: DisconnectingWebSocket
+    atlas_healthy: SignallingWebSocket
+    zephyr_healthy: SignallingWebSocket
+    atlas_received: asyncio.Event
+    zephyr_received: asyncio.Event
+
+
+@scenario(
+    "reference_example.feature",
+    "A disconnected recipient does not stop announcements for other workspaces",
+)
+def test_disconnected_recipient_keeps_announcements_flowing() -> None:
+    """Scenario registration for pytest-bdd."""
+
+
+@pytest.fixture
+def announcement_scenario(
+    event_loop: asyncio.AbstractEventLoop,
+) -> cabc.Iterator[AnnouncementScenario]:
+    """Run the real announcement worker over the container's feed and manager."""
+    conn_mgr = WebSocketConnectionManager()
+    container = build_container(conn_mgr)
+    feed = container.resolve("announcement_feed")
+    assert isinstance(feed, AnnouncementFeed), (
+        "the container must provide the announcement feed service"
+    )
+    atlas_received = asyncio.Event()
+    zephyr_received = asyncio.Event()
+    disconnecting = DisconnectingWebSocket()
+    atlas_healthy = SignallingWebSocket(expected=2, received=atlas_received)
+    zephyr_healthy = SignallingWebSocket(expected=1, received=zephyr_received)
+
+    async def _register(
+        conn_id: str, websocket: WebSocketLike, workspace_id: str
+    ) -> None:
+        await conn_mgr.add_connection(conn_id, websocket)
+        await conn_mgr.join_room(conn_id, _workspace_room(workspace_id))
+
+    controller = WorkerController()
+    event_loop.run_until_complete(
+        _register("atlas-gone", disconnecting, "atlas"),
+    )
+    event_loop.run_until_complete(_register("atlas-healthy", atlas_healthy, "atlas"))
+    event_loop.run_until_complete(_register("zephyr-healthy", zephyr_healthy, "zephyr"))
+    event_loop.run_until_complete(
+        controller.start(
+            announcement_worker,
+            conn_mgr=conn_mgr,
+            announcement_feed=feed,
+        )
+    )
+    try:
+        yield AnnouncementScenario(
+            loop=event_loop,
+            controller=controller,
+            feed=feed,
+            disconnecting=disconnecting,
+            atlas_healthy=atlas_healthy,
+            zephyr_healthy=zephyr_healthy,
+            atlas_received=atlas_received,
+            zephyr_received=zephyr_received,
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            event_loop.run_until_complete(controller.stop())
+
+
+@given(
+    "an announcement worker with a disconnected atlas recipient",
+    target_fixture="announcement_scenario",
+)
+def given_announcement_worker(
+    announcement_scenario: AnnouncementScenario,
+) -> AnnouncementScenario:
+    """Reuse the running worker started by the scenario fixture."""
+    return announcement_scenario
+
+
+@when("announcements are published for the atlas and zephyr workspaces")
+def publish_announcements(announcement_scenario: AnnouncementScenario) -> None:
+    """Publish to both workspaces and wait for the healthy recipients."""
+
+    async def _publish() -> None:
+        await announcement_scenario.feed.publish("atlas", {"seq": 1})
+        await announcement_scenario.feed.publish("atlas", {"seq": 2})
+        await announcement_scenario.feed.publish("zephyr", {"seq": 3})
+        async with asyncio.timeout(ANNOUNCEMENT_TIMEOUT):
+            await announcement_scenario.atlas_received.wait()
+            await announcement_scenario.zephyr_received.wait()
+
+    announcement_scenario.loop.run_until_complete(_publish())
+
+
+@then("healthy recipients in both workspaces receive every announcement")
+def then_healthy_recipients_receive(
+    announcement_scenario: AnnouncementScenario,
+) -> None:
+    """Check that one disconnect did not interrupt cross-workspace delivery."""
+    assert announcement_scenario.atlas_healthy.messages == [{"seq": 1}, {"seq": 2}], (
+        "the healthy atlas recipient must receive both announcements in order"
+    )
+    assert announcement_scenario.zephyr_healthy.messages == [{"seq": 3}], (
+        "the zephyr recipient must still receive its announcement"
+    )
+    assert announcement_scenario.disconnecting.messages == [], (
+        "the disconnected recipient must not record a delivery"
     )
