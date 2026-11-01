@@ -1323,18 +1323,19 @@ sequenceDiagram
 ```
 
 With `receive_loop=True`, the router owns an established session through
-cleanup; the default leaves later receives and cleanup to the application.
-Falcon's reported disconnect code is passed to `on_disconnect`; absent a code,
-the effective code is `1006`. A server-initiated `ws.close(code)` sends that
-code to the peer; cleanup uses the disconnect code Falcon reports to the
-router. Cancellation preserves an already selected or reported code; otherwise
-it selects `1001` and attempts a best-effort close if the accepted transport
-remains open. Shielded cleanup continues through each disconnect stage once,
-even if the caller is cancelled again. An unexpected ordinary failure triggers
-a best-effort `1011` close and reports `1011`. Cleanup runs in a shielded task
-without a timeout, so `on_disconnect` must terminate. The router invokes
-`before_disconnect` before `on_disconnect` and prevents new receive or dispatch
-hooks once disconnect begins.
+cleanup. With `receive_loop=False`, it returns after acceptance and leaves
+later receives and cleanup to the application. Falcon's reported disconnect
+code is passed to `on_disconnect`; absent a code, the effective code is `1006`.
+A server-initiated `ws.close(code)` sends that code to the peer; cleanup uses
+the disconnect code Falcon reports to the router. Cancellation preserves an
+already selected or reported code; otherwise it selects `1001` and attempts a
+best-effort close if the accepted transport remains open. Shielded cleanup
+continues through each disconnect stage once, even if the caller is cancelled
+again. An unexpected ordinary failure triggers a best-effort `1011` close and
+reports `1011`. Cleanup runs in a shielded task without a timeout, so
+`on_disconnect` must terminate. The router invokes `before_disconnect` before
+`on_disconnect` and prevents new receive or dispatch hooks once disconnect
+begins.
 
 A lone session or cleanup failure is re-raised unchanged. Multiple ordinary
 failures are grouped in an `ExceptionGroup`, with the primary session failure
