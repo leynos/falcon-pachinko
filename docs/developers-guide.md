@@ -1257,13 +1257,17 @@ the 19 s and 36 s lanes will be dominated by runner start-up either way.
 `make test-workflow-contracts` runs them on their own. `make test` collects
 them too, which is what makes them a gate rather than a convenience.
 
-The action-reference reader checks every workflow and local action manifest.
+The action-reference reader checks workflow job and step `uses:` declarations
+and composite action `runs.steps[*].uses` declarations. It discovers
+`action.yml` and `action.yaml` manifests at any depth below `.github/actions`.
 External GitHub Actions and reusable workflows must use a full 40-character
-lowercase commit SHA; Docker actions must use a SHA-256 digest. Local `./`
-action references are exempt because they resolve within the checked-out
-repository. Keep the upstream release version in a same-line `# vX.Y.Z` comment
-so Dependabot can update the SHA and comment together. This also applies to the
-[Markdown lint action](#markdown-formatting-and-linting).
+lowercase commit SHA; `uses: docker://…` references must use a SHA-256 digest.
+Local `./` action references are exempt because they resolve within the
+checked-out repository. Docker action `runs.image` metadata is outside this
+`uses:` contract, and non-composite action manifests without `steps` remain
+valid omissions. Keep the upstream release version in a same-line `# vX.Y.Z`
+comment so Dependabot can update the SHA and comment together. This also
+applies to the [Markdown lint action](#markdown-formatting-and-linting).
 
 Before updating a pin, query the owning repository with
 `gh api repos/OWNER/REPO/git/ref/tags/TAG`, and follow annotated tag objects

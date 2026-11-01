@@ -100,6 +100,53 @@ def test_discovery_and_references(tmp_path: pathlib.Path) -> None:
         validate_reference(site, ref)
 
 
+def test_nested_action_manifests_are_discovered(tmp_path: pathlib.Path) -> None:
+    """Discover composite manifests in nested local-action directories."""
+    workflow, actions = sources(
+        tmp_path,
+        {"jobs": {}},
+        {"runs": {"using": "node20"}},
+    )
+    nested = actions.action_dir / "group" / "nested"
+    nested.mkdir(parents=True)
+    (nested / "action.yaml").write_text(
+        yaml.safe_dump({
+            "runs": {
+                "using": "composite",
+                "steps": [{"uses": f"owner/repo@{'a' * 40}"}],
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    refs = list(action_references(workflow, actions))
+
+    assert "group/nested/action.yaml" in actions.names(), (
+        "nested action manifests must be discovered"
+    )
+    assert (
+        "group/nested/action.yaml:runs.steps[0]",
+        f"owner/repo@{'a' * 40}",
+    ) in refs, "nested action references must be yielded"
+
+
+def test_non_composite_docker_manifests_without_steps_are_ignored(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Keep non-composite runtime metadata outside the uses contract."""
+    workflow, actions = sources(
+        tmp_path,
+        {"jobs": {}},
+        {"runs": {"using": "docker", "image": "docker://alpine:latest"}},
+    )
+
+    refs = list(action_references(workflow, actions))
+
+    assert not refs, (
+        "non-composite Docker runtime metadata is outside the uses contract"
+    )
+
+
 @pytest.mark.parametrize(
     ("workflow", "action", "error"),
     [

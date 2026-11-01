@@ -452,7 +452,7 @@ class ActionManifestSource:
     action_dir: pathlib.Path
 
     def names(self) -> list[str]:
-        """Find both supported manifest filenames in action directories.
+        """Find supported manifests in every local action directory.
 
         Returns
         -------
@@ -464,17 +464,20 @@ class ActionManifestSource:
         UnreadableWorkflowError
             If the directory cannot be listed.
         """
-        try:
-            directories = list(self.action_dir.iterdir())
-            return sorted(
-                path.relative_to(self.action_dir).as_posix()
-                for directory in directories
-                if directory.is_dir()
-                for path in directory.iterdir()
-                if path.name in {"action.yml", "action.yaml"}
-            )
-        except OSError as error:
-            raise UnreadableWorkflowError(self.action_dir) from error
+        directories = [self.action_dir]
+        manifests = []
+        while directories:
+            directory = directories.pop()
+            try:
+                entries = list(directory.iterdir())
+            except OSError as error:
+                raise UnreadableWorkflowError(directory) from error
+            for path in entries:
+                if path.is_dir():
+                    directories.append(path)
+                elif path.name in {"action.yml", "action.yaml"}:
+                    manifests.append(path.relative_to(self.action_dir).as_posix())
+        return sorted(manifests)
 
     def document(self, name: str) -> dict[str, object]:
         """Parse a manifest with the workflow loader's strict error handling.
