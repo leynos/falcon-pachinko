@@ -26,8 +26,10 @@ from .workflow_support import (
     NotAListError,
     NotAMappingError,
     UnparsableWorkflowError,
+    UnreadableWorkflowError,
     UnsupportedUsesError,
     WorkflowSource,
+    _raise_unreadable_directory,
 )
 
 
@@ -145,6 +147,12 @@ def test_non_composite_docker_manifests_without_steps_are_ignored(
     assert not refs, (
         "non-composite Docker runtime metadata is outside the uses contract"
     )
+
+
+def test_directory_walk_errors_use_the_contract_error() -> None:
+    """Translate inaccessible nested directories to the named shape error."""
+    with pytest.raises(UnreadableWorkflowError):
+        _raise_unreadable_directory(PermissionError("directory is unreadable"))
 
 
 @pytest.mark.parametrize(

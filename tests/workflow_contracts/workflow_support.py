@@ -25,6 +25,7 @@ workflow fails the same way whether or not assertions are enabled.
 from __future__ import annotations
 
 import dataclasses as dc
+import os
 import pathlib
 import typing as typ
 
@@ -439,6 +440,11 @@ class UnsupportedUsesError(WorkflowShapeError):
         super().__init__(f"{site}: unsupported or mutable uses {value!r}")
 
 
+def _raise_unreadable_directory(error: OSError) -> typ.NoReturn:
+    """Translate directory walk failures to the shared contract error."""
+    raise UnreadableWorkflowError(pathlib.Path(error.filename or ROOT)) from error
+
+
 @dc.dataclass(frozen=True, slots=True)
 class ActionManifestSource:
     """Read action manifests from a directory of local actions.
@@ -454,30 +460,21 @@ class ActionManifestSource:
     def names(self) -> list[str]:
         """Find supported manifests in every local action directory.
 
+        Directory traversal failures are translated to
+        ``UnreadableWorkflowError``.
+
         Returns
         -------
         list[str]
             Sorted paths relative to the action directory.
-
-        Raises
-        ------
-        UnreadableWorkflowError
-            If the directory cannot be listed.
         """
-        directories = [self.action_dir]
-        manifests = []
-        while directories:
-            directory = directories.pop()
-            try:
-                entries = list(directory.iterdir())
-            except OSError as error:
-                raise UnreadableWorkflowError(directory) from error
-            for path in entries:
-                if path.is_dir():
-                    directories.append(path)
-                elif path.name in {"action.yml", "action.yaml"}:
-                    manifests.append(path.relative_to(self.action_dir).as_posix())
-        return sorted(manifests)
+        return sorted(
+            (pathlib.Path(directory) / name).relative_to(self.action_dir).as_posix()
+            for directory, _, filenames in os.walk(
+                self.action_dir, onerror=_raise_unreadable_directory
+            )
+            for name in {"action.yml", "action.yaml"}.intersection(filenames)
+        )
 
     def document(self, name: str) -> dict[str, object]:
         """Parse a manifest with the workflow loader's strict error handling.
