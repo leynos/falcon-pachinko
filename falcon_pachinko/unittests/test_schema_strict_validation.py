@@ -49,7 +49,9 @@ class _RecordingResourceLike(typ.Protocol):
     because the tests only inspect what was recorded.
     """
 
-    events: cabc.Sequence[object]
+    @property
+    def events(self) -> cabc.Sequence[object]:
+        """Events recorded so far, in dispatch order."""
 
     def bind_default_hook_manager(self) -> object:
         """Install the framework's default hook manager."""

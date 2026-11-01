@@ -167,11 +167,14 @@ def _convert_payload(context: HandlerInvocationContext, payload_type: type) -> o
     except ms.ValidationError:
         if context.handler_info.strict:
             raise
-        return ms.convert(
-            context.payload,
-            type=payload_type,
-            strict=context.handler_info.strict,
-        )
+    # Convert after leaving the ``except`` suite so a failure here does not
+    # retain the wire-decode error as its ``__context__``: the vendor message
+    # can quote peer-supplied field names.
+    return ms.convert(
+        context.payload,
+        type=payload_type,
+        strict=context.handler_info.strict,
+    )
 
 
 async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
