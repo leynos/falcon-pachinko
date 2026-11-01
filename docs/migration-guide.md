@@ -239,8 +239,15 @@ router = WebSocketRouter(resource_factory=container.create_resource)
   `falcon_pachinko.unittests.resource_factories.resource_factory`).
 
 Envelope handlers whose payload annotations reject `None` no longer receive
-`None` for omitted or JSON `null` payloads. These messages now reach
-`on_unhandled`; annotate the payload as optional to accept them.
+`None` for omitted or JSON `null` payloads; these messages now reach
+`on_unhandled`. Annotate the payload as `T | None` to accept them. Until
+[#283](https://github.com/leynos/falcon-pachinko/issues/283) is fixed, however,
+a non-null JSON object with a `msgspec.Struct | None` annotation can raise
+`TypeError` under strict validation. As a workaround, use
+`@handles_message("type", strict=False)` or register the handler with
+`WebSocketResource.add_handler(…, payload_type=Payload | None, strict=False)`.
+This relaxes strict `msgspec.Struct` field validation and enables non-strict
+conversions, so use it only when that trade-off is acceptable.
 
 1) **Update connection manager usage:**
 
