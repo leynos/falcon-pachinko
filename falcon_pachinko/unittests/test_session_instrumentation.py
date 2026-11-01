@@ -9,6 +9,9 @@ import typing as typ
 import falcon
 import pytest
 
+from falcon_pachinko._disconnect import _PeerDisconnectedError
+from falcon_pachinko._session import SessionState
+from falcon_pachinko._session_instrumentation import _instrumentation_dimensions
 from falcon_pachinko.observability import (
     CloseCodeCategory,
     Counter,
@@ -44,6 +47,28 @@ def _assert_observation_durations(caplog: pytest.LogCaptureFixture) -> None:
         and record.__dict__.get("outcome") == "completed"
         and record.__dict__.get("operation") in {"setup", "session"}
     ] == [("setup", 2.0), ("session", 7.0)], _ASSERTION_FAILURE
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_category"),
+    [
+        (falcon.WebSocketDisconnected(4000), ExceptionCategory.TRANSPORT),
+        (_PeerDisconnectedError(4000), ExceptionCategory.TRANSPORT),
+        (None, ExceptionCategory.NONE),
+    ],
+)
+def test_exception_dimension_preserves_transport_and_empty_categories(
+    error: BaseException | None, expected_category: ExceptionCategory
+) -> None:
+    """Transport signals remain bounded while absent failures use no category."""
+    dimensions = _instrumentation_dimensions(
+        SessionState(),
+        operation=Operation.SESSION,
+        outcome=Outcome.FAILED,
+        error=error,
+    )
+
+    assert dimensions.exception is expected_category, _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio

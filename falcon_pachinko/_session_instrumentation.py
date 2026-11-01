@@ -11,16 +11,14 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
-import falcon
-
 from . import observability as _observability
-from ._disconnect import _PeerDisconnectedError
 from ._session import SessionPhase, SessionState
 from ._session_observation import (
     _log_session_observation,
     _outcome_for_error,
     _SessionObservation,
 )
+from ._session_socket import _peer_disconnect_error
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -261,8 +259,8 @@ def _instrumentation_dimensions(
         close_code=_observability._close_code_category(session.close_code),
         exception=_observability._exception_category(
             error,
-            is_transport=isinstance(
-                error, (falcon.WebSocketDisconnected, _PeerDisconnectedError)
+            is_transport=(
+                error is not None and _peer_disconnect_error(error) is not None
             ),
         ),
     )
