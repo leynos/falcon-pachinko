@@ -278,16 +278,21 @@ async def test_registered_handler_precedes_integer_tag_fallback() -> None:
 
 
 @pytest.mark.asyncio
-async def test_none_tag_calls_fallback_without_conventional_handler(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """None tags should call on_unhandled rather than on_none."""
+async def test_runtime_assigned_untagged_schema_is_a_configuration_error() -> None:
+    """A runtime-assigned untagged schema fails visibly, not as a bad frame.
+
+    Class creation rejects an untagged schema, so assigning one afterwards
+    bypasses that check. Tag dispatch cannot resolve an untagged member at all;
+    reporting every frame as unhandled would leave the broken schema installed
+    and hide the configuration mistake behind the fallback.
+    """
     r = UntaggedFallbackResource()
     r.bind_default_hook_manager()
-    monkeypatch.setattr(r, "schema", Untagged)
+    r.schema = Untagged
     raw = msjson.encode(Untagged(value="untagged"))
-    await r.dispatch(DummyWS(), raw)
-    assert r.events == [("raw", raw)], "on_none must not run for a None tag"
+    with pytest.raises(TypeError, match="schema Struct types must define a tag"):
+        await r.dispatch(DummyWS(), raw)
+    assert not r.events, "an invalid schema must not be reported as a bad frame"
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,6 @@ import logging
 import typing as typ
 
 import msgspec as ms
-import msgspec.inspect as msinspect
 import msgspec.json as msjson
 
 from .diagnostics import _class_name, _frame_metadata, _identifier, _type_name
@@ -18,7 +17,7 @@ from .exceptions import (
     SignatureInspectionError,
 )
 from .handlers import LIFECYCLE_CALLBACK_NAMES, HandlerInfo, get_payload_type
-from .schema import validate_strict_payload
+from .schema import schema_dispatch, validate_strict_payload
 from .utils import to_snake_case
 
 logger = logging.getLogger(__name__)
@@ -44,6 +43,10 @@ class HandlerInvocationContext:
     raw: str | bytes
     handler_info: HandlerInfo
     payload: object
+    #: Struct selected by schema dispatch, when it differs from the handler's
+    #: annotation. Schema mode always converts to the resolved member so an
+    #: unannotated conventional handler still receives a typed payload.
+    target_type: type | None = None
 
     def __repr__(self) -> str:
         """Describe the invocation without displaying raw or decoded values."""
@@ -124,7 +127,11 @@ def find_conventional_handler(
 
 async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
     """Convert ``payload`` to the handler's type and invoke it."""
-    payload_type = context.handler_info.payload_type
+    payload_type = (
+        context.target_type
+        if context.target_type is not None
+        else context.handler_info.payload_type
+    )
     payload = context.payload
     failed = False
     if payload_type is not None and payload is not None:
@@ -160,34 +167,48 @@ async def dispatch_with_schema(
 ) -> None:
     """Decode and dispatch ``raw`` using ``resource.schema``.
 
-    Non-``None`` tags are converted with ``str()`` for conventional handler
-    lookup; ``None`` tags fall back to ``on_unhandled``.
+    The frame is decoded generically to a mapping first. Decoding straight into
+    the schema union would let ``msgspec`` discard undeclared fields before the
+    strict decision, so a strict handler could receive a message that violated
+    its no-extra-fields contract. The mapping is retained through validation
+    and only converted to the resolved Struct afterwards.
+
+    ``None`` tags, unknown tags, non-object frames and malformed JSON fall back
+    to ``on_unhandled``. A configuration ``TypeError`` from an invalid schema
+    propagates instead.
     """
+    # Fall back outside the ``except`` suite: raising there would chain the
+    # vendor decode error into an application failure as ``__context__``, and
+    # the decode error can quote the frame.
     failed = False
     try:
-        message = msjson.decode(raw, type=resource.schema)
+        payload: object = msjson.decode(raw)
     except (ms.DecodeError, ms.ValidationError):
         failed = True
     if failed:
         await resource.on_unhandled(ws, raw)
         return
-
-    entry = resource.__class__._struct_handlers.get(type(message))
-    if not entry:
-        info = msinspect.type_info(type(message))
-        tag = info.tag if isinstance(info, msinspect.StructType) else None
-        # msgspec permits integer tags; conventional lookup uses strings.
-        conv = (
-            find_conventional_handler(resource, str(tag)) if tag is not None else None
-        )
-        if conv is None:
-            await resource.on_unhandled(ws, raw)
-            return
-        ctx = HandlerInvocationContext(resource, ws, raw, conv, message)
-        await convert_and_invoke_handler(ctx)
+    if not isinstance(payload, dict):
+        await resource.on_unhandled(ws, raw)
         return
 
-    ctx = HandlerInvocationContext(resource, ws, raw, entry, message)
+    # ``dispatch`` only routes here when a schema is set.
+    schema = typ.cast("type", resource.schema)
+    resolution = schema_dispatch(schema).resolve(payload)
+    if resolution is None:
+        await resource.on_unhandled(ws, raw)
+        return
+    member, tag = resolution
+
+    entry = resource.__class__._struct_handlers.get(member)
+    if entry is None:
+        # msgspec permits integer tags; conventional lookup uses strings.
+        entry = find_conventional_handler(resource, str(tag))
+    if entry is None:
+        await resource.on_unhandled(ws, raw)
+        return
+
+    ctx = HandlerInvocationContext(resource, ws, raw, entry, payload, member)
     await convert_and_invoke_handler(ctx)
 
 
