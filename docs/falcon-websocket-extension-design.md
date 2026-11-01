@@ -719,11 +719,11 @@ sequenceDiagram
 
 Applications register, join, publish and remove connections through the
 coordinator. Start `fanout.run` with `WorkerController` in the application
-lifespan and mount `WebSocketRouter(receive_loop=True)` so the router owns the
-accepted connection's receive loop and disconnect cleanup. The receive loop is
-opt-in; the default `False` returns after acceptance and leaves receives and
-cleanup to the application. Node IDs and connection IDs must be unique across
-the cluster. A production Redis or RabbitMQ adapter implements only
+lifespan and mount `WebSocketRouter()` so the router owns the accepted
+connection's receive loop and disconnect cleanup by default. Set
+`receive_loop=False` to return after acceptance and leave receives and cleanup
+to the application. Node IDs and connection IDs must be unique across the
+cluster. A production Redis or RabbitMQ adapter implements only
 `FanoutTransport`; such an adapter is outside the scope of this release.
 
 Delivery is best effort and not durable. There is no replay for nodes that are
@@ -809,7 +809,7 @@ conn_mgr = pachinko.install(app)
 # 1. Define workers as ordinary async functions with explicit dependencies
 @worker
 async def announcement_worker(
-    conn_mgr: falcon_pachinko.WebSocketConnectionManager,
+    conn_mgr: pachinko.WebSocketConnectionManager,
 ) -> None:
     """Broadcasts a heartbeat message to all sockets every 30s."""
     while True:
@@ -1587,27 +1587,22 @@ class ChatResource(WebSocketResource):
 
 #### 5.3.2. Automated Dispatch Logic
 
-With `WebSocketRouter(receive_loop=True)`, the router owns the receive loop for
-each accepted connection. Its session driver calls `receive_media()` and awaits
-`WebSocketResource.dispatch()` for each value before receiving the next one.
-With the default `False`, the router returns after acceptance and the
-application owns subsequent receives.
+By default, `WebSocketRouter` owns the receive loop for each accepted
+connection. Its session driver calls `receive_media()` and awaits
+`WebSocketResource.dispatch()` for each value before receiving the next one. Set
+`receive_loop=False` to return after acceptance and hand subsequent reception
+and cleanup to the application. Manual callers can retain the accepted session
+returned by `WebSocketRouter.negotiate()` and manage dispatch explicitly.
 
-Falcon may decode media before `receive_media()` returns it, so enabling the
-receive loop does not by itself guarantee exact raw frames. `attach()` enables
-raw input automatically. For manually mounted routers or other Falcon WebSocket
+Falcon may decode media before `receive_media()` returns it, so the receive
+loop does not by itself guarantee exact raw frames. `attach()` enables raw
+input automatically. For manually mounted routers or other Falcon WebSocket
 routes, call `configure_raw_frame_media(app)` before Falcon constructs
 WebSockets. Either setup path is app-wide and preserves the configured outgoing
-serializers for both frame types. For each accepted connection,
-`WebSocketSession.run()` owns the receive loop. Its session driver calls
-`receive_media()` and awaits `WebSocketResource.dispatch()` for each value
-before receiving the next one. Manual callers can retain the accepted session
-returned by `WebSocketRouter.negotiate()` and manage dispatch explicitly. The
-native adapter preserves text and binary payloads before media decoding, so
-malformed JSON reaches `on_unhandled()`; injected transports retain the
-`receive_media()` adapter and encode other values as JSON.
-
-1. Receive a raw message from the WebSocket.
+serializers for both frame types. The native adapter preserves text and binary
+payloads before media decoding, so malformed JSON reaches `on_unhandled()`;
+injected transports retain the `receive_media()` adapter and encode other
+values as JSON.
 
 The resource's dispatch method performs these steps:
 
@@ -1703,23 +1698,23 @@ This provides maximum control, allowing outer layers to act as setup/teardown
 guards for inner layers. An exception in a `before_*` hook should terminate the
 connection attempt immediately.
 
-With `receive_loop=True`, the router accepts the connection before starting its
-single inline receive loop. It passes each text or binary frame to the selected
-resource's dispatcher and waits for that dispatch to finish before receiving
-the next frame. The loop creates no task per frame. The default
-`receive_loop=False` returns after accepted setup and leaves subsequent
-reception and cleanup to the application. A normal peer close runs
-`before_disconnect` hooks and attempts `on_disconnect` once; a missing peer
-close code maps to 1006. Cancellation preserves an already selected or reported
-close code; otherwise it selects 1001 and attempts a best-effort close on the
-accepted transport. Shielded cleanup runs each disconnect stage once and
-propagates cancellation. An unexpected receive or handler exception closes with
-1011, runs best-effort cleanup, and propagates the original exception. Failure
-during `after_connect` or `accept` uses 1006 for cleanup. Returning normally
-from `on_unhandled` leaves the session open. Manual negotiation returns a
-`WebSocketSession` after acceptance but before `on_session_start()`; `aclose()`
-waits without a timeout if `run()` is active, so bounded shutdown requires
-cancelling and awaiting that run task.
+By default, the router accepts the connection before starting its single inline
+receive loop. It passes each text or binary frame to the selected resource's
+dispatcher and waits for that dispatch to finish before receiving the next
+frame. The loop creates no task per frame. Set `receive_loop=False` to return
+after accepted setup and leave subsequent reception and cleanup to the
+application. A normal peer close runs `before_disconnect` hooks and attempts
+`on_disconnect` once; a missing peer close code maps to 1006. Cancellation
+preserves an already selected or reported close code; otherwise it selects 1001
+and attempts a best-effort close on the accepted transport. Shielded cleanup
+runs each disconnect stage once and propagates cancellation. An unexpected
+receive or handler exception closes with 1011, runs best-effort cleanup, and
+propagates the original exception. Failure before acceptance completes attempts
+a code-1000 handshake close and does not call `on_disconnect()`. Returning
+normally from `on_unhandled` leaves the session open. Manual negotiation
+returns a `WebSocketSession` after acceptance but before `on_session_start()`;
+`aclose()` waits without a timeout if `run()` is active, so bounded shutdown
+requires cancelling and awaiting that run task.
 
 ```mermaid
 stateDiagram-v2

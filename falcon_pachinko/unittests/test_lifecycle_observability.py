@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses as dc
 import logging
+import math
 
 import pytest
 
@@ -74,6 +75,48 @@ async def test_success_observes_lifecycle_once_and_keeps_frames_silent() -> None
 
 
 @pytest.mark.asyncio
+async def test_lifecycle_observations_use_the_configured_monotonic_clock() -> None:
+    """Every lifecycle duration shares the router's guarded clock source."""
+    observer = _RecordingObserver()
+    resource = _ObservedResource()
+    router = _observed_router(resource, observer)
+    clock_value = 0.0
+
+    def monotonic_clock() -> float:
+        nonlocal clock_value
+        clock_value += 10.0
+        return clock_value
+
+    router.configure_session_instrumentation(None, monotonic_clock=monotonic_clock)
+    await router.on_websocket(make_req("/session"), DummyWS())
+
+    assert all(event.duration_seconds >= 10.0 for event in observer.events), (
+        "observer durations must come from the injected clock, not wall time"
+    )
+    assert all(
+        math.isclose(event.duration_seconds % 10.0, 0.0) for event in observer.events
+    ), "observer durations must retain the injected clock's step size"
+    assert tuple(sorted(event.operation for event in observer.events)) == (
+        _EXPECTED_OPERATIONS
+    ), "all six lifecycle durations must be observed"
+
+
+@pytest.mark.asyncio
+async def test_default_router_runs_and_finalizes_the_accepted_session() -> None:
+    """The ordinary on_websocket path owns frames and cleanup by default."""
+    resource = _ObservedResource()
+    router = WebSocketRouter()
+    router.add_route("/session", lambda: resource)
+    router.mount("/")
+
+    await router.on_websocket(make_req("/session"), DummyWS())
+
+    assert resource.disconnects == [1000], (
+        "the default receive loop must run disconnect cleanup once"
+    )
+
+
+@pytest.mark.asyncio
 async def test_rejection_observes_no_accepted_session_work() -> None:
     """A rejection completes negotiation without acceptance or session spans."""
     observer = _RecordingObserver()
@@ -127,7 +170,7 @@ async def test_setup_failure_finishes_spans_and_omits_sensitive_values() -> None
 
 @pytest.mark.asyncio
 async def test_receive_cancellation_is_observed_and_preserves_cleanup() -> None:
-    """Cancellation finishes spans and propagates without sending a close frame."""
+    """Cancellation finishes spans, closes with 1001, and propagates."""
     observer = _RecordingObserver()
     resource = _ObservedResource()
     socket = SessionSocket(block_receive=True)

@@ -5,24 +5,15 @@ from __future__ import annotations
 import asyncio
 import collections.abc as cabc
 import dataclasses as dc
-import itertools
 import typing as typ
 from contextlib import contextmanager, suppress
 
-import falcon.asgi
-import msgspec as ms
-import msgspec.json as msjson
 import uvicorn
 
-from falcon_pachinko import (
-    WebSocketConnectionManager,
-    WebSocketResource,
-    WebSocketRouter,
-)
-
 if typ.TYPE_CHECKING:
-    from falcon_pachinko.protocols import WebSocketLike
+    import falcon.asgi
 
+from tests.behaviour._live_lifecycle_app import LiveApplication, create_live_application
 
 type _LoopExceptionHandler = cabc.Callable[
     [asyncio.AbstractEventLoop, dict[str, typ.Any]], None
@@ -36,196 +27,6 @@ def _assert_no_loop_errors(loop_errors: list[dict[str, object]]) -> None:
         error.get("exception") or error.get("message") for error in loop_errors
     ]
     assert not unexpected, f"live server reported loop errors: {unexpected!r}"
-
-
-class DisconnectRecorder:
-    """Record accepted connections, failures, and completed disconnects."""
-
-    def __init__(self) -> None:
-        self.connection_ids: list[str] = []
-        self.disconnect_records: list[tuple[str, int]] = []
-        self.disconnect_events: dict[str, asyncio.Event] = {}
-        self.handler_errors: list[Exception] = []
-        self.received_frames: list[str | bytes] = []
-        self.disconnect_invocations = 0
-        self.rejected_disconnects = 0
-        self.block_started = asyncio.Event()
-        self._ids = itertools.count(1)
-
-    def register(self) -> str:
-        """Create a stable identifier and event for the next resource."""
-        conn_id = f"live-{next(self._ids)}"
-        self.connection_ids.append(conn_id)
-        self.disconnect_events[conn_id] = asyncio.Event()
-        return conn_id
-
-    async def wait_for_disconnect(self, conn_id: str) -> None:
-        """Wait for one resource to finish its disconnect hook."""
-        await asyncio.wait_for(self.disconnect_events[conn_id].wait(), timeout=5)
-
-
-class RecordingResource(WebSocketResource):
-    """Exercise echo, close, failure, and blocked-handler session outcomes."""
-
-    def __init__(
-        self,
-        *,
-        manager: WebSocketConnectionManager,
-        recorder: DisconnectRecorder,
-        close_on_connect: bool = False,
-    ) -> None:
-        self._manager = manager
-        self._recorder = recorder
-        self._conn_id: str | None = None
-        self._close_on_connect = close_on_connect
-
-    async def on_connect(
-        self,
-        req: falcon.Request,
-        ws: WebSocketLike,
-        **params: object,
-    ) -> bool:
-        """Approve the routed connection before router-owned acceptance."""
-        del req, params
-        if self._close_on_connect:
-            # Keep one explicit probe of the deprecated early-accept path.
-            await ws.accept()
-            conn_id = self._recorder.register()
-            await self._manager.add_connection(conn_id, ws)
-            self._conn_id = conn_id
-            await ws.close(4003)
-            return False
-        return True
-
-    async def on_session_start(self, ws: WebSocketLike) -> None:
-        """Register accepted membership after the router completes acceptance."""
-        conn_id = self._recorder.register()
-        await self._manager.add_connection(conn_id, ws)
-        self._conn_id = conn_id
-
-    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Implement the small message protocol used by live scenarios."""
-        self._recorder.received_frames.append(message)
-        try:
-            payload = msjson.decode(message)
-        except ms.DecodeError:
-            match message:
-                case str():
-                    await ws.send_media({"type": "raw", "message": message})
-                    return
-                case _:
-                    raise
-
-        match payload:
-            case dict():
-                # JSON object keys are strings; values can be any JSON value.
-                await self._respond_to_payload(
-                    ws, typ.cast("dict[str, object]", payload)
-                )
-            case _:
-                msg = "live test messages must be JSON objects"
-                raise TypeError(msg)
-
-    async def _respond_to_payload(
-        self, ws: WebSocketLike, payload: dict[str, object]
-    ) -> None:
-        """Exercise handler exits independently of raw frame decoding."""
-        match payload.get("type"):
-            case "echo":
-                await ws.send_media(payload)
-            case "close-me" | "close-and-send":
-                await ws.close(4001)
-                if payload.get("type") == "close-and-send":
-                    await ws.send_media(payload)
-            case "boom":
-                error = RuntimeError("live WebSocket handler failed")
-                self._recorder.handler_errors.append(error)
-                raise error
-            case "block":
-                self._recorder.block_started.set()
-                await asyncio.Event().wait()
-            case _:
-                pass
-
-    async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
-        """Remove the accepted socket and publish the final close code."""
-        del ws
-        self._recorder.disconnect_invocations += 1
-        conn_id = self._conn_id
-        if conn_id is None:
-            return
-        await self._manager.remove_connection(conn_id)
-        self._conn_id = None
-        self._recorder.disconnect_records.append((conn_id, close_code))
-        self._recorder.disconnect_events[conn_id].set()
-
-
-class RejectingResource(WebSocketResource):
-    """Reject before acceptance so no session cleanup can be promised."""
-
-    def __init__(
-        self, *, recorder: DisconnectRecorder, close_on_connect: bool = False
-    ) -> None:
-        self._recorder = recorder
-        self._close_on_connect = close_on_connect
-
-    async def on_connect(
-        self,
-        req: falcon.Request,
-        ws: WebSocketLike,
-        **params: object,
-    ) -> bool:
-        """Reject before acceptance, optionally closing the handshake first."""
-        del req, params
-        if self._close_on_connect:
-            await ws.close()
-        return False
-
-    async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
-        """Record any cleanup that a rejected handshake must never receive."""
-        del ws, close_code
-        self._recorder.disconnect_invocations += 1
-        self._recorder.rejected_disconnects += 1
-
-
-@dc.dataclass(slots=True)
-class LiveApplication:
-    """Application pieces shared by the live server and BDD assertions."""
-
-    app: falcon.asgi.App[falcon.asgi.Request, falcon.asgi.Response]
-    router: WebSocketRouter
-    manager: WebSocketConnectionManager
-    recorder: DisconnectRecorder
-
-
-def create_live_application() -> LiveApplication:
-    """Build Falcon with a router mounted on the exact and catch-all paths."""
-    app: falcon.asgi.App[falcon.asgi.Request, falcon.asgi.Response] = falcon.asgi.App()
-    manager = WebSocketConnectionManager()
-    recorder = DisconnectRecorder()
-    router = WebSocketRouter(receive_loop=True)
-    router.add_route(
-        "/session",
-        RecordingResource,
-        manager=manager,
-        recorder=recorder,
-    )
-    router.add_route("/reject", RejectingResource, recorder=recorder)
-    router.add_route(
-        "/reject-close", RejectingResource, recorder=recorder, close_on_connect=True
-    )
-    router.add_route(
-        "/accept-close",
-        RecordingResource,
-        manager=manager,
-        recorder=recorder,
-        close_on_connect=True,
-    )
-    prefix = "/ws"
-    router.mount(prefix)
-    app.add_route(prefix, router)
-    app.add_route(prefix + "/{pachinko_path:path}", router)
-    return LiveApplication(app, router, manager, recorder)
 
 
 class SignalFreeServer(uvicorn.Server):

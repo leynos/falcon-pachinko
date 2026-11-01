@@ -1,4 +1,11 @@
-"""Cancellation-safe cleanup and failure policy for routed sessions."""
+"""Run shielded disconnect cleanup and apply session failure precedence.
+
+The session driver uses this module after accepted setup or receive work, and
+``WebSocketSession.aclose()`` reuses it for manually managed sessions. The
+cleanup task claims the single disconnect guard, attempts both hook stages,
+and keeps the primary session failure ahead of cleanup failures while
+preserving bare cancellation.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +15,7 @@ import contextvars
 import logging
 import typing as typ
 
-from ._observability import _observe_lifecycle, _observe_operation
+from ._observability import _LifecycleOptions, _observe_lifecycle, _observe_operation
 from ._session import (
     MAX_CLOSE_CODE,
     SessionState,
@@ -74,7 +81,12 @@ async def _cleanup_session(context: SessionDriverContext) -> tuple[BaseException
     with (
         _observe_operation(logger, "disconnect") as log_observation,
         _observe_lifecycle(
-            context.observer, "cleanup", failure_category="cleanup"
+            context.observer,
+            "cleanup",
+            options=_LifecycleOptions(
+                failure_category="cleanup",
+                monotonic_clock=context.monotonic_clock,
+            ),
         ) as observation,
     ):
         try:

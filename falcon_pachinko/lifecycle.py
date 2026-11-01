@@ -9,14 +9,11 @@ import enum
 import typing as typ
 import warnings
 
-import falcon
-
-from ._disconnect import _PeerDisconnectedError
-from ._observability import _observe_lifecycle
+from ._observability import _LifecycleOptions, _observe_lifecycle
 from ._session import _report_session_failure, _wait_for_shielded_task
 from ._session_context import SessionDriverContext
 from ._session_driver import finalize_session, run_session
-from ._session_socket import _accept_arguments
+from ._session_socket import _accept_arguments, _peer_disconnect_error
 
 if typ.TYPE_CHECKING:
     from ._session import SessionState
@@ -70,6 +67,7 @@ class LifecycleGuard:
         "_accepting",
         "_close_code",
         "_close_started",
+        "_monotonic_clock",
         "_observer",
         "_phase",
         "_session",
@@ -82,6 +80,7 @@ class LifecycleGuard:
         session: SessionState,
         *,
         observer: LifecycleObserver | None = None,
+        monotonic_clock: cabc.Callable[[], float] | None = None,
     ) -> None:
         """Guard one transport and retain its optional lifecycle observer.
 
@@ -93,9 +92,12 @@ class LifecycleGuard:
             Shared exactly-once disconnect state for this connection.
         observer : LifecycleObserver or None, default=None
             Optional synchronous host metrics and tracing adapter.
+        monotonic_clock : collections.abc.Callable or None, default=None
+            Guarded monotonic clock used for lifecycle observation durations.
         """
         self._websocket = websocket
         self._observer = observer
+        self._monotonic_clock = monotonic_clock
         self._session = session
         self._phase = ConnectionPhase.PRE_ACCEPT
         self._accepting = False
@@ -159,7 +161,12 @@ class LifecycleGuard:
         self._accepting = True
         try:
             with _observe_lifecycle(
-                self._observer, "acceptance", failure_category="transport"
+                self._observer,
+                "acceptance",
+                options=_LifecycleOptions(
+                    failure_category="transport",
+                    monotonic_clock=self._monotonic_clock,
+                ),
             ) as observation:
                 try:
                     await self._accept_transport(options)
@@ -323,8 +330,11 @@ class LifecycleGuard:
         """Record the peer close state when a receive operation disconnects."""
         try:
             return await operation
-        except (falcon.WebSocketDisconnected, _PeerDisconnectedError) as exc:
-            self._record_disconnect(exc)
+        except Exception as error:
+            disconnect = _peer_disconnect_error(error)
+            if disconnect is None:
+                raise
+            self._record_disconnect(disconnect)
             raise
 
     async def _run_transport(
@@ -400,6 +410,7 @@ class WebSocketSession:
         self._session_state = context.session_state
         self._params = dict(context.params)
         self._observer = context.observer
+        self._monotonic_clock = context.monotonic_clock
         self._instrumentation_run = context.instrumentation_run
         self._run_task: asyncio.Task[object] | None = None
         self._run_completion: asyncio.Future[BaseException | None] | None = None
@@ -451,7 +462,11 @@ class WebSocketSession:
         """Run the driver and publish completion inside its observation span."""
         run_error: BaseException | None = None
         with _observe_lifecycle(
-            self._observer, span_name="falcon_pachinko.websocket.session"
+            self._observer,
+            options=_LifecycleOptions(
+                span_name="falcon_pachinko.websocket.session",
+                monotonic_clock=self._monotonic_clock,
+            ),
         ) as observation:
             try:
                 await run_session(self._driver_context(), self._finalize)
@@ -551,6 +566,7 @@ class WebSocketSession:
             primary_error=primary_error,
             finalization_error=finalization_error,
             observer=self._observer,
+            monotonic_clock=self._monotonic_clock,
             instrumentation_run=self._instrumentation_run,
         )
 

@@ -11,10 +11,8 @@ import asyncio
 import contextlib
 import typing as typ
 
-import falcon
-
 from ._disconnect import _PeerDisconnectedError
-from ._observability import _observe_lifecycle
+from ._observability import _LifecycleOptions, _observe_lifecycle
 from ._session import (
     ABNORMAL_CLOSURE,
     INTERNAL_ERROR,
@@ -24,7 +22,7 @@ from ._session_cleanup import (
     raise_session_failures,
     run_shielded_cleanup,
 )
-from ._session_socket import receive_frame
+from ._session_socket import _peer_disconnect_error, receive_frame
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -57,8 +55,11 @@ def _observe_session_operation(
     with _observe_lifecycle(
         context.observer,
         operation,
-        span_name=span_name,
-        failure_category=failure_category,
+        options=_LifecycleOptions(
+            span_name=span_name,
+            failure_category=failure_category,
+            monotonic_clock=context.monotonic_clock,
+        ),
     ) as observation:
         try:
             yield observation
@@ -228,7 +229,7 @@ async def _receive_session_body(
     while hook_manager.can_receive(dispatch.ws):
         try:
             raw = await receive_frame(dispatch.ws)
-        except (falcon.WebSocketDisconnected, _PeerDisconnectedError) as exc:
+        except _PeerDisconnectedError as exc:
             session.peer_disconnected = True
             if session.close_code is None:
                 session.close_code = _effective_disconnect_code(exc)
@@ -255,10 +256,10 @@ def _record_session_ending(
     session: SessionState, error: BaseException
 ) -> BaseException | None:
     """Distinguish a transport ending from an unexpected session failure."""
-    if isinstance(error, (falcon.WebSocketDisconnected, _PeerDisconnectedError)):
+    if (disconnect := _peer_disconnect_error(error)) is not None:
         session.peer_disconnected = True
         if session.close_code is None:
-            session.close_code = _effective_disconnect_code(error)
+            session.close_code = _effective_disconnect_code(disconnect)
         return None
     session.primary_error = error
     return error

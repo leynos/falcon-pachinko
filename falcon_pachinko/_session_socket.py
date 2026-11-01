@@ -14,6 +14,8 @@ import falcon
 import falcon.asgi
 import msgspec.json as msjson
 
+from ._disconnect import _PeerDisconnectedError
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
@@ -36,6 +38,18 @@ def _accept_arguments(
     if headers is not None:
         kwargs["headers"] = headers
     return kwargs
+
+
+def _peer_disconnect_error(error: BaseException) -> _PeerDisconnectedError | None:
+    """Translate Falcon's transport signal into the framework-neutral form."""
+    match error:
+        case _PeerDisconnectedError() as disconnect:
+            return disconnect
+        case falcon.WebSocketDisconnected() as disconnect:
+            code = getattr(disconnect, "code", None)
+            return _PeerDisconnectedError(code if type(code) is int else None)
+        case _:
+            return None
 
 
 class SessionWebSocket:
@@ -220,11 +234,21 @@ def track_session_socket(ws: WebSocketLike, session: SessionState) -> WebSocketL
 async def receive_frame(ws: WebSocketLike) -> str | bytes:
     """Keep native frames raw and adapt injected media-only transports."""
     receive_payload = getattr(ws, "_receive_payload", None)
-    media = (
-        await typ.cast("cabc.Callable[[], cabc.Awaitable[object]]", receive_payload)()
-        if callable(receive_payload)
-        else await ws.receive_media()
-    )
+    try:
+        media = (
+            await typ.cast(
+                "cabc.Callable[[], cabc.Awaitable[object]]", receive_payload
+            )()
+            if callable(receive_payload)
+            else await ws.receive_media()
+        )
+    except Exception as error:
+        disconnect = _peer_disconnect_error(error)
+        if disconnect is None:
+            raise
+        if disconnect is error:
+            raise
+        raise disconnect from error
     return media if isinstance(media, str | bytes) else msjson.encode(media)
 
 

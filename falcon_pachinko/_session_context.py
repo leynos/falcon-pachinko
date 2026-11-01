@@ -61,4 +61,5 @@ class SessionDriverContext:
     primary_error: BaseException | None = None
     finalization_error: BaseException | None = None
     observer: LifecycleObserver | None = None
+    monotonic_clock: cabc.Callable[[], float] | None = None
     instrumentation_run: _SessionInstrumentationRun | None = None

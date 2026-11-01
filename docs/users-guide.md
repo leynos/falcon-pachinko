@@ -162,16 +162,17 @@ app.add_route("/ws", RouterAdapter(router))
 app.add_route("/ws/{rest:path}", RouterAdapter(router))
 ```
 
-- The router is mounted once (`router.mount("/ws")`). In Falcon, register it
-  both at the exact prefix and at one descendant route ending in
-  `/{pachinko_path:path}` so it receives descendant paths. The router matches
-  using the concrete request path.
+- The router is mounted once (`router.mount("/ws")`). The example registers a
+  `RouterAdapter` at `/ws` and `/ws/{rest:path}` so it receives both the exact
+  prefix and descendant paths; the router matches using the concrete request
+  path.
 - `on_connect` runs before router acceptance. Return `True` to ask the router
   to accept, or return a falsey value to reject the connection.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
-- The router accepts approved connections, runs `on_session_start()`, then
-  receives and dispatches frames sequentially until the session ends.
+- With `receive_loop=True`, the router accepts approved connections, runs
+  `on_session_start()`, then receives and dispatches frames sequentially until
+  the session ends.
 
 ### The `add_route` signature
 
@@ -263,14 +264,6 @@ point has enabled raw-frame handling.
   - Override via `get_child_context()` to supply a custom state store (e.g.,
     Redis-backed proxy).
 
-For an attached router, `attach()` installs pass-through TEXT and BINARY
-deserializers in the application's shared `ws_options.media_handlers` mapping.
-For a manually mounted router, call `configure_raw_frame_media(app)` before
-Falcon constructs WebSockets. Both configure all WebSocket routes on the app,
-warn when replacing customized inbound handlers, and preserve the configured
-outgoing serializers. Falcon's default handlers decode input when neither entry
-point has enabled raw-frame handling.
-
 For either receive mode, native Falcon sockets passed to lifecycle hooks,
 message hooks, and handlers such as `on_unhandled` use a forwarding adapter
 that implements `WebSocketLike`. This means
@@ -287,7 +280,7 @@ The effective close code passed to `on_disconnect` follows this table:
 | Handler or server calls `close(code)`      | Requested code; `1000` if omitted; reported code or `1006` if already closed |
 | Transport loss without a close frame       | `1006`                                                                       |
 | Task cancellation without a reported code  | `1001`; close attempted if transport is open                                 |
-| Approval succeeds without acceptance       | `1006`; no WebSocket close frame can be sent                                 |
+| Approval without completed acceptance      | `1000`; close attempted when possible; no `on_disconnect` callback           |
 | Failure after acceptance on an open socket | `1011`; close attempted                                                      |
 | Handler failure after code-less loss       | `1006`; transport is already closed                                          |
 
@@ -303,16 +296,13 @@ code (`1000` when omitted). This keeps a concurrent receive from replacing the
 server's selected code with the peer's close-handshake response. A failed close
 rolls back that provisional code unless the transport reports a completed
 close. If the transport was already closed before the attempt, its reported
-code is used, with `1006` when none is available. For other endings, Falcon's
-reported code is used, with `1006` when no code is available. Setup failures
-before the cleanup promise point do not run `on_disconnect`; failures after
-approval or acceptance do. An approved but unaccepted connection is cleaned up
-with `1006`, since the handshake has no established WebSocket on which to send
-a close frame. A previously reported socket close code is retained if the
-handler then fails. If the transport is already closed without a code, cleanup
-uses `1006` and does not try to close it again. The router runs
-`before_disconnect` before the callback and guards both against later receive
-dispatch. Cleanup runs in a shielded task and has no timeout, so
+code is used, with `1006` when none is available. An approved connection whose
+transport never completes acceptance attempts a code-`1000` handshake close
+when possible and does not call `on_disconnect()`. A previously reported socket
+close code is retained if the handler then fails. If the transport is already
+closed without a code, cleanup uses `1006` and does not try to close it again.
+The router runs `before_disconnect` before the callback and guards both against
+later receive dispatch. Cleanup runs in a shielded task and has no timeout, so
 `on_disconnect` must terminate. A lone failure propagates unchanged; multiple
 ordinary failures form a primary-first `ExceptionGroup`. Cancellation remains a
 bare `CancelledError`, and cleanup errors suppressed by cancellation are sent
@@ -321,7 +311,28 @@ to the event loop's exception handler.
 `resource.has_router_session` is true while the router owns lifecycle work,
 including connection setup. Use it to leave accepted-session membership removal
 to `on_disconnect`; it does not itself establish the cleanup promise. That
-promise begins only after `on_connect` approves or the socket is accepted.
+promise begins only after transport acceptance completes.
+
+### Optional lifecycle metrics and tracing
+
+Assign an application-owned `LifecycleObserver` to `router.lifecycle_observer`
+before serving requests. Its synchronous `start_span()` and
+`record_operation()` callbacks adapt the router to the host's metrics and
+tracing system. The default is `None`, and Falcon-Pachinko requires no
+telemetry SDK or exporter.
+
+The observer receives immutable `LifecycleObservationEvent` values for the six
+operations `negotiation`, `acceptance`, `session_start`, `receive_termination`,
+`finalization`, and `cleanup`. Each event has an outcome, nonnegative duration,
+failure category, and close-code category. Spans use the fixed names
+`falcon_pachinko.websocket.negotiation`, `falcon_pachinko.websocket.session`,
+and `falcon_pachinko.websocket.finalization`, with immutable
+`LifecycleSpanResult` values. Categories are bounded; raw close codes,
+application data, and exception values are not labels. Callback failures are
+isolated from session behaviour. Configure the router's guarded
+`monotonic_clock` through `configure_session_instrumentation()` to use the same
+clock for lifecycle durations. See `falcon_pachinko.observability` for the
+protocol and event types.
 
 ### Optional session instrumentation
 

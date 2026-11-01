@@ -7,7 +7,7 @@ import dataclasses as dc
 
 import pytest
 
-from falcon_pachinko._observability import _observe_lifecycle
+from falcon_pachinko._observability import _LifecycleOptions, _observe_lifecycle
 from falcon_pachinko.unittests._lifecycle_observer_fixtures import (
     _FailingObserver,
     _observed_router,
@@ -15,6 +15,21 @@ from falcon_pachinko.unittests._lifecycle_observer_fixtures import (
     _RecordingObserver,
 )
 from falcon_pachinko.unittests.helpers import DummyWS, make_req
+
+
+def test_absent_observer_does_not_read_the_configured_clock() -> None:
+    """An unconfigured observer leaves the host clock completely untouched."""
+
+    def fail_if_read() -> float:
+        """Fail if disabled observation invokes its optional clock."""
+        pytest.fail("disabled lifecycle observation read the clock")
+
+    with _observe_lifecycle(
+        None,
+        "cleanup",
+        options=_LifecycleOptions(monotonic_clock=fail_if_read),
+    ):
+        pass
 
 
 def test_cancellation_overrides_a_previously_returned_observation_failure() -> None:
@@ -27,7 +42,9 @@ def test_cancellation_overrides_a_previously_returned_observation_failure() -> N
         with _observe_lifecycle(
             observer,
             "cleanup",
-            span_name="falcon_pachinko.websocket.finalization",
+            options=_LifecycleOptions(
+                span_name="falcon_pachinko.websocket.finalization"
+            ),
         ) as observation:
             observation.record_failure(ValueError("private cleanup detail"), "cleanup")
             raise cancellation

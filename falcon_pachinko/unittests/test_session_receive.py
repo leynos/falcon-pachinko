@@ -9,6 +9,7 @@ import falcon
 import falcon.asgi
 import pytest
 
+from falcon_pachinko._disconnect import _PeerDisconnectedError
 from falcon_pachinko._session import SessionState
 from falcon_pachinko._session_socket import SessionWebSocket, receive_frame
 from falcon_pachinko.hooks import HookCollection, HookEvent, HookManager
@@ -118,7 +119,7 @@ async def test_not_ready_native_socket_preserves_buffered_frame() -> None:
     assert await receive_frame(session_socket) == '{"type":"queued"}', (
         "a frame queued before disconnect must reach resource dispatch"
     )
-    with pytest.raises(falcon.WebSocketDisconnected) as raised:
+    with pytest.raises(_PeerDisconnectedError) as raised:
         await receive_frame(session_socket)
     assert raised.value.code == 4000, "the queued disconnect code must be retained"
 

@@ -19,7 +19,7 @@ import typing as typ
 import falcon
 import falcon.asgi
 
-from ._observability import _observe_lifecycle
+from ._observability import _LifecycleOptions, _observe_lifecycle
 from ._route_support import (
     _CompiledRoute,
     _normalize_path,
@@ -113,7 +113,7 @@ class WebSocketRouter(_RouterResolutionMixin):
         name: str | None = None,
         resource_factory: ResourceFactory | None = None,
         simulator_factory: SimulatorFactory | None = None,
-        receive_loop: bool = False,
+        receive_loop: bool = True,
     ) -> None:
         """Create a router and configure its resource factories.
 
@@ -125,9 +125,9 @@ class WebSocketRouter(_RouterResolutionMixin):
             Optional factory used to create routed resources.
         simulator_factory : SimulatorFactory or None, default=None
             Optional factory used by simulator routing.
-        receive_loop : bool, default=False
-            If true, run the accepted session through disconnect cleanup. By
-            default, return after accepted setup and hand later reception and
+        receive_loop : bool, default=True
+            If true, run the accepted session through disconnect cleanup. Set
+            false to return after accepted setup and hand later reception and
             cleanup to the application.
         """
         self._raw: list[_RawRoute] = []
@@ -436,7 +436,10 @@ class WebSocketRouter(_RouterResolutionMixin):
         del params
         with self._mount_lock:
             self._session_started = True
-        preparation = _ConnectionPreparation(observer=self._lifecycle_observer)
+        preparation = _ConnectionPreparation(
+            observer=self._lifecycle_observer,
+            monotonic_clock=self._session_clock,
+        )
         instrumentation_run = start_session_instrumentation(
             preparation.session,
             self._session_instrumentation,
@@ -446,7 +449,10 @@ class WebSocketRouter(_RouterResolutionMixin):
         with _observe_lifecycle(
             preparation.observer,
             "negotiation",
-            span_name="falcon_pachinko.websocket.negotiation",
+            options=_LifecycleOptions(
+                span_name="falcon_pachinko.websocket.negotiation",
+                monotonic_clock=self._session_clock,
+            ),
         ) as observation:
             try:
                 self._validate_mount_template(req)

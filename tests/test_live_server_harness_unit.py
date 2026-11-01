@@ -11,7 +11,11 @@ from types import SimpleNamespace
 import pytest
 import uvicorn
 
-from tests.behaviour import _live_server, _router_live_server
+from tests.behaviour import (
+    _live_lifecycle_app,
+    _live_server,
+    _router_live_server,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -226,7 +230,9 @@ def test_live_server_preserves_test_runner_signal_handlers(
 
     monkeypatch.setattr(signal, "signal", record_signal)
     server = _router_live_server._SignalFreeServer(
-        uvicorn.Config(_live_server.create_live_application().app, lifespan="off")
+        uvicorn.Config(
+            _live_lifecycle_app.create_live_application().app, lifespan="off"
+        )
     )
     with server.capture_signals():
         assert not calls, "server startup must leave pytest signal ownership alone"
@@ -351,10 +357,10 @@ async def test_stop_reports_session_join_timeout_inside_caller_exception(
 @pytest.mark.asyncio
 async def test_live_server_retains_supplied_application_metadata() -> None:
     """The application factory is called once and its bundle stays observable."""
-    application = _live_server.create_live_application()
-    calls: list[_live_server.LiveApplication] = []
+    application = _live_lifecycle_app.create_live_application()
+    calls: list[_live_lifecycle_app.LiveApplication] = []
 
-    def make_application() -> _live_server.LiveApplication:
+    def make_application() -> _live_lifecycle_app.LiveApplication:
         calls.append(application)
         return application
 

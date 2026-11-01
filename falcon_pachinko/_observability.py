@@ -135,13 +135,21 @@ class _LifecycleObservation:
         self.close_code_category = _close_code_category(code)
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _LifecycleOptions:
+    """Keep optional host adapters and operation classification together."""
+
+    span_name: LifecycleSpanName | None = None
+    failure_category: LifecycleFailureCategory = "other"
+    monotonic_clock: cabc.Callable[[], float] | None = None
+
+
 @contextlib.contextmanager
 def _observe_lifecycle(
     observer: LifecycleObserver | None,
     operation: LifecycleOperation | None = None,
     *,
-    span_name: LifecycleSpanName | None = None,
-    failure_category: LifecycleFailureCategory = "other",
+    options: _LifecycleOptions | None = None,
 ) -> cabc.Iterator[_LifecycleObservation]:
     """Complete bounded metrics and spans without changing lifecycle policy.
 
@@ -159,11 +167,16 @@ def _observe_lifecycle(
         yield observation
         return
 
-    observation.started = time.monotonic()
+    options = _LifecycleOptions() if options is None else options
+    clock = (
+        time.monotonic if options.monotonic_clock is None else options.monotonic_clock
+    )
+    if operation is not None:
+        observation.started = clock()
     span: LifecycleSpan | None = None
-    if span_name is not None:
+    if options.span_name is not None:
         with contextlib.suppress(Exception, asyncio.CancelledError):
-            span = observer.start_span(span_name)
+            span = observer.start_span(options.span_name)
     try:
         yield observation
     except BaseException as error:
@@ -171,37 +184,27 @@ def _observe_lifecycle(
             isinstance(error, asyncio.CancelledError)
             or observation.outcome == "succeeded"
         ):
-            observation.record_failure(error, failure_category)
+            observation.record_failure(error, options.failure_category)
         raise
     finally:
-        _complete_lifecycle_observation(observer, operation, span, observation)
-
-
-def _complete_lifecycle_observation(
-    observer: LifecycleObserver,
-    operation: LifecycleOperation | None,
-    span: LifecycleSpan | None,
-    observation: _LifecycleObservation,
-) -> None:
-    """Publish immutable completion data through isolated host callbacks."""
-    if operation is not None:
-        event = LifecycleObservationEvent(
-            operation=operation,
-            outcome=observation.outcome,
-            duration_seconds=max(0.0, time.monotonic() - observation.started),
-            failure_category=observation.failure_category,
-            close_code_category=observation.close_code_category,
-        )
-        with contextlib.suppress(Exception, asyncio.CancelledError):
-            observer.record_operation(event)
-    if span is not None:
-        result = LifecycleSpanResult(
-            outcome=observation.outcome,
-            failure_category=observation.failure_category,
-            close_code_category=observation.close_code_category,
-        )
-        with contextlib.suppress(Exception, asyncio.CancelledError):
-            span.finish(result)
+        if operation is not None:
+            event = LifecycleObservationEvent(
+                operation=operation,
+                outcome=observation.outcome,
+                duration_seconds=max(0.0, clock() - observation.started),
+                failure_category=observation.failure_category,
+                close_code_category=observation.close_code_category,
+            )
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                observer.record_operation(event)
+        if span is not None:
+            result = LifecycleSpanResult(
+                outcome=observation.outcome,
+                failure_category=observation.failure_category,
+                close_code_category=observation.close_code_category,
+            )
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                span.finish(result)
 
 
 def _close_code_category(code: int | None) -> LifecycleCloseCodeCategory:
