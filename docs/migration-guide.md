@@ -68,6 +68,30 @@ check. There the configuration `TypeError` propagates during dispatch instead
 of reaching `on_unhandled`; it is deliberately not converted into a bad-frame
 fallback, which would disguise a broken schema as a malformed message.
 
+## Schema-mode unknown fields
+
+Schema dispatch now rejects undeclared top-level fields before converting a
+message to its Struct. Previously the frame was decoded straight into the
+schema union, and `msgspec` silently discarded any field the selected Struct
+did not declare, so a strict handler ran on a message that violated its
+no-extra-fields contract. The dispatcher now decodes the frame generically,
+resolves the member from its tag, validates the retained object, and only then
+converts it.
+
+- A message with an extra top-level field now reaches `on_unhandled` with the
+  original frame. Remove the extra field from the sender, or declare it on the
+  Struct.
+- `@handles_message(..., strict=False)` keeps one meaning in both envelope and
+  schema modes: undeclared top-level fields are ignored and lax coercion is
+  allowed. A Struct declared with `forbid_unknown_fields=True` still rejects
+  extras.
+- A field renamed with `rename="camel"` must arrive under its encoded wire
+  name (`camelCase`). The Python attribute name is not accepted on the wire.
+- Nested Structs keep their own `forbid_unknown_fields` setting; the
+  framework's check is shallow.
+- A schema member declared with `array_like=True` has no keyed tag on the wire
+  and is now rejected with a `TypeError` at class definition.
+
 ## Reserved lifecycle handlers
 
 The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are reserved:
@@ -283,7 +307,9 @@ registration or mounting, before the route can handle a connection.
   raising `ValueError` on duplicate IDs and ignoring stale room entries in
   `snapshot` or documenting alternative semantics.
 - When migrating message handlers, ensure schema tags match incoming payloads;
-  extra fields are rejected unless `strict=False` is used on `@handles_message`.
+  extra fields are rejected unless `strict=False` is used on
+  `@handles_message`. This now applies to schema mode too, where extras were
+  previously discarded before validation.
 - Keep every member of a `schema` on the same tag kind. Mixing string and
   integer tags now raises `TypeError` at class definition rather than failing
   on the first frame; see *Schema tag kinds* above.
