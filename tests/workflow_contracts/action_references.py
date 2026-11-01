@@ -1,4 +1,10 @@
-"""Read and validate every action and reusable workflow reference."""
+"""Read and validate action references across workflows and composites.
+
+``action_references`` traverses reusable-workflow jobs, workflow steps and
+composite-action steps through ``WorkflowSource`` and
+``ActionManifestSource``. ``validate_reference`` accepts local references,
+digest-pinned Docker actions and lowercase full-commit SHAs.
+"""
 
 from __future__ import annotations
 

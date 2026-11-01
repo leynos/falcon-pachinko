@@ -1,4 +1,10 @@
-"""Prove action reference contracts reject mutable and malformed declarations."""
+"""Verify immutable action references and fail-closed source readers.
+
+These pytest tests exercise ``validate_reference`` and ``action_references``
+with temporary workflow and composite-action manifests, then check every
+repository workflow and action manifest. Hypothesis strategies cover generated
+full SHAs and mutable reference forms.
+"""
 
 from __future__ import annotations
 
