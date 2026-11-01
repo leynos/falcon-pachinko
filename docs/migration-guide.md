@@ -186,9 +186,11 @@ router.attach(app)
 - `on_session_start(ws)` runs after acceptance and before frame reception. Move
   sends, receives, and active connection registration here.
 - The router dispatches frames in order and attempts `on_disconnect()` once for
-  each accepted session. Missing peer codes use `1006`; cancellation closes with
-  `1001`; unexpected receive or handler failures close with `1011` and
-  propagate after cleanup.
+  each accepted session. Missing peer codes use `1006`. Cancellation preserves
+  an already selected or reported code; otherwise it selects `1001` and attempts
+  a best-effort close on the accepted transport. It propagates
+  `CancelledError` after cleanup. Unexpected receive or handler failures close
+  with `1011` and propagate after cleanup.
 
 `router.attach()` also enables raw TEXT and BINARY input for all WebSocket
 routes on the app, preserving its outgoing serializers. For manually mounted

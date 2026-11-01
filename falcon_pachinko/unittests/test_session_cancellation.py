@@ -136,7 +136,20 @@ def test_generated_repeated_cancellation_waits_for_same_cleanup_task(
 
 async def _exercise_repeated_cancellation(repetitions: int) -> None:
     """Hold disconnect cleanup while delivering a bounded cancellation burst."""
-    router = make_session_router()
+
+    class CancellationRecordingResource(RecordingResource):
+        def __init__(self) -> None:
+            super().__init__()
+            self.disconnect_cancelled = False
+
+        async def on_disconnect(self, ws: object, close_code: int) -> None:
+            try:
+                await super().on_disconnect(ws, close_code)
+            except asyncio.CancelledError:
+                self.disconnect_cancelled = True
+                raise
+
+    router = make_session_router(CancellationRecordingResource)
     socket = SessionSocket(block_receive=True)
     task = asyncio.create_task(
         router.on_websocket(
@@ -144,7 +157,9 @@ async def _exercise_repeated_cancellation(repetitions: int) -> None:
         )
     )
     await socket.receive_started.wait()
-    resource = RecordingResource.instances[0]
+    resource = typ.cast(
+        "CancellationRecordingResource", CancellationRecordingResource.instances[0]
+    )
     resource.wait_in_disconnect = True
 
     task.cancel()
@@ -158,6 +173,7 @@ async def _exercise_repeated_cancellation(repetitions: int) -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
     assert resource.disconnect_codes == [1001], _ASSERTION_FAILURE
+    assert not resource.disconnect_cancelled, _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio

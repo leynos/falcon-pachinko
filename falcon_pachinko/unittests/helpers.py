@@ -97,7 +97,15 @@ class DummyWS:
         subprotocol: str | None = None,
         headers: cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None = None,
     ) -> None:  # pragma: no cover
-        """Accept the WebSocket handshake and record its options."""
+        """Accept once and retain the handshake options.
+
+        Parameters
+        ----------
+        subprotocol : str or None, optional
+            Requested WebSocket subprotocol, by default None.
+        headers : Mapping[str, str] or Iterable[tuple[str, str]] or None, optional
+            Handshake headers recorded in ``accept_calls``, by default None.
+        """
         if self._accepted or self._closed:
             return
         self.accepted.append(subprotocol)
@@ -109,7 +117,15 @@ class DummyWS:
     async def close(
         self, code: int | None = 1000, reason: str | None = None
     ) -> None:  # pragma: no cover
-        """Close once and retain the transport's effective close code."""
+        """Close once and retain the transport's effective close code.
+
+        Parameters
+        ----------
+        code : int or None, optional
+            Close code to retain, defaulting to 1000.
+        reason : str or None, optional
+            Close reason. The stub ignores this value, by default None.
+        """
         del reason
         if self._closed:
             return

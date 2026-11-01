@@ -751,6 +751,7 @@ works with the production reference app.
 
 ```python
 # app.py
+import asyncio
 import falcon.asgi
 import falcon_pachinko as pachinko
 from falcon_pachinko import WorkerController, worker
@@ -762,13 +763,12 @@ conn_mgr = pachinko.install(app)
 # 1. Define workers as ordinary async functions with explicit dependencies
 @worker
 async def announcement_worker(
-    conn_mgr: pachinko.WebSocketConnectionManager,
+    conn_mgr: falcon_pachinko.WebSocketConnectionManager,
 ) -> None:
     """Broadcasts a heartbeat message to all sockets every 30s."""
     while True:
-        await conn_mgr.broadcast_to_all(
-            {"type": "ping"},
-        )  # Assuming a broadcast_to_all method
+        async for websocket in conn_mgr.connections():
+            await websocket.send_media({"type": "ping"})
         await asyncio.sleep(30)
 
 

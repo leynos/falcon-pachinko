@@ -336,7 +336,8 @@ class WebSocketResource:
         after the ``before_disconnect`` hooks. This includes cleanup when
         ``on_session_start`` or message handling fails. A peer close code is
         passed through, or 1006 when the peer code is unavailable. Cancellation
-        before disconnect cleanup starts closes with 1001 and passes 1001 here.
+        before disconnect cleanup starts selects 1001 and attempts a best-effort
+        close on the accepted transport, then passes 1001 here.
         Unexpected receive or handler failures close with 1011 and pass 1011
         here. These failures propagate after cleanup.
 

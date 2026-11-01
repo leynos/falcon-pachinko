@@ -134,7 +134,7 @@ def _assert_event_sequence(
 @given("a router with multi-tier hooks")
 def given_router(context: dict[str, typ.Any]) -> None:
     """Prepare a router with global and resource hooks."""
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.global_hooks.add("before_connect", global_hook)
     router.global_hooks.add("after_connect", global_hook)
     router.global_hooks.add("before_receive", global_hook)
@@ -161,7 +161,7 @@ def given_router(context: dict[str, typ.Any]) -> None:
 @given("a router with only global hooks")
 def given_router_global_only(context: dict[str, typ.Any]) -> None:
     """Prepare a router that only registers global hooks."""
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.global_hooks.add("before_connect", global_hook)
     router.global_hooks.add("after_connect", global_hook)
     router.global_hooks.add("before_receive", global_hook)
@@ -180,10 +180,35 @@ def _connect_client(
     router: WebSocketRouter = context["router"]
     ws = DummyWS(frames)
     req = make_req("/hooks/child")
-    asyncio.run(router.on_websocket(req, ws))
+    previous_child_count = len(HookedChild.instances)
+    try:
+        asyncio.run(router.on_websocket(req, ws))
+    except BaseException:
+        if len(HookedChild.instances) > previous_child_count:
+            child = HookedChild.instances[-1]
+            if hasattr(child, "params"):
+                context["child_params"] = child.params
+        raise
     child = HookedChild.instances[-1]
     context["child_params"] = child.params
     return child, ws
+
+
+def test_connect_client_preserves_original_exception_without_child() -> None:
+    """A missing child must not hide the router's original failure."""
+    failure = RuntimeError("route construction failed")
+
+    class FailingRouter:
+        async def on_websocket(self, req: object, ws: object) -> None:
+            del req, ws
+            raise failure
+
+    context = {"router": typ.cast("WebSocketRouter", FailingRouter())}
+    HookedChild.instances.clear()
+    with pytest.raises(RuntimeError) as captured:
+        _connect_client(context)
+
+    assert captured.value is failure, "the original routing error must be preserved"
 
 
 def _record_hook_observations(context: dict[str, typ.Any]) -> None:
@@ -324,7 +349,7 @@ def then_error_propagates(context: dict[str, typ.Any]) -> None:
 def test_connect_client_preserves_original_setup_error(failure_stage: str) -> None:
     """Missing observation state must never mask a router setup failure."""
     failure = LookupError("setup failed")
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
 
     def create_child() -> HookedChild:
         if failure_stage == "factory":

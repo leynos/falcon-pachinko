@@ -87,18 +87,55 @@ class AcceptanceCountingWebSocket:
         await self._websocket.accept(subprotocol=subprotocol, headers=headers)
 
     async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
+        """Forward closure to Falcon's native socket.
+
+        Parameters
+        ----------
+        code : int or None
+            Close code forwarded to Falcon.
+        reason : str or None
+            Close reason forwarded to Falcon.
+        """
         await self._websocket.close(code, reason)
 
     async def send_media(self, media: object) -> None:
+        """Forward a structured frame to Falcon's native socket.
+
+        Parameters
+        ----------
+        media : object
+            Frame payload forwarded to Falcon.
+        """
         await self._websocket.send_media(media)
 
     async def send_text(self, message: str) -> None:
+        """Forward a text frame to Falcon's native socket.
+
+        Parameters
+        ----------
+        message : str
+            Text payload forwarded to Falcon.
+        """
         await self._websocket.send_text(message)
 
     async def receive_media(self) -> object:
+        """Receive one frame from Falcon's native socket.
+
+        Returns
+        -------
+        object
+            The received frame payload.
+        """
         return await self._websocket.receive_media()
 
     async def receive_text(self) -> str:
+        """Receive one text frame from Falcon's native socket.
+
+        Returns
+        -------
+        str
+            The received text payload.
+        """
         return await self._websocket.receive_text()
 
 
@@ -237,6 +274,22 @@ class RejectingResource(WebSocketResource):
         ws: WebSocketLike,
         **params: object,
     ) -> bool:
+        """Admit connections carrying the configured session metadata.
+
+        Parameters
+        ----------
+        req : falcon.Request
+            Incoming request inspected for the session token.
+        ws : WebSocketLike
+            Socket closed when the scenario requests pre-accept closure.
+        **params : object
+            Router path parameters, unused by this fixture.
+
+        Returns
+        -------
+        bool
+            Whether the request includes an ``x-session-token`` header.
+        """
         del params
         if self._close_on_connect:
             await ws.close()
@@ -249,6 +302,15 @@ class RejectingResource(WebSocketResource):
         self._recorder.connection_ready.set()
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+        """Record cleanup for admitted sessions or unexpected rejected cleanup.
+
+        Parameters
+        ----------
+        ws : WebSocketLike
+            Accepted socket, unused by this recorder.
+        close_code : int
+            Effective close code supplied to the cleanup callback.
+        """
         del ws
         conn_id = self._conn_id
         if conn_id is None:
@@ -295,20 +357,61 @@ class LifecycleChildResource(RecordingResource):
         ws: WebSocketLike,
         **params: object,
     ) -> bool:
+        """Accept the child connection and record its lifecycle event.
+
+        Parameters
+        ----------
+        req : falcon.Request
+            Incoming request, unused by this fixture.
+        ws : WebSocketLike
+            Accepted socket, unused during the decision.
+        **params : object
+            Captured nested-route parameters, unused by this fixture.
+
+        Returns
+        -------
+        bool
+            Always true for this child resource.
+        """
         del req, ws, params
         self._recorder.events.append("child.on_connect")
         return True
 
     async def on_session_start(self, ws: WebSocketLike) -> None:
+        """Record the child session start and register it with the parent.
+
+        Parameters
+        ----------
+        ws : WebSocketLike
+            Accepted socket passed to the parent lifecycle hook.
+        """
         self._recorder.events.append("child.on_session_start")
         await super().on_session_start(ws)
 
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record and process an unhandled frame in the child resource.
+
+        Parameters
+        ----------
+        ws : WebSocketLike
+            Accepted socket passed to the parent handler.
+        message : str or bytes
+            Raw frame dispatched to the child.
+        """
         self._recorder.events.append("child.dispatch")
         await super().on_unhandled(ws, message)
         self._recorder.message_processed.set()
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+        """Record child cleanup before delegating to the parent resource.
+
+        Parameters
+        ----------
+        ws : WebSocketLike
+            Accepted socket passed to the parent cleanup hook.
+        close_code : int
+            Effective close code passed to the parent cleanup hook.
+        """
         self._recorder.events.append("child.on_disconnect")
         await super().on_disconnect(ws, close_code)
 

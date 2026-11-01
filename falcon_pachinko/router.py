@@ -506,33 +506,6 @@ class WebSocketRouter(_RouterResolutionMixin):
             msg = f"route template '{template}' does not match router mount '{mount}'"
             raise falcon.HTTPNotFound(description=msg)
 
-    async def _try_route(
-        self, route: _CompiledRoute, req: _RequestLike, ws: WebSocketLike
-    ) -> bool:
-        """Attempt one route and run its accepted session when it matches."""
-        match = self._validate_and_normalize_path(route, req)
-        if match is None:
-            return False
-        preparation = _ConnectionPreparation(observer=self._lifecycle_observer)
-        dispatch = _Dispatch(
-            route=route,
-            req=typ.cast("falcon.Request", req),
-            ws=ws,
-            match=match,
-            session=preparation.session,
-        )
-        session = await execute_route_with_error_handling(self, dispatch, preparation)
-        if session is not None:
-            if self._receive_loop:
-                await session.run()
-            else:
-                session._hand_off_to_application()
-        elif not dispatch.matched:
-            websocket = preparation.websocket
-            if websocket is not None and websocket.phase is ConnectionPhase.PRE_ACCEPT:
-                await websocket.close()
-        return dispatch.matched
-
     def _setup_hook_management(
         self, chain: list[WebSocketResource], session: SessionState
     ) -> HookManager:
@@ -542,12 +515,3 @@ class WebSocketRouter(_RouterResolutionMixin):
         for item in chain:
             item.bind_hook_manager(manager)
         return manager
-
-    async def _instantiate_resource(
-        self,
-        route_factory: cabc.Callable[..., WebSocketResource],
-        ws: WebSocketLike,
-    ) -> WebSocketResource:
-        """Instantiate a resource; the route pipeline owns failure cleanup."""
-        del ws
-        return self._resource_factory(route_factory)

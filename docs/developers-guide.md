@@ -534,7 +534,7 @@ being deferred to connection dispatch.
 captured parameters into `params`.
 
 `_Dispatch` is a mutable, per-connection-attempt bundle of `route`, `req`,
-`ws`, and `match`. It is built once in `_try_route` and threaded through
+`ws`, and `match`. It is built once in `_negotiate_route` and threaded through
 `_execute_route_with_error_handling`, resource and subroute resolution, hook
 notification (`_prepare_connection_context` fires `before_connect`;
 `_finalize_connection`, and `_execute_resource_handler` on error, fire
@@ -546,7 +546,7 @@ rather than requiring `route`, `req`, `ws`, `params`, and `remaining` to be
 threaded positionally through each helper.
 
 `req` is cast to `falcon.Request` at the point `_Dispatch` is constructed in
-`_try_route`, consistent with the cast-at-the-edge policy described above.
+`_negotiate_route`, consistent with the cast-at-the-edge policy described above.
 
 ## Live WebSocket acceptance tests
 
@@ -625,18 +625,20 @@ Explicit registration takes precedence: dispatch looks up the exact envelope
 stays legal for a distinct method; see §3.6 of the
 [design document](falcon-websocket-extension-design.md).
 
-## Router-owned WebSocket sessions
+## WebSocket receive ownership
 
 After route resolution and connection hooks, `WebSocketRouter` calls
-`on_connect()` and `after_connect`, accepts the connection, then awaits the
-selected session inline. `WebSocketSession.run()` calls `on_session_start()`
-and repeatedly receives one frame, adapts decoded values to raw JSON frames
-when needed, and awaits `WebSocketResource.dispatch()` before reading the next
-frame. It creates no per-frame tasks. The selected child resource, bound hook
-manager, injected services, and connection-scoped state proxy are the same
-objects prepared for connection setup. The router owns this lifecycle for
-ordinary Falcon routing; manual callers can use `negotiate()` and retain the
-session handle themselves.
+`on_connect()` and `after_connect`, then accepts the connection. By default,
+`receive_loop=False` returns after accepted setup and hands later reception and
+cleanup to the application. Set `receive_loop=True` when the router should run
+the accepted session inline. In that mode, `WebSocketSession.run()` calls
+`on_session_start()` and repeatedly receives one frame, adapts decoded values
+to raw JSON frames when needed, and awaits `WebSocketResource.dispatch()` before
+reading the next frame. It creates no per-frame tasks. The selected child
+resource, bound hook manager, injected services, and connection-scoped state
+proxy are the same objects prepared for connection setup. Manual callers can
+use `negotiate()` to retain the session handle and choose when to run or close
+it.
 
 Falcon may decode incoming media before `receive_media()` returns it, so the
 receive loop does not itself guarantee exact raw TEXT or BINARY input.

@@ -98,7 +98,7 @@ async def test_router_global_hooks_wrap_lifecycle() -> None:
             context.params["injected"] = True
         events.append(f"global.{context.event}")
 
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.global_hooks.add("before_connect", global_hook)
     router.global_hooks.add("after_connect", global_hook)
     router.global_hooks.add("before_receive", global_hook)
@@ -667,20 +667,27 @@ async def test_router_uses_falcons_uri_template_for_mounted_route() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("path", "expected"),
+    ("path", "matches"),
     [("/ok", True), ("/oops", False)],
     ids=["matching_path", "unmatched_path"],
 )
-async def test_try_route(path: str, *, expected: bool) -> None:
-    """_try_route should report whether the path matched its route."""
+async def test_negotiate_matches_registered_path(path: str, *, matches: bool) -> None:
+    """Public negotiation accepts a matching route and rejects an unmatched path."""
     router = WebSocketRouter()
     router.add_route("/ok", AcceptingResource)
     router.mount("/")
-    route = router._routes[0]
-
     req = make_req(path, "/")
-    handled = await router._try_route(route, req, DummyWS())
-    assert handled is expected, f"_try_route should return {expected} for path {path!r}"
+    ws = DummyWS()
+
+    if not matches:
+        with pytest.raises(falcon.HTTPNotFound):
+            await router.negotiate(req, ws)
+        return
+
+    session = await router.negotiate(req, ws)
+    assert session is not None, "matching route should return an accepted session"
+    assert ws.accepted, "matching route should accept its WebSocket"
+    await session.aclose()
 
 
 @pytest.mark.asyncio
