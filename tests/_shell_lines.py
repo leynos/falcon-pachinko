@@ -22,7 +22,7 @@ SHELL_HEREDOC_PART = re.compile(
 )
 
 
-SHELL_QUOTED_TEXT = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+SHELL_QUOTED_TEXT = re.compile(r"\\.|'[^']*'|\"(?:\\.|[^\"\\])*\"")
 
 
 SHELL_COMMAND_SUBSTITUTION = re.compile(r"\$\((?!\()")
@@ -60,17 +60,23 @@ def logical_lines(text: str) -> list[tuple[int, str]]:
     fragments: list[str] = []
     pending_heredocs: list[tuple[str, bool, int]] = []
     start_line = 1
+    continues_from_previous = False
 
     for line_number, line in enumerate(text.splitlines(), start=1):
         if _skip_shell_line(line, fragments, pending_heredocs):
             continue
         if not fragments:
             start_line = line_number
-        if not _append_shell_fragment(line, fragments):
+        elif not continues_from_previous:
+            fragments.append(" ")
+        continues_from_previous = _append_shell_fragment(
+            line, fragments, previously_continued=continues_from_previous
+        )
+        if not continues_from_previous:
             _finish_logical_line(fragments, start_line, logical_lines, pending_heredocs)
 
     if fragments:
-        logical_lines.append((start_line, " ".join(fragments)))
+        logical_lines.append((start_line, "".join(fragments)))
     _raise_for_unterminated_heredocs(pending_heredocs)
     return logical_lines
 
@@ -106,13 +112,18 @@ def _skip_shell_line(
     return not fragments and line.lstrip().startswith("#")
 
 
-def _append_shell_fragment(line: str, fragments: list[str]) -> bool:
+def _append_shell_fragment(
+    line: str, fragments: list[str], *, previously_continued: bool = False
+) -> bool:
     """Append a physical line and report whether its shell continuation remains open."""
     stripped = line.rstrip()
     trailing_backslashes = len(stripped) - len(stripped.rstrip("\\"))
     contains_comment = _strip_shell_comment(line) != line
     continues = trailing_backslashes % 2 == 1 and not contains_comment
-    fragments.append(stripped[:-1].strip() if continues else line.strip())
+    fragment = stripped[:-1] if continues else line
+    if not previously_continued and not continues:
+        fragment = fragment.strip()
+    fragments.append(fragment)
     return continues
 
 
@@ -123,7 +134,7 @@ def _finish_logical_line(
     pending_heredocs: list[tuple[str, bool, int]],
 ) -> None:
     """Store a complete shell line or retain it while a quote remains open."""
-    logical_line = " ".join(fragments)
+    logical_line = "".join(fragments)
     if _has_incomplete_shell_quote(logical_line):
         return
     logical_lines.append((start_line, logical_line))

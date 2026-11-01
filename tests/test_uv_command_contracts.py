@@ -355,6 +355,15 @@ def test_command_scanner_uses_odd_backslashes_for_line_continuation(
     )
 
 
+@pytest.mark.parametrize("script", ["u\\\nv sync", "uv \\\nsync"])
+def test_command_scanner_preserves_text_across_backslash_newline(script: str) -> None:
+    """A shell backslash-newline removes itself but retains adjacent text."""
+    assert unlocked_project_commands(script) == [(1, "uv sync")], (
+        "the scanner must preserve command text and whitespace across an "
+        "escaped physical newline"
+    )
+
+
 @given(
     command_prefix=st.sampled_from([
         (),
@@ -500,6 +509,17 @@ def test_command_scanner_fails_closed_on_quoted_command_substitutions() -> None:
 @pytest.mark.parametrize("script", ["echo `uv sync`", r"echo \\`uv sync`"])
 def test_command_scanner_fails_closed_on_backtick_substitutions(script: str) -> None:
     """An active backtick substitution must not hide a project call."""
+    with pytest.raises(
+        ShellCommandSyntaxError,
+        match=r"Unsupported backtick command substitution at shell line 1",
+    ):
+        unlocked_project_commands(script)
+
+
+def test_command_scanner_detects_backticks_after_escaped_single_quotes() -> None:
+    """Escaped single quotes are literal, so their backticks remain active."""
+    script = r"echo \'`uv sync`\'"
+
     with pytest.raises(
         ShellCommandSyntaxError,
         match=r"Unsupported backtick command substitution at shell line 1",
