@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses as dc
 import functools
 import inspect
+import types
 import typing as typ
 
 import msgspec as ms
@@ -179,7 +180,10 @@ def schema_dispatch(schema: type) -> SchemaDispatch:
     return SchemaDispatch(
         tag_field=tag_field,
         tag_kind=type(members_info[0].tag),
-        members=members,
+        # The dispatch table is shared by every resource using this schema, so
+        # expose it read-only: mutating one caller's view would corrupt
+        # dispatch for all of them.
+        members=types.MappingProxyType(members),
     )
 
 
@@ -204,6 +208,37 @@ def requires_strict_validation(
 ) -> typ.TypeGuard[dict[str, typ.Any]]:
     """Return ``True`` when ``payload`` needs strict validation."""
     return strict and isinstance(payload, dict) and issubclass(payload_type, ms.Struct)
+
+
+@functools.cache
+def _allowed_wire_keys(payload_type: type) -> frozenset[str] | None:
+    """Return the keys a strict frame may declare for ``payload_type``.
+
+    ``msinspect.type_info`` walks the whole type graph, and schema mode now
+    validates every strict frame, so the key set is computed once per Struct
+    rather than once per message.
+
+    Parameters
+    ----------
+    payload_type : type
+        The declared type of a handler's payload.
+
+    Returns
+    -------
+    frozenset[str] | None
+        The encoded wire names plus the tag field, or ``None`` when
+        ``payload_type`` is not a Struct and therefore has no such contract.
+    """
+    info = msinspect.type_info(payload_type)
+    if not isinstance(info, msinspect.StructType):
+        return None
+    # Compare wire names, not Python attribute names: ``rename`` changes what
+    # a valid frame may contain. The tag field travels beside the fields, so it
+    # is a declared key too.
+    allowed = {field.encode_name for field in info.fields}
+    if info.tag_field is not None:
+        allowed.add(info.tag_field)
+    return frozenset(allowed)
 
 
 def validate_strict_payload(
@@ -233,14 +268,8 @@ def validate_strict_payload(
     """  # ruff: ignore[docstring-extraneous-exception] - raised by raise_unknown_fields
     if not requires_strict_validation(payload, payload_type, strict=strict):
         return
-    info = msinspect.type_info(payload_type)
-    if not isinstance(info, msinspect.StructType):
+    allowed = _allowed_wire_keys(payload_type)
+    if allowed is None:
         return
-    # Compare wire names, not Python attribute names: ``rename`` changes what
-    # a valid frame may contain. The tag field travels beside the fields, so it
-    # is a declared key too.
-    allowed = {field.encode_name for field in info.fields}
-    if info.tag_field is not None:
-        allowed.add(info.tag_field)
     if extra := set(payload) - allowed:
         raise_unknown_fields(extra, expected_type=payload_type)

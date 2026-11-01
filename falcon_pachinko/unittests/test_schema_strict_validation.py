@@ -327,13 +327,13 @@ async def test_schema_strict_false_ignores_extra_field() -> None:
 
 @pytest.mark.asyncio
 async def test_schema_unknown_tag_after_generic_decode_calls_fallback() -> None:
-    """A decoded but unrecognised tag reaches the fallback with the raw frame."""
+    """A decoded but unrecognized tag reaches the fallback with the raw frame."""
     r = SchemaResource()
     r.bind_default_hook_manager()
     raw = msjson.encode({"type": "oops", "room": "x"})
     await r.dispatch(DummyWS(), raw)
     assert r.events == [("raw", raw)], (
-        "an unrecognised tag must fall back with the original frame"
+        "an unrecognized tag must fall back with the original frame"
     )
 
 

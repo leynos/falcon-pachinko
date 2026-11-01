@@ -162,6 +162,36 @@ async def dispatch(
         await dispatch_with_envelope(resource, ws, raw)
 
 
+def _decode_schema_frame(raw: str | bytes) -> dict[str, object] | None:
+    """Decode ``raw`` to a JSON object, or return ``None`` when it is not one.
+
+    Returning from inside the ``except`` suite keeps the vendor decode error out
+    of ``__context__``: callers fall back outside it, so no application error is
+    raised while that exception is being handled. The decode error can quote
+    the frame, so it must not be chained to a reply.
+
+    Parameters
+    ----------
+    raw : str | bytes
+        The received frame.
+
+    Returns
+    -------
+    dict[str, object] | None
+        The decoded JSON object, or ``None`` when the frame is malformed or is
+        not a JSON object.
+    """
+    try:
+        payload = msjson.decode(raw)
+    except (ms.DecodeError, ms.ValidationError):
+        return None
+    match payload:
+        case dict():
+            return typ.cast("dict[str, object]", payload)
+        case _:
+            return None
+
+
 async def dispatch_with_schema(
     resource: WebSocketResource, ws: WebSocketLike, raw: str | bytes
 ) -> None:
@@ -177,18 +207,8 @@ async def dispatch_with_schema(
     to ``on_unhandled``. A configuration ``TypeError`` from an invalid schema
     propagates instead.
     """
-    # Fall back outside the ``except`` suite: raising there would chain the
-    # vendor decode error into an application failure as ``__context__``, and
-    # the decode error can quote the frame.
-    failed = False
-    try:
-        payload: object = msjson.decode(raw)
-    except (ms.DecodeError, ms.ValidationError):
-        failed = True
-    if failed:
-        await resource.on_unhandled(ws, raw)
-        return
-    if not isinstance(payload, dict):
+    payload = _decode_schema_frame(raw)
+    if payload is None:
         await resource.on_unhandled(ws, raw)
         return
 
