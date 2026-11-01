@@ -38,7 +38,8 @@ def create_live_application() -> LiveApplication:
     manager = WebSocketConnectionManager()
     recorder = DisconnectRecorder()
     router = WebSocketRouter(
-        simulator_factory=lambda _req, ws: AcceptanceCountingWebSocket(ws, recorder)
+        simulator_factory=lambda _req, ws: AcceptanceCountingWebSocket(ws, recorder),
+        receive_loop=True,
     )
     _add_live_routes(router, manager, recorder)
     _add_global_hooks(router, recorder)

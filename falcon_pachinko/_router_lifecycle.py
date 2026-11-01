@@ -12,7 +12,7 @@ import falcon
 
 from ._router_resources import _ResourceResolver
 from ._session import SessionPhase, SessionState
-from ._session_driver import SessionDriverContext
+from ._session_context import SessionDriverContext
 from ._session_socket import track_session_socket
 from .lifecycle import AcceptOptions, ConnectionPhase, LifecycleGuard, WebSocketSession
 
@@ -21,9 +21,9 @@ if typ.TYPE_CHECKING:
     import re
 
     from ._route_support import _RouteMatch
+    from ._session_instrumentation import _SessionInstrumentationRun
     from .hooks import HookContext, HookManager
     from .observability import LifecycleObserver
-    from ._session_instrumentation import _SessionInstrumentationRun
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
 

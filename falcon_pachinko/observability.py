@@ -438,6 +438,10 @@ class LifecycleObserver(typ.Protocol):
 
 
 __all__ = (
+    "CloseCodeCategory",
+    "Counter",
+    "Duration",
+    "ExceptionCategory",
     "LifecycleCloseCodeCategory",
     "LifecycleFailureCategory",
     "LifecycleObservationEvent",
@@ -447,10 +451,6 @@ __all__ = (
     "LifecycleSpan",
     "LifecycleSpanName",
     "LifecycleSpanResult",
-    "CloseCodeCategory",
-    "Counter",
-    "Duration",
-    "ExceptionCategory",
     "NoOpSessionInstrumentation",
     "Operation",
     "Outcome",

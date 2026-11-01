@@ -90,10 +90,8 @@ class SessionWebSocket:
             "cabc.Callable[..., cabc.Awaitable[None]]", self._websocket.accept
         )
         was_closed = self.closed
-        succeeded = False
         try:
             await accept(**kwargs)
-            succeeded = True
         finally:
             # Missing state is initially unknown. Only a completed accept call
             # provides acceptance evidence when the transport has no probe.

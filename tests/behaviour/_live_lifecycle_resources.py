@@ -34,6 +34,7 @@ class DisconnectRecorder:
         self.decoded_media: list[object] = []
         self.events: list[str] = []
         self.accept_calls = 0
+        self.disconnect_invocations = 0
         self.before_disconnect_errors: list[BaseException | None] = []
         self.connection_ready = asyncio.Event()
         self.message_processed = asyncio.Event()
@@ -238,6 +239,7 @@ class RecordingResource(WebSocketResource):
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Remove the accepted socket and publish the final close code."""
         del ws
+        self._recorder.disconnect_invocations += 1
         conn_id = self._conn_id
         self._conn_id = None
         if conn_id is None:
@@ -302,6 +304,7 @@ class RejectingResource(WebSocketResource):
             Effective close code supplied to the cleanup callback.
         """
         del ws
+        self._recorder.disconnect_invocations += 1
         conn_id = self._conn_id
         if conn_id is None:
             self._recorder.rejected_disconnects += 1

@@ -292,7 +292,11 @@ class SimulatorRouterHarness:
     @staticmethod
     def _retrieve_task_exception(router_task: asyncio.Task[None] | None) -> None:
         """Retrieve a completed session error not consumed by ``aclose``."""
-        if router_task is None or not router_task.done() or router_task.cancelled():
+        if router_task is None:
+            return
+        if not router_task.done():
+            return
+        if router_task.cancelled():
             return
         router_task.exception()
 
@@ -347,31 +351,54 @@ class SimulatorRouterHarness:
     ) -> None:
         """Wait until routing accepts, closes, or fails before yielding."""
         readiness_task = asyncio.create_task(simulator.ready_event.wait())
-        waiters: set[asyncio.Future[typ.Any]] = {readiness_task}
-        if router_task is not None:
-            waiters.add(router_task)
         try:
-            done, _ = await asyncio.wait(
-                waiters,
-                timeout=_STARTUP_READY_TIMEOUT,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if not done:
-                msg = "router did not accept or reject the simulated connection"
-                raise TimeoutError(msg)
-            if router_task is not None and router_task in done:
-                router_task.result()
-            if simulator.closed and router_task is not None and router_task.done():
-                router_task.result()
+            await SimulatorRouterHarness._wait_for_startup(readiness_task, router_task)
         finally:
             readiness_task.cancel()
             with suppress(asyncio.CancelledError):
                 await readiness_task
-        if simulator.closed and router_task is not None and router_task.done():
-            await asyncio.wait_for(
-                asyncio.shield(router_task), timeout=_STARTUP_READY_TIMEOUT
-            )
+        await SimulatorRouterHarness._wait_for_closed_router(simulator, router_task)
 
+    @staticmethod
+    async def _wait_for_startup(
+        readiness_task: asyncio.Task[bool],
+        router_task: asyncio.Task[None] | None,
+    ) -> None:
+        """Wait for readiness or router termination, preserving router errors."""
+        waiters: set[asyncio.Future[typ.Any]] = {readiness_task}
+        if router_task is not None:
+            waiters.add(router_task)
+        done, _ = await asyncio.wait(
+            waiters,
+            timeout=_STARTUP_READY_TIMEOUT,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if not done:
+            msg = "router did not accept or reject the simulated connection"
+            raise TimeoutError(msg)
+        if router_task is None:
+            return
+        if router_task in done:
+            router_task.result()
+
+    @staticmethod
+    async def _wait_for_closed_router(
+        simulator: _HarnessSimulator,
+        router_task: asyncio.Task[None] | None,
+    ) -> None:
+        """Finish a router task that closed before readiness was signalled."""
+        if not simulator.closed:
+            return
+        if router_task is None:
+            return
+        if router_task.done():
+            router_task.result()
+            return
+        await asyncio.wait_for(
+            asyncio.shield(router_task), timeout=_STARTUP_READY_TIMEOUT
+        )
+
+    @staticmethod
     async def _await_router_task(router_task: asyncio.Task[None]) -> None:
         """Await session completion and cancel it if teardown exceeds timeout."""
         try:

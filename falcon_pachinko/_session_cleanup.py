@@ -4,17 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import dataclasses as dc
 import contextvars
 import logging
 import typing as typ
 
 from ._observability import _observe_lifecycle, _observe_operation
-from ._session_instrumentation import (
-    _SessionInstrumentationRun,
-    finish_cleanup_instrumentation,
-    start_cleanup_instrumentation,
-)
 from ._session import (
     MAX_CLOSE_CODE,
     SessionState,
@@ -22,35 +16,22 @@ from ._session import (
     _wait_for_shielded_task,
     effective_close_code,
 )
+from ._session_instrumentation import (
+    finish_cleanup_instrumentation,
+    start_cleanup_instrumentation,
+)
 from .hooks import HookContext, HookEvent
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from ._session_driver import SessionConnection
-    from .hooks import HookManager
-    from .observability import LifecycleObserver
-    from .resource import WebSocketResource
+    from ._session_context import SessionDriverContext
 
 logger = logging.getLogger(__name__)
 
 
-@dc.dataclass(slots=True)
-class CleanupContext:
-    """Inputs shared by the cancellation-safe cleanup task."""
-
-    resource: WebSocketResource
-    dispatch: SessionConnection
-    hook_manager: HookManager
-    session: SessionState
-    params: dict[str, object]
-    primary_error: BaseException | None
-    observer: LifecycleObserver | None = None
-    instrumentation_run: _SessionInstrumentationRun | None = None
-
-
 async def run_shielded_cleanup(
-    context: CleanupContext,
+    context: SessionDriverContext,
 ) -> tuple[tuple[BaseException, ...], tuple[asyncio.CancelledError, ...]]:
     """Finish one cleanup task even if its caller receives more cancellation."""
     cleanup_task = asyncio.create_task(
@@ -71,7 +52,7 @@ async def run_shielded_cleanup(
 
 
 async def _collect_cleanup_failures(
-    context: CleanupContext,
+    context: SessionDriverContext,
 ) -> tuple[BaseException, ...]:
     """Keep unexpected housekeeping errors within the session failure policy."""
     # A cancelled shield may independently report an inner task's exception.
@@ -82,9 +63,9 @@ async def _collect_cleanup_failures(
         return (exc,)
 
 
-async def _cleanup_session(context: CleanupContext) -> tuple[BaseException, ...]:
+async def _cleanup_session(context: SessionDriverContext) -> tuple[BaseException, ...]:
     """Close best-effort, notify both cleanup layers, then mark the session."""
-    session = context.session
+    session = context.session_state
     if not session.begin_disconnect():
         return ()
 
@@ -111,13 +92,15 @@ async def _cleanup_session(context: CleanupContext) -> tuple[BaseException, ...]
 
 
 async def _close_failed_session(
-    context: CleanupContext, failures: list[BaseException]
+    context: SessionDriverContext, failures: list[BaseException]
 ) -> int:
     """Choose the effective close code and close a failed session best-effort."""
     primary_error = context.primary_error
     recorded_code = getattr(context.dispatch.ws, "close_code", None)
-    close_code = effective_close_code(recorded_code, context.session, primary_error)
-    context.session.close_code = close_code
+    close_code = effective_close_code(
+        recorded_code, context.session_state, primary_error
+    )
+    context.session_state.close_code = close_code
     should_close = primary_error is not None and not isinstance(
         primary_error, asyncio.CancelledError
     )
@@ -130,7 +113,7 @@ async def _close_failed_session(
 
 
 async def _run_disconnect_hooks(
-    context: CleanupContext, close_code: int
+    context: SessionDriverContext, close_code: int
 ) -> tuple[BaseException, ...]:
     """Attempt both cleanup hooks and preserve every hook failure."""
     dispatch = context.dispatch
@@ -140,7 +123,7 @@ async def _run_disconnect_hooks(
         resource=None,
         req=dispatch.req,
         ws=dispatch.ws,
-        params=context.params,
+        params=dict(context.params),
         close_code=close_code,
         error=context.primary_error,
     )
@@ -173,67 +156,49 @@ def raise_session_failures(
     session: SessionState | None = None,
 ) -> None:
     """Apply primary-first exception precedence after cleanup has completed."""
-    if primary_error is not None:
-        _raise_primary_session_error(
-            primary_error, cleanup_failures, interruptions, session
-        )
-
     cancellation = _session_cancellation(primary_error, cleanup_failures, interruptions)
     if cancellation is not None:
         _report_cancelled_session_failures(
-            None, cleanup_failures, cancellation, session
+            primary_error, cleanup_failures, cancellation, session
         )
         raise cancellation
 
-    _raise_cleanup_failures(cleanup_failures)
+    _raise_uncancelled_session_failures(primary_error, cleanup_failures)
 
 
-def _raise_primary_session_error(
-    primary_error: BaseException,
+def _raise_uncancelled_session_failures(
+    primary_error: BaseException | None,
     cleanup_failures: tuple[BaseException, ...],
-    interruptions: tuple[asyncio.CancelledError, ...],
-    session: SessionState | None,
-) -> typ.NoReturn:
-    """Keep the original session error ahead of every finalization failure."""
-    if isinstance(primary_error, asyncio.CancelledError):
-        _report_cancelled_session_failures(
-            None, cleanup_failures, primary_error, session
-        )
-        raise primary_error
-    for failure in cleanup_failures:
-        _report_session_failure(
-            failure,
-            "WebSocket finalization failed after a session error",
-            suppress_handler_errors=True,
-        )
-    for interruption in interruptions:
-        _report_session_failure(
-            interruption,
-            "WebSocket finalization was cancelled after a session error",
-            suppress_handler_errors=True,
-        )
-    raise primary_error
-
-
-def _raise_cleanup_failures(cleanup_failures: tuple[BaseException, ...]) -> None:
-    """Propagate one cleanup error directly or group multiple failures."""
-    match cleanup_failures:
-        case ():
-            return
-        case (failure,):
-            raise failure
-        case _:
-            _raise_cleanup_failure_group(cleanup_failures)
-
-
-def _raise_cleanup_failure_group(
-    cleanup_failures: tuple[BaseException, ...],
-) -> typ.NoReturn:
-    """Use an ExceptionGroup unless a cleanup failure is a BaseException."""
-    if all(isinstance(failure, Exception) for failure in cleanup_failures):
-        exceptions = [typ.cast("Exception", failure) for failure in cleanup_failures]
+) -> None:
+    """Apply primary-first grouping after cancellation precedence is settled."""
+    failures = ([primary_error] if primary_error is not None else []) + list(
+        cleanup_failures
+    )
+    if not failures:
+        return
+    if len(failures) == 1:
+        raise failures[0]
+    if all(isinstance(failure, Exception) for failure in failures):
+        exceptions = [typ.cast("Exception", failure) for failure in failures]
         raise ExceptionGroup("session", exceptions)
-    raise BaseExceptionGroup("session", cleanup_failures)
+    _raise_base_exception_failures(primary_error, cleanup_failures, failures)
+
+
+def _raise_base_exception_failures(
+    primary_error: BaseException | None,
+    cleanup_failures: tuple[BaseException, ...],
+    failures: list[BaseException],
+) -> typ.NoReturn:
+    """Keep base exceptions primary while reporting secondary cleanup errors."""
+    if primary_error is not None and not isinstance(primary_error, Exception):
+        for failure in cleanup_failures:
+            _report_session_failure(
+                failure,
+                "WebSocket disconnect cleanup failed after a base exception",
+                suppress_handler_errors=True,
+            )
+        raise primary_error
+    raise BaseExceptionGroup("session", failures)
 
 
 def _session_cancellation(
@@ -290,8 +255,6 @@ def _report_cancelled_failure(
             "close_code": close_code,
             "exception_type": type(error).__name__,
         })
-        message = (
-            f"{message} (phase={session.phase.value}, close_code={close_code})"
-        )
+        message = f"{message} (phase={session.phase.value}, close_code={close_code})"
         details["message"] = message
         asyncio.get_running_loop().call_exception_handler(details)

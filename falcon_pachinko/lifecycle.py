@@ -14,13 +14,13 @@ import falcon
 from ._disconnect import _PeerDisconnectedError
 from ._observability import _observe_lifecycle
 from ._session import _report_session_failure, _wait_for_shielded_task
-from ._session_driver import SessionDriverContext, finalize_session, run_session
+from ._session_context import SessionDriverContext
+from ._session_driver import finalize_session, run_session
 from ._session_socket import _accept_arguments
 
 if typ.TYPE_CHECKING:
     from ._session import SessionState
     from .observability import LifecycleObserver
-    from ._session_instrumentation import _SessionInstrumentationRun
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
 
@@ -362,7 +362,9 @@ class LifecycleGuard:
     def _record_close_code_and_phase(self, code: int | None) -> None:
         """Keep the first observed close code and mark the lifecycle closed."""
         if self._close_code is None:
-            self._close_code = code
+            self._close_code = self._session.close_code
+            if self._close_code is None:
+                self._close_code = code
         if self._session.close_code is None:
             self._session.close_code = self._close_code
         self._phase = ConnectionPhase.CLOSED
@@ -433,24 +435,33 @@ class WebSocketSession:
             asyncio.get_running_loop().create_future()
         )
         self._run_completion = run_completion
-        context = self._driver_context()
         run_error: BaseException | None = None
         try:
-            with _observe_lifecycle(
-                self._observer, span_name="falcon_pachinko.websocket.session"
-            ) as observation:
-                try:
-                    await run_session(context, self._finalize)
-                except BaseException as error:
-                    run_error = error
-                    raise
-                finally:
-                    observation.set_close_code(self._session_state.close_code)
-                    if not run_completion.done():
-                        run_completion.set_result(run_error)
+            await self._run_with_observation(run_completion)
+        except BaseException as error:
+            run_error = error
+            raise
         finally:
             if self._instrumentation_run is not None:
                 self._instrumentation_run.finish(run_error)
+
+    async def _run_with_observation(
+        self, run_completion: asyncio.Future[BaseException | None]
+    ) -> None:
+        """Run the driver and publish completion inside its observation span."""
+        run_error: BaseException | None = None
+        with _observe_lifecycle(
+            self._observer, span_name="falcon_pachinko.websocket.session"
+        ) as observation:
+            try:
+                await run_session(self._driver_context(), self._finalize)
+            except BaseException as error:
+                run_error = error
+                raise
+            finally:
+                observation.set_close_code(self._session_state.close_code)
+                if not run_completion.done():
+                    run_completion.set_result(run_error)
 
     def _hand_off_to_application(self) -> None:
         """End setup-only telemetry when the application owns later work."""

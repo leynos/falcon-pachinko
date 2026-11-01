@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import falcon
 import typing as typ
 
+import falcon
 import msgspec.json as msjson
 import pytest
 from hypothesis import example, given
@@ -18,6 +18,7 @@ if typ.TYPE_CHECKING:
 
 
 _ASSERTION_FAILURE = "lifecycle expectation failed"
+
 
 @pytest.mark.asyncio
 async def test_accept_and_close_record_state() -> None:

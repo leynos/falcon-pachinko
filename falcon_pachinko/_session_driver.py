@@ -7,11 +7,8 @@ hook manager, while shielded cleanup preserves failure and cancellation policy.
 
 from __future__ import annotations
 
-import abc
 import asyncio
 import contextlib
-import dataclasses as dc
-import logging
 import typing as typ
 
 import falcon
@@ -20,80 +17,26 @@ from ._disconnect import _PeerDisconnectedError
 from ._observability import _observe_lifecycle
 from ._session import (
     ABNORMAL_CLOSURE,
-    GOING_AWAY,
     INTERNAL_ERROR,
     effective_close_code,
 )
-from ._session_instrumentation import _SessionInstrumentationRun
 from ._session_cleanup import (
-    CleanupContext,
     raise_session_failures,
     run_shielded_cleanup,
 )
 from ._session_socket import receive_frame
-from .diagnostics import _type_name
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from ._observability import _LifecycleObservation
     from ._session import SessionState
-    from .hooks import HookManager
-    from .lifecycle import LifecycleGuard
+    from ._session_context import SessionDriverContext
     from .observability import (
         LifecycleFailureCategory,
-        LifecycleObserver,
         LifecycleOperation,
         LifecycleSpanName,
     )
-    from .protocols import WebSocketLike
-    from .resource import WebSocketResource
-
-logger = logging.getLogger(__name__)
-
-
-class SessionRouteMatch(typ.Protocol):
-    """Route captures read by session setup without depending on router internals."""
-
-    @property
-    @abc.abstractmethod
-    def params(self) -> cabc.Mapping[str, str]:
-        """Captured URI parameters for the selected resource."""
-
-
-class SessionConnection(typ.Protocol):
-    """Request and socket fields shared by session execution and cleanup."""
-
-    req: falcon.Request
-    ws: WebSocketLike
-
-
-class SessionDispatch(SessionConnection, typ.Protocol):
-    """Mutable socket and lifecycle fields supplied by the routing pipeline."""
-
-    session: SessionState | None
-
-    @property
-    @abc.abstractmethod
-    def match(self) -> SessionRouteMatch:
-        """Selected route parameters consumed by the session driver."""
-
-
-@dc.dataclass(slots=True)
-class SessionDriverContext:
-    """Retain the values shared by session execution and finalization."""
-
-    resource: WebSocketResource
-    resources: tuple[WebSocketResource, ...]
-    websocket: LifecycleGuard
-    dispatch: SessionDispatch
-    session_state: SessionState
-    hook_manager: HookManager
-    params: cabc.Mapping[str, object]
-    primary_error: BaseException | None = None
-    finalization_error: BaseException | None = None
-    observer: LifecycleObserver | None = None
-    instrumentation_run: _SessionInstrumentationRun | None = None
 
 
 @contextlib.contextmanager
@@ -183,22 +126,36 @@ async def _close_after_session_error(
     """Close failed sessions with the code associated with their cause."""
     if error is None:
         return None
-
     if isinstance(error, asyncio.CancelledError):
-        close_code = effective_close_code(
-            context.websocket.close_code, context.session_state, error
+        return await _close_cancelled_session(context, error)
+    if context.websocket.closed:
+        context.session_state.close_code = effective_close_code(
+            context.websocket.close_code, context.session_state, None
         )
-        context.session_state.close_code = close_code
-        if not context.websocket.closed:
-            try:
-                await context.websocket.close(close_code)
-            except (Exception, asyncio.CancelledError) as close_error:
-                return close_error
         return None
-
     close_code = INTERNAL_ERROR
     if context.session_state.close_code is None:
         context.session_state.close_code = close_code
+    return await _attempt_session_close(context, close_code)
+
+
+async def _close_cancelled_session(
+    context: SessionDriverContext, error: asyncio.CancelledError
+) -> BaseException | None:
+    """Close a cancelled session with its effective cancellation code."""
+    close_code = effective_close_code(
+        context.websocket.close_code, context.session_state, error
+    )
+    context.session_state.close_code = close_code
+    if context.websocket.closed:
+        return None
+    return await _attempt_session_close(context, close_code)
+
+
+async def _attempt_session_close(
+    context: SessionDriverContext, close_code: int
+) -> BaseException | None:
+    """Return a close failure so the session precedence policy can handle it."""
     try:
         await context.websocket.close(close_code)
     except asyncio.CancelledError as close_error:
@@ -213,10 +170,6 @@ async def _handle_session_failure(
 ) -> tuple[BaseException | None, BaseException | None]:
     """Record a session failure and close using its lifecycle code."""
     primary_error = _record_session_ending(context.session_state, error)
-    if primary_error is not None and not isinstance(
-        primary_error, asyncio.CancelledError
-    ):
-        logger.error("WebSocket session failed: %s", _type_name(primary_error))
     finalization_error = await _close_after_session_error(context, primary_error)
     return primary_error, finalization_error
 
@@ -242,17 +195,7 @@ async def _finalize_session(
         recorded_code, session, context.primary_error
     )
 
-    cleanup_context = CleanupContext(
-        resource=context.resource,
-        dispatch=context.dispatch,
-        hook_manager=context.hook_manager,
-        session=session,
-        params=dict(context.params),
-        primary_error=context.primary_error,
-        observer=context.observer,
-        instrumentation_run=context.instrumentation_run,
-    )
-    cleanup_failures, interrupted = await run_shielded_cleanup(cleanup_context)
+    cleanup_failures, interrupted = await run_shielded_cleanup(context)
     failures = (
         (context.finalization_error,) if context.finalization_error is not None else ()
     ) + cleanup_failures
@@ -287,7 +230,8 @@ async def _receive_session_body(
             raw = await receive_frame(dispatch.ws)
         except (falcon.WebSocketDisconnected, _PeerDisconnectedError) as exc:
             session.peer_disconnected = True
-            session.close_code = _effective_disconnect_code(exc)
+            if session.close_code is None:
+                session.close_code = _effective_disconnect_code(exc)
             return
 
         # A close can be initiated by another task while receive_media is

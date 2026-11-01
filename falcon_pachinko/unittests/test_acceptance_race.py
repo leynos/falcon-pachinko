@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
+import falcon
 import pytest
 
 from falcon_pachinko._session import SessionState
@@ -53,6 +54,32 @@ class _SuspendedAcceptanceWebSocket:
         return ""
 
 
+class _ServerCloseRaceWebSocket(_SuspendedAcceptanceWebSocket):
+    """Expose a peer reply while a server close is still completing."""
+
+    def __init__(self, session: SessionState) -> None:
+        """Retain lifecycle state and coordinate close with receive."""
+        super().__init__()
+        self.unaccepted = False
+        self.session = session
+        self.close_started = asyncio.Event()
+        self.release_close = asyncio.Event()
+
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
+        """Publish the server code before awaiting the close handshake."""
+        del reason
+        if self.session.close_code is None:
+            self.session.close_code = 1000 if code is None else code
+        self.close_started.set()
+        await self.release_close.wait()
+        self.closed = True
+
+    async def receive_media(self) -> object:
+        """Report the default-code peer acknowledgement during server close."""
+        await self.close_started.wait()
+        raise falcon.WebSocketDisconnected(1000)
+
+
 @pytest.mark.asyncio
 async def test_overlapping_acceptance_reaches_transport_once() -> None:
     """A pending handshake reserves acceptance before yielding."""
@@ -100,3 +127,21 @@ async def test_overlapping_acceptance_reaches_transport_once() -> None:
         "only one acceptance may reach the transport while it is pending"
     )
     assert websocket.accept_calls == 1, "the transport must accept once"
+
+
+@pytest.mark.asyncio
+async def test_peer_close_reply_preserves_server_selected_close_code() -> None:
+    """A default peer reply cannot replace the server's selected close code."""
+    session = SessionState()
+    websocket = _ServerCloseRaceWebSocket(session)
+    guard = LifecycleGuard(websocket, session)
+
+    close_task = asyncio.create_task(guard.close(4002))
+    await websocket.close_started.wait()
+    with pytest.raises(falcon.WebSocketDisconnected):
+        await guard.receive_media()
+    websocket.release_close.set()
+    await close_task
+
+    assert session.close_code == 4002, "the session must retain its selected code"
+    assert guard.close_code == 4002, "the guard must retain its selected code"

@@ -33,9 +33,7 @@ class _DisconnectMarker:
     code: int
 
 
-class WebSocketSimulator(  # ruff: ignore[too-many-public-methods] -- harness waiter
-    _LifecycleSocket,
-):
+class WebSocketSimulator(_LifecycleSocket):
     """In-memory :class:`WebSocketLike` implementation for hermetic tests.
 
     Its public frame-count waiter keeps harnesses from reaching into the
@@ -96,7 +94,11 @@ class WebSocketSimulator(  # ruff: ignore[too-many-public-methods] -- harness wa
         await super().close(code, reason)
         # Keep queued inbound frames ahead of the disconnect notification. If
         # the queue is full, the closed-and-empty path reports the close later.
-        close_code = self.close_code if self.close_code is not None else code
+        close_code = self.close_code
+        if close_code is None:
+            close_code = code
+        if close_code is None:
+            close_code = 1000
         if not self._inbound.full():
             self._inbound.put_nowait(DisconnectSentinel(close_code))
 

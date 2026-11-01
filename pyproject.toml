@@ -426,10 +426,6 @@ reason = "The main-branch URI-template extraction moved these thin wrappers into
 unit = "falcon_pachinko/diagnostics.py"
 reason = "Nose reports the sequence and mapping opening-delimiter emissions as unnamed fragments in diagnostics.py. Their traversal contracts remain distinct: sequences preserve list or tuple shape, while mappings filter and normalize keys and account for omitted entries. A shared renderer would couple those output and budget rules for two one-line delimiters. The path-only key is required because the fragments have no unit names; it also covers future families within this file, which must be inspected rather than treated as blanket approval."
 
-[[tool.duplication_gate.allow]]
-members = ["falcon_pachinko/_router_attachment.py", "falcon_pachinko/_session_setup.py"]
-reason = "Nose reports these TYPE_CHECKING imports as unnamed fragments; each module needs independent annotation dependencies, and extracting them would add import-only coupling. Keep this exact pair reviewed rather than sharing runtime behavior."
-
 # Mutation testing. `make mutation` prints the local command; CI runs the
 # estate's reusable workflow, which injects the pinned mutmut through
 # `uv run --with` rather than declaring it as a project dependency.
@@ -446,8 +442,11 @@ reason = "send_text and send_json are distinct public operations with different 
 members = ["falcon_pachinko/_testing_harness.py::accept", "falcon_pachinko/_testing_harness.py::close"]
 reason = "The simulator harness must preserve separate accept and close protocol methods. Each signals readiness after its corresponding simulator transition, and _signal_ready_after already centralizes the shared behavior."
 [[tool.duplication_gate.allow]]
-members = ["falcon_pachinko/_session_cleanup.py", "falcon_pachinko/lifecycle.py"]
-reason = "Each module owns its TYPE_CHECKING imports for local annotations; sharing them would add coupling and risk import cycles."
+members = ["falcon_pachinko/_session_instrumentation.py", "falcon_pachinko/_session_socket.py"]
+reason = "Both are idiomatic early returns for distinct optional contracts: absent cleanup instrumentation is a no-op, and an omitted close code requires no validation. A shared guard helper would obscure these independent boundaries; keep this exact two-file fragment reviewed."
+[[tool.duplication_gate.allow]]
+members = ["falcon_pachinko/_observability.py", "falcon_pachinko/_session_driver.py", "falcon_pachinko/_router_lifecycle.py"]
+reason = "These modules need different type-only views of the public observer: _observability uses event and span types, _session_driver uses operation and failure literals, and _router_lifecycle annotates route dispatch. Centralizing these imports would add an import-only module and obscure each module’s type surface. Keep this exact unnamed-fragment family reviewed if any import block changes."
 [tool.mutmut]
 # Only the package is mutated. `tests/`, `tools/` and `examples/` would
 # produce mutants of the suite's own assertions and of lint tooling, and a

@@ -203,7 +203,7 @@ def create_live_application() -> LiveApplication:
     app: falcon.asgi.App[falcon.asgi.Request, falcon.asgi.Response] = falcon.asgi.App()
     manager = WebSocketConnectionManager()
     recorder = DisconnectRecorder()
-    router = WebSocketRouter()
+    router = WebSocketRouter(receive_loop=True)
     router.add_route(
         "/session",
         RecordingResource,

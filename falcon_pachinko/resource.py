@@ -26,6 +26,7 @@ if typ.TYPE_CHECKING:  # pragma: no cover - imported for type hints
     from .lifecycle import AcceptOptions
     from .protocols import WebSocketLike
 
+from ._session import SessionPhase
 from .dispatcher import dispatch
 from .exceptions import ReservedHandlerRegistrationError
 from .handlers import (
@@ -36,7 +37,6 @@ from .handlers import (
     is_lifecycle_callback,
 )
 from .hooks import HookCollection, HookManager
-from ._session import SessionPhase
 from .schema import populate_struct_handlers, validate_schema_types
 
 

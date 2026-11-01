@@ -78,9 +78,9 @@ handler, or `on_session_start()` exception closes the open socket with `1011`,
 then runs disconnect cleanup and propagates the original exception.
 Cancellation preserves an already selected close code; otherwise it selects
 `1001`, attempts to close the accepted transport, and propagates
-`CancelledError`. `on_disconnect()` is attempted
-exactly once for accepted sessions, including failures in `on_session_start()`
-or dispatch. `before_disconnect` hooks run first. Cleanup changes the phase to
+`CancelledError`. `on_disconnect()` is attempted exactly once for accepted
+sessions, including failures in `on_session_start()` or dispatch.
+`before_disconnect` hooks run first. Cleanup changes the phase to
 `DISCONNECTING`, preventing later receive hooks and handlers from starting, and
 runs in a shielded task without a timeout. An interrupted hook before
 `on_disconnect()` may be retried during cancellation cleanup; an interrupted
@@ -619,12 +619,12 @@ After route resolution and connection hooks, `WebSocketRouter` calls
 cleanup to the application. Set `receive_loop=True` when the router should run
 the accepted session inline. In that mode, `WebSocketSession.run()` calls
 `on_session_start()` and repeatedly receives one frame, adapts decoded values
-to raw JSON frames when needed, and awaits `WebSocketResource.dispatch()` before
-reading the next frame. It creates no per-frame tasks. The selected child
-resource, bound hook manager, injected services, and connection-scoped state
-proxy are the same objects prepared for connection setup. Manual callers can
-use `negotiate()` to retain the session handle and choose when to run or close
-it.
+to raw JSON frames when needed, and awaits `WebSocketResource.dispatch()`
+before reading the next frame. It creates no per-frame tasks. The selected
+child resource, bound hook manager, injected services, and connection-scoped
+state proxy are the same objects prepared for connection setup. Manual callers
+can use `negotiate()` to retain the session handle and choose when to run or
+close it.
 
 Falcon may decode incoming media before `receive_media()` returns it, so the
 receive loop does not itself guarantee exact raw TEXT or BINARY input.
@@ -638,9 +638,9 @@ used.
 
 An ordinary peer disconnect runs `before_disconnect` hooks and then attempts
 `on_disconnect(ws, peer_code)` once; a missing peer close code maps to 1006.
-Cancellation preserves a close code already selected by the handler, server,
-or transport. Otherwise the router selects 1001 and attempts a best-effort
-close while the accepted transport remains open. The shielded cleanup continues
+Cancellation preserves a close code already selected by the handler, server, or
+transport. Otherwise the router selects 1001 and attempts a best-effort close
+while the accepted transport remains open. The shielded cleanup continues
 through both cleanup stages and attempts `on_disconnect()` exactly once.
 Unexpected receive or handler exceptions close with 1011, run best-effort
 disconnect cleanup, and re-raise the original exception. Failure in
@@ -946,6 +946,13 @@ The repository's initial families were adjudicated as follows:
 | `_uri_template.py::compile_uri_template` and `_uri_template.py::_compile_prefix_template` | Retained as separate thin variants of the existing `_compile_template_with_suffix`: complete URI matching permits an optional trailing slash, while prefix matching enforces segment boundaries. The main-branch extraction changed the module path but not these contracts.                                                                                                                                                                                  | `falcon_pachinko/unittests/test_router.py::test_template_compilers_keep_complete_and_prefix_match_semantics` and `falcon_pachinko/unittests/test_uri_template.py` |
 | Unnamed fragments in `diagnostics.py`                                                     | The sequence and mapping code emits different opening delimiters. Sequence traversal preserves list or tuple shape; mapping traversal filters and normalizes keys and reports omitted entries. A shared renderer would couple their distinct output and budget rules. Nose supplies no unit names, so this exact path-only key also covers future fragments in the file; review them rather than treating the entry as blanket approval.                      | `tests/test_diagnostics_unit.py`                                                                                                                                  |
 | `_session.py` and `websocket.py` unnamed guard fragments                                  | Intentional. Nose reports both empty-list guards as unnamed fragments, so path-only keys are required. Session cleanup raises the first failure and annotates later failures; room broadcasting re-raises one failure or groups several. Sharing the guard would couple distinct error contracts. The exception covers only families located in both named modules; review any future matching family.                                                        | `falcon_pachinko/unittests/test_router_session.py` and `tests/test_connection_manager_unit.py`                                                                    |
+
+The lifecycle changes retain two additional, narrowly scoped fragment families:
+
+| Family                                                                                   | Decision and reason                                                                                                                                                                                                                                                                                                                        | Regression evidence                                                                                                         |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `None` guards in `_session_instrumentation.py` and `_session_socket.py`                  | Missing cleanup instrumentation is a no-op; an omitted close code needs no validation. A shared generic guard would obscure these separate optional-value contracts.                                                                                                                                                                       | `falcon_pachinko/unittests/test_session_instrumentation.py` and `falcon_pachinko/unittests/test_session_socket.py`          |
+| Observer imports in `_observability.py`, `_session_driver.py` and `_router_lifecycle.py` | Each module needs a different type-only view of the public observer: event and span types, operation and failure literals, or the route-dispatch observer. Centralizing these imports would add an import-only module and obscure each module's type surface. Keep this exact unnamed-fragment family reviewed if an import block changes. | `falcon_pachinko/unittests/test_session_instrumentation.py` and `falcon_pachinko/unittests/test_lifecycle_observability.py` |
 
 No application code was changed to clear the initial report. The gate modules
 and tests are focused adoption evidence, not a detector benchmark; no benchmark

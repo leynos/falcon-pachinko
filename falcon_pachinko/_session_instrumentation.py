@@ -11,7 +11,11 @@ import falcon
 from . import observability as _observability
 from ._disconnect import _PeerDisconnectedError
 from ._session import SessionPhase, SessionState
-from ._session_observation import _SessionObservation, _log_session_observation
+from ._session_observation import (
+    _log_session_observation,
+    _outcome_for_error,
+    _SessionObservation,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -65,7 +69,7 @@ class _SessionInstrumentationRun:
 
     @property
     def primary_error(self) -> BaseException | None:
-        """Return the session's original failure for bounded log metadata."""
+        """Original session failure for bounded log metadata."""
         return self.session.primary_error
 
     def set_resource(self, resource: object) -> None:
@@ -79,9 +83,7 @@ class _SessionInstrumentationRun:
             outcome = "rejected"
         _log_session_observation(
             self,
-            _SessionObservation(
-                "setup", outcome, self.setup_started, error=error
-            ),
+            _SessionObservation("setup", outcome, self.setup_started, error=error),
         )
 
     def finish(
@@ -166,7 +168,9 @@ def finish_cleanup_instrumentation(
         return
     attempt = cleanup.attempt
     attempt.cleanup_failures = failures
-    outcome = _observability.Outcome.FAILED if failures else _observability.Outcome.COMPLETED
+    outcome = (
+        _observability.Outcome.FAILED if failures else _observability.Outcome.COMPLETED
+    )
     error = failures[0] if failures else None
     dimensions = _instrumentation_dimensions(
         attempt.session,
@@ -218,13 +222,6 @@ def _session_outcome(
     if handed_off:
         return _observability.Outcome.HANDED_OFF
     return _observability.Outcome.COMPLETED
-
-
-def _outcome_for_error(error: BaseException | None) -> str:
-    """Map setup failures to a fixed observation outcome."""
-    if error is None:
-        return "completed"
-    return "cancelled" if isinstance(error, asyncio.CancelledError) else "failed"
 
 
 def _instrumentation_error(

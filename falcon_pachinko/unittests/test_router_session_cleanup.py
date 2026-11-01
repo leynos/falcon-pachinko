@@ -296,18 +296,17 @@ async def test_rejected_connection_does_not_run_disconnect_hook() -> None:
 
 
 @pytest.mark.asyncio
-async def test_receive_loop_logs_dispatch_failure_without_exception_values(
+async def test_receive_loop_propagates_dispatch_failure_without_exception_values(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Failure diagnostics expose the exception type without reflecting payloads."""
+    """Propagated failures do not log caller-controlled exception text."""
     resource = SessionResource(dispatch_error=RuntimeError("CANARY-dispatch-secret"))
     socket = SessionSocket(("first",))
     router = session_router(resource)
     with pytest.raises(RuntimeError, match="CANARY-dispatch-secret"):
         await router.on_websocket(make_req("/session"), socket)
-    assert "RuntimeError" in caplog.text, "dispatch failures must leave a diagnostic"
     assert "CANARY-dispatch-secret" not in caplog.text, (
-        "diagnostics must omit exception values"
+        "failure propagation must not log exception values"
     )
 
 

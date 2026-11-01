@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from falcon_pachinko.websocket import WebSocketConnectionManager
-
 from examples.reference_app.resources import (
     AssignTask,
     BroadcastNote,
@@ -17,6 +15,7 @@ from examples.reference_app.services import (
     TaskCreationParams,
     WorkspaceRepository,
 )
+from falcon_pachinko.websocket import WebSocketConnectionManager
 from tests._reference_example_support import (
     _PROJECT,
     _WORKSPACE,
@@ -38,36 +37,50 @@ async def _resource_with_task(
     return resource, repo, RecordingWebSocket()
 
 
+@pytest.mark.parametrize(
+    ("command", "expected_message", "stored_attribute", "expected_value"),
+    [
+        (
+            CompleteTask(task_id="T-1"),
+            {
+                "type": "task.completed",
+                "payload": {"task_id": "T-1", "completed": True},
+            },
+            "completed",
+            True,
+        ),
+        (
+            AssignTask(task_id="T-1", assignee="casey"),
+            {
+                "type": "task.assigned",
+                "payload": {"task_id": "T-1", "assignee": "casey"},
+            },
+            "assigned_to",
+            "casey",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_handle_complete_marks_the_task_and_replies() -> None:
-    """Completing a task updates the repository and replies with its state."""
+async def test_task_updates_reply_and_persist_state(
+    command: CompleteTask | AssignTask,
+    expected_message: dict[str, object],
+    stored_attribute: str,
+    expected_value: object,
+) -> None:
+    """Task updates reply with the mutation and persist its resulting state."""
     resource, repo, ws = await _resource_with_task(
-        TaskCreationParams(task_id="T-1", title="Fix it", author="avery")
+        TaskCreationParams(task_id="T-1", title="Ship it", author="avery")
     )
 
-    await _dispatch(resource, ws, CompleteTask(task_id="T-1"))
+    await _dispatch(resource, ws, command)
 
-    assert ws.messages == [
-        {"type": "task.completed", "payload": {"task_id": "T-1", "completed": True}}
-    ], f"the completion reply must echo the task state: {ws.messages}"
-    (stored,) = await repo.list_tasks(_WORKSPACE, _PROJECT, include_completed=True)
-    assert stored.completed is True, "the repository must record the completion"
-
-
-@pytest.mark.asyncio
-async def test_handle_assign_reassigns_the_task_and_replies() -> None:
-    """Assigning a task updates the assignee and replies with the new owner."""
-    resource, repo, ws = await _resource_with_task(
-        TaskCreationParams(task_id="T-2", title="Ship it", author="avery")
+    assert ws.messages == [expected_message], (
+        f"the reply must echo the update: {ws.messages}"
     )
-
-    await _dispatch(resource, ws, AssignTask(task_id="T-2", assignee="casey"))
-
-    assert ws.messages == [
-        {"type": "task.assigned", "payload": {"task_id": "T-2", "assignee": "casey"}}
-    ], f"the assignment reply must echo the new assignee: {ws.messages}"
     (stored,) = await repo.list_tasks(_WORKSPACE, _PROJECT, include_completed=True)
-    assert stored.assigned_to == "casey", "the repository must record the assignee"
+    assert getattr(stored, stored_attribute) == expected_value, (
+        f"stored task field {stored_attribute!r} must match {expected_value!r}"
+    )
 
 
 @pytest.mark.asyncio

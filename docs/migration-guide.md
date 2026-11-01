@@ -187,8 +187,8 @@ router.attach(app)
   sends, receives, and active connection registration here.
 - The router dispatches frames in order and attempts `on_disconnect()` once for
   each accepted session. Missing peer codes use `1006`. Cancellation preserves
-  an already selected or reported code; otherwise it selects `1001` and attempts
-  a best-effort close on the accepted transport. It propagates
+  an already selected or reported code; otherwise it selects `1001` and
+  attempts a best-effort close on the accepted transport. It propagates
   `CancelledError` after cleanup. Unexpected receive or handler failures close
   with `1011` and propagate after cleanup.
 

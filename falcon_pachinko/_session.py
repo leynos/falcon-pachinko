@@ -30,7 +30,7 @@ async def _wait_for_shielded_task[T](
                 cancel_on_interrupt and not cancellation_forwarded and not task.done()
             )
             if should_forward_cancellation:
-                task.cancel()
+                task.cancel(exc.args[0] if len(exc.args) == 1 else None)
                 cancellation_forwarded = True
             if task.done():
                 break

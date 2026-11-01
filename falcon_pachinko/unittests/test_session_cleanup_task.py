@@ -10,10 +10,10 @@ import pytest
 
 from falcon_pachinko._session import SessionState
 from falcon_pachinko._session_cleanup import (
-    CleanupContext,
     raise_session_failures,
     run_shielded_cleanup,
 )
+from falcon_pachinko._session_context import SessionDriverContext
 from falcon_pachinko.hooks import HookCollection, HookManager
 from falcon_pachinko.unittests._session_fixtures import (
     RecordingResource,
@@ -24,6 +24,8 @@ from falcon_pachinko.unittests._session_fixtures import (
 if typ.TYPE_CHECKING:
     import falcon
 
+    from falcon_pachinko._session_context import SessionDispatch
+    from falcon_pachinko.lifecycle import LifecycleGuard
     from falcon_pachinko.protocols import WebSocketLike
 
 
@@ -52,7 +54,7 @@ class _CleanupDispatch:
 
 def _cleanup_context(
     failure: RuntimeError, primary_error: Exception | None = None
-) -> CleanupContext:
+) -> SessionDriverContext:
     """Assemble the real cleanup path with one injected housekeeping failure."""
     resource = RecordingResource()
     # The lightweight request supplies the fields exercised by these tests.
@@ -61,11 +63,13 @@ def _cleanup_context(
     dispatch = _CleanupDispatch(
         typ.cast("falcon.Request", make_session_request()), socket
     )
-    return CleanupContext(
+    return SessionDriverContext(
         resource=resource,
-        dispatch=dispatch,
+        resources=(resource,),
+        websocket=typ.cast("LifecycleGuard", socket),
+        dispatch=typ.cast("SessionDispatch", dispatch),
+        session_state=_FailingClosedState(failure),
         hook_manager=HookManager(global_hooks=HookCollection(), resources=[resource]),
-        session=_FailingClosedState(failure),
         params={},
         primary_error=primary_error,
     )
@@ -88,21 +92,15 @@ async def test_unexpected_cleanup_task_failure_preserves_precedence(
     failures, interruptions = await run_shielded_cleanup(context)
     assert failures == (failure,), "unexpected cleanup errors must remain available"
     assert not interruptions, "ordinary cleanup has no cancellation"
-    reported: list[dict[str, object]] = []
-    loop = asyncio.get_running_loop()
-    previous_handler = loop.get_exception_handler()
-    loop.set_exception_handler(lambda _loop, details: reported.append(details))
-    try:
-        expected_error = primary_error or failure
-        with pytest.raises(type(expected_error)) as raised:
-            raise_session_failures(primary_error, failures, interruptions)
-    finally:
-        loop.set_exception_handler(previous_handler)
-    assert raised.value is expected_error, "the selected failure must be preserved"
-    if primary_error is not None:
-        assert [details["exception"] for details in reported] == [failure], (
-            "finalization failure must remain observable without replacing "
-            "the session error"
+    expected_type = RuntimeError if primary_error is None else ExceptionGroup
+    with pytest.raises(expected_type) as raised:
+        raise_session_failures(primary_error, failures, interruptions)
+    if primary_error is None:
+        assert raised.value is failure, "a lone cleanup failure must be unchanged"
+    else:
+        assert isinstance(raised.value, ExceptionGroup), "both failures must be grouped"
+        assert raised.value.exceptions == (primary_error, failure), (
+            "the primary failure must precede cleanup"
         )
     resource = typ.cast("RecordingResource", context.resource)
     assert len(resource.disconnect_codes) == 1, "hooks must finish before task failure"

@@ -36,14 +36,14 @@ from ._router_lifecycle import (
     execute_route_with_error_handling,
 )
 from ._router_resolution import _RouterResolutionMixin
+from ._session_instrumentation import start_session_instrumentation
 from ._uri_template import _compile_prefix_template, compile_uri_template
 from .hooks import HookCollection, HookManager
+from .lifecycle import ConnectionPhase, WebSocketSession
 from .observability import (
     NOOP_SESSION_INSTRUMENTATION,
     SessionInstrumentation,
 )
-from .lifecycle import ConnectionPhase, WebSocketSession
-from ._session_instrumentation import start_session_instrumentation
 from .protocols import WebSocketLike
 
 # Imported at runtime, not under TYPE_CHECKING: ``ResourceFactory`` below is a
@@ -84,7 +84,6 @@ def _guard_session_clock(
         return reading
 
     return read_clock
-
 
 
 type ResourceFactory = cabc.Callable[
@@ -456,11 +455,12 @@ class WebSocketRouter(_RouterResolutionMixin):
                 if session is None:
                     observation.reject()
                     instrumentation_run.finish()
-                return session
             except BaseException as error:
                 instrumentation_run.finish_setup(error)
                 instrumentation_run.finish(error)
                 raise
+            else:
+                return session
             finally:
                 observation.set_close_code(preparation.session.close_code)
 

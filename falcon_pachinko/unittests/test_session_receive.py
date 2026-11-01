@@ -23,6 +23,9 @@ from falcon_pachinko.unittests._session_fixtures import (
 )
 from falcon_pachinko.unittests.helpers import DummyWS
 
+if typ.TYPE_CHECKING:
+    from falcon_pachinko.protocols import WebSocketLike
+
 _ASSERTION_FAILURE = "lifecycle expectation failed"
 
 
@@ -107,13 +110,16 @@ async def test_not_ready_native_socket_preserves_buffered_frame() -> None:
     )
     await websocket.accept()
     await asyncio.wait_for(disconnect_received.wait(), timeout=1)
-    session_websocket = SessionWebSocket(websocket, websocket, SessionState())
+    session_websocket = SessionWebSocket(
+        typ.cast("WebSocketLike", websocket), websocket, SessionState()
+    )
+    session_socket = typ.cast("WebSocketLike", session_websocket)
 
-    assert await receive_frame(session_websocket) == '{"type":"queued"}', (
+    assert await receive_frame(session_socket) == '{"type":"queued"}', (
         "a frame queued before disconnect must reach resource dispatch"
     )
     with pytest.raises(falcon.WebSocketDisconnected) as raised:
-        await receive_frame(session_websocket)
+        await receive_frame(session_socket)
     assert raised.value.code == 4000, "the queued disconnect code must be retained"
 
 
@@ -225,7 +231,10 @@ async def test_close_guard_overrides_wrapped_is_closed_probe() -> None:
         def is_closed(self) -> bool:
             return self.closed
 
-        async def close(self, code: int = 1000) -> None:
+        async def close(
+            self, code: int | None = 1000, reason: str | None = None
+        ) -> None:
+            del reason
             self.close_started.set()
             await self.finish_close.wait()
             await super().close(code)
@@ -265,8 +274,10 @@ async def test_failed_close_rolls_back_its_provisional_code() -> None:
     """A failed transport close must not masquerade as an effective close."""
 
     class FailingCloseSocket(SessionSocket):
-        async def close(self, code: int = 1000) -> None:
-            del code
+        async def close(
+            self, code: int | None = 1000, reason: str | None = None
+        ) -> None:
+            del code, reason
             raise RuntimeError("failed")
 
     session = SessionState()
