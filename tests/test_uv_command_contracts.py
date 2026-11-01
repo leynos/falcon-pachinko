@@ -206,6 +206,8 @@ def test_ci_run_steps_require_the_project_lockfile() -> None:
         ("@uv run pytest", [(1, "@uv run pytest")]),
         ("$(UV) run pytest", []),
         ("@$(UV) run --locked pytest", []),
+        ("time uv sync", [(1, "time uv sync")]),
+        ("time -p uv sync", [(1, "time -p uv sync")]),
         ("{ uv sync; }", [(1, "{ uv sync")]),
         ("{ uv sync --locked; }", []),
         ("(cd sub && uv sync)", [(1, "uv sync")]),
@@ -492,6 +494,26 @@ def test_command_scanner_fails_closed_on_unsupported_env_options() -> None:
     script = "env -S 'uv sync'"
 
     with pytest.raises(UnsupportedEnvOptionError, match=r"line 1.*env -S"):
+        unlocked_project_commands(script)
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "timeout 600 uv sync",
+        "nice -n 10 uv run pytest",
+        "nohup uv sync",
+        "sudo -u tester uv sync",
+        "xargs uv sync",
+    ],
+    ids=("timeout", "nice", "nohup", "sudo", "xargs"),
+)
+def test_command_scanner_fails_closed_on_wrapped_uv_commands(script: str) -> None:
+    """Known command wrappers must not hide a project uv invocation."""
+    with pytest.raises(
+        UnsupportedCommandOptionError,
+        match=r"line 1.*wrapper command",
+    ):
         unlocked_project_commands(script)
 
 

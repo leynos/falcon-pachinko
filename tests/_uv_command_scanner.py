@@ -39,9 +39,11 @@ SHELL_COMMAND_PREFIXES = frozenset({
     "exec",
     "if",
     "then",
+    "time",
     "!",
     "{",
 })
+WRAPPER_COMMANDS = frozenset({"nice", "nohup", "sudo", "timeout", "xargs"})
 ENV_FLAGS = frozenset({
     "-",
     "-0",
@@ -232,18 +234,56 @@ def _uv_executable_index(tokens: list[str], *, is_makefile: bool) -> int | None:
     """Return the uv token after shell prefixes, if present."""
     invocation = 0
     while invocation < len(tokens):
-        prefix_word = tokens[invocation]
-        if prefix_word == "env":
-            invocation = _env_command_index(tokens, invocation)
-            if invocation is None:
-                return None
-            continue
-        if not _is_command_prefix(prefix_word, is_makefile=is_makefile):
+        prefix_end = _shell_command_prefix_end(
+            tokens, invocation, is_makefile=is_makefile
+        )
+        if prefix_end is None:
+            return None
+        if prefix_end == invocation:
             break
-        invocation += 1
-    if invocation < len(tokens) and tokens[invocation] in {"uv", "$(UV)"}:
+        invocation = prefix_end
+    if invocation >= len(tokens):
+        return None
+    if tokens[invocation] in {"uv", "$(UV)"}:
         return invocation
+    _reject_wrapped_uv_command(tokens, invocation)
     return None
+
+
+def _shell_command_prefix_end(
+    tokens: list[str], invocation: int, *, is_makefile: bool
+) -> int | None:
+    """Return the next token after a supported shell command prefix."""
+    prefix_word = tokens[invocation]
+    if prefix_word == "time":
+        return _time_command_prefix_end(tokens, invocation)
+    if prefix_word == "env":
+        return _env_command_index(tokens, invocation)
+    if _is_command_prefix(prefix_word, is_makefile=is_makefile):
+        return invocation + 1
+    return invocation
+
+
+def _time_command_prefix_end(tokens: list[str], invocation: int) -> int:
+    """Return the command after Bash's optional ``time -p`` flag."""
+    command_index = invocation + 1
+    if command_index < len(tokens) and tokens[command_index] == "-p":
+        command_index += 1
+    return command_index
+
+
+def _reject_wrapped_uv_command(tokens: list[str], invocation: int) -> None:
+    """Reject a known utility wrapper that could hide a uv command."""
+    wrapper = tokens[invocation]
+    if wrapper not in WRAPPER_COMMANDS:
+        return
+    if not any(token in {"uv", "$(UV)"} for token in tokens[invocation + 1 :]):
+        return
+    message = (
+        f"Unsupported wrapper command {wrapper!r} before uv; invoke uv "
+        "directly so its lock options can be checked"
+    )
+    raise UnsupportedCommandOptionError(message)
 
 
 def _uv_project_subcommand_index(tokens: list[str], index: int) -> int | None:
