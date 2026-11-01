@@ -1265,9 +1265,12 @@ lowercase commit SHA; `uses: docker://…` references must use a SHA-256 digest.
 Local `./` action references are exempt because they resolve within the
 checked-out repository. Docker action `runs.image` metadata is outside this
 `uses:` contract, and non-composite action manifests without `steps` remain
-valid omissions. Keep the upstream release version in a same-line `# vX.Y.Z`
-comment so Dependabot can update the SHA and comment together. This also
-applies to the [Markdown lint action](#markdown-formatting-and-linting).
+valid omissions. For actions with a verifiable release tag, keep that version
+in a same-line `# vX.Y.Z` comment so Dependabot can update the SHA and comment
+together. The `leynos/shared-actions` refs remain full-SHA pinned; their
+referenced commits have no matching semantic-version release tags, so they have
+no version comment. This also applies to the
+[Markdown lint action](#markdown-formatting-and-linting).
 
 Before updating a pin, query the owning repository with
 `gh api repos/OWNER/REPO/git/ref/tags/TAG`, and follow annotated tag objects
