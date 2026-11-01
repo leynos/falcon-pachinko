@@ -22,7 +22,8 @@ if typ.TYPE_CHECKING:
 
     from falcon_pachinko.testing import WebSocketTestClient
     from falcon_pachinko.testing.client import WebSocketSession
-    from tests.behaviour._live_lifecycle_server import DisconnectRecorder, LiveServer
+    from tests.behaviour._live_lifecycle_resources import DisconnectRecorder
+    from tests.behaviour._live_lifecycle_server import LiveServer
 
 _ASSERTION_FAILURE = "lifecycle expectation failed"
 

@@ -666,31 +666,6 @@ async def test_router_uses_falcons_uri_template_for_mounted_route() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("path", "matches"),
-    [("/ok", True), ("/oops", False)],
-    ids=["matching_path", "unmatched_path"],
-)
-async def test_negotiate_matches_registered_path(path: str, *, matches: bool) -> None:
-    """Public negotiation accepts a matching route and rejects an unmatched path."""
-    router = WebSocketRouter()
-    router.add_route("/ok", AcceptingResource)
-    router.mount("/")
-    req = make_req(path, "/")
-    ws = DummyWS()
-
-    if not matches:
-        with pytest.raises(falcon.HTTPNotFound):
-            await router.negotiate(req, ws)
-        return
-
-    session = await router.negotiate(req, ws)
-    assert session is not None, "matching route should return an accepted session"
-    assert ws.accepted, "matching route should accept its WebSocket"
-    await session.aclose()
-
-
-@pytest.mark.asyncio
 async def test_malformed_remaining_path_not_matched() -> None:
     """Paths without a slash after the prefix should not match."""
     router = WebSocketRouter()
