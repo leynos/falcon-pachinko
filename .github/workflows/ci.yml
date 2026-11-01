@@ -135,7 +135,7 @@ jobs:
         run: make check-cv005
 
       - name: Check workflow contracts
-        run: uv run pytest tests/workflow_contracts
+        run: uv run --locked pytest tests/workflow_contracts
 
       # Markdown is linted through the upstream action rather than a `run:`
       # step, because the action's release carries the linter's whole
