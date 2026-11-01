@@ -37,6 +37,18 @@ def _event(observer: _RecordingObserver, operation: str) -> LifecycleObservation
     return events[0]
 
 
+def _assert_clock_observations_are_complete(observer: _RecordingObserver) -> None:
+    """Require valid durations and exactly-once completion for every span."""
+    assert observer.events, "clock failures must not suppress lifecycle events"
+    assert all(
+        math.isfinite(event.duration_seconds) and event.duration_seconds >= 0
+        for event in observer.events
+    ), "lifecycle durations must remain finite and nonnegative"
+    assert all(
+        span.finish_calls == 1 and len(span.results) == 1 for span in observer.spans
+    ), "every started lifecycle span must finish exactly once"
+
+
 @pytest.mark.asyncio
 async def test_success_observes_lifecycle_once_and_keeps_frames_silent() -> None:
     """A multi-frame session records six operations and three completed spans."""
@@ -99,6 +111,121 @@ async def test_lifecycle_observations_use_the_configured_monotonic_clock() -> No
     assert tuple(sorted(event.operation for event in observer.events)) == (
         _EXPECTED_OPERATIONS
     ), "all six lifecycle durations must be observed"
+
+
+@pytest.mark.asyncio
+async def test_first_clock_failure_keeps_fallback_timebase_and_application_error() -> (
+    None
+):
+    """An initial clock failure selects one fallback epoch for the whole run."""
+    observer = _RecordingObserver()
+    failure = RuntimeError("application setup failed")
+    resource = _ObservedResource(start_error=failure)
+    router = _observed_router(resource, observer)
+    clock_calls = 0
+
+    def monotonic_clock() -> float:
+        nonlocal clock_calls
+        clock_calls += 1
+        if clock_calls == 1:
+            msg = "host clock unavailable"
+            raise RuntimeError(msg)
+        return 1_000_000_000_000.0 + clock_calls
+
+    router.configure_session_instrumentation(None, monotonic_clock=monotonic_clock)
+    with pytest.raises(RuntimeError, match="application setup failed") as raised:
+        await router.on_websocket(make_req("/session"), DummyWS())
+
+    assert raised.value is failure, (
+        "the clock error must not replace application failure"
+    )
+    assert clock_calls == 1, (
+        "the fallback epoch must remain permanent after first-read failure"
+    )
+    assert resource.disconnects == [1011], (
+        "application failure must still clean up once"
+    )
+    _assert_clock_observations_are_complete(observer)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "clock_error",
+    [
+        pytest.param(RuntimeError("host clock failed"), id="runtime-error"),
+        pytest.param(
+            asyncio.CancelledError("host clock callback cancelled"),
+            id="callback-cancellation",
+        ),
+    ],
+)
+async def test_later_clock_failures_reuse_last_reading_until_recovery(
+    clock_error: BaseException,
+) -> None:
+    """Repeated clock errors preserve time and cannot replace session outcomes."""
+    failures_remaining = 0
+    failure_count = 0
+    last_reading = 0.0
+
+    def monotonic_clock() -> float:
+        nonlocal failure_count, failures_remaining, last_reading
+        if failures_remaining:
+            failures_remaining -= 1
+            failure_count += 1
+            raise clock_error
+        last_reading += 10.0
+        return last_reading
+
+    def fail_next_two_reads(_context: object) -> None:
+        """Place both failures inside accepted-transport observation."""
+        nonlocal failures_remaining
+        failures_remaining = 2
+
+    class ClockArmingResource(_ObservedResource):
+        """Arm clock failures immediately before transport acceptance."""
+
+        async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            fail_next_two_reads(None)
+            return await super().on_connect(req, ws, **params)
+
+    application_error = RuntimeError("application setup failed")
+    resource = ClockArmingResource(
+        start_error=(
+            application_error if isinstance(clock_error, RuntimeError) else None
+        )
+    )
+    observer = _RecordingObserver()
+    router = _observed_router(resource, observer)
+    router.configure_session_instrumentation(None, monotonic_clock=monotonic_clock)
+
+    if isinstance(clock_error, RuntimeError):
+        with pytest.raises(RuntimeError, match="application setup failed") as raised:
+            await router.on_websocket(make_req("/session"), DummyWS())
+        assert raised.value is application_error, (
+            "a clock failure must not replace the application error"
+        )
+        assert resource.disconnects == [1011], "application failure must clean up once"
+    else:
+        socket = SessionSocket(block_receive=True)
+        task = asyncio.create_task(router.on_websocket(make_req("/session"), socket))
+        await socket.receive_started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert socket.close_codes == [1001], (
+            "task cancellation must retain its close code"
+        )
+        assert resource.disconnects == [1001], "cancelled sessions must clean up once"
+        assert (_event(observer, "receive_termination").outcome) == "cancelled", (
+            "clock callback cancellation must not hide task cancellation"
+        )
+
+    assert failure_count == 2, "both injected failures must be isolated"
+    assert failures_remaining == 0, "the injected clock must recover afterward"
+    assert math.isclose(
+        _event(observer, "acceptance").duration_seconds, 0.0, abs_tol=1e-12
+    ), "failed reads must reuse the last successful value until recovery"
+    _assert_clock_observations_are_complete(observer)
 
 
 @pytest.mark.asyncio
