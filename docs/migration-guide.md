@@ -55,7 +55,9 @@ close `code` and `reason` fields retain their values.
 `HookManager.notify_before_disconnect()` now accepts a prepared `HookContext`
 and returns `None`. The router prepares this context itself; only applications
 that call the manager directly need to migrate. The former target/socket/code
-call remains available for one release and emits `DeprecationWarning`.
+call remains available for one release and emits `DeprecationWarning`. The
+example omits the optional `req` and `params` values; they default to `None`
+when a direct caller has no request or route parameters to supply.
 
 ```python
 from falcon_pachinko import HookContext
@@ -69,8 +71,6 @@ context = HookContext(
     event="before_disconnect",
     target=resource,
     resource=None,
-    req=req,
-    params=params,
     ws=ws,
     close_code=close_code,
     error=None,
