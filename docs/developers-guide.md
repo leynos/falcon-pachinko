@@ -29,6 +29,14 @@ remains telemetry-agnostic. It propagates the original startup exception to the
 application startup caller, leaving application-specific logging and metrics to
 the lifespan owner.
 
+The controller does not supervise a worker that fails while running: that task
+ends and `stop()` reports the exception. The reference example opts in to its
+own supervision instead. Its `announcement_worker` isolates expected recipient
+delivery failures, and restarts its consuming loop after unexpected failures
+while logging the traceback. Failures the worker handles this way no longer
+surface at `stop()`; cancellation still propagates, so `stop()` returns cleanly
+on lifespan shutdown.
+
 ## WebSocket session lifecycle
 
 `WebSocketRouter.on_websocket()` negotiates the connection and runs the accepted
