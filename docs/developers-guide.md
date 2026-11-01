@@ -299,15 +299,20 @@ invalid schema in place and disguise a schema bug as a malformed message.
 Schema dispatch resolves the target before conversion. The dispatcher decodes
 the frame generically with `msgspec.json.decode`, resolves the schema member
 from the tag, validates the retained mapping when the handler is strict, and
-only then converts it with `msgspec.convert`. Decoding straight into the union
-would discard undeclared fields before the strict decision. The shared
-`validate_strict_payload` path compares top-level keys with the target's
-encoded field names and tag field; the check is shallow, so nested Structs keep
-their own `forbid_unknown_fields` semantics. `strict=False` skips that check
-and uses lax coercion in both dispatch modes. A `ValidationError` from
-validation or conversion routes to `on_unhandled`; a configuration `TypeError`
-(such as a mixed-tag union, an untagged Struct, or an `array_like` member) must
-propagate and must not reach `on_unhandled`. See
+then decodes the original frame into the resolved member with
+`msgspec.json.decode`. Decoding straight into the union would discard
+undeclared fields before the strict decision, but keeping the generic mapping
+as the conversion input would lose wire-level detail: integer mapping keys
+would arrive as strings, `msgspec.Raw` fields as decoded JSON, and `Decimal`
+fields through a `float`. A `strict=False` handler falls back to
+`msgspec.convert` of the retained mapping when the wire decode rejects a value
+the lax rules accept. The shared `validate_strict_payload` path compares
+top-level keys with the target's encoded field names and tag field; the check
+is shallow, so nested Structs keep their own `forbid_unknown_fields` semantics.
+`strict=False` skips that check and uses lax coercion in both dispatch modes. A
+`ValidationError` from validation or conversion routes to `on_unhandled`; a
+configuration `TypeError` (such as a mixed-tag union, an untagged Struct, or an
+`array_like` member) must propagate and must not reach `on_unhandled`. See
 [ADR 003](adr-003-schema-mode-strict-validation.md).
 
 ## Safe diagnostics

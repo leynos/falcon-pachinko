@@ -344,10 +344,12 @@ class ChatResource(WebSocketResource):
   it to `on_unhandled` would hide it behind a bad-frame fallback while leaving
   the broken schema in place. Fix the schema instead of handling the exception.
 - Schema dispatch decodes the frame to a plain JSON object first, resolves the
-  member from its tag, and validates that object before converting it to the
-  Struct. Decoding straight into the schema would let `msgspec` discard
-  undeclared fields before the strict decision, so a strict handler would run
-  on a message that violated its no-extra-fields contract. With default-strict
+  member from its tag, and validates that object before decoding the original
+  frame into the Struct. Decoding straight into the schema would let `msgspec`
+  discard undeclared fields before the strict decision, so a strict handler
+  would run on a message that violated its no-extra-fields contract. Converting
+  the plain object instead would lose wire-level values such as integer mapping
+  keys, `msgspec.Raw` JSON, and exact `Decimal` numbers. With default-strict
   validation, any undeclared top-level field sends the raw frame to
   `on_unhandled`.
 - The allowed keys are the Struct's encoded wire names plus its tag field. A

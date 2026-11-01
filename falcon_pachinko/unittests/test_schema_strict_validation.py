@@ -7,6 +7,7 @@ and msgspec's coercion, and nested Structs keep their own declarations.
 """
 
 import collections.abc as cabc
+import decimal
 import typing as typ
 
 import msgspec as ms
@@ -206,6 +207,29 @@ class LenientCoercionResource(_RecordingResource):
         self.events.append(("coerced", payload.count))
 
 
+class WireTypesMessage(ms.Struct, tag="wire_types"):
+    """Message whose fields only decode faithfully from the original frame."""
+
+    scores: dict[int, str]
+    blob: ms.Raw
+    amount: decimal.Decimal
+
+
+class WireTypesResource(_RecordingResource):
+    """Resource receiving a message with wire-only field types."""
+
+    schema = WireTypesMessage
+
+    async def on_wire_types(self, ws: WebSocketLike, payload: WireTypesMessage) -> None:
+        """Record the decoded mapping keys, raw JSON and exact decimal."""
+        self.events.append((
+            "wire_types",
+            payload.scores,
+            msjson.decode(payload.blob),
+            payload.amount,
+        ))
+
+
 class ClosedTopMessage(ms.Struct, tag="closed_top", forbid_unknown_fields=True):
     """Top-level message that always forbids undeclared fields."""
 
@@ -361,6 +385,26 @@ async def test_schema_renamed_field_rejects_attribute_name() -> None:
     assert r.events == [("raw", raw)], (
         "the Python attribute name must be rejected on the wire"
     )
+
+
+@pytest.mark.asyncio
+async def test_schema_member_decodes_wire_level_types() -> None:
+    """The member decodes from the frame, not from the generic mapping.
+
+    Converting the generically decoded mapping would stringify the integer
+    mapping key, fail to capture ``Raw`` JSON, and round the decimal through a
+    ``float`` before it reached ``Decimal``.
+    """
+    r = WireTypesResource()
+    r.bind_default_hook_manager()
+    raw = (
+        b'{"type": "wire_types", "scores": {"1": "a"}, '
+        b'"blob": {"nested": true}, "amount": 0.1}'
+    )
+    await r.dispatch(DummyWS(), raw)
+    assert r.events == [
+        ("wire_types", {1: "a"}, {"nested": True}, decimal.Decimal("0.1"))
+    ], "wire-level values must survive into the typed payload unchanged"
 
 
 @pytest.mark.asyncio

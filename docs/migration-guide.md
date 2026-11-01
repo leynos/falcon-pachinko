@@ -76,7 +76,10 @@ schema union, and `msgspec` silently discarded any field the selected Struct
 did not declare, so a strict handler ran on a message that violated its
 no-extra-fields contract. The dispatcher now decodes the frame generically,
 resolves the member from its tag, validates the retained object, and only then
-converts it.
+decodes the original frame into the member. Wire-level values such as integer
+mapping keys, `msgspec.Raw` JSON, and exact `Decimal` numbers therefore still
+arrive intact; a `strict=False` handler keeps lax coercion by falling back to
+converting the retained object when the wire decode rejects a coercible value.
 
 - A message with an extra top-level field now reaches `on_unhandled` with the
   original frame. Remove the extra field from the sender, or declare it on the

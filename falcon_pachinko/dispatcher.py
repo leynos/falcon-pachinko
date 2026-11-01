@@ -125,6 +125,55 @@ def find_conventional_handler(
     return HandlerInfo(func, payload_type, strict=True)
 
 
+def _convert_payload(context: HandlerInvocationContext, payload_type: type) -> object:
+    """Convert the retained payload, or re-decode a schema frame from the wire.
+
+    Schema dispatch decodes frames generically so undeclared keys can be
+    inspected. That mapping has already lost wire-level detail: integer mapping
+    keys arrive as strings, ``msgspec.Raw`` fields arrive as decoded JSON, and
+    ``Decimal`` fields pass through a ``float``. Re-decoding the original frame
+    into the resolved member restores msgspec's wire semantics.
+
+    A ``strict=False`` handler keeps its documented lax coercion: when the wire
+    decode rejects a value the lax rules would accept, such as the string
+    ``"5"`` in an integer field, the already-decoded mapping is converted
+    instead.
+
+    Parameters
+    ----------
+    context : HandlerInvocationContext
+        The invocation carrying the retained payload and the original frame.
+    payload_type : type
+        The type to convert into.
+
+    Returns
+    -------
+    object
+        The converted payload.
+
+    Raises
+    ------
+    msgspec.ValidationError
+        If the payload does not satisfy ``payload_type``.
+    """
+    if context.target_type is None:
+        return ms.convert(
+            context.payload,
+            type=payload_type,
+            strict=context.handler_info.strict,
+        )
+    try:
+        return msjson.decode(context.raw, type=payload_type)
+    except ms.ValidationError:
+        if context.handler_info.strict:
+            raise
+        return ms.convert(
+            context.payload,
+            type=payload_type,
+            strict=context.handler_info.strict,
+        )
+
+
 async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
     """Convert ``payload`` to the handler's type and invoke it."""
     payload_type = (
@@ -139,11 +188,7 @@ async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
             validate_strict_payload(
                 payload, payload_type, strict=context.handler_info.strict
             )
-            payload = ms.convert(
-                payload,
-                type=payload_type,
-                strict=context.handler_info.strict,
-            )
+            payload = _convert_payload(context, payload_type)
         except ms.ValidationError:
             failed = True
     if failed:
@@ -200,21 +245,25 @@ async def dispatch_with_schema(
     The frame is decoded generically to a mapping first. Decoding straight into
     the schema union would let ``msgspec`` discard undeclared fields before the
     strict decision, so a strict handler could receive a message that violated
-    its no-extra-fields contract. The mapping is retained through validation
-    and only converted to the resolved Struct afterwards.
+    its no-extra-fields contract. The mapping is retained through validation and
+    the original frame is then decoded into the resolved Struct, which keeps
+    wire-level values the generic mapping cannot carry.
 
     ``None`` tags, unknown tags, non-object frames and malformed JSON fall back
     to ``on_unhandled``. A configuration ``TypeError`` from an invalid schema
     propagates instead.
     """
+    # ``dispatch`` only routes here when a schema is set. Resolve the tag table
+    # first so a misconfigured schema raises for every frame, good or bad,
+    # rather than surfacing only once a well-formed object arrives.
+    schema = typ.cast("type", resource.schema)
+    table = schema_dispatch(schema)
     payload = _decode_schema_frame(raw)
     if payload is None:
         await resource.on_unhandled(ws, raw)
         return
 
-    # ``dispatch`` only routes here when a schema is set.
-    schema = typ.cast("type", resource.schema)
-    resolution = schema_dispatch(schema).resolve(payload)
+    resolution = table.resolve(payload)
     if resolution is None:
         await resource.on_unhandled(ws, raw)
         return

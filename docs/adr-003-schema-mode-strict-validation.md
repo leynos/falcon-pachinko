@@ -23,7 +23,13 @@ Decode schema frames generically and validate before conversion:
 3. Validate the retained mapping against the resolved member when the handler
    is strict. The allowed keys are the member's encoded wire names plus its tag
    field.
-4. Convert the mapping to the member with `msgspec.convert`.
+4. Decode the original frame into the resolved member with
+   `msgspec.json.decode`. The generically decoded mapping is inspection-only:
+   converting it would lose wire-level detail, turning integer mapping keys
+   into strings, `msgspec.Raw` fields into decoded JSON, and `Decimal` fields
+   into `float`-derived values. A `strict=False` handler that hits a wire
+   decode rejection falls back to `msgspec.convert` of the retained mapping so
+   lax coercion still applies.
 
 Both dispatch modes now share one validate-then-convert path. `strict=False`
 has the same meaning in both: undeclared top-level fields are ignored and
@@ -60,5 +66,8 @@ An undeclared top-level field in a valid schema-tagged message now reaches
 `on_unhandled` with the original frame. Applications that relied on extras
 being silently dropped must remove the field or declare it, or opt into
 `strict=False` on a decorated handler. Renamed fields must arrive under their
-encoded wire name. Schema frames are decoded once more than before (generic
-decode then typed conversion), while the tag table is cached per schema.
+encoded wire name. Schema frames are decoded twice (generic decode for the
+strict decision, then a wire decode into the member), while the tag table and
+allowed-key sets are cached per schema. The tag table is resolved before the
+frame is decoded, so a misconfigured schema raises `TypeError` for any frame,
+including one that would otherwise fall back as malformed.
