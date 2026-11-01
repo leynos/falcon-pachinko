@@ -29,11 +29,6 @@ remains telemetry-agnostic. It propagates the original startup exception to the
 application startup caller, leaving application-specific logging and metrics to
 the lifespan owner.
 
-The Falcon composition boundary is `WebSocketRouter.attach(app, prefix)`: it
-registers the router mount and descendant catch-all routes and installs
-raw-frame media handlers. For routers built from relative paths,
-`router.mount(prefix)` followed by `router.attach(app)` is the two-step form.
-
 ## WebSocket session lifecycle
 
 `WebSocketRouter.on_websocket()` negotiates the connection and runs the accepted
@@ -270,19 +265,22 @@ host-configured, with no mandatory SDK, public constructor changes or
 ## Dependency bounds
 
 The package supports Falcon releases from 4.0 up to, but not including, 4.5, as
-declared by `falcon>=4,<4.5`. This upper bound excludes Falcon 4.5 until
-compatibility is verified: `falcon_pachinko/_session_socket.py` uses Falcon's
-private `_receive()` method because there is no public raw receiver. Falcon
-documents
+declared by `falcon>=4,<4.5`. Falcon 4.5 remains excluded until compatibility
+is verified: `falcon_pachinko/_session_socket.py` uses Falcon's private
+`_receive()` method because there is no public raw receiver. Falcon follows
 [semantic versioning](https://falcon.readthedocs.io/en/stable/community/releases.html#semantic-versioning),
 so an incompatible API change can arrive with a new major release. This bound
 keeps unverified releases outside the supported range.
 
 The lower bound was checked on 2026-10-08 UTC (2026-10-09 in Europe/Berlin) by
 installing Falcon 4.0.0 with `uv pip install falcon==4.0.0` and running
-`uv run --no-sync pytest -v`: 770 tests passed and 2 were skipped. This records
-validation at the declared lower bound. Run `make build` afterwards to restore
-the normal environment.
+`uv run --no-sync pytest -v`: 770 tests passed and 2 were skipped. Run
+`make build` afterwards to restore the normal environment. `uv.lock` is
+committed and `.gitignore` does not exclude it. The dependency bounds above are
+deliberately wide, so the lockfile pins the Falcon release tested by
+`lint-test` and the shared coverage action; Dependabot keeps that release
+current. See "Dependency management with uv" below for how the lockfile is
+maintained.
 
 The `falcon-minimum` job in `.github/workflows/ci.yml` checks the lower bound
 on every pull request and every push to `main`. After `make build` installs the
@@ -297,12 +295,6 @@ When the lower bound changes, update the `falcon` bound in `pyproject.toml`,
 `tests/workflow_contracts/falcon_minimum_fixtures.py` together. Review
 `tests/workflow_contracts/test_falcon_minimum_lane.py` as well; its workflow
 contract keeps those values aligned.
-
-`uv.lock` is committed and `.gitignore` no longer excludes it. It selects a
-concrete resolution within the supported range; it currently resolves Falcon
-4.4.0. That selection does not expand the `pyproject.toml` support bound. See
-"Dependency management with uv" below for how the lockfile is kept current.
-Lower-bound coverage in CI stays tracked separately from this support policy.
 
 ## Dependency management with uv
 
@@ -354,23 +346,17 @@ request.
 
 ## WebSocket lifecycle acceptance tests
 
-Every WebSocket lifecycle feature requires a pytest-bdd scenario using
-`live_websocket_server`, `WebSocketTestClient`, and an application mounted with
-`WebSocketRouter.attach()`. The scenario must exercise real Falcon ASGI
-responders over a real socket. Simulator scenarios remain useful for fast
-behavioural coverage, but they do not establish the production responder
-contract and cannot replace the live-server suite.
+When acceptance, session-start, receive, or cleanup behaviour changes, add a
+pytest-bdd scenario to `tests/behaviour/live_lifecycle.feature`. The shared
+fixture in `tests/behaviour/conftest.py` starts the application from
+`_live_lifecycle_server.py` under Uvicorn on an ephemeral loopback port and
+connects with `WebSocketTestClient`. These scenarios exercise Falcon's real
+ASGI responder over a network socket. Simulator tests remain useful for fast
+resource and routing coverage, but they do not replace the live responder
+contract.
 
-The live harness captures failures from Falcon's `Exception` handler and from
-exceptions escaping the ASGI callable. Tests can inspect the read-only
-`server.errors` snapshot or acknowledge asserted failures with
-`server.pop_errors()`. Applications that register their own `Exception` handler
-must register it after `live_websocket_server.start(app)` because the harness
-installs its capture handler during startup and replaces a handler registered
-earlier. The application handler must call `server.record_error(ex)`; otherwise
-Falcon may consume the exception before the harness can report it.
-Unacknowledged server failures fail context teardown, while `pop_errors()`
-marks failures that the scenario intentionally asserted.
+Run these scenarios with `make test`; the same target runs the complete unit
+and behaviour suites.
 
 ## WebSocket responder and live-harness boundaries
 
