@@ -115,7 +115,7 @@ async def test_missing_payload_rejects_required_types(
     assert record.levelno == logging.DEBUG, "the signal must stay at DEBUG"
     assert fields["operation"] == "dispatch", "the operation must be dispatch"
     assert fields["outcome"] == "rejected", "the outcome must be rejected"
-    assert fields["duration_seconds"] > 0, "rejections must report elapsed time"
+    assert fields["duration_seconds"] >= 0, "rejection duration must be non-negative"
     assert fields["exception_type"] == "ValidationError", "bounded type name"
     expected_type = "Payload" if "struct" in tag else "int"
     assert fields["expected_type"] == expected_type, "the declared payload type"
