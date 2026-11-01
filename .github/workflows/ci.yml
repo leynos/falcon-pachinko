@@ -208,6 +208,8 @@ jobs:
         run: uv pip install "falcon==${FALCON_MINIMUM_VERSION}"
 
       - name: Verify Falcon minimum version
+        # `--no-sync` implies frozen mode; `make build` checks lock freshness.
+        # Keep `--locked` here for the repository command contract.
         run: >-
           uv run --locked --no-sync python -c
           "import importlib.metadata, os, sys; actual =
@@ -215,6 +217,8 @@ jobs:
           os.environ['FALCON_MINIMUM_VERSION']; sys.exit(0 if actual == expected else 1)"
 
       - name: Run full test suite
+        # `--no-sync` implies frozen mode; `make build` checks lock freshness.
+        # Keep `--locked` here for the repository command contract.
         run: uv run --locked --no-sync pytest -v
 
   build-dist:

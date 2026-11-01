@@ -336,7 +336,7 @@ EXPECTED_REGRESSION_VIOLATIONS: typ.Final[dict[str, str]] = {
     "pin-removed": "env.FALCON_MINIMUM_VERSION must be",
     "install-step-removed": "must install falcon==",
     "verification-step-removed": "must verify Falcon",
-    "no-sync-dropped-from-pytest": "must run pytest",
+    "no-sync-dropped-from-pytest": "must not run make, uv sync",
     "locked-dropped-from-pytest": "must run pytest",
     "pytest-filter-added": "must run pytest",
     "version-check-no-sync-dropped": "must verify Falcon",

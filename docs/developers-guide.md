@@ -207,12 +207,13 @@ The `falcon-minimum` job in `.github/workflows/ci.yml` checks the lower bound
 on every pull request and every push to `main`. After `make build` installs and
 validates the locked environment, the job overrides Falcon with
 `FALCON_MINIMUM_VERSION`, verifies the installed version, and runs the full
-suite with `uv run --locked --no-sync pytest -v`. In that command, `--no-sync`
-skips uv's project lock and sync operation, so it does not check lock
-freshness. The preceding `make build` runs `uv sync --group dev --locked` and
-fails on a stale lock before applying the Falcon override. Avoiding a later
-sync preserves that override; `make test` would run its `build` prerequisite
-and restore the locked release.
+suite with `uv run --locked --no-sync pytest -v`. uv's
+[`--no-sync` option](https://docs.astral.sh/uv/reference/cli/#uv-run) implies
+frozen mode, so this command skips environment synchronization and does not
+check lock freshness. The preceding `make build` runs
+`uv sync --group dev --locked` and fails on a stale lock before applying the
+Falcon override. Avoiding a later sync preserves that override; `make test`
+would run its `build` prerequisite and restore the locked release.
 
 When the lower bound changes, update the `falcon` bound in `pyproject.toml`,
 `FALCON_MINIMUM_VERSION` in the workflow, and `EXPECTED_FALCON_VERSION` in
@@ -264,18 +265,18 @@ lockfile makes the command fail rather than silently resolving a different
 release set. Repository-owned CI project-environment commands use `--locked`
 and never regenerate the lock. Commands that sync the project environment fail
 when the lock is stale. The `falcon-minimum` lane's `uv run --no-sync` commands
-skip lock freshness checks; they run only after `make build` has checked and
-synced the locked environment, then preserve the deliberate Falcon override.
-The main coverage lane runs `uv lock --check` before its pinned shared coverage
-action, whose project sync is maintained outside this repository. The separate
-scheduled/manual mutation workflow also delegates to a pinned shared workflow;
-that workflow runs `uv run --with` without `--locked`, so uv automatically
-updates an out-of-date lock while preparing that job's project environment.
-This mutation workflow is not a pull-request check. `make test` runs the
-complete suite and requests the `examples` extra in its locked `uv run`
-command. After the CI lane runs the dedicated `lint_toolchain` step, it uses
-`make test-ci` to avoid running those integration tests twice while keeping
-them in the local suite.
+are frozen and do not re-check lock freshness; they run only after `make build`
+has checked and synced the locked environment, then preserve the deliberate
+Falcon override. The main coverage lane runs `uv lock --check` before its
+pinned shared coverage action, whose project sync is maintained outside this
+repository. The separate scheduled/manual mutation workflow also delegates to a
+pinned shared workflow; that workflow runs `uv run --with` without `--locked`,
+so uv automatically updates an out-of-date lock while preparing that job's
+project environment. This mutation workflow is not a pull-request check.
+`make test` runs the complete suite and requests the `examples` extra in its
+locked `uv run` command. After the CI lane runs the dedicated `lint_toolchain`
+step, it uses `make test-ci` to avoid running those integration tests twice
+while keeping them in the local suite.
 
 ### Refreshing the lockfile
 
