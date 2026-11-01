@@ -59,7 +59,10 @@ and propagate. Cancellation preserves an already selected or reported code;
 otherwise it selects `1001` and attempts a best-effort close on the accepted
 transport. Shielded cleanup continues through each disconnect stage once, even
 when the caller is cancelled again. Rejected connections and failed
-`on_connect` calls do not call the callback.
+`on_connect` calls do not call the callback. The optional host telemetry
+contract observes these lifecycle operations without changing error or
+cancellation behaviour; see
+[Optional lifecycle metrics and tracing](#optional-lifecycle-metrics-and-tracing).
 
 The diagrams below show the router-owned session path.
 
@@ -129,6 +132,49 @@ accepts, starts the session, dispatches frames, and calls the disconnect hook.**
 
 This implemented contract supersedes the future-tense responder and receive
 loop descriptions in the original proposal below.
+
+### Optional lifecycle metrics and tracing
+
+An application may assign a synchronous host adapter to
+`WebSocketRouter.lifecycle_observer` before serving requests. The default is
+`None`, and assigning `None` disables instrumentation. Router constructor
+signatures do not change, and the package does not install a telemetry SDK,
+exporter, or global configuration. Each connection retains the observer
+selected when negotiation starts, including through acceptance and cleanup.
+
+The contracts in `falcon_pachinko.observability` are `LifecycleObserver`,
+`LifecycleObservationEvent`, `LifecycleSpan`, and `LifecycleSpanResult`. The
+observer's `record_operation(event)` method receives an immutable event with a
+monotonic duration and bounded categorical fields. `start_span(name)` returns a
+host-owned span or `None`; the framework finishes a returned span once with an
+immutable result. The host adapter owns SDK setup, sampling, aggregation, and
+export.
+
+For each completed operation, the host adapter increments the counter
+`falcon_pachinko.websocket.lifecycle.operations` and records its duration in
+seconds in the histogram
+`falcon_pachinko.websocket.lifecycle.operation.duration`. The span names are
+`falcon_pachinko.websocket.negotiation`, `falcon_pachinko.websocket.session`,
+and `falcon_pachinko.websocket.finalization`.
+
+| Field                 | Fixed values                                                                                   |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| `operation`           | `negotiation`, `acceptance`, `session_start`, `receive_termination`, `finalization`, `cleanup` |
+| `outcome`             | `succeeded`, `rejected`, `failed`, `cancelled`                                                 |
+| `failure_category`    | `none`, `application`, `transport`, `cleanup`, `cancelled`, `other`                            |
+| `close_code_category` | `unknown`, `normal`, `going_away`, `protocol_error`, `server_error`, `abnormal`, `other`       |
+
+These fields produce at most 1,008 label combinations per metric instrument.
+Events and spans include no connection, room, node, or message identifiers; raw
+paths or URLs; payloads; credentials; exception messages; or arbitrary
+exception class names. Successful frames do not each emit an event: the receive
+measurement describes termination of the whole receive loop. Cleanup records
+errors returned as values as well as raised errors. Observer callbacks must
+return promptly; exceptions, including adapter-raised cancellation, are
+suppressed so instrumentation cannot change WebSocket error precedence,
+cancellation, or cleanup. See the
+[developer guide](developers-guide.md#optional-lifecycle-metrics-and-tracing)
+for the adapter and category details.
 
 ## 2. Literature Survey and Existing Solutions
 
@@ -828,6 +874,15 @@ accustomed to Falcon.
   - Key elements: `on_connect()`, `on_session_start()`, `on_disconnect()`
   - Purpose: negotiate the connection, run accepted-only setup, then clean up.
   - Falcon analogy: request/response middleware.
+
+- **Lifecycle Observability**
+
+  - Key elements: `WebSocketRouter.lifecycle_observer` and the contracts in
+    `falcon_pachinko.observability`.
+  - Purpose: optional host-owned metrics and tracing with bounded labels,
+    disabled by default.
+  - Details: see
+    [Optional lifecycle metrics and tracing](#optional-lifecycle-metrics-and-tracing).
 
 - **Message Handling (Typed)**
 
