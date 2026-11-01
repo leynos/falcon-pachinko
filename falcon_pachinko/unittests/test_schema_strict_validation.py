@@ -6,6 +6,9 @@ the strictness decision. These tests pin that contract: extras reach
 and msgspec's coercion, and nested Structs keep their own declarations.
 """
 
+import collections.abc as cabc
+import typing as typ
+
 import msgspec as ms
 import msgspec.json as msjson
 import pytest
@@ -21,41 +24,58 @@ from falcon_pachinko.unittests.test_schema_dispatch import (
 from falcon_pachinko.utils import ValidationError
 
 
-class ConventionalJoinResource(WebSocketResource):
-    """Schema-backed resource resolving a conventional ``on_join`` handler."""
+class _RecordingResource(WebSocketResource):
+    """Base resource recording handler events and fallback frames.
 
-    schema = Join
+    Each test resource below declares only its ``schema`` and handlers; the
+    record format lives in one place so it cannot drift between them.
+    """
 
     def __init__(self) -> None:
         """Initialize with an empty events list."""
-        self.events: list[tuple[str, object]] = []
+        self.events: list[object] = []
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record fallback frames."""
+        self.events.append(("raw", message))
+
+
+class _RecordingResourceLike(typ.Protocol):
+    """Resource surface shared by the parametrized dispatch tests.
+
+    The dispatch resources live in two modules; this lets one test drive both
+    without pretending one class is the other. ``events`` is read-only here
+    because the tests only inspect what was recorded.
+    """
+
+    events: cabc.Sequence[object]
+
+    def bind_default_hook_manager(self) -> object:
+        """Install the framework's default hook manager."""
+
+    async def dispatch(self, ws: WebSocketLike, raw: str | bytes) -> None:
+        """Dispatch one received frame."""
+
+
+class ConventionalJoinResource(_RecordingResource):
+    """Schema-backed resource resolving a conventional ``on_join`` handler."""
+
+    schema = Join
 
     async def on_join(self, ws: WebSocketLike, payload: Join) -> None:
         """Record the conventional handler event."""
         self.events.append(("on_join", payload.room))
 
-    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Record fallback frames."""
-        self.events.append(("raw", message))
 
-
-class LenientSchemaResource(WebSocketResource):
+class LenientSchemaResource(_RecordingResource):
     """Schema-backed resource whose decorated handler opts out of strictness."""
 
     schema = MessageUnion
-
-    def __init__(self) -> None:
-        """Initialize with an empty events list."""
-        self.events: list[tuple[str, object]] = []
 
     @handles_message("join", strict=False)
     async def handle_join(self, ws: WebSocketLike, payload: Join) -> None:
         """Record the join room while ignoring undeclared fields."""
         self.events.append(("join", payload.room))
-
-    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Record fallback frames."""
-        self.events.append(("raw", message))
 
 
 class CustomTagMessage(ms.Struct, tag="custom", tag_field="kind"):
@@ -64,22 +84,14 @@ class CustomTagMessage(ms.Struct, tag="custom", tag_field="kind"):
     value: str
 
 
-class CustomTagResource(WebSocketResource):
+class CustomTagResource(_RecordingResource):
     """Resource resolving a conventional handler from a custom tag field."""
 
     schema = CustomTagMessage
 
-    def __init__(self) -> None:
-        """Initialize with an empty events list."""
-        self.events: list[tuple[str, object]] = []
-
     async def on_custom(self, ws: WebSocketLike, payload: CustomTagMessage) -> None:
         """Record the value carried by the custom tag message."""
         self.events.append(("on_custom", payload.value))
-
-    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Record fallback frames."""
-        self.events.append(("raw", message))
 
 
 class RenamedMessage(ms.Struct, tag="renamed", rename="camel"):
@@ -88,22 +100,14 @@ class RenamedMessage(ms.Struct, tag="renamed", rename="camel"):
     room_name: str
 
 
-class RenamedSchemaResource(WebSocketResource):
+class RenamedSchemaResource(_RecordingResource):
     """Resource dispatching a renamed message through a conventional handler."""
 
     schema = RenamedMessage
 
-    def __init__(self) -> None:
-        """Initialize with an empty events list."""
-        self.events: list[tuple[str, object]] = []
-
     async def on_renamed(self, ws: WebSocketLike, payload: RenamedMessage) -> None:
         """Record the room under its Python attribute name."""
         self.events.append(("on_renamed", payload.room_name))
-
-    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Record fallback frames."""
-        self.events.append(("raw", message))
 
 
 class NestedItem(ms.Struct):
@@ -119,14 +123,10 @@ class NestedMessage(ms.Struct, tag="nested"):
     items: list[NestedItem] = ms.field(default_factory=list)
 
 
-class NestedResource(WebSocketResource):
+class NestedResource(_RecordingResource):
     """Resource dispatching nested Structs through a conventional handler."""
 
     schema = NestedMessage
-
-    def __init__(self) -> None:
-        """Initialize with an empty events list."""
-        self.events: list[object] = []
 
     async def on_nested(self, ws: WebSocketLike, payload: NestedMessage) -> None:
         """Record the nested amounts in declaration and container order."""
@@ -135,10 +135,6 @@ class NestedResource(WebSocketResource):
             payload.item.amount,
             [item.amount for item in payload.items],
         ))
-
-    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Record fallback frames."""
-        self.events.append(("raw", message))
 
 
 class ClosedNestedItem(ms.Struct, forbid_unknown_fields=True):
@@ -153,24 +149,16 @@ class ClosedNestedMessage(ms.Struct, tag="closed_nested"):
     item: ClosedNestedItem
 
 
-class ClosedNestedResource(WebSocketResource):
+class ClosedNestedResource(_RecordingResource):
     """Resource whose nested Struct owns its own unknown-field contract."""
 
     schema = ClosedNestedMessage
-
-    def __init__(self) -> None:
-        """Initialize with an empty events list."""
-        self.events: list[tuple[str, object]] = []
 
     async def on_closed_nested(
         self, ws: WebSocketLike, payload: ClosedNestedMessage
     ) -> None:
         """Record the nested amount."""
         self.events.append(("closed_nested", payload.item.amount))
-
-    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Record fallback frames."""
-        self.events.append(("raw", message))
 
 
 class OptionalMessage(ms.Struct, tag="optional"):
@@ -180,22 +168,14 @@ class OptionalMessage(ms.Struct, tag="optional"):
     detail: str | None = None
 
 
-class OptionalResource(WebSocketResource):
+class OptionalResource(_RecordingResource):
     """Resource dispatching a message with optional fields."""
 
     schema = OptionalMessage
 
-    def __init__(self) -> None:
-        """Initialize with an empty events list."""
-        self.events: list[object] = []
-
     async def on_optional(self, ws: WebSocketLike, payload: OptionalMessage) -> None:
         """Record the resolved label and detail values."""
         self.events.append(("optional", payload.label, payload.detail))
-
-    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Record fallback frames."""
-        self.events.append(("raw", message))
 
 
 class CoercedMessage(ms.Struct, tag="coerced"):
@@ -204,42 +184,26 @@ class CoercedMessage(ms.Struct, tag="coerced"):
     count: int
 
 
-class StrictCoercionResource(WebSocketResource):
+class StrictCoercionResource(_RecordingResource):
     """Resource whose decorated handler keeps strict conversion."""
 
     schema = CoercedMessage
-
-    def __init__(self) -> None:
-        """Initialize with an empty events list."""
-        self.events: list[tuple[str, object]] = []
 
     @handles_message("coerced")
     async def handle_coerced(self, ws: WebSocketLike, payload: CoercedMessage) -> None:
         """Record the integer count."""
         self.events.append(("coerced", payload.count))
 
-    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Record fallback frames."""
-        self.events.append(("raw", message))
 
-
-class LenientCoercionResource(WebSocketResource):
+class LenientCoercionResource(_RecordingResource):
     """Resource whose decorated handler opts into lax conversion."""
 
     schema = CoercedMessage
-
-    def __init__(self) -> None:
-        """Initialize with an empty events list."""
-        self.events: list[tuple[str, object]] = []
 
     @handles_message("coerced", strict=False)
     async def handle_coerced(self, ws: WebSocketLike, payload: CoercedMessage) -> None:
         """Record the laxly coerced integer count."""
         self.events.append(("coerced", payload.count))
-
-    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Record fallback frames."""
-        self.events.append(("raw", message))
 
 
 class ClosedTopMessage(ms.Struct, tag="closed_top", forbid_unknown_fields=True):
@@ -248,14 +212,10 @@ class ClosedTopMessage(ms.Struct, tag="closed_top", forbid_unknown_fields=True):
     value: int
 
 
-class LenientClosedTopResource(WebSocketResource):
+class LenientClosedTopResource(_RecordingResource):
     """Resource opting out of strictness for a closed top-level Struct."""
 
     schema = ClosedTopMessage
-
-    def __init__(self) -> None:
-        """Initialize with an empty events list."""
-        self.events: list[tuple[str, object]] = []
 
     @handles_message("closed_top", strict=False)
     async def handle_closed_top(
@@ -264,19 +224,11 @@ class LenientClosedTopResource(WebSocketResource):
         """Record the value of a closed message."""
         self.events.append(("closed_top", payload.value))
 
-    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Record fallback frames."""
-        self.events.append(("raw", message))
 
-
-class RaisingHandlerResource(WebSocketResource):
+class RaisingHandlerResource(_RecordingResource):
     """Resource whose handler raises its own validation error."""
 
     schema = Join
-
-    def __init__(self) -> None:
-        """Initialize with an empty events list."""
-        self.events: list[tuple[str, object]] = []
 
     @handles_message("join")
     async def handle_join(self, ws: WebSocketLike, payload: Join) -> None:
@@ -284,32 +236,27 @@ class RaisingHandlerResource(WebSocketResource):
         msg = "handler failed"
         raise ValidationError(msg)
 
-    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
-        """Record fallback frames that must never be reached."""
-        self.events.append(("raw", message))
-
 
 @pytest.mark.asyncio
-async def test_schema_extra_field_on_decorated_handler_calls_fallback() -> None:
-    """An undeclared field rejects a schema message before the handler runs."""
-    r = SchemaResource()
+@pytest.mark.parametrize(
+    "resource_type",
+    [SchemaResource, ConventionalJoinResource],
+    ids=["decorated", "conventional"],
+)
+async def test_schema_extra_field_calls_fallback(
+    resource_type: type[_RecordingResourceLike],
+) -> None:
+    """An undeclared field rejects a schema message before the handler runs.
+
+    Both registration styles keep the default strict contract: a decorated
+    handler and a conventional ``on_<tag>`` handler see the same decision.
+    """
+    r = resource_type()
     r.bind_default_hook_manager()
     raw = msjson.encode({"type": "join", "room": "a", "extra": 1})
     await r.dispatch(DummyWS(), raw)
     assert r.events == [("raw", raw)], (
         "an extra top-level field must reach on_unhandled with the exact raw frame"
-    )
-
-
-@pytest.mark.asyncio
-async def test_schema_extra_field_on_conventional_handler_calls_fallback() -> None:
-    """Conventional schema handlers keep the default strict contract."""
-    r = ConventionalJoinResource()
-    r.bind_default_hook_manager()
-    raw = msjson.encode({"type": "join", "room": "a", "extra": 1})
-    await r.dispatch(DummyWS(), raw)
-    assert r.events == [("raw", raw)], (
-        "a conventional handler must not receive a message with undeclared fields"
     )
 
 
