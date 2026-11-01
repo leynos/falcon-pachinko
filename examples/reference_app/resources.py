@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses as dc
 import secrets
 import typing as typ
@@ -17,6 +16,7 @@ from falcon_pachinko import (
 )
 from falcon_pachinko.hooks import HookContext, HookEvent
 
+from ._connection_rollback import _rollback_setup_without_router_cleanup, _SetupRollback
 from .services import Task, TaskCreationParams
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
@@ -85,7 +85,7 @@ _PENDING_AUDIT_RECORDS = "_reference_pending_audit_records"
 def _remember_connection_audit(
     resource: WebSocketResource, record: dict[str, object]
 ) -> None:
-    """Keep pre-accept hook records until Falcon assigns a connection ID."""
+    """Keep setup audit records until a connection ID is available."""
     pending = resource.state.setdefault(_PENDING_AUDIT_RECORDS, [])
     if isinstance(pending, list):
         pending.append(record)
@@ -154,6 +154,16 @@ class TaskOperationConfig:
     payload_builder: cabc.Callable[[Task], dict[str, object]]
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _TaskStreamSession:
+    """Carry the connection identity and workspace setup values together."""
+
+    conn_id: str
+    workspace_id: str
+    project_id: str
+    user: str
+
+
 class TaskStreamResource(WebSocketResource):
     """Final resource that handles the bidirectional task stream."""
 
@@ -197,49 +207,121 @@ class TaskStreamResource(WebSocketResource):
         workspace_id: str,
         project_id: str,
     ) -> bool:
-        """Store request identity after auth and resource hooks have run."""
-        user = req.get_header("X-User") or req.get_param("user", default="guest")
-        self.state["workspace_id"] = workspace_id
-        self.state["project_id"] = project_id
-        self.state["user"] = user
+        """Register, accept, and open a task-stream workspace session.
+
+        The socket is registered before acceptance. Acceptance precedes
+        workspace setup, pending-audit association, session recording, and
+        readiness delivery.
+
+        Parameters
+        ----------
+        req : falcon.Request
+            The WebSocket upgrade request. The ``X-User`` header or ``user``
+            query parameter identifies the session user.
+        ws : WebSocketLike
+            The socket to register and accept for the session.
+        workspace_id : str
+            Identifier of the workspace to join.
+        project_id : str
+            Identifier of the project for this session.
+
+        Returns
+        -------
+        bool
+            ``True`` after session setup and readiness delivery complete.
+
+        Notes
+        -----
+        If setup fails after registration, rollback removes connection-manager
+        membership unless the router owns accepted-session cleanup. The
+        original setup failure propagates after rollback. If direct or
+        unaccepted rollback is cancelled after membership removal succeeds,
+        the setup failure is retained as ``CancelledError.__cause__``. If
+        removal also fails while cancellation is in progress, the removal
+        error is ``CancelledError.__cause__`` and the setup failure remains in
+        ``CancelledError.__context__``. Other rollback failures preserve both
+        failures.
+        """
+        session = _TaskStreamSession(
+            conn_id=secrets.token_hex(12),
+            workspace_id=workspace_id,
+            project_id=project_id,
+            user=req.get_header("X-User") or req.get_param("user", default="guest"),
+        )
+        await self._conn_mgr.add_connection(session.conn_id, ws)
+        self._conn_id = session.conn_id
+        await self._open_session(session, ws)
         return True
 
-    async def on_accepted(self, ws: WebSocketLike) -> None:
-        """Register and announce the session after Falcon accepts the socket."""
-        workspace_id: str = self.state["workspace_id"]
-        project_id: str = self.state["project_id"]
-        user: str = self.state.get("user", "guest")
-        conn_id = secrets.token_hex(12)
-        self._conn_id = conn_id
-        registered = False
+    async def _open_session(
+        self,
+        session: _TaskStreamSession,
+        ws: WebSocketLike,
+    ) -> None:
+        """Accept before exposing workspace membership or publishing readiness."""
+        is_accepted = False
         try:
-            await self._conn_mgr.add_connection(conn_id, ws)
-            registered = True
-            await self._conn_mgr.join_room(conn_id, _workspace_room(workspace_id))
-            pending_records = self.state.pop(_PENDING_AUDIT_RECORDS, [])
-            if isinstance(pending_records, list):
-                await self._audit.associate_connection(pending_records, conn_id)
-            await self._audit.record(
-                "session.open",
-                connection=conn_id,
-                workspace=workspace_id,
-                project=project_id,
-                user=user,
+            is_accepted = await self._accept_session(ws)
+            await self._prepare_workspace_session(session)
+            await self._associate_pending_audits(session)
+            await self._record_open_session(session)
+            await self._send_session_ready(ws, session)
+        except BaseException as error:
+            await _rollback_setup_without_router_cleanup(
+                _SetupRollback(
+                    owner=self,
+                    session=session,
+                    websocket=ws,
+                    is_accepted=is_accepted,
+                    error=error,
+                )
             )
-            await ws.send_media({
-                "type": "session.ready",
-                "payload": {
-                    "workspace": workspace_id,
-                    "project": project_id,
-                },
-            })
-        except (Exception, asyncio.CancelledError):
-            try:
-                if registered:
-                    await self._conn_mgr.remove_connection(conn_id)
-            finally:
-                self._conn_id = None
             raise
+
+    async def _prepare_workspace_session(self, session: _TaskStreamSession) -> None:
+        """Join the accepted socket to its workspace and retain route state."""
+        await self._conn_mgr.join_room(
+            session.conn_id, _workspace_room(session.workspace_id)
+        )
+        self.state.setdefault("workspace_id", session.workspace_id)
+        self.state["project_id"] = session.project_id
+        self.state["user"] = session.user
+
+    async def _associate_pending_audits(self, session: _TaskStreamSession) -> None:
+        """Associate route setup records only after acceptance establishes a session."""
+        pending_records = self.state.pop(_PENDING_AUDIT_RECORDS, [])
+        if isinstance(pending_records, list):
+            await self._audit.associate_connection(pending_records, session.conn_id)
+
+    async def _record_open_session(self, session: _TaskStreamSession) -> None:
+        """Record the accepted connection after route audits are associated."""
+        await self._audit.record(
+            "session.open",
+            connection=session.conn_id,
+            workspace=session.workspace_id,
+            project=session.project_id,
+            user=self.state["user"],
+        )
+
+    @staticmethod
+    async def _accept_session(ws: WebSocketLike) -> bool:
+        """Observe acceptance before later setup can fail."""
+        await ws.accept()
+        return getattr(ws, "unaccepted", False) is False
+
+    @staticmethod
+    async def _send_session_ready(
+        ws: WebSocketLike,
+        session: _TaskStreamSession,
+    ) -> None:
+        """Publish readiness only after the websocket handshake succeeds."""
+        await ws.send_media({
+            "type": "session.ready",
+            "payload": {
+                "workspace": session.workspace_id,
+                "project": session.project_id,
+            },
+        })
 
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Remove the websocket from the connection manager on disconnect."""
@@ -247,6 +329,7 @@ class TaskStreamResource(WebSocketResource):
             return
         conn_id = self._conn_id
         await self._conn_mgr.remove_connection(conn_id)
+        self._conn_id = None
         await self._audit.record(
             "session.closed",
             connection=conn_id,

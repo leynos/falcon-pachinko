@@ -19,6 +19,8 @@ from falcon_pachinko.router import WebSocketRouter
 
 from ._common import FrameKind, _decode_json
 
+_STARTUP_READY_TIMEOUT = 5
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
@@ -106,6 +108,10 @@ class SimulatorConnection:
     async def push_bytes(self, payload: bytes | bytearray | memoryview) -> None:
         """Queue a binary frame for the resource."""
         await self.simulator.push_bytes(payload)
+
+    async def wait_for_sent_count(self, count: int) -> None:
+        """Wait until the router has processed the requested number of replies."""
+        await self.simulator.wait_for_sent_count(count)
 
     async def disconnect(self, code: int = 1000) -> None:
         """Queue a client disconnect after any pending inbound frames."""
@@ -202,9 +208,7 @@ class SimulatorRouterHarness:
             request_path, simulator, request, original, router_task
         )
         try:
-            await asyncio.wait_for(
-                self._wait_until_ready(simulator, router_task), timeout=5
-            )
+            await self._wait_until_ready(simulator, router_task)
         except (Exception, asyncio.CancelledError):
             await self._rollback_startup(session)
             raise
@@ -224,11 +228,15 @@ class SimulatorRouterHarness:
     async def _finish_connection(self, session: _ConnectionSession) -> None:
         """Close test sockets and await the router's session task."""
         self._pending_simulator = None
-        if not session.simulator.closed:
-            await session.simulator.close()
-        if not session.websocket.closed:
-            await session.websocket.close()
-        await self._await_router_task(session.router_task)
+        try:
+            if not session.simulator.closed:
+                await session.simulator.close()
+            if not session.websocket.closed:
+                await session.websocket.close()
+            await self._await_router_task(session.router_task)
+        except BaseException:
+            await self._rollback_startup(session)
+            raise
 
     @asynccontextmanager
     async def connect(
@@ -279,9 +287,30 @@ class SimulatorRouterHarness:
         router_task: asyncio.Task[None],
     ) -> None:
         """Wait until routing accepts, closes, or fails before yielding."""
-        await asyncio.wait_for(simulator.ready_event.wait(), timeout=5)
+        readiness_task = asyncio.create_task(simulator.ready_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                (router_task, readiness_task),
+                timeout=_STARTUP_READY_TIMEOUT,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                msg = "router did not accept or reject the simulated connection"
+                raise TimeoutError(msg)
+            if router_task in done:
+                router_task.result()
+            elif simulator.closed and router_task.done():
+                # A close is a readiness event too; surface any failure that
+                # followed the resource's rejection or setup rollback.
+                router_task.result()
+        finally:
+            readiness_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await readiness_task
         if simulator.closed or router_task.done():
-            await router_task
+            await asyncio.wait_for(
+                asyncio.shield(router_task), timeout=_STARTUP_READY_TIMEOUT
+            )
 
     @staticmethod
     async def _await_router_task(router_task: asyncio.Task[None]) -> None:

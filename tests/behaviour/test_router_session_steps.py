@@ -17,9 +17,9 @@ from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from ._live_server import LiveServerContext, SessionRecorder
+    from ._router_live_server import LiveServerContext, SessionRecorder
 
-pytest_plugins = ("tests.behaviour._live_server",)
+pytest_plugins = ("tests.behaviour._router_live_server",)
 
 
 class EchoMessage(ms.Struct, tag="echo"):

@@ -420,14 +420,15 @@ exclude = [
 members = ["falcon_pachinko/exceptions.py::__init__", "falcon_pachinko/websocket.py::__init__"]
 reason = "These __init__ methods preserve independent public exception contracts: their built-in base classes, arguments, and messages differ across handler dispatch and WebSocket routing. A shared formatter or base class would couple separate error domains without shared validation logic. Nose reports only __init__, so the exact two-file member keys deliberately cover constructors in these files."
 [[tool.duplication_gate.allow]]
-members = ["falcon_pachinko/router.py", "falcon_pachinko/__init__.py"]
-reason = "The router imports these types for its own dispatch implementation; the package initializer independently re-exports selected names through __all__. Centralising the lines would require an import-only module, while importing through the initializer from the router would create a cycle. Nose reports an unnamed import fragment in both files, so both exact path-only keys are necessary. A router-only family, or any family with a location elsewhere, remains blocking."
-[[tool.duplication_gate.allow]]
 members = ["falcon_pachinko/_uri_template.py::compile_uri_template", "falcon_pachinko/_uri_template.py::_compile_prefix_template"]
 reason = "The main-branch URI-template extraction moved these thin wrappers into _uri_template.py. Both still call _compile_template_with_suffix; their suffixes encode different contracts: a full URI with an optional trailing slash versus a prefix ending at a segment boundary. Inlining the suffixes would spread regex details into callers, while sharing one wrapper would erase semantics. This exception names only the two reported units."
 [[tool.duplication_gate.allow]]
 unit = "falcon_pachinko/diagnostics.py"
 reason = "Nose reports the sequence and mapping opening-delimiter emissions as unnamed fragments in diagnostics.py. Their traversal contracts remain distinct: sequences preserve list or tuple shape, while mappings filter and normalize keys and account for omitted entries. A shared renderer would couple those output and budget rules for two one-line delimiters. The path-only key is required because the fragments have no unit names; it also covers future families within this file, which must be inspected rather than treated as blanket approval."
+
+[[tool.duplication_gate.allow]]
+members = ["falcon_pachinko/_router_attachment.py", "falcon_pachinko/_session_setup.py"]
+reason = "Nose reports these TYPE_CHECKING imports as unnamed fragments; each module needs independent annotation dependencies, and extracting them would add import-only coupling. Keep this exact pair reviewed rather than sharing runtime behavior."
 
 # Mutation testing. `make mutation` prints the local command; CI runs the
 # estate's reusable workflow, which injects the pinned mutmut through

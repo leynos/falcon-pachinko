@@ -20,10 +20,6 @@ class _RequestLike(typ.Protocol):
     def path(self) -> str:
         """The request path."""
 
-    @property
-    def path_template(self) -> str:
-        """The mount path template."""
-
 
 @dc.dataclass(slots=True)
 class _RawRoute:

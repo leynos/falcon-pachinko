@@ -9,12 +9,14 @@ Falcon app and used to generate URLs for registered routes.
 
 from __future__ import annotations
 
+import asyncio
 import collections.abc as cabc
 import contextlib
 import dataclasses as dc
 import functools
 import inspect
 import threading
+import time
 import typing as typ
 
 import falcon
@@ -33,9 +35,13 @@ from ._route_support import (
 )
 from ._router_attachment import attach_router
 from ._router_resources import _ResourceResolver
-from ._router_session import _ConnectionSession
+from ._session_driver import _SessionOptions, run_session
 from ._uri_template import _compile_prefix_template, compile_uri_template
-from .hooks import HookCollection, HookContext, HookManager
+from .hooks import HookCollection, HookManager
+from .observability import (
+    NOOP_SESSION_INSTRUMENTATION,
+    SessionInstrumentation,
+)
 from .protocols import WebSocketLike
 
 # Imported at runtime, not under TYPE_CHECKING: ``ResourceFactory`` below is a
@@ -43,6 +49,9 @@ from .protocols import WebSocketLike
 # that raises NameError when introspected would be a trap for runtime
 # consumers, so the name it references has to resolve at runtime too.
 from .resource import WebSocketResource
+
+if typ.TYPE_CHECKING:
+    from ._session import SessionState
 
 __all__ = ["ResourceFactory", "SimulatorFactory", "WebSocketRouter"]
 
@@ -58,6 +67,33 @@ type SimulatorFactory = cabc.Callable[
 ]
 
 
+def _guard_session_clock(
+    clock: cabc.Callable[[], float],
+) -> cabc.Callable[[], float]:
+    """Keep diagnostics clock failures from bypassing session cleanup."""
+    last_reading: float | None = None
+    use_fallback_clock = False
+
+    def read_clock() -> float:
+        nonlocal last_reading, use_fallback_clock
+        if use_fallback_clock:
+            return time.monotonic()
+        try:
+            reading = clock()
+        except (Exception, asyncio.CancelledError):  # ruff: ignore[blind-except] - isolate timing failures so cleanup always runs
+            # Callback cancellation is telemetry failure, not task cancellation.
+            if last_reading is not None:
+                return last_reading
+            # Once fallback establishes the time base, don't switch epochs if
+            # a host clock that failed at startup later begins returning values.
+            use_fallback_clock = True
+            return time.monotonic()
+        last_reading = reading
+        return reading
+
+    return read_clock
+
+
 @dc.dataclass(slots=True)
 class _Dispatch:
     """Mutable per-request state threaded through the routing pipeline."""
@@ -66,23 +102,7 @@ class _Dispatch:
     req: falcon.Request
     ws: WebSocketLike
     match: _RouteMatch
-    session_close_attempted: bool = False
-
-    def mark_session_close_attempted(self) -> None:
-        """Record when the session driver owns the policy close."""
-        self.session_close_attempted = True
-
-
-@dc.dataclass(slots=True)
-class _ConnectionFinalization:
-    """Group the state needed to complete one connection handshake."""
-
-    resource: WebSocketResource
-    ws: WebSocketLike
-    should_accept: bool
-    context: HookContext
-    hook_manager: HookManager
-    on_accept: cabc.Callable[[], None] | None = None
+    session: SessionState | None = None
 
 
 class WebSocketRouter:
@@ -118,8 +138,9 @@ class WebSocketRouter:
             permits the session and attempt ``on_disconnect`` once, including
             acceptance setup failure. ``attach()`` and
             ``configure_raw_frame_media(app)`` share the User Guide's app-wide
-            raw-media setup. If false, return after acceptance; the application
-            owns receiving and cleanup.
+            raw-media setup. If false, return after observed acceptance; the
+            application owns receiving and cleanup. Approval without completed
+            acceptance is cleaned up by the router before it returns.
         """
         self._raw: list[_RawRoute] = []
         self._routes: list[_CompiledRoute] = []
@@ -138,6 +159,54 @@ class WebSocketRouter:
         self._simulator_factory = simulator_factory
         self._receive_loop = receive_loop
         self._attached = False
+        self._session_instrumentation: SessionInstrumentation = (
+            NOOP_SESSION_INSTRUMENTATION
+        )
+        self._session_started = False
+        self._session_clock: cabc.Callable[[], float] = time.monotonic
+
+    def configure_session_instrumentation(
+        self,
+        instrumentation: SessionInstrumentation | None,
+        *,
+        monotonic_clock: cabc.Callable[[], float] | None = None,
+    ) -> None:
+        """Configure optional host-owned metrics and timing before first use.
+
+        The router has a no-op implementation by default. The configured
+        adapter must use synchronous, non-blocking callbacks and bounded
+        exporter work; it is invoked on the session's event-loop thread.
+        An optional monotonic clock supplies lifecycle observation and
+        instrumentation durations. After a successful read, a failure returns
+        the last reading until the host clock recovers. If the first read
+        fails, the router uses ``time.monotonic`` for that router's lifetime,
+        keeping timing in one time base without bypassing session cleanup.
+
+        Parameters
+        ----------
+        instrumentation : SessionInstrumentation or None
+            Host adapter, or ``None`` to restore the no-op implementation.
+        monotonic_clock : collections.abc.Callable or None, default=None
+            Monotonic clock used for lifecycle observations and instrumentation.
+            ``None`` restores ``time.monotonic``.
+
+        Raises
+        ------
+        RuntimeError
+            If a routed session has already started on this router.
+        """
+        with self._mount_lock:
+            if self._session_started:
+                msg = "session instrumentation must be configured before first use"
+                raise RuntimeError(msg)
+            self._session_instrumentation = (
+                NOOP_SESSION_INSTRUMENTATION
+                if instrumentation is None
+                else instrumentation
+            )
+            self._session_clock = _guard_session_clock(
+                time.monotonic if monotonic_clock is None else monotonic_clock
+            )
 
     @staticmethod
     def _compile_route(
@@ -395,8 +464,11 @@ class WebSocketRouter:
             ws_for_cleanup = dispatch.ws
             return await self._process_route_resolution(dispatch)
         except Exception as exc:
+            session_is_established = (
+                dispatch.session is not None and dispatch.session.has_established
+            )
             factory_closed = getattr(exc, "_pachinko_factory_closed", False)
-            if not dispatch.session_close_attempted and not factory_closed:
+            if not session_is_established and not factory_closed:
                 with contextlib.suppress(Exception):
                     await ws_for_cleanup.close()
             raise
@@ -508,105 +580,18 @@ class WebSocketRouter:
         hook_manager: HookManager,
     ) -> bool:
         """Run connection setup, then own the accepted session until closure."""
-        context = await self._prepare_connection_context(
-            hook_manager, resource, dispatch
-        )
-        should_accept = await self._execute_resource_handler(
-            resource, dispatch, context, hook_manager
-        )
-        if should_accept:
-            connection_session = _ConnectionSession(resource, dispatch.ws, hook_manager)
-            acceptance = self._finalize_connection(
-                _ConnectionFinalization(
-                    resource=resource,
-                    ws=dispatch.ws,
-                    should_accept=True,
-                    context=context,
-                    hook_manager=hook_manager,
-                    on_accept=connection_session.mark_accepted,
-                )
-            )
-            await connection_session.run(
-                acceptance,
-                on_policy_close=dispatch.mark_session_close_attempted,
-                receive_loop=self._receive_loop,
-            )
-            return True
-
-        acceptance = self._finalize_connection(
-            _ConnectionFinalization(
-                resource=resource,
-                ws=dispatch.ws,
-                should_accept=False,
-                context=context,
-                hook_manager=hook_manager,
-            )
-        )
-        return await acceptance
-
-    @staticmethod
-    async def _prepare_connection_context(
-        hook_manager: HookManager,
-        resource: WebSocketResource,
-        dispatch: _Dispatch,
-    ) -> HookContext:
-        """Return the hook context with the handler parameters resolved."""
-        params_obj: dict[str, object] = dict(dispatch.match.params)
-        context = await hook_manager.notify_before_connect(
+        with self._mount_lock:
+            self._session_started = True
+            instrumentation = self._session_instrumentation
+            session_clock = self._session_clock
+        return await run_session(
             resource,
-            req=dispatch.req,
-            ws=dispatch.ws,
-            params=params_obj,
+            dispatch,
+            hook_manager=hook_manager,
+            options=_SessionOptions(
+                receive_loop=self._receive_loop,
+                observation_clock=session_clock,
+                instrumentation_clock=session_clock,
+                instrumentation=instrumentation,
+            ),
         )
-        # ``before_connect`` hooks may rewrite the parameters; fall back to the
-        # route captures when they leave them untouched.
-        if context.params is None:
-            context.params = params_obj
-        return context
-
-    @staticmethod
-    async def _execute_resource_handler(
-        resource: WebSocketResource,
-        dispatch: _Dispatch,
-        context: HookContext,
-        hook_manager: HookManager,
-    ) -> bool:
-        """Invoke ``resource.on_connect`` handling hook error propagation."""
-        params = context.params if context.params is not None else {}
-        try:
-            return await resource.on_connect(dispatch.req, dispatch.ws, **params)
-        except Exception as exc:
-            context.error = exc
-            context.result = False
-            await hook_manager.notify_after_connect(context)
-            raise
-
-    @staticmethod
-    async def _finalize_connection(
-        finalization: _ConnectionFinalization,
-    ) -> bool:
-        """Complete the connection lifecycle and honour ``should_accept``."""
-        context = finalization.context
-        context.result = finalization.should_accept
-        await finalization.hook_manager.notify_after_connect(context)
-        if not finalization.should_accept:
-            await finalization.ws.close()
-            return True
-        if getattr(finalization.ws, "closed", False):
-            return True
-        if WebSocketRouter._is_socket_unaccepted(finalization.ws):
-            await finalization.ws.accept()
-        if getattr(finalization.ws, "closed", False):
-            return True
-        if finalization.on_accept is not None:
-            finalization.on_accept()
-        await finalization.resource.on_accepted(finalization.ws)
-        return True
-
-    @staticmethod
-    def _is_socket_unaccepted(ws: WebSocketLike) -> bool:
-        """Return whether the handshake still needs router-owned acceptance."""
-        unaccepted = getattr(ws, "unaccepted", None)
-        if isinstance(unaccepted, bool):
-            return unaccepted
-        return not bool(getattr(ws, "accepted", False))
