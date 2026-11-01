@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses as dc
 import inspect
 import logging
+import time
 import typing as typ
 
 import msgspec as ms
@@ -132,6 +133,7 @@ async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
     payload = context.payload
     rejected = False
     if payload_type is not None:
+        started = time.monotonic()
         try:
             validate_strict_payload(
                 payload, payload_type, strict=context.handler_info.strict
@@ -142,6 +144,7 @@ async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
                 strict=context.handler_info.strict,
             )
         except ms.ValidationError as exc:
+            duration_seconds = max(0.0, time.monotonic() - started)
             # Application telemetry can count rejections without seeing frames
             # or payload values; the default on_unhandled is silent.
             logger.debug(
@@ -149,7 +152,7 @@ async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
                 extra={
                     "operation": "dispatch",
                     "outcome": "rejected",
-                    "duration_seconds": 0.0,
+                    "duration_seconds": duration_seconds,
                     "exception_type": _type_name(exc),
                     "expected_type": _expected_type_label(context.handler_info),
                 },
