@@ -28,7 +28,7 @@ SHELL_QUOTED_TEXT = re.compile(r"\\.|'[^']*'|\"(?:\\.|[^\"\\])*\"")
 SHELL_COMMAND_SUBSTITUTION = re.compile(r"\$\((?!\()")
 
 
-SHELL_BACKTICK_SUBSTITUTION = re.compile(r"`(?:\\.|[^`\\])*`")
+SHELL_BACKTICK_SUBSTITUTION = re.compile(r"\\.|(?P<substitution>`(?:\\.|[^`\\])*`)")
 
 
 MAKE_COMMAND_SUBSTITUTION = re.compile(r"\$\$\((?!\()")
@@ -45,6 +45,11 @@ QUOTED_CLOSE_PARENTHESIS = "\ue001"
 
 def logical_lines(text: str) -> list[tuple[int, str]]:
     """Return source lines joined across shell or Make continuations.
+
+    Parameters
+    ----------
+    text : str
+        Makefile recipe or shell script source.
 
     Returns
     -------
@@ -234,6 +239,15 @@ def shell_commands(
 ) -> list[list[str]]:
     """Split a logical shell line at command separators.
 
+    Parameters
+    ----------
+    line : str
+        One logical shell line.
+    line_number : int
+        One-based starting line number, used in error messages.
+    is_makefile : bool
+        Whether Make recipe syntax applies to the line.
+
     Returns
     -------
     list of list of str
@@ -302,6 +316,7 @@ def _backtick_substitution_contains_uv_command(line: str) -> bool:
     return any(
         _backtick_match_contains_uv_command(source, match, single_quoted_spans)
         for match in SHELL_BACKTICK_SUBSTITUTION.finditer(source)
+        if match.group("substitution") is not None
     )
 
 
@@ -311,16 +326,15 @@ def _backtick_match_contains_uv_command(
     single_quoted_spans: list[tuple[int, int]],
 ) -> bool:
     """Return whether one active backtick substitution may invoke uv."""
-    prefix = source[: match.start()]
-    preceding_backslashes = len(prefix) - len(prefix.rstrip("\\"))
-    if preceding_backslashes % 2:
-        return False
     if any(
         start <= match.start() and match.end() <= end
         for start, end in single_quoted_spans
     ):
         return False
-    return bool(UV_COMMAND_IN_SUBSTITUTION.search(match.group()[1:-1]))
+    substitution = match.group("substitution")
+    if substitution is None:
+        return False
+    return bool(UV_COMMAND_IN_SUBSTITUTION.search(substitution[1:-1]))
 
 
 def _protect_quoted_parentheses(

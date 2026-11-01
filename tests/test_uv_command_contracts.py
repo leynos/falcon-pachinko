@@ -528,7 +528,14 @@ def test_command_scanner_fails_closed_on_quoted_command_substitutions() -> None:
         unlocked_project_commands(script)
 
 
-@pytest.mark.parametrize("script", ["echo `uv sync`", r"echo \\`uv sync`"])
+@pytest.mark.parametrize(
+    "script",
+    [
+        "echo `uv sync`",
+        r"echo \\`uv sync`",
+        r"echo \` `uv sync`",
+    ],
+)
 def test_command_scanner_fails_closed_on_backtick_substitutions(script: str) -> None:
     """An active backtick substitution must not hide a project call."""
     with pytest.raises(

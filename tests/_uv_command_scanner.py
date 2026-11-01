@@ -295,7 +295,20 @@ def _uv_project_subcommand_index(tokens: list[str], index: int) -> int | None:
 
 
 def is_project_subcommand(tokens: list[str], index: int) -> bool:
-    """Return whether a valid token index names a project uv subcommand."""
+    """Return whether a valid token index names a project uv subcommand.
+
+    Parameters
+    ----------
+    tokens : list of str
+        Tokens of one shell command.
+    index : int
+        Position to test; an out-of-range index yields ``False``.
+
+    Returns
+    -------
+    bool
+        Whether ``tokens[index]`` is ``run`` or ``sync``.
+    """
     return 0 <= index < len(tokens) and tokens[index] in {"run", "sync"}
 
 

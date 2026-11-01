@@ -305,13 +305,7 @@ Tool environments are separate as well. `uv tool run`, `uv run --no-project` and
 pins or constraints remain at their Makefile and CI call sites; this policy
 adds no pins for `mbake`, `cibuildwheel` or the build backend.
 
-### Dependabot
-
-Dependabot's root `uv` entry in `.github/dependabot.yml` is the only automated
-lockfile refresh path. It groups minor and patch updates into pull requests; CI
-validates each candidate against the committed lock with `--locked`.
-`tests/test_uv_toolchain.py` holds the updater configuration and the lockfile
-contract in place.
+### Command contracts
 
 `tests/test_uv_command_contracts.py` enforces this policy in Makefile recipes,
 GitHub Actions `run:` steps and composite-action `action.yml` files, using
@@ -319,6 +313,14 @@ GitHub Actions `run:` steps and composite-action `action.yml` files, using
 with source lines and fails closed on unsupported shell syntax or uv and env
 options that could hide a command. When adding a supported option, update the
 scanner's option tables and the focused command-contract tests together.
+
+### Dependabot
+
+Dependabot's root `uv` entry in `.github/dependabot.yml` is the only automated
+lockfile refresh path. It groups minor and patch updates into pull requests; CI
+validates each candidate against the committed lock with `--locked`.
+`tests/test_uv_toolchain.py` holds the updater configuration and the lockfile
+contract in place.
 
 The auto-merge workflow needs no change for this: `dependabot-automerge.yml`
 keys on the actor `dependabot[bot]`, not on the ecosystem that opened the pull
