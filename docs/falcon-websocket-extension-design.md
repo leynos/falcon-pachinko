@@ -1341,8 +1341,10 @@ A lone session or cleanup failure is re-raised unchanged. Multiple ordinary
 failures are grouped in an `ExceptionGroup`, with the primary session failure
 first. Cancellation remains a bare `CancelledError`; cleanup failures that
 cannot be grouped with cancellation are reported through the running loop's
-exception handler. This cleanup guarantee is what makes membership added during
-approved connection setup reliably removable by `on_disconnect`.
+exception handler. Membership added after transport acceptance, normally in
+`on_session_start`, can then be removed by `on_disconnect`. State changes made
+before acceptance, such as in `on_connect`, need application-owned rollback if
+negotiation fails because pre-acceptance failures do not invoke `on_disconnect`.
 
 ```mermaid
 erDiagram

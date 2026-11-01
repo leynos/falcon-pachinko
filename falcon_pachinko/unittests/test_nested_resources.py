@@ -234,6 +234,62 @@ async def test_nested_subroute_params() -> None:
 
 
 @pytest.mark.asyncio
+async def test_nested_accepted_session_finalizes_child() -> None:
+    """Closing an accepted nested session runs child disconnect cleanup once."""
+    disconnect_codes: list[int] = []
+
+    class AcceptingChild(WebSocketResource):
+        """Accept the nested route and retain its merged parameters."""
+
+        instances: typ.ClassVar[list[AcceptingChild]] = []
+        params: dict[str, object]
+
+        def __init__(self) -> None:
+            """Track the child selected by nested route resolution."""
+            AcceptingChild.instances.append(self)
+
+        async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Accept the route after recording its merged parameters."""
+            self.params = params
+            return True
+
+        async def on_disconnect(self, ws: object, close_code: int) -> None:
+            """Record the close code delivered to nested cleanup."""
+            del ws
+            disconnect_codes.append(close_code)
+
+    class ParentWithAcceptingChild(WebSocketResource):
+        """Resolve the child path under a parameterized parent route."""
+
+        def __init__(self) -> None:
+            """Register the nested child route."""
+            self.add_subroute("child/{cid}", AcceptingChild)
+
+        async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Defer acceptance to the nested child."""
+            return False
+
+    AcceptingChild.instances.clear()
+    router = WebSocketRouter()
+    router.add_route("/parent/{pid}", ParentWithAcceptingChild)
+    router.mount("/")
+    ws = DummyWS()
+
+    session = await router.negotiate(make_req("/parent/42/child/9"), ws)
+
+    assert session is not None, "the accepting nested child must return a session"
+    assert ws.accepted, "the nested session must accept the transport"
+    assert AcceptingChild.instances[-1].params == {"pid": "42", "cid": "9"}, (
+        "nested acceptance must retain merged route parameters"
+    )
+    assert not disconnect_codes, "disconnect cleanup waits for session closure"
+
+    await session.aclose()
+
+    assert disconnect_codes == [1000], "session closure must finalize the child once"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("path", "description"),
     [
