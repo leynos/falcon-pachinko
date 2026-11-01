@@ -1,4 +1,10 @@
-"""Cancellation-safe cleanup and failure policy for routed sessions."""
+"""Own cancellation-safe disconnect cleanup and session failure precedence.
+
+The session driver runs accepted-session cleanup here, and
+``ConnectionSetup.execute()`` reuses its failure combiner for setup rollback.
+The cleanup task claims the single disconnect guard, attempts both hook stages,
+and preserves ordinary failure ordering while keeping cancellation bare.
+"""
 
 from __future__ import annotations
 

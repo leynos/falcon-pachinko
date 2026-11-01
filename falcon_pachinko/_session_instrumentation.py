@@ -1,4 +1,9 @@
-"""Instrument bounded outcomes for one routed WebSocket session."""
+"""Isolate host-configured telemetry around one routed WebSocket session.
+
+The session driver uses this boundary to own session counters, durations, and
+span completion without requiring a telemetry SDK. Its fixed dimensions and
+failure isolation prevent host callback errors from changing session outcomes.
+"""
 
 from __future__ import annotations
 

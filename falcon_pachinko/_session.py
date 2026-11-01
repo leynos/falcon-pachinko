@@ -1,4 +1,9 @@
-"""Internal state and failure policy for one accepted WebSocket session."""
+"""Track phases and failure state for one routed WebSocket session.
+
+The session driver shares this state with the socket adapter and cleanup task.
+It records the effective close code and primary error, while
+``begin_disconnect()`` grants exactly one caller cleanup ownership.
+"""
 
 from __future__ import annotations
 

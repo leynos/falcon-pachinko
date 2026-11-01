@@ -1,4 +1,10 @@
-"""Adapt native acceptance history and preserve raw inbound frames."""
+"""Adapt native sockets while preserving acceptance state and raw frames.
+
+The session driver installs this adapter before setup; session work uses its
+raw-frame receiver to dispatch text and binary messages without media
+re-decoding. The adapter keeps acceptance and close-code state in sync with the
+session while preserving the public WebSocketLike operations.
+"""
 
 from __future__ import annotations
 

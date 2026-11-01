@@ -1,4 +1,9 @@
-"""Emit bounded observations for routed WebSocket session behaviour."""
+"""Map routed-session events to bounded DEBUG observations and outcomes.
+
+The session driver and session-work helpers use these functions to describe
+phase, close-code, and exception categories. They retain exception objects for
+loop reporting but omit exception values and other unbounded data from labels.
+"""
 
 from __future__ import annotations
 

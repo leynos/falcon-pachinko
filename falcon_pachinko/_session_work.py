@@ -1,4 +1,9 @@
-"""Run ordered setup and receive work for a routed WebSocket session."""
+"""Run ordered setup and receive work for a routed WebSocket session.
+
+The session driver invokes this module after selecting the final resource.
+Setup establishes the cleanup promise, and the receive loop dispatches frames
+only while connected before handing the effective close code to cleanup.
+"""
 
 from __future__ import annotations
 

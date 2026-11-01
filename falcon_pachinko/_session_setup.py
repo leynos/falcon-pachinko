@@ -1,4 +1,10 @@
-"""Share the connection setup sequence between router session modes."""
+"""Enforce the ordered connection setup shared by router session modes.
+
+The session-work layer invokes ``ConnectionSetup.execute()`` for connect hooks,
+resource approval, after-connect hooks, and acceptance. This module preserves
+the establishment boundary and combines rollback failures with the original
+setup error.
+"""
 
 from __future__ import annotations
 
