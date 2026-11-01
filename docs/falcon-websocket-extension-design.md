@@ -102,13 +102,14 @@ stateDiagram-v2
     accTitle: WebSocket session state transitions
     accDescr {
         Approval or resource-owned acceptance promises cleanup. An unaccepted
-        rejection returns without cleanup. Peer closure, failure or
-        cancellation moves the established session through one cleanup phase.
+        false result returns without cleanup only when the resource did not
+        accept during on_connect. Peer closure, failure or cancellation moves
+        an established session through one cleanup phase.
     }
 
     [*] --> Connecting
     Connecting --> Established: on_connect approval or resource acceptance
-    Connecting --> [*]: false result while unaccepted
+    Connecting --> [*]: false result while neither router nor resource accepts
     Established --> Disconnecting: peer close, setup failure, receive failure or cancellation
     Disconnecting --> Closed: before_disconnect and on_disconnect attempted
     Closed --> [*]
