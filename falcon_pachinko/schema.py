@@ -69,9 +69,11 @@ def validate_schema_types(schema: type) -> None:
         If a member is not a tagged Struct, uses array encoding, or if the
         members do not all use the same kind of tag.
     """
-    types = typ.get_args(schema) or (schema,)
+    # Named ``members`` rather than ``types`` so the module import stays
+    # visible in this scope.
+    members = typ.get_args(schema) or (schema,)
     kinds: set[type] = set()
-    for t in types:
+    for t in members:
         # Narrow before inspecting metadata: a non-struct member must fail on
         # the membership check rather than inside ``msgspec.inspect``.
         struct = _require_struct_type(t)
@@ -83,7 +85,7 @@ def validate_schema_types(schema: type) -> None:
     # lone Struct has nothing to disagree with, and msgspec already rejects any
     # tag that is neither an ``int`` nor a ``str``.
     if len(kinds) > 1:
-        names = [_class_name(struct) for struct in types]
+        names = [_class_name(struct) for struct in members]
         msg = f"schema tags must all be strings or all be integers: {names!r}"
         raise TypeError(msg)
 

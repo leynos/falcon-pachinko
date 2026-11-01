@@ -285,43 +285,33 @@ async def test_schema_unknown_tag_after_generic_decode_calls_fallback() -> None:
 
 
 @pytest.mark.asyncio
-async def test_schema_missing_tag_calls_fallback() -> None:
-    """A frame without the tag field is not resolved to any schema member."""
-    r = IntegerTagResource()
-    r.bind_default_hook_manager()
-    raw = msjson.encode({"value": "one"})
-    await r.dispatch(DummyWS(), raw)
-    assert r.events == [("raw", raw)], (
-        "a frame with no tag must fall back rather than matching a handler"
-    )
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pytest.param({"value": "one"}, id="missing-tag"),
+        # ``bool`` subclasses ``int``, so a plain equality lookup would let
+        # ``True`` select the ``tag=1`` member.
+        pytest.param({"type": True, "value": "one"}, id="boolean-tag"),
+        pytest.param([1, 2], id="array"),
+        pytest.param("scalar", id="string"),
+        pytest.param(7, id="integer"),
+        pytest.param(None, id="null"),
+        pytest.param(True, id="boolean"),
+    ],
+)
+async def test_schema_unresolvable_frame_calls_fallback(frame: object) -> None:
+    """Frames without a usable integer tag reach the fallback unchanged.
 
-
-@pytest.mark.asyncio
-async def test_schema_boolean_tag_does_not_match_integer_tag() -> None:
-    """JSON ``true`` must not be accepted as the integer tag ``1``.
-
-    ``bool`` is a subclass of ``int`` in Python, so a plain equality lookup
-    would let ``True`` select the ``tag=1`` member.
+    A frame can fail to resolve because it is not a JSON object, omits the tag
+    field, or carries a tag of the wrong kind. All three must fall back rather
+    than fail dispatch or select a handler.
     """
-    r = IntegerTagResource()
-    r.bind_default_hook_manager()
-    raw = msjson.encode({"type": True, "value": "one"})
-    await r.dispatch(DummyWS(), raw)
-    assert r.events == [("raw", raw)], (
-        "a boolean tag must not be treated as the integer tag 1"
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("frame", [[1, 2], "scalar", 7, None, True])
-async def test_schema_non_object_frame_calls_fallback(frame: object) -> None:
-    """Frames that are not JSON objects cannot carry a tag and fall back."""
     r = IntegerTagResource()
     r.bind_default_hook_manager()
     raw = msjson.encode(frame)
     await r.dispatch(DummyWS(), raw)
     assert r.events == [("raw", raw)], (
-        "a non-object frame must fall back rather than fail dispatch"
+        "a frame without a usable integer tag must fall back with the raw frame"
     )
 
 
