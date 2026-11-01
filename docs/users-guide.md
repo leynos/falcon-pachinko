@@ -788,6 +788,21 @@ removes the connection and records `session.closed`. The app exposes its
 container as `app.reference_services` for access to the audit trail,
 repository, and connection manager.
 
+Announcement delivery is best effort, and each broadcast uses the room
+membership captured at broadcast time. A recipient that has already
+disconnected makes `broadcast_to_room` re-raise
+`falcon.WebSocketDisconnected` — directly for a single recipient, or grouped
+when several fail. The worker logs each such failure at debug level and keeps
+consuming, so the remaining recipients still receive the announcement and later
+announcements still reach their workspaces.
+
+Other failures are treated as unexpected. The worker logs them with a traceback
+and restarts its consuming loop after a fixed delay. An event that was dequeued
+when such a failure occurred is dropped rather than replayed. Cancellation
+propagates, so lifespan shutdown through `WorkerController.stop()` stops the
+worker cleanly. Applications that need stronger delivery guarantees should
+adapt this policy to their own requirements.
+
 The live pytest-bdd feature verifies the full journey, including
 `workspace.loaded`, `project.loaded`, `session.open`, `message.received`,
 `message.processed`, and `session.closed` for the same connection ID. It also
