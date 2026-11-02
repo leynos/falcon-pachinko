@@ -22,6 +22,23 @@ if typ.TYPE_CHECKING:
 _ASSERTION_FAILURE = "router instrumentation must preserve bounded lifecycle semantics"
 
 
+def _assert_setup_only_outcome(
+    instrumentation: RecordingInstrumentation, expected_outcome: Outcome
+) -> None:
+    """Assert a terminal setup outcome without a completed session duration."""
+    _, amount, dimensions = session_counter(instrumentation)
+    assert amount == 1, _ASSERTION_FAILURE
+    assert dimensions.outcome is expected_outcome, _ASSERTION_FAILURE
+    assert not any(
+        measurement is Duration.SESSION
+        for measurement, _, _ in instrumentation.durations
+    ), _ASSERTION_FAILURE
+    assert [span.name for span in instrumentation.spans] == [SpanName.SESSION], (
+        _ASSERTION_FAILURE
+    )
+    assert [span.end_count for span in instrumentation.spans] == [1], _ASSERTION_FAILURE
+
+
 class StartingResource(RecordingResource):
     """Record startup for the automatic application-owned handoff path."""
 
@@ -49,18 +66,8 @@ async def test_setup_only_handoff_counts_outcome_without_claiming_session_end() 
 
     await drive_router(router, SessionSocket())
 
-    _, amount, dimensions = session_counter(instrumentation)
-    assert amount == 1, _ASSERTION_FAILURE
-    assert dimensions.outcome is Outcome.HANDED_OFF, _ASSERTION_FAILURE
-    assert not any(
-        measurement is Duration.SESSION
-        for measurement, _, _ in instrumentation.durations
-    ), _ASSERTION_FAILURE
-    assert [span.name for span in instrumentation.spans] == [SpanName.SESSION], (
-        _ASSERTION_FAILURE
-    )
+    _assert_setup_only_outcome(instrumentation, Outcome.HANDED_OFF)
     assert not resource.disconnect_codes, _ASSERTION_FAILURE
-    assert instrumentation.spans[0].end_count == 1, _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio
@@ -140,15 +147,5 @@ async def test_rejected_attempt_has_one_rejected_outcome_and_no_cleanup_span() -
 
     await drive_router(router, SessionSocket())
 
-    _, amount, dimensions = session_counter(instrumentation)
-    assert amount == 1, _ASSERTION_FAILURE
-    assert dimensions.outcome is Outcome.REJECTED, _ASSERTION_FAILURE
-    assert not any(
-        measurement is Duration.SESSION
-        for measurement, _, _ in instrumentation.durations
-    ), _ASSERTION_FAILURE
-    assert [span.name for span in instrumentation.spans] == [SpanName.SESSION], (
-        _ASSERTION_FAILURE
-    )
-    assert [span.end_count for span in instrumentation.spans] == [1], _ASSERTION_FAILURE
+    _assert_setup_only_outcome(instrumentation, Outcome.REJECTED)
     assert not resource.disconnect_codes, _ASSERTION_FAILURE
