@@ -11,7 +11,6 @@ import warnings
 from ._disconnect import neutral_disconnect_classifier
 from ._observability import _LifecycleOptions, _observe_lifecycle
 from ._session import _report_session_failure, _wait_for_shielded_task
-from ._session_context import SessionDriverContext
 from ._session_driver import finalize_session, run_session
 from .protocols import AcceptHeaders, _accept_arguments
 
@@ -20,6 +19,7 @@ if typ.TYPE_CHECKING:
 
     from ._disconnect import _PeerDisconnectedError
     from ._session import SessionState
+    from ._session_context import SessionCleanupContext, SessionDriverContext
     from .observability import LifecycleObserver
     from .protocols import DisconnectClassifier, WebSocketLike
     from .resource import WebSocketResource
@@ -203,7 +203,9 @@ class LifecycleGuard:
         if getattr(self._websocket, "unaccepted", None) is True:
             msg = "WebSocket transport returned from accept() without accepting"
             raise LifecycleError(msg)
-        self._mark_accepted()
+        if not self._mark_accepted():
+            msg = "WebSocket was closed before acceptance completed"
+            raise LifecycleError(msg)
 
     def _record_partial_acceptance(self) -> None:
         """Record a transport that accepted before failing or cancellation."""
@@ -370,10 +372,19 @@ class LifecycleGuard:
             msg = f"{operation}() is unavailable after the WebSocket is closed"
         raise LifecycleError(msg)
 
-    def _mark_accepted(self) -> None:
-        """Record the one transition into an accepted session."""
+    def _mark_accepted(self) -> bool:
+        """Record acceptance unless closure already won the transition race."""
+        if self.phase is ConnectionPhase.CLOSED or bool(
+            getattr(self._websocket, "closed", False)
+        ):
+            self._close_started = True
+            self._record_close_code_and_phase(
+                getattr(self._websocket, "close_code", None)
+            )
+            return False
         self._phase = ConnectionPhase.ACCEPTED
         self._session.establish()
+        return True
 
     def _mark_closed(self, code: int | None) -> None:
         """Record closure and preserve the first close code."""
@@ -405,26 +416,22 @@ class WebSocketSession:
     ``WebSocketTestClient.connect()``.
     """
 
-    def __init__(self, context: SessionDriverContext) -> None:
+    def __init__(
+        self,
+        driver_context: SessionDriverContext,
+        cleanup_context: SessionCleanupContext,
+    ) -> None:
         """Retain the accepted connection and its one-run finalization state.
 
         Parameters
         ----------
-        context : SessionDriverContext
-            Selected resources, transport, hooks, state, and optional observer.
+        driver_context : SessionDriverContext
+            Resource, guarded socket, state, hooks, and receive dependencies.
+        cleanup_context : SessionCleanupContext
+            Request and cleanup dependencies, sharing the guarded socket.
         """
-        self._resource = context.resource
-        self._resources = tuple(context.resources)
-        self._websocket: LifecycleGuard = context.websocket
-        self._hook_manager = context.hook_manager
-        self._dispatch = context.dispatch
-        self._session_state = context.session_state
-        self._params = dict(context.params)
-        self._disconnect_classifier = context.disconnect_classifier
-        self._frame_receiver = context.frame_receiver
-        self._observer = context.observer
-        self._monotonic_clock = context.monotonic_clock
-        self._instrumentation_run = context.instrumentation_run
+        self._driver_context = driver_context
+        self._cleanup_context = cleanup_context
         self._run_task: asyncio.Task[object] | None = None
         self._run_completion: asyncio.Future[BaseException | None] | None = None
         self._finalization_task: asyncio.Task[None] | None = None
@@ -432,12 +439,12 @@ class WebSocketSession:
     @property
     def resource(self) -> WebSocketResource:
         """Innermost resource selected for this connection."""
-        return self._resource
+        return self._driver_context.resource
 
     @property
     def ws(self) -> LifecycleGuard:
         """Guarded socket for this accepted session."""
-        return self._websocket
+        return self._driver_context.websocket
 
     async def run(self) -> None:
         """Run post-accept setup, receive dispatch, and disconnect cleanup.
@@ -455,7 +462,7 @@ class WebSocketSession:
         LifecycleError
             If the connection is not accepted or this session was already run.
         """
-        if self._websocket.phase is not ConnectionPhase.ACCEPTED:
+        if self._driver_context.websocket.phase is not ConnectionPhase.ACCEPTED:
             msg = "WebSocketSession.run() requires an accepted connection"
             raise LifecycleError(msg)
         if self._run_task is not None:
@@ -477,8 +484,9 @@ class WebSocketSession:
             run_error = error
             raise
         finally:
-            if self._instrumentation_run is not None:
-                self._instrumentation_run.finish(run_error, handed_off=handed_off)
+            instrumentation = self._driver_context.observation.instrumentation_run
+            if instrumentation is not None:
+                instrumentation.finish(run_error, handed_off=handed_off)
 
     async def _run_with_observation(
         self,
@@ -489,22 +497,23 @@ class WebSocketSession:
         """Run the driver and publish completion inside its observation span."""
         run_error: BaseException | None = None
         handed_off = False
+        context = self._driver_context
         with _observe_lifecycle(
-            self._observer,
+            context.observation.observer,
             options=_LifecycleOptions(
                 span_name="falcon_pachinko.websocket.session",
-                monotonic_clock=self._monotonic_clock,
+                monotonic_clock=context.observation.monotonic_clock,
             ),
         ) as observation:
             try:
                 handed_off = await run_session(
-                    self._driver_context(), self._finalize, receive_loop=receive_loop
+                    context, self._finalize, receive_loop=receive_loop
                 )
             except BaseException as error:
                 run_error = error
                 raise
             finally:
-                observation.set_close_code(self._session_state.close_code)
+                observation.set_close_code(context.session_state.close_code)
                 if not run_completion.done():
                     run_completion.set_result(run_error)
         return handed_off
@@ -526,13 +535,14 @@ class WebSocketSession:
         task before or concurrently with calling ``aclose()``. Cancellation
         while waiting for the run task propagates to the caller.
         """
-        close_error = await _capture_error(self._websocket.close(code))
+        close_error = await _capture_error(self._driver_context.websocket.close(code))
         run_error = await self._wait_for_run_completion()
         try:
             await self._finish_aclose(run_error, close_error)
         finally:
-            if self._instrumentation_run is not None:
-                self._instrumentation_run.finish(run_error or close_error)
+            instrumentation = self._driver_context.observation.instrumentation_run
+            if instrumentation is not None:
+                instrumentation.finish(run_error or close_error)
 
     async def _wait_for_run_completion(self) -> BaseException | None:
         """Wait for another task's active run without cancelling that run."""
@@ -564,8 +574,10 @@ class WebSocketSession:
     ) -> None:
         """Share one cleanup task across the session loop and explicit close."""
         if self._finalization_task is None:
-            context = self._driver_context(error, finalization_error)
-            self._finalization_task = asyncio.create_task(finalize_session(context))
+            context = dc.replace(self._cleanup_context, primary_error=error)
+            self._finalization_task = asyncio.create_task(
+                finalize_session(context, finalization_error)
+            )
         interruptions = await self._wait_for_finalization()
         try:
             self._finalization_task.result()
@@ -574,29 +586,6 @@ class WebSocketSession:
         except Exception as task_error:  # ruff: ignore[blind-except] - cleanup errors
             self._handle_finalization_task_error(task_error, error, interruptions)
         self._handle_finalization_interruptions(error, interruptions)
-
-    def _driver_context(
-        self,
-        primary_error: BaseException | None = None,
-        finalization_error: BaseException | None = None,
-    ) -> SessionDriverContext:
-        """Create a driver view with this session's retained lifecycle state."""
-        return SessionDriverContext(
-            resource=self._resource,
-            resources=self._resources,
-            websocket=self._websocket,
-            dispatch=self._dispatch,
-            session_state=self._session_state,
-            hook_manager=self._hook_manager,
-            params=self._params,
-            disconnect_classifier=self._disconnect_classifier,
-            frame_receiver=self._frame_receiver,
-            primary_error=primary_error,
-            finalization_error=finalization_error,
-            observer=self._observer,
-            monotonic_clock=self._monotonic_clock,
-            instrumentation_run=self._instrumentation_run,
-        )
 
     async def _wait_for_finalization(self) -> list[asyncio.CancelledError]:
         """Wait for shared cleanup despite repeated cancellation requests."""

@@ -247,6 +247,11 @@ resource and its hooks.
     `CancelledError`. Unexpected receive or handler failures
     close with `1011` before the original error propagates. Rejected connections
     and failed `on_connect()` calls do not run disconnect cleanup.
+- Session data operations require an accepted WebSocket. Calling operations
+  such as `send_media()`, `send_text()`, `send_bytes()`, `send_json()`,
+  `receive_media()`, `receive_text()`, `receive_bytes()` or `receive_json()`
+  before acceptance raises `LifecycleError`. Put active-session I/O in
+  `on_session_start()` or perform it after `WebSocketSession.run()` starts.
 - For manual negotiation, call `await router.negotiate(req, ws)`. It returns
   `None` when the selected resource rejects, or an accepted `WebSocketSession`
   that has not run `on_session_start()`, regardless of the router's

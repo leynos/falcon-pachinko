@@ -32,13 +32,13 @@ from .hooks import HookContext, HookEvent
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from ._session_context import SessionDriverContext
+    from ._session_context import SessionCleanupContext
 
 logger = logging.getLogger(__name__)
 
 
 async def run_shielded_cleanup(
-    context: SessionDriverContext,
+    context: SessionCleanupContext,
 ) -> tuple[tuple[BaseException, ...], tuple[asyncio.CancelledError, ...]]:
     """Finish one cleanup task even if its caller receives more cancellation."""
     cleanup_task = asyncio.create_task(
@@ -59,7 +59,7 @@ async def run_shielded_cleanup(
 
 
 async def _collect_cleanup_failures(
-    context: SessionDriverContext,
+    context: SessionCleanupContext,
 ) -> tuple[BaseException, ...]:
     """Keep unexpected housekeeping errors within the session failure policy."""
     # A cancelled shield may independently report an inner task's exception.
@@ -70,22 +70,24 @@ async def _collect_cleanup_failures(
         return (exc,)
 
 
-async def _cleanup_session(context: SessionDriverContext) -> tuple[BaseException, ...]:
+async def _cleanup_session(context: SessionCleanupContext) -> tuple[BaseException, ...]:
     """Close best-effort, notify both cleanup layers, then mark the session."""
     session = context.session_state
     if not session.begin_disconnect():
         return ()
 
     failures: list[BaseException] = []
-    instrumentation = start_cleanup_instrumentation(context.instrumentation_run)
+    instrumentation = start_cleanup_instrumentation(
+        context.observation.instrumentation_run
+    )
     with (
         _observe_operation(logger, "disconnect") as log_observation,
         _observe_lifecycle(
-            context.observer,
+            context.observation.observer,
             "cleanup",
             options=_LifecycleOptions(
                 failure_category="cleanup",
-                monotonic_clock=context.monotonic_clock,
+                monotonic_clock=context.observation.monotonic_clock,
             ),
         ) as observation,
     ):
@@ -104,11 +106,11 @@ async def _cleanup_session(context: SessionDriverContext) -> tuple[BaseException
 
 
 async def _close_failed_session(
-    context: SessionDriverContext, failures: list[BaseException]
+    context: SessionCleanupContext, failures: list[BaseException]
 ) -> int:
     """Choose the effective close code and close a failed session best-effort."""
     primary_error = context.primary_error
-    recorded_code = getattr(context.dispatch.ws, "close_code", None)
+    recorded_code = getattr(context.websocket, "close_code", None)
     close_code = effective_close_code(
         recorded_code, context.session_state, primary_error
     )
@@ -116,25 +118,24 @@ async def _close_failed_session(
     should_close = primary_error is not None and not isinstance(
         primary_error, asyncio.CancelledError
     )
-    if should_close and not bool(getattr(context.dispatch.ws, "closed", False)):
+    if should_close and not bool(getattr(context.websocket, "closed", False)):
         try:
-            await context.dispatch.ws.close(close_code)
+            await context.websocket.close(close_code)
         except BaseException as exc:  # ruff: ignore[blind-except] - cleanup must continue
             failures.append(exc)
     return close_code
 
 
 async def _run_disconnect_hooks(
-    context: SessionDriverContext, close_code: int
+    context: SessionCleanupContext, close_code: int
 ) -> tuple[BaseException, ...]:
     """Attempt both cleanup hooks and preserve every hook failure."""
-    dispatch = context.dispatch
     hook_context = HookContext(
         event=HookEvent.BEFORE_DISCONNECT,
         target=context.resource,
         resource=None,
-        req=dispatch.req,
-        ws=dispatch.ws,
+        req=context.req,
+        ws=context.websocket,
         params=dict(context.params),
         close_code=close_code,
         error=context.primary_error,
@@ -144,7 +145,7 @@ async def _run_disconnect_hooks(
         lambda: context.hook_manager.notify_before_disconnect(hook_context), failures
     )
     await _attempt_cleanup(
-        lambda: context.resource.on_disconnect(dispatch.ws, close_code), failures
+        lambda: context.resource.on_disconnect(context.websocket, close_code), failures
     )
     return tuple(failures)
 

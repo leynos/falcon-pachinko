@@ -445,11 +445,8 @@ reason = "The simulator harness must preserve separate accept and close protocol
 members = ["falcon_pachinko/_session_instrumentation.py", "falcon_pachinko/_session_socket.py"]
 reason = "Both are idiomatic early returns for distinct optional contracts: absent cleanup instrumentation is a no-op, and an omitted close code requires no validation. A shared guard helper would obscure these independent boundaries; keep this exact two-file fragment reviewed."
 [[tool.duplication_gate.allow]]
-members = ["falcon_pachinko/_session_context.py", "falcon_pachinko/_router_lifecycle.py"]
-reason = "The shared session context owns structural session contracts, while router lifecycle owns route dispatch types. Their overlapping TYPE_CHECKING imports are declaration scaffolding rather than runtime logic; a shared import module would obscure ownership. Keep this exact path pair reviewed if either import block changes."
-[[tool.duplication_gate.allow]]
-members = ["falcon_pachinko/_observability.py", "falcon_pachinko/_session_driver.py"]
-reason = "The observation adapter annotates public event and span types, while the session driver annotates lifecycle operation and failure categories. Their overlapping TYPE_CHECKING imports are declaration scaffolding rather than runtime logic; a shared import module would obscure each module’s type surface. Keep this exact path pair reviewed if either import block changes."
+members = ["falcon_pachinko/_observability.py", "falcon_pachinko/_session_context.py", "falcon_pachinko/_session_driver.py", "falcon_pachinko/lifecycle.py"]
+reason = "The detector groups module-local TYPE_CHECKING import scaffolding across these four lifecycle modules. Each block names types needed only by that module, so extracting a shared import module would add dependencies and hide ownership without removing the required names. Keep this exact four-file family reviewed when one of these type surfaces changes."
 [tool.mutmut]
 # Only the package is mutated. `tests/`, `tools/` and `examples/` would
 # produce mutants of the suite's own assertions and of lint tooling, and a

@@ -10,7 +10,11 @@ import typing as typ
 
 from ._router_resources import _ResourceResolver
 from ._session import SessionPhase, SessionState
-from ._session_context import SessionDriverContext
+from ._session_context import (
+    SessionCleanupContext,
+    SessionDriverContext,
+    SessionObservationAdapter,
+)
 from ._session_socket import (
     _peer_disconnect_error,
     receive_frame,
@@ -106,7 +110,6 @@ class _RouteLifecycle:
     """Share accepted-connection state across negotiation and cleanup."""
 
     resource: WebSocketResource
-    resources: list[WebSocketResource]
     dispatch: _Dispatch
     session: SessionState
     hook_manager: HookManager
@@ -230,7 +233,6 @@ async def _process_route_resolution(
     manager = router._setup_hook_management(chain, session)
     lifecycle = _RouteLifecycle(
         resource=resource,
-        resources=chain,
         dispatch=dispatch,
         session=session,
         hook_manager=manager,
@@ -391,21 +393,34 @@ async def _close_pre_accept_failure(
 
 def _new_session(lifecycle: _RouteLifecycle) -> WebSocketSession:
     """Build the retained handle for an accepted connection."""
+    observation = SessionObservationAdapter(
+        observer=lifecycle.observer,
+        monotonic_clock=lifecycle.dispatch.monotonic_clock,
+        instrumentation_run=lifecycle.dispatch.instrumentation_run,
+    )
+    websocket = lifecycle.websocket
+    driver_context = SessionDriverContext(
+        resource=lifecycle.resource,
+        websocket=websocket,
+        session_state=lifecycle.session,
+        hook_manager=lifecycle.hook_manager,
+        params=lifecycle.params,
+        disconnect_classifier=lifecycle.disconnect_classifier,
+        frame_receiver=lifecycle.frame_receiver,
+        observation=observation,
+    )
+    cleanup_context = SessionCleanupContext(
+        resource=lifecycle.resource,
+        req=lifecycle.dispatch.req,
+        websocket=websocket,
+        session_state=lifecycle.session,
+        hook_manager=lifecycle.hook_manager,
+        params=lifecycle.params,
+        observation=observation,
+    )
     return WebSocketSession(
-        SessionDriverContext(
-            resource=lifecycle.resource,
-            resources=tuple(lifecycle.resources),
-            websocket=lifecycle.websocket,
-            dispatch=lifecycle.dispatch,
-            session_state=lifecycle.session,
-            hook_manager=lifecycle.hook_manager,
-            params=lifecycle.params,
-            disconnect_classifier=lifecycle.disconnect_classifier,
-            frame_receiver=lifecycle.frame_receiver,
-            observer=lifecycle.observer,
-            monotonic_clock=lifecycle.dispatch.monotonic_clock,
-            instrumentation_run=lifecycle.dispatch.instrumentation_run,
-        )
+        driver_context,
+        cleanup_context,
     )
 
 

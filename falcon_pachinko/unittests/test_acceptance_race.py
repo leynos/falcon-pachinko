@@ -135,6 +135,24 @@ async def test_overlapping_acceptance_reaches_transport_once() -> None:
 
 
 @pytest.mark.asyncio
+async def test_close_during_acceptance_keeps_guard_closed() -> None:
+    """A late handshake completion cannot reopen a closed lifecycle guard."""
+    websocket = _SuspendedAcceptanceWebSocket()
+    guard = LifecycleGuard(websocket, SessionState())
+
+    accept_task = asyncio.create_task(guard._accept())
+    await websocket.accept_started.wait()
+    await guard.close()
+    websocket.release_accept.set()
+    with pytest.raises(LifecycleError, match="closed before acceptance completed"):
+        await accept_task
+
+    assert guard.phase.value == "closed", "acceptance must not reopen the guard"
+    with pytest.raises(LifecycleError, match="after the WebSocket is closed"):
+        await guard.send_text("too late")
+
+
+@pytest.mark.asyncio
 async def test_peer_close_reply_preserves_server_selected_close_code() -> None:
     """A default peer reply cannot replace the server's selected close code."""
     session = SessionState()

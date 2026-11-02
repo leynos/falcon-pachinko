@@ -28,7 +28,7 @@ if typ.TYPE_CHECKING:
 
     from ._observability import _LifecycleObservation
     from ._session import SessionState
-    from ._session_context import SessionDriverContext
+    from ._session_context import SessionCleanupContext, SessionDriverContext
     from .observability import (
         LifecycleFailureCategory,
         LifecycleOperation,
@@ -39,7 +39,7 @@ if typ.TYPE_CHECKING:
 
 @contextlib.contextmanager
 def _observe_session_operation(
-    context: SessionDriverContext,
+    context: SessionDriverContext | SessionCleanupContext,
     operation: LifecycleOperation,
     *,
     span_name: LifecycleSpanName | None = None,
@@ -53,12 +53,12 @@ def _observe_session_operation(
         State for operation-specific failure classification.
     """
     with _observe_lifecycle(
-        context.observer,
+        context.observation.observer,
         operation,
         options=_LifecycleOptions(
             span_name=span_name,
             failure_category=failure_category,
-            monotonic_clock=context.monotonic_clock,
+            monotonic_clock=context.observation.monotonic_clock,
         ),
     ) as observation:
         try:
@@ -200,7 +200,10 @@ async def _handle_session_failure(
     return primary_error, finalization_error
 
 
-async def finalize_session(context: SessionDriverContext) -> None:
+async def finalize_session(
+    context: SessionCleanupContext,
+    finalization_error: BaseException | None = None,
+) -> None:
     """Close if needed, run disconnect hooks, then apply error precedence."""
     with _observe_session_operation(
         context,
@@ -208,11 +211,13 @@ async def finalize_session(context: SessionDriverContext) -> None:
         span_name="falcon_pachinko.websocket.finalization",
         failure_category="cleanup",
     ) as observation:
-        await _finalize_session(context, observation)
+        await _finalize_session(context, observation, finalization_error)
 
 
 async def _finalize_session(
-    context: SessionDriverContext, observation: _LifecycleObservation
+    context: SessionCleanupContext,
+    observation: _LifecycleObservation,
+    finalization_error: BaseException | None,
 ) -> None:
     """Retain the finalization policy while reporting its selected failure."""
     session = context.session_state
@@ -223,7 +228,7 @@ async def _finalize_session(
 
     cleanup_failures, interrupted = await run_shielded_cleanup(context)
     failures = (
-        (context.finalization_error,) if context.finalization_error is not None else ()
+        (finalization_error,) if finalization_error is not None else ()
     ) + cleanup_failures
     if context.primary_error is not None:
         observation.record_failure(context.primary_error, "application")
@@ -248,12 +253,11 @@ async def _receive_session_body(
 ) -> None:
     """Dispatch frames silently and classify the one receive-loop termination."""
     resource = context.resource
-    dispatch = context.dispatch
     session = context.session_state
     hook_manager = context.hook_manager
-    while hook_manager.can_receive(dispatch.ws):
+    while hook_manager.can_receive(context.websocket):
         try:
-            raw = await context.frame_receiver(dispatch.ws)
+            raw = await context.frame_receiver(context.websocket)
         except _PeerDisconnectedError as exc:
             session.peer_disconnected = True
             if session.close_code is None:
@@ -262,10 +266,10 @@ async def _receive_session_body(
 
         # A close can be initiated by another task while receive_media is
         # suspended. Do not dispatch the late frame into receive hooks.
-        if not hook_manager.can_receive(dispatch.ws):
+        if not hook_manager.can_receive(context.websocket):
             return
         try:
-            await resource.dispatch(dispatch.ws, raw)
+            await resource.dispatch(context.websocket, raw)
         except BaseException as error:
             observation.record_failure(error, "application")
             raise

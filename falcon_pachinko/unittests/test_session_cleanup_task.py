@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses as dc
 import typing as typ
 
 import pytest
@@ -13,8 +12,10 @@ from falcon_pachinko._session_cleanup import (
     raise_session_failures,
     run_shielded_cleanup,
 )
-from falcon_pachinko._session_context import SessionDriverContext
-from falcon_pachinko._session_socket import _peer_disconnect_error, receive_frame
+from falcon_pachinko._session_context import (
+    SessionCleanupContext,
+    SessionObservationAdapter,
+)
 from falcon_pachinko.hooks import HookCollection, HookManager
 from falcon_pachinko.unittests._session_fixtures import (
     RecordingResource,
@@ -25,9 +26,7 @@ from falcon_pachinko.unittests._session_fixtures import (
 if typ.TYPE_CHECKING:
     import falcon
 
-    from falcon_pachinko._session_context import SessionDispatch
     from falcon_pachinko.lifecycle import LifecycleGuard
-    from falcon_pachinko.protocols import WebSocketLike
 
 
 class _FailingClosedState(SessionState):
@@ -45,36 +44,23 @@ class _FailingClosedState(SessionState):
         raise self.failure
 
 
-@dc.dataclass(slots=True)
-class _CleanupDispatch:
-    """Provide the request and socket fields consumed by disconnect cleanup."""
-
-    req: falcon.Request
-    ws: WebSocketLike
-
-
 def _cleanup_context(
     failure: RuntimeError, primary_error: Exception | None = None
-) -> SessionDriverContext:
-    """Assemble the real cleanup path with one injected housekeeping failure."""
+) -> SessionCleanupContext:
+    """Supply only cleanup dependencies and one housekeeping failure."""
     resource = RecordingResource()
     # The lightweight request supplies the fields exercised by these tests.
     socket = SessionSocket()
     socket.unaccepted = False
-    dispatch = _CleanupDispatch(
-        typ.cast("falcon.Request", make_session_request()), socket
-    )
-    return SessionDriverContext(
+    return SessionCleanupContext(
+        req=typ.cast("falcon.Request", make_session_request()),
         resource=resource,
-        resources=(resource,),
         websocket=typ.cast("LifecycleGuard", socket),
-        dispatch=typ.cast("SessionDispatch", dispatch),
         session_state=_FailingClosedState(failure),
         hook_manager=HookManager(global_hooks=HookCollection(), resources=[resource]),
         params={},
-        disconnect_classifier=_peer_disconnect_error,
-        frame_receiver=receive_frame,
         primary_error=primary_error,
+        observation=SessionObservationAdapter(),
     )
 
 
