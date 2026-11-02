@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import typing as typ
+
 import pytest
 
 from falcon_pachinko.observability import Duration, Outcome, SpanName
@@ -14,7 +16,27 @@ from falcon_pachinko.unittests.test_session_instrumentation_fixtures import (
     session_counter,
 )
 
+if typ.TYPE_CHECKING:
+    from falcon_pachinko.protocols import WebSocketLike
+
 _ASSERTION_FAILURE = "router instrumentation must preserve bounded lifecycle semantics"
+
+
+class StartingResource(RecordingResource):
+    """Record startup for the automatic application-owned handoff path."""
+
+    def __init__(self, *, startup_error: Exception | None = None) -> None:
+        super().__init__()
+        self.startup_error = startup_error
+        self.start_calls = 0
+        self.started_socket: WebSocketLike | None = None
+
+    async def on_session_start(self, ws: WebSocketLike) -> None:
+        """Capture startup and optionally fail before ownership transfers."""
+        self.start_calls += 1
+        self.started_socket = ws
+        if self.startup_error is not None:
+            raise self.startup_error
 
 
 @pytest.mark.asyncio
@@ -39,6 +61,57 @@ async def test_setup_only_handoff_counts_outcome_without_claiming_session_end() 
     )
     assert not resource.disconnect_codes, _ASSERTION_FAILURE
     assert instrumentation.spans[0].end_count == 1, _ASSERTION_FAILURE
+
+
+@pytest.mark.asyncio
+async def test_application_handoff_runs_start_and_releases_router_dispatch_guard() -> (
+    None
+):
+    """Automatic setup completes before application-owned receive dispatch."""
+    resource = StartingResource()
+    router = configured_router(
+        resource, RecordingInstrumentation(), InjectedClock(), receive_loop=False
+    )
+    socket = SessionSocket()
+
+    await drive_router(router, socket)
+
+    assert resource.start_calls == 1, "handoff must run post-accept startup once"
+    assert resource.started_socket is not None, "startup receives the guarded socket"
+    assert not socket.receive_started.is_set(), "handoff must not start router receive"
+    assert not socket.closed, "successful handoff keeps the accepted socket open"
+    assert not resource.has_router_session, (
+        "application ownership releases router state"
+    )
+    await resource.dispatch(resource.started_socket, '{"type":"unknown"}')
+    assert resource.handled_frames == ['{"type":"unknown"}'], (
+        "application dispatch remains enabled after handoff"
+    )
+    assert not resource.disconnect_codes, "application ownership skips router cleanup"
+
+
+@pytest.mark.asyncio
+async def test_application_handoff_start_failure_uses_router_cleanup() -> None:
+    """Failed post-accept setup closes and finalizes instead of handing off."""
+    failure = RuntimeError("startup failed")
+    resource = StartingResource(startup_error=failure)
+    instrumentation = RecordingInstrumentation()
+    router = configured_router(
+        resource, instrumentation, InjectedClock(), receive_loop=False
+    )
+    socket = SessionSocket()
+
+    with pytest.raises(RuntimeError, match="startup failed") as caught:
+        await drive_router(router, socket)
+
+    _, amount, dimensions = session_counter(instrumentation)
+    assert caught.value is failure, "startup failure identity must be preserved"
+    assert amount == 1, "failed handoff has one session outcome"
+    assert dimensions.outcome is Outcome.FAILED, "failed setup is not a handoff"
+    assert resource.start_calls == 1, "startup is attempted exactly once"
+    assert socket.close_codes == [1011], "startup failure closes with internal error"
+    assert resource.disconnect_codes == [1011], "router cleanup runs exactly once"
+    assert not resource.has_router_session, "failed setup releases router session state"
 
 
 @pytest.mark.asyncio

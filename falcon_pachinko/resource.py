@@ -320,8 +320,12 @@ class WebSocketResource:
         Use this hook for active-session operations such as sending a ready
         frame or registering the connection with a manager. The router invokes
         it after the handshake succeeds and before its receive loop starts.
+        The automatic ``receive_loop=False`` path also runs it before handing
+        later receives and cleanup to the application. Manual calls to
+        ``WebSocketRouter.negotiate()`` return before this callback; the caller
+        decides whether to start the session through ``WebSocketSession.run()``.
         Exceptions close the accepted session with code 1011 and still run
-        disconnect cleanup.
+        router cleanup.
 
         Parameters
         ----------
@@ -332,8 +336,11 @@ class WebSocketResource:
     async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
         """Handle cleanup for a router-owned WebSocket session.
 
-        The router attempts this callback once for every accepted session,
-        after the ``before_disconnect`` hooks. This includes cleanup when
+        The router attempts this callback once for every accepted session it
+        owns through cleanup, after the ``before_disconnect`` hooks. A
+        successful automatic ``receive_loop=False`` handoff transfers later
+        cleanup to the application, so the router does not invoke this callback
+        after that handoff. Router-owned cleanup includes failures when
         ``on_session_start`` or message handling fails. A peer close code is
         passed through, or 1006 when the peer code is unavailable. Cancellation
         before disconnect cleanup starts selects 1001 and attempts a best-effort

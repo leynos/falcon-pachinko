@@ -183,14 +183,18 @@ router.attach(app)
   owns acceptance after the `after_connect` hooks. Calling `ws.accept()` in
   `on_connect` remains temporarily supported with a deprecation warning, but
   accepts immediately and changes the hook order for that compatibility path.
-- `on_session_start(ws)` runs after acceptance and before frame reception. Move
-  sends, receives, and active connection registration here.
+- `on_session_start(ws)` runs after acceptance and before router-owned frame
+  reception. It also runs before automatic handoff when `receive_loop=False`;
+  after it succeeds, the application owns later reception and cleanup.
 - The router dispatches frames in order and attempts `on_disconnect()` once for
-  each accepted session. Missing peer codes use `1006`. Cancellation preserves
-  an already selected or reported code; otherwise it selects `1001` and
-  attempts a best-effort close on the accepted transport. It propagates
-  `CancelledError` after cleanup. Unexpected receive or handler failures close
-  with `1011` and propagate after cleanup.
+  each accepted session it owns through cleanup. A successful
+  `receive_loop=False` handoff leaves later reception and cleanup to the
+  application, so the router does not call `on_disconnect()` for that session.
+  Missing peer codes use `1006`. Cancellation preserves an already selected or
+  reported code; otherwise it selects `1001` and attempts a best-effort close
+  on the accepted transport. It propagates `CancelledError` after cleanup.
+  Unexpected receive or handler failures close with `1011` and propagate after
+  cleanup.
 
 `router.attach()` also enables raw TEXT and BINARY input for all WebSocket
 routes on the app, preserving its outgoing serializers. For manually mounted

@@ -57,12 +57,13 @@ close the handshake with code `1000` and does not call `on_disconnect()`. If
 setup fails after resource-owned acceptance, the router still finalizes the
 session.
 
-Native Falcon sockets use a forwarding lifecycle adapter that records
-acceptance history. Custom transports without an `unaccepted` property use the
-same adapter: missing state is initially unknown, and a completed `accept()`
-call establishes acceptance. This avoids inferring acceptance from Falcon's
-post-close `unaccepted` value, which is also false after a rejected handshake.
-Injected simulators keep their identity and expose their own acceptance state.
+Only native Falcon sockets use the forwarding socket adapter that preserves raw
+frames and records acceptance history. Other transports are not wrapped by that
+adapter; the lifecycle guard observes an exposed `unaccepted` value and records
+acceptance when `accept()` completes. It does not infer acceptance from
+Falcon's post-close `unaccepted` value, which is also false after a rejected
+handshake. Injected simulators retain their transport implementation and
+acceptance state.
 
 The native receiver preserves raw TEXT and BINARY frames so malformed JSON can
 reach `on_unhandled()` instead of failing in Falcon's media decoder. Injected
@@ -79,13 +80,16 @@ then runs disconnect cleanup and propagates the original exception.
 Cancellation preserves an already selected close code; otherwise it selects
 `1001`, attempts to close the accepted transport, and propagates
 `CancelledError`. `on_disconnect()` is attempted exactly once for accepted
-sessions, including failures in `on_session_start()` or dispatch.
-`before_disconnect` hooks run first. Cleanup changes the phase to
-`DISCONNECTING`, preventing later receive hooks and handlers from starting, and
-runs in a shielded task without a timeout. An interrupted hook before
-`on_disconnect()` may be retried during cancellation cleanup; an interrupted
-`on_disconnect()` is never invoked again. Cleanup failures do not replace a
-primary session failure. A normal peer-close cleanup error propagates.
+sessions the router owns through cleanup, including failures in
+`on_session_start()` or dispatch. A successful automatic `receive_loop=False`
+handoff transfers later cleanup to the application, so the router does not call
+`on_disconnect()` afterwards. `before_disconnect` hooks run first. Cleanup
+changes the phase to `DISCONNECTING`, preventing later receive hooks and
+handlers from starting, and runs in a shielded task without a timeout. An
+interrupted hook before `on_disconnect()` may be retried during cancellation
+cleanup; an interrupted `on_disconnect()` is never invoked again. Cleanup
+failures do not replace a primary session failure. A normal peer-close cleanup
+error propagates.
 
 Reserved callback dispatch and its descriptor rules are documented in the
 [reserved lifecycle dispatch section](#reserved-lifecycle-dispatch).
@@ -559,15 +563,21 @@ stays legal for a distinct method; see §3.6 of the
 
 After route resolution and connection hooks, `WebSocketRouter` calls
 `on_connect()` and `after_connect`, then accepts the connection. By default,
-the router runs the accepted session inline. Set `receive_loop=False` to return
-after accepted setup and hand later reception and cleanup to the application.
-In the default mode, `WebSocketSession.run()` calls `on_session_start()` and
-repeatedly receives one frame, adapts decoded values to raw JSON frames when
-needed, and awaits `WebSocketResource.dispatch()` before reading the next
-frame. It creates no per-frame tasks. The selected child resource, bound hook
-manager, injected services, and connection-scoped state proxy are the same
-objects prepared for connection setup. Manual callers can use `negotiate()` to
-retain the session handle and choose when to run or close it.
+the router runs the accepted session inline. Set `receive_loop=False` to run
+`on_session_start()` and then hand later reception and cleanup to the
+application. The router releases its dispatch guard at that point and does not
+later run `on_disconnect()`; the application owns those operations. If startup
+fails or closes the socket, the router retains ownership and applies normal
+failure cleanup. In the default mode, `WebSocketSession.run()` calls
+`on_session_start()` and repeatedly receives one frame, adapts decoded values
+to raw JSON frames when needed, and awaits `WebSocketResource.dispatch()`
+before reading the next frame. It creates no per-frame tasks. The selected
+child resource, bound hook manager, injected services, and connection-scoped
+state proxy are the same objects prepared for connection setup. Manual callers
+can use `negotiate()` to retain the session handle and choose when to run or
+close it. `negotiate()` itself returns before startup regardless of
+`receive_loop`; calling `session.run()` starts router-owned processing, while
+manual dispatch and `session.aclose()` leave startup and dispatch to the caller.
 
 Falcon may decode incoming media before `receive_media()` returns it, so the
 receive loop does not itself guarantee exact raw TEXT or BINARY input.

@@ -429,6 +429,14 @@ class WebSocketSession:
     async def run(self) -> None:
         """Run post-accept setup, receive dispatch, and disconnect cleanup.
 
+        Call only after acceptance and at most once; invalid calls raise
+        :class:`LifecycleError`.
+        """
+        await self._run(receive_loop=True)
+
+    async def _run(self, *, receive_loop: bool) -> None:
+        """Run startup and optionally retain router ownership through cleanup.
+
         Raises
         ------
         LifecycleError
@@ -447,20 +455,27 @@ class WebSocketSession:
         )
         self._run_completion = run_completion
         run_error: BaseException | None = None
+        handed_off = False
         try:
-            await self._run_with_observation(run_completion)
+            handed_off = await self._run_with_observation(
+                run_completion, receive_loop=receive_loop
+            )
         except BaseException as error:
             run_error = error
             raise
         finally:
             if self._instrumentation_run is not None:
-                self._instrumentation_run.finish(run_error)
+                self._instrumentation_run.finish(run_error, handed_off=handed_off)
 
     async def _run_with_observation(
-        self, run_completion: asyncio.Future[BaseException | None]
-    ) -> None:
+        self,
+        run_completion: asyncio.Future[BaseException | None],
+        *,
+        receive_loop: bool,
+    ) -> bool:
         """Run the driver and publish completion inside its observation span."""
         run_error: BaseException | None = None
+        handed_off = False
         with _observe_lifecycle(
             self._observer,
             options=_LifecycleOptions(
@@ -469,7 +484,9 @@ class WebSocketSession:
             ),
         ) as observation:
             try:
-                await run_session(self._driver_context(), self._finalize)
+                handed_off = await run_session(
+                    self._driver_context(), self._finalize, receive_loop=receive_loop
+                )
             except BaseException as error:
                 run_error = error
                 raise
@@ -477,11 +494,7 @@ class WebSocketSession:
                 observation.set_close_code(self._session_state.close_code)
                 if not run_completion.done():
                     run_completion.set_result(run_error)
-
-    def _hand_off_to_application(self) -> None:
-        """End setup-only telemetry when the application owns later work."""
-        if self._instrumentation_run is not None:
-            self._instrumentation_run.finish(handed_off=True)
+        return handed_off
 
     async def aclose(self, code: int = 1000) -> None:
         """Close and finalize the session once, including manual sessions.

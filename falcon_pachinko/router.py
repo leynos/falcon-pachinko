@@ -127,7 +127,7 @@ class WebSocketRouter(_RouterResolutionMixin):
             Optional factory used by simulator routing.
         receive_loop : bool, default=True
             If true, run the accepted session through disconnect cleanup. Set
-            false to return after accepted setup and hand later reception and
+            false to run post-accept startup, then hand later reception and
             cleanup to the application.
         """
         self._raw: list[_RawRoute] = []
@@ -396,14 +396,16 @@ class WebSocketRouter(_RouterResolutionMixin):
         """Negotiate and run the session for the first matching route.
 
         Falcon's path parameters are ignored because the router re-matches
-        ``req.path`` and builds captures across nested resources.
+        ``req.path`` and builds captures across nested resources. When
+        ``receive_loop`` is false, post-accept startup completes before the
+        application receives ownership of later reception and cleanup.
         """
         session = await self.negotiate(req, ws, **params)
         if session is not None:
             if self._receive_loop:
                 await session.run()
             else:
-                session._hand_off_to_application()
+                await session._run(receive_loop=False)
 
     async def negotiate(
         self, req: _RequestLike, ws: WebSocketLike, **params: object
@@ -416,7 +418,11 @@ class WebSocketRouter(_RouterResolutionMixin):
         The returned session is accepted but has not run
         ``on_session_start``. Call :meth:`WebSocketSession.run` to own its
         receive loop, or call :meth:`WebSocketSession.aclose` when dispatch is
-        managed manually.
+        managed manually. This lower-level method returns before
+        ``on_session_start`` even when this router is configured with
+        ``receive_loop=False``; that option applies to the automatic
+        :meth:`on_websocket` path, which runs startup before handing subsequent
+        receive and cleanup ownership to the application.
 
         Parameters
         ----------

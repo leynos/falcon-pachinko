@@ -72,30 +72,53 @@ async def run_session(
     finalize: cabc.Callable[
         [BaseException | None, BaseException | None], cabc.Awaitable[None]
     ],
-) -> None:
-    """Run post-accept setup, frame dispatch, and exactly-once cleanup."""
+    *,
+    receive_loop: bool = True,
+) -> bool:
+    """Run post-accept setup and either own cleanup or hand off the socket.
+
+    Returns
+    -------
+    bool
+        Whether successful startup transferred later receive and cleanup
+        ownership to the application.
+    """
     primary_error: BaseException | None = None
     finalization_error: BaseException | None = None
+    handed_off = False
 
     try:
-        await _run_session_body(context)
+        handed_off = await _run_session_body(context, receive_loop=receive_loop)
     except asyncio.CancelledError as exc:
         primary_error, finalization_error = await _handle_session_failure(context, exc)
     except Exception as exc:  # ruff: ignore[blind-except] - hooks are extensible
         primary_error, finalization_error = await _handle_session_failure(context, exc)
     finally:
-        finalization_error = await _close_after_session_run(context, finalization_error)
-        await finalize(primary_error, finalization_error)
+        if not handed_off:
+            finalization_error = await _close_after_session_run(
+                context, finalization_error
+            )
+            await finalize(primary_error, finalization_error)
+    return handed_off
 
 
-async def _run_session_body(context: SessionDriverContext) -> None:
-    """Run resource setup and the receive loop before finalization."""
+async def _run_session_body(
+    context: SessionDriverContext, *, receive_loop: bool
+) -> bool:
+    """Run resource setup, then receive frames or transfer their ownership."""
     with _observe_session_operation(
         context, "session_start", failure_category="application"
     ):
         await context.resource.on_session_start(context.websocket)
-    if context.hook_manager.can_receive(context.websocket):
+    if not context.hook_manager.can_receive(context.websocket):
+        return False
+    if receive_loop:
         await _receive_session(context)
+        return False
+
+    context.hook_manager.release_session(context.session_state)
+    context.session_state.mark_closed()
+    return True
 
 
 async def _close_after_session_run(

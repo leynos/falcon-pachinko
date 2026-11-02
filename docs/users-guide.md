@@ -231,14 +231,17 @@ resource and its hooks.
     supported for migration but emits a deprecation warning and accepts before
     `after_connect` runs.
 - `on_session_start(ws) -> None`
-  - Runs after successful acceptance and before frame reception. Send a ready
-    frame, register the socket with a manager, or perform other active-session
-    setup here. Failure closes the accepted connection and still runs disconnect
-    cleanup.
+  - Runs after successful acceptance and before frame reception on the normal
+    router path. With `receive_loop=False`, it runs before the router hands
+    later receives and cleanup to the application. Failure closes the accepted
+    connection and still runs router cleanup.
 - `on_disconnect(ws, close_code) -> None`
   - The router runs `before_disconnect` hooks then attempts this callback once
-    for each accepted session, including `on_session_start()` or handler
-    failures. Peer close codes pass through; a missing code uses `1006`.
+    for each accepted session it owns through cleanup, including
+    `on_session_start()` or handler failures. After a successful automatic
+    `receive_loop=False` handoff, the application owns cleanup and the router
+    does not call this callback. Peer close codes pass through; a missing code
+    uses `1006`.
     Cancellation preserves an already selected close code; otherwise it uses
     `1001`, attempts to close the accepted transport, and propagates
     `CancelledError`. Unexpected receive or handler failures
@@ -246,10 +249,13 @@ resource and its hooks.
     and failed `on_connect()` calls do not run disconnect cleanup.
 - For manual negotiation, call `await router.negotiate(req, ws)`. It returns
   `None` when the selected resource rejects, or an accepted `WebSocketSession`
-  that has not run `on_session_start()`. Call `await session.run()` to use the
-  router's ordered receive loop, or dispatch manually and finish with
-  `await session.aclose()`. If `run()` is active in another task, `aclose()`
-  waits without a timeout; cancel and await that task to bound shutdown.
+  that has not run `on_session_start()`, regardless of the router's
+  `receive_loop` setting. Call `await session.run()` to run startup and use the
+  router's ordered receive loop. Manual dispatch leaves startup, reception, and
+  cleanup to the caller; `await session.aclose()` provides router cleanup when
+  the caller chooses to use it. If `run()` is active in another task,
+  `aclose()` waits without a timeout; cancel and await that task to bound
+  shutdown.
 
 For an attached router, `attach()` installs pass-through TEXT and BINARY
 deserializers in the application's shared `ws_options.media_handlers` mapping.
@@ -264,13 +270,15 @@ point has enabled raw-frame handling.
   - Override via `get_child_context()` to supply a custom state store (e.g.,
     Redis-backed proxy).
 
-For either receive mode, native Falcon sockets passed to lifecycle hooks,
-message hooks, and handlers such as `on_unhandled` use a forwarding adapter
-that implements `WebSocketLike`. This means
+Native Falcon sockets passed to lifecycle hooks, message hooks, and handlers
+such as `on_unhandled` use a forwarding adapter that implements
+`WebSocketLike`. Other transports are not wrapped by that adapter. This means
 `isinstance(ws, falcon.asgi.WebSocket)` is false; attributes the adapter does
-not define are forwarded to Falcon's socket. With `receive_loop=False`, the
-application receives this adapter during setup and owns later reception and
-cleanup after setup succeeds.
+not define are forwarded to Falcon's socket. The lifecycle guard records
+acceptance for injected transports from their exposed state or a completed
+`accept()` call. With `receive_loop=False`, the application receives the
+guarded socket during `on_session_start()` and owns later reception and cleanup
+after setup succeeds; the router does not call `on_disconnect()` after handoff.
 
 The effective close code passed to `on_disconnect` follows this table:
 
