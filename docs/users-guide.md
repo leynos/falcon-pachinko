@@ -809,7 +809,9 @@ it. An undecorated async function works in the same way.
 
 - **WebSocketTestClient** – Real websocket client powered by `websockets`,
   designed for integration tests; captures original payloads for assertions,
-  while trace representations and `TraceEvent.summary()` show safe metadata.
+  while trace representations and `TraceEvent.summary()` show safe metadata. Its
+  `connect()` context yields a `WebSocketTestSession`; `WebSocketSession`
+  remains a compatibility alias.
 - **WebSocketSimulator** – In-memory fake implementing the WebSocket protocol
   for fast unit tests.
 - **Live server harness** – `LiveWebSocketServer` serves a real Falcon ASGI app
