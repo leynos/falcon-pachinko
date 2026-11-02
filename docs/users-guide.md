@@ -168,10 +168,11 @@ app.add_route("/ws/{rest:path}", RouterAdapter(router))
   to accept, or return a falsey value to reject the connection.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
-- With `receive_loop=True`, the router accepts approved connections, runs
-  `on_session_start()`, then receives and dispatches frames sequentially until
-  the session ends. The default is `False`, which returns after acceptance
-  and leaves receives and cleanup to the application.
+- With `receive_loop=True` (the default), the router accepts approved
+  connections, runs `on_session_start()`, then receives and dispatches frames
+  sequentially until the session ends.
+- Pass `receive_loop=False` explicitly to return after acceptance and leave
+  receives and cleanup to the application.
 - When `payload` is present and valid, the `ChatPayload` annotation makes the
   router pass a `ChatPayload` instance to the handler. An omitted or JSON
   `null` payload is rejected before the handler runs, so no frame is sent and
