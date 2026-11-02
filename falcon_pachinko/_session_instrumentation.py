@@ -12,18 +12,19 @@ import dataclasses as dc
 import typing as typ
 
 from . import observability as _observability
+from ._disconnect import neutral_disconnect_classifier
 from ._session import SessionPhase, SessionState
 from ._session_observation import (
     _log_session_observation,
     _outcome_for_error,
     _SessionObservation,
 )
-from ._session_socket import _peer_disconnect_error
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from .observability import SessionInstrumentation
+    from .protocols import DisconnectClassifier
 
 
 @dc.dataclass(slots=True)
@@ -43,18 +44,20 @@ class _SessionInstrumentationRun:
         session: SessionState,
         instrumentation: SessionInstrumentation,
         clock: cabc.Callable[[], float],
+        disconnect_classifier: DisconnectClassifier,
     ) -> None:
         """Start the session span and retain its state for terminal reporting."""
         self.session = session
         self.instrumentation = instrumentation
         self.observation_clock = clock
+        self.disconnect_classifier = disconnect_classifier
         self.started = clock()
         self.setup_started = self.started
         self.resource: object = None
         self.cleanup_failures: tuple[BaseException, ...] = ()
         self._finished = False
         dimensions = _instrumentation_dimensions(
-            session,
+            self,
             operation=_observability.Operation.SESSION,
             outcome=_observability.Outcome.STARTED,
             error=None,
@@ -101,7 +104,7 @@ class _SessionInstrumentationRun:
         self._finished = True
         outcome = _session_outcome(self.session, error, handed_off=handed_off)
         dimensions = _instrumentation_dimensions(
-            self.session,
+            self,
             operation=_observability.Operation.SESSION,
             outcome=outcome,
             error=_instrumentation_error(self, error),
@@ -135,9 +138,12 @@ def start_session_instrumentation(
     session: SessionState,
     instrumentation: SessionInstrumentation,
     clock: cabc.Callable[[], float],
+    disconnect_classifier: DisconnectClassifier = neutral_disconnect_classifier,
 ) -> _SessionInstrumentationRun:
     """Start telemetry before route hooks so setup and cleanup share a span."""
-    return _SessionInstrumentationRun(session, instrumentation, clock)
+    return _SessionInstrumentationRun(
+        session, instrumentation, clock, disconnect_classifier
+    )
 
 
 def start_cleanup_instrumentation(
@@ -148,7 +154,7 @@ def start_cleanup_instrumentation(
         return None
     started = attempt.observation_clock()
     dimensions = _instrumentation_dimensions(
-        attempt.session,
+        attempt,
         operation=_observability.Operation.CLEANUP,
         outcome=_observability.Outcome.STARTED,
         error=None,
@@ -176,7 +182,7 @@ def finish_cleanup_instrumentation(
     )
     error = failures[0] if failures else None
     dimensions = _instrumentation_dimensions(
-        attempt.session,
+        attempt,
         operation=_observability.Operation.CLEANUP,
         outcome=outcome,
         error=error,
@@ -239,13 +245,14 @@ def _instrumentation_error(
 
 
 def _instrumentation_dimensions(
-    session: SessionState,
+    attempt: _SessionInstrumentationRun,
     *,
     operation: _observability.Operation,
     outcome: _observability.Outcome,
     error: BaseException | None,
 ) -> _observability.SessionDimensions:
     """Build labels only from closed enum categories."""
+    session = attempt.session
     phase = {
         SessionPhase.CONNECTING: _observability.Phase.CONNECTING,
         SessionPhase.ESTABLISHED: _observability.Phase.ESTABLISHED,
@@ -260,7 +267,7 @@ def _instrumentation_dimensions(
         exception=_observability._exception_category(
             error,
             is_transport=(
-                error is not None and _peer_disconnect_error(error) is not None
+                error is not None and attempt.disconnect_classifier(error) is not None
             ),
         ),
     )

@@ -8,7 +8,12 @@ import falcon
 import pytest
 
 from falcon_pachinko._session import SessionState
-from falcon_pachinko.lifecycle import LifecycleError, LifecycleGuard
+from falcon_pachinko._session_socket import _peer_disconnect_error
+from falcon_pachinko.lifecycle import (
+    LifecycleError,
+    LifecycleGuard,
+    _LifecycleGuardBindings,
+)
 
 
 class _SuspendedAcceptanceWebSocket:
@@ -134,7 +139,11 @@ async def test_peer_close_reply_preserves_server_selected_close_code() -> None:
     """A default peer reply cannot replace the server's selected close code."""
     session = SessionState()
     websocket = _ServerCloseRaceWebSocket(session)
-    guard = LifecycleGuard(websocket, session)
+    guard = LifecycleGuard(
+        websocket,
+        session,
+        bindings=_LifecycleGuardBindings(disconnect_classifier=_peer_disconnect_error),
+    )
 
     close_task = asyncio.create_task(guard.close(4002))
     await websocket.close_started.wait()

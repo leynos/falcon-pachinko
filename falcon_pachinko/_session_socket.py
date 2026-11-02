@@ -15,6 +15,7 @@ import falcon.asgi
 import msgspec.json as msjson
 
 from ._disconnect import _PeerDisconnectedError
+from .protocols import _accept_arguments
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -25,19 +26,6 @@ if typ.TYPE_CHECKING:
 
 _MIN_CLOSE_CODE = 1000
 _RESERVED_CLOSE_CODE_RANGES = ((1004, 1006), (1015, 1999))
-
-
-def _accept_arguments(
-    subprotocol: str | None,
-    headers: cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None,
-) -> dict[str, object]:
-    """Build only the handshake keywords supplied by the caller."""
-    kwargs: dict[str, object] = {}
-    if subprotocol is not None:
-        kwargs["subprotocol"] = subprotocol
-    if headers is not None:
-        kwargs["headers"] = headers
-    return kwargs
 
 
 def _peer_disconnect_error(error: BaseException) -> _PeerDisconnectedError | None:

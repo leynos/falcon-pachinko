@@ -11,7 +11,11 @@ import pytest
 
 from falcon_pachinko._disconnect import _PeerDisconnectedError
 from falcon_pachinko._session import SessionState
-from falcon_pachinko._session_instrumentation import _instrumentation_dimensions
+from falcon_pachinko._session_instrumentation import (
+    _instrumentation_dimensions,
+    _SessionInstrumentationRun,
+)
+from falcon_pachinko._session_socket import _peer_disconnect_error
 from falcon_pachinko.observability import (
     CloseCodeCategory,
     Counter,
@@ -61,8 +65,11 @@ def test_exception_dimension_preserves_transport_and_empty_categories(
     error: BaseException | None, expected_category: ExceptionCategory
 ) -> None:
     """Transport signals remain bounded while absent failures use no category."""
+    attempt = _SessionInstrumentationRun(
+        SessionState(), RecordingInstrumentation(), lambda: 0.0, _peer_disconnect_error
+    )
     dimensions = _instrumentation_dimensions(
-        SessionState(),
+        attempt,
         operation=Operation.SESSION,
         outcome=Outcome.FAILED,
         error=error,

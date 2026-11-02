@@ -11,8 +11,18 @@ import typing as typ
 from ._router_resources import _ResourceResolver
 from ._session import SessionPhase, SessionState
 from ._session_context import SessionDriverContext
-from ._session_socket import _peer_disconnect_error, track_session_socket
-from .lifecycle import AcceptOptions, ConnectionPhase, LifecycleGuard, WebSocketSession
+from ._session_socket import (
+    _peer_disconnect_error,
+    receive_frame,
+    track_session_socket,
+)
+from .lifecycle import (
+    AcceptOptions,
+    ConnectionPhase,
+    LifecycleGuard,
+    WebSocketSession,
+    _LifecycleGuardBindings,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -24,7 +34,7 @@ if typ.TYPE_CHECKING:
     from ._session_instrumentation import _SessionInstrumentationRun
     from .hooks import HookContext, HookManager
     from .observability import LifecycleObserver
-    from .protocols import WebSocketLike
+    from .protocols import DisconnectClassifier, FrameReceiver, WebSocketLike
     from .resource import WebSocketResource
 
 
@@ -102,6 +112,8 @@ class _RouteLifecycle:
     hook_manager: HookManager
     params: dict[str, object]
     observer: LifecycleObserver | None
+    disconnect_classifier: DisconnectClassifier
+    frame_receiver: FrameReceiver
 
     @property
     def websocket(self) -> LifecycleGuard:
@@ -153,8 +165,11 @@ async def _prepare_websocket(
     return LifecycleGuard(
         adapted,
         session,
-        observer=preparation.observer,
-        monotonic_clock=preparation.monotonic_clock,
+        bindings=_LifecycleGuardBindings(
+            observer=preparation.observer,
+            monotonic_clock=preparation.monotonic_clock,
+            disconnect_classifier=_peer_disconnect_error,
+        ),
     )
 
 
@@ -221,6 +236,8 @@ async def _process_route_resolution(
         hook_manager=manager,
         params=dict(dispatch.match.params),
         observer=dispatch.observer,
+        disconnect_classifier=_peer_disconnect_error,
+        frame_receiver=receive_frame,
     )
     return await _negotiate_connection(lifecycle)
 
@@ -262,7 +279,7 @@ async def _handle_on_connect_failure(
     hook_context.result = False
     after_connect_error = await _after_connect_error(hook_context, lifecycle)
 
-    if _peer_disconnect_error(error) is not None:
+    if lifecycle.disconnect_classifier(error) is not None:
         await _cleanup_negotiation_failure(None, lifecycle, after_connect_error)
         if after_connect_error is None:
             return None
@@ -383,6 +400,8 @@ def _new_session(lifecycle: _RouteLifecycle) -> WebSocketSession:
             session_state=lifecycle.session,
             hook_manager=lifecycle.hook_manager,
             params=lifecycle.params,
+            disconnect_classifier=lifecycle.disconnect_classifier,
+            frame_receiver=lifecycle.frame_receiver,
             observer=lifecycle.observer,
             monotonic_clock=lifecycle.dispatch.monotonic_clock,
             instrumentation_run=lifecycle.dispatch.instrumentation_run,

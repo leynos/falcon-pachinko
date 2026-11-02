@@ -3,26 +3,26 @@
 from __future__ import annotations
 
 import asyncio
-import collections.abc as cabc
 import dataclasses as dc
 import enum
 import typing as typ
 import warnings
 
+from ._disconnect import neutral_disconnect_classifier
 from ._observability import _LifecycleOptions, _observe_lifecycle
 from ._session import _report_session_failure, _wait_for_shielded_task
 from ._session_context import SessionDriverContext
 from ._session_driver import finalize_session, run_session
-from ._session_socket import _accept_arguments, _peer_disconnect_error
+from .protocols import AcceptHeaders, _accept_arguments
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    from ._disconnect import _PeerDisconnectedError
     from ._session import SessionState
     from .observability import LifecycleObserver
-    from .protocols import WebSocketLike
+    from .protocols import DisconnectClassifier, WebSocketLike
     from .resource import WebSocketResource
-
-
-type AcceptHeaders = cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]]
 
 
 async def _capture_error(operation: cabc.Awaitable[object]) -> BaseException | None:
@@ -60,6 +60,15 @@ class AcceptOptions:
         return True
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _LifecycleGuardBindings:
+    """Keep optional observation and transport adaptation with the guard."""
+
+    observer: LifecycleObserver | None = None
+    monotonic_clock: cabc.Callable[[], float] | None = None
+    disconnect_classifier: DisconnectClassifier = neutral_disconnect_classifier
+
+
 class LifecycleGuard:
     """Enforce pre-accept, accepted, and closed operations on one transport."""
 
@@ -67,6 +76,7 @@ class LifecycleGuard:
         "_accepting",
         "_close_code",
         "_close_started",
+        "_disconnect_classifier",
         "_monotonic_clock",
         "_observer",
         "_phase",
@@ -79,10 +89,9 @@ class LifecycleGuard:
         websocket: WebSocketLike,
         session: SessionState,
         *,
-        observer: LifecycleObserver | None = None,
-        monotonic_clock: cabc.Callable[[], float] | None = None,
+        bindings: _LifecycleGuardBindings | None = None,
     ) -> None:
-        """Guard one transport and retain its optional lifecycle observer.
+        """Guard one transport with its observation and adapter bindings.
 
         Parameters
         ----------
@@ -90,14 +99,16 @@ class LifecycleGuard:
             Transport whose acceptance and data operations are guarded.
         session : SessionState
             Shared exactly-once disconnect state for this connection.
-        observer : LifecycleObserver or None, default=None
-            Optional synchronous host metrics and tracing adapter.
-        monotonic_clock : collections.abc.Callable or None, default=None
-            Guarded monotonic clock used for lifecycle observation durations.
+        bindings : _LifecycleGuardBindings or None, default=None
+            Optional observation hooks and transport disconnect classifier.
         """
+        resolved_bindings = (
+            bindings if bindings is not None else _LifecycleGuardBindings()
+        )
         self._websocket = websocket
-        self._observer = observer
-        self._monotonic_clock = monotonic_clock
+        self._observer = resolved_bindings.observer
+        self._monotonic_clock = resolved_bindings.monotonic_clock
+        self._disconnect_classifier = resolved_bindings.disconnect_classifier
         self._session = session
         self._phase = ConnectionPhase.PRE_ACCEPT
         self._accepting = False
@@ -331,7 +342,7 @@ class LifecycleGuard:
         try:
             return await operation
         except Exception as error:
-            disconnect = _peer_disconnect_error(error)
+            disconnect = self._disconnect_classifier(error)
             if disconnect is None:
                 raise
             self._record_disconnect(disconnect)
@@ -379,7 +390,7 @@ class LifecycleGuard:
             self._session.close_code = self._close_code
         self._phase = ConnectionPhase.CLOSED
 
-    def _record_disconnect(self, error: BaseException) -> None:
+    def _record_disconnect(self, error: _PeerDisconnectedError) -> None:
         """Record the peer code when the receive API reports a disconnect."""
         self._session.peer_disconnected = True
         code = getattr(error, "code", None)
@@ -409,6 +420,8 @@ class WebSocketSession:
         self._dispatch = context.dispatch
         self._session_state = context.session_state
         self._params = dict(context.params)
+        self._disconnect_classifier = context.disconnect_classifier
+        self._frame_receiver = context.frame_receiver
         self._observer = context.observer
         self._monotonic_clock = context.monotonic_clock
         self._instrumentation_run = context.instrumentation_run
@@ -576,6 +589,8 @@ class WebSocketSession:
             session_state=self._session_state,
             hook_manager=self._hook_manager,
             params=self._params,
+            disconnect_classifier=self._disconnect_classifier,
+            frame_receiver=self._frame_receiver,
             primary_error=primary_error,
             finalization_error=finalization_error,
             observer=self._observer,

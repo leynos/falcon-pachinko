@@ -16,7 +16,7 @@ if typ.TYPE_CHECKING:
     from .hooks import HookManager
     from .lifecycle import LifecycleGuard
     from .observability import LifecycleObserver
-    from .protocols import WebSocketLike
+    from .protocols import DisconnectClassifier, FrameReceiver, WebSocketLike
     from .resource import WebSocketResource
 
 
@@ -58,6 +58,8 @@ class SessionDriverContext:
     session_state: SessionState
     hook_manager: HookManager
     params: cabc.Mapping[str, object]
+    disconnect_classifier: DisconnectClassifier
+    frame_receiver: FrameReceiver
     primary_error: BaseException | None = None
     finalization_error: BaseException | None = None
     observer: LifecycleObserver | None = None

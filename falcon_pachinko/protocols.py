@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
+import collections.abc as cabc
 import typing as typ
 
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
+from ._disconnect import _PeerDisconnectedError
+
+type AcceptHeaders = cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]]
+
+
+def _accept_arguments(
+    subprotocol: str | None,
+    headers: AcceptHeaders | None,
+) -> dict[str, object]:
+    """Build generic handshake keywords from the supplied protocol options."""
+    kwargs: dict[str, object] = {}
+    if subprotocol is not None:
+        kwargs["subprotocol"] = subprotocol
+    if headers is not None:
+        kwargs["headers"] = headers
+    return kwargs
 
 
 class WebSocketLike(typ.Protocol):
@@ -14,7 +29,7 @@ class WebSocketLike(typ.Protocol):
     async def accept(
         self,
         subprotocol: str | None = None,
-        headers: cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None = None,
+        headers: AcceptHeaders | None = None,
     ) -> None:
         """Accept the WebSocket handshake."""
 
@@ -32,3 +47,9 @@ class WebSocketLike(typ.Protocol):
 
     async def receive_text(self) -> str:
         """Receive one text frame from an accepted connection."""
+
+
+type DisconnectClassifier = cabc.Callable[
+    [BaseException], _PeerDisconnectedError | None
+]
+type FrameReceiver = cabc.Callable[[WebSocketLike], cabc.Awaitable[str | bytes]]

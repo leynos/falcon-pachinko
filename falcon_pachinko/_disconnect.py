@@ -10,3 +10,10 @@ class _PeerDisconnectedError(Exception):
         """Create a disconnect signal with an optional peer close code."""
         super().__init__(code)
         self.code = code
+
+
+def neutral_disconnect_classifier(
+    error: BaseException,
+) -> _PeerDisconnectedError | None:
+    """Recognize the package's transport-neutral peer-disconnect signal."""
+    return error if isinstance(error, _PeerDisconnectedError) else None

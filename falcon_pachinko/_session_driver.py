@@ -22,7 +22,6 @@ from ._session_cleanup import (
     raise_session_failures,
     run_shielded_cleanup,
 )
-from ._session_socket import _peer_disconnect_error, receive_frame
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -35,6 +34,7 @@ if typ.TYPE_CHECKING:
         LifecycleOperation,
         LifecycleSpanName,
     )
+    from .protocols import DisconnectClassifier
 
 
 @contextlib.contextmanager
@@ -193,7 +193,9 @@ async def _handle_session_failure(
     context: SessionDriverContext, error: BaseException
 ) -> tuple[BaseException | None, BaseException | None]:
     """Record a session failure and close using its lifecycle code."""
-    primary_error = _record_session_ending(context.session_state, error)
+    primary_error = _record_session_ending(
+        context.session_state, error, context.disconnect_classifier
+    )
     finalization_error = await _close_after_session_error(context, primary_error)
     return primary_error, finalization_error
 
@@ -234,7 +236,7 @@ async def _finalize_session(
 
 
 async def _receive_session(context: SessionDriverContext) -> None:
-    """Receive and route frames until Falcon reports a disconnect."""
+    """Receive and route frames until the transport reports a disconnect."""
     with _observe_session_operation(
         context, "receive_termination", failure_category="transport"
     ) as observation:
@@ -251,7 +253,7 @@ async def _receive_session_body(
     hook_manager = context.hook_manager
     while hook_manager.can_receive(dispatch.ws):
         try:
-            raw = await receive_frame(dispatch.ws)
+            raw = await context.frame_receiver(dispatch.ws)
         except _PeerDisconnectedError as exc:
             session.peer_disconnected = True
             if session.close_code is None:
@@ -276,10 +278,12 @@ def _effective_disconnect_code(error: BaseException) -> int:
 
 
 def _record_session_ending(
-    session: SessionState, error: BaseException
+    session: SessionState,
+    error: BaseException,
+    disconnect_classifier: DisconnectClassifier,
 ) -> BaseException | None:
     """Distinguish a transport ending from an unexpected session failure."""
-    if (disconnect := _peer_disconnect_error(error)) is not None:
+    if (disconnect := disconnect_classifier(error)) is not None:
         session.peer_disconnected = True
         if session.close_code is None:
             session.close_code = _effective_disconnect_code(disconnect)

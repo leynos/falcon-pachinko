@@ -14,6 +14,7 @@ from falcon_pachinko._session_cleanup import (
     run_shielded_cleanup,
 )
 from falcon_pachinko._session_context import SessionDriverContext
+from falcon_pachinko._session_socket import _peer_disconnect_error, receive_frame
 from falcon_pachinko.hooks import HookCollection, HookManager
 from falcon_pachinko.unittests._session_fixtures import (
     RecordingResource,
@@ -71,6 +72,8 @@ def _cleanup_context(
         session_state=_FailingClosedState(failure),
         hook_manager=HookManager(global_hooks=HookCollection(), resources=[resource]),
         params={},
+        disconnect_classifier=_peer_disconnect_error,
+        frame_receiver=receive_frame,
         primary_error=primary_error,
     )
 

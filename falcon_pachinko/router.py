@@ -37,6 +37,7 @@ from ._router_lifecycle import (
 )
 from ._router_resolution import _RouterResolutionMixin
 from ._session_instrumentation import start_session_instrumentation
+from ._session_socket import _peer_disconnect_error
 from ._uri_template import _compile_prefix_template, compile_uri_template
 from .hooks import HookCollection, HookManager
 from .lifecycle import ConnectionPhase, WebSocketSession
@@ -450,6 +451,7 @@ class WebSocketRouter(_RouterResolutionMixin):
             preparation.session,
             self._session_instrumentation,
             self._session_clock,
+            _peer_disconnect_error,
         )
         preparation.instrumentation_run = instrumentation_run
         with _observe_lifecycle(

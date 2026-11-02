@@ -12,7 +12,12 @@ from hypothesis import strategies as st
 
 from falcon_pachinko._disconnect import _PeerDisconnectedError
 from falcon_pachinko._session import SessionPhase, SessionState
-from falcon_pachinko.lifecycle import ConnectionPhase, LifecycleError, LifecycleGuard
+from falcon_pachinko.lifecycle import (
+    ConnectionPhase,
+    LifecycleError,
+    LifecycleGuard,
+    _LifecycleGuardBindings,
+)
 
 type _Operation = typ.Literal[
     "accept", "send", "receive", "peer_disconnect", "close", "cancel", "cleanup"
@@ -103,6 +108,28 @@ class _ModelTransport:
             msg = "model transport returned a non-text frame"
             raise TypeError(msg)
         return message
+
+
+class _AdapterDisconnectError(Exception):
+    """Represent a disconnect exception owned by a transport adapter."""
+
+    def __init__(self, code: int) -> None:
+        """Retain the adapter's peer close code."""
+        super().__init__(code)
+        self.code = code
+
+
+class _AdapterDisconnectTransport(_ModelTransport):
+    """Raise an adapter-specific disconnect from the generic receive method."""
+
+    def __init__(self, disconnect: _AdapterDisconnectError) -> None:
+        """Retain the exact exception object that the guard must re-raise."""
+        super().__init__()
+        self.disconnect = disconnect
+
+    async def receive_media(self) -> object:
+        """Raise the configured transport-specific disconnect."""
+        raise self.disconnect
 
 
 async def _cancel_pending_accept(
@@ -327,3 +354,32 @@ def test_generated_lifecycle_operations_preserve_state_invariants(
 ) -> None:
     """Generated operation traces preserve acceptance, data and cleanup rules."""
     asyncio.run(_exercise_operations(operations))
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_guard_uses_injected_transport_disconnect_classifier() -> None:
+    """Classify adapter errors while preserving the original receive exception."""
+    disconnect = _AdapterDisconnectError(4009)
+    transport = _AdapterDisconnectTransport(disconnect)
+
+    def classify_disconnect(
+        error: BaseException,
+    ) -> _PeerDisconnectedError | None:
+        if isinstance(error, _AdapterDisconnectError):
+            return _PeerDisconnectedError(error.code)
+        return None
+
+    session = SessionState()
+    guard = LifecycleGuard(
+        transport,
+        session,
+        bindings=_LifecycleGuardBindings(disconnect_classifier=classify_disconnect),
+    )
+    await guard.accept()
+
+    with pytest.raises(_AdapterDisconnectError) as caught:
+        await guard.receive_media()
+
+    assert caught.value is disconnect, "receive must re-raise the source exception"
+    assert session.peer_disconnected, "the classifier records peer closure"
+    assert guard.close_code == 4009, "the normalized code reaches lifecycle state"
