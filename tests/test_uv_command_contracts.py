@@ -584,12 +584,16 @@ def test_command_scanner_fails_closed_on_quoted_command_substitutions() -> None:
         ('echo "$$(cd "$d" && uv sync)"', True),
         ('x="$$(cd "$d" && uv sync)"', True),
         ('echo "$(shell uv sync)"', True),
+        ('echo "$(echo $((1+2)) && uv sync)"', False),
+        ('echo "$( (true) && uv sync )"', False),
+        ('echo "$$(echo $((1+2)) && uv sync)"', True),
+        ('echo "$$( (true) && uv sync )"', True),
     ],
 )
 def test_command_scanner_rejects_nested_quote_uv_substitutions(
     script: str, *, is_makefile: bool
 ) -> None:
-    """Nested quotes must not split a substitution containing a uv call."""
+    """Quoted substitutions must not hide an active project command."""
     with pytest.raises(
         ShellCommandSyntaxError,
         match=r"Unsupported quoted command substitution at shell line 1",

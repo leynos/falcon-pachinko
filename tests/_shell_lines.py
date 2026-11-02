@@ -358,6 +358,11 @@ def _command_substitution_end(
             index = opening.end()
             continue
         character = source[index]
+        if character == "(" and quote is None:
+            enclosing_quotes.append(None)
+            depth += 1
+            index += 1
+            continue
         if character != ")" or quote is not None:
             quote, index = _advance_shell_quote(source, index, quote)
             continue
