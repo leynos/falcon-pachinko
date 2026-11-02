@@ -6,6 +6,7 @@ import msgspec as ms
 import pytest
 
 from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
+from falcon_pachinko._observability import _observe_operation
 from falcon_pachinko.dispatcher import (
     HandlerInvocationContext,
     convert_and_invoke_handler,
@@ -173,14 +174,20 @@ async def test_rejection_signal_omits_peer_payload(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("clock_readings", "expected_duration"),
+    [((10.0, 10.375), 0.375), ((10.0, 10.0), 0.0), ((10.375, 10.0), 0.0)],
+)
 async def test_rejection_signal_uses_injected_monotonic_clock(
     caplog: pytest.LogCaptureFixture,
+    clock_readings: tuple[float, float],
+    expected_duration: float,
 ) -> None:
-    """Dispatch rejection duration can be controlled at the invocation boundary."""
+    """Dispatch duration uses the injected clock and clamps negative readings."""
     caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
     resource = RecordingResource()
     resource.bind_default_hook_manager()
-    clock_values = iter((10.0, 10.375))
+    clock_values = iter(clock_readings)
     context = HandlerInvocationContext(
         resource,
         DummyWS(),
@@ -194,6 +201,27 @@ async def test_rejection_signal_uses_injected_monotonic_clock(
 
     records = _rejection_records(caplog)
     assert len(records) == 1, "exactly one rejection signal expected"
-    assert vars(records[0])["duration_seconds"] == pytest.approx(0.375), (
-        "rejection duration must use the injected clock"
+    assert vars(records[0])["duration_seconds"] == pytest.approx(expected_duration), (
+        "rejection duration must use the injected clock and stay non-negative"
     )
+
+
+def test_dispatch_is_a_registered_observation_operation(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The dispatch operation remains a recognised observation dimension."""
+    logger = logging.getLogger("falcon_pachinko.dispatcher")
+    caplog.set_level(logging.DEBUG, logger=logger.name)
+
+    with _observe_operation(logger, "dispatch"):
+        pass
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Operation observation"
+    ]
+    assert [vars(record)["operation"] for record in records] == [
+        "dispatch",
+        "dispatch",
+    ], "dispatch must not fall back to the other operation"

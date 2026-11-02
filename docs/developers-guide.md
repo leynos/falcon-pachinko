@@ -213,8 +213,16 @@ hooks support resource instrumentation. Filter, sample or aggregate to bound
 event volume because publication and lease renewal are frequent and DEBUG is
 off by default. Metrics must use fixed operation and outcome dimensions, never
 room, message, connection or node IDs as labels. Keep instrumentation optional
-and host-configured, with no mandatory SDK, public constructor changes or
-`WorkerController` changes.
+and host-configured, with no mandatory SDK, public resource or router
+constructor changes, or `WorkerController` changes.
+
+Dispatch rejection timing uses `HandlerInvocationContext.monotonic_clock`,
+typed as `collections.abc.Callable[[], float]` and defaulting to
+`time.monotonic`. `convert_and_invoke_handler` reads it around typed-payload
+conversion so the rejection observation reports a non-negative duration.
+Dispatcher-created contexts use the default. Tests that construct
+`HandlerInvocationContext` directly can inject controlled readings to verify
+exact and clamped durations without patching the dispatcher module clock.
 
 ## Dependency bounds
 

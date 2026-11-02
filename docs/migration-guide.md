@@ -32,9 +32,13 @@ Redacted samples are bounded and intended for trusted local debugging.
 Conventional-handler DEBUG messages retain their lazy format but now include
 only a bounded handler name and exception class.
 
-`HookContext`, `HandlerInvocationContext`, and `TraceEvent` keep their fields,
-constructors, slots, equality behaviour and operational payload values, but
-their representations now show safe metadata instead of raw or decoded values.
+`HookContext` and `TraceEvent` keep their fields, constructors, slots, equality
+behaviour and operational payload values. `HandlerInvocationContext` keeps its
+existing invocation fields and adds an optional
+`monotonic_clock: collections.abc.Callable[[], float]`, defaulting to
+`time.monotonic`, for dispatch-rejection timing. Tests that construct the
+context directly can inject controlled clock readings. All three
+representations now show safe metadata instead of raw or decoded values.
 `TraceEvent.summary()` is new and returns the same kind of metadata. Code that
 relied on payload values appearing in `repr()` must read the explicit payload
 field at a trusted boundary.
