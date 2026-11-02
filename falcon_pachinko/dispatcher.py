@@ -40,7 +40,14 @@ class Envelope(ms.Struct, frozen=True):
 
 @dc.dataclass(slots=True, repr=False)
 class HandlerInvocationContext:
-    """Context for invoking a message handler."""
+    """Context for invoking a message handler.
+
+    Attributes
+    ----------
+    monotonic_clock : cabc.Callable[[], float]
+        Clock used to measure typed-payload rejection time. Defaults to
+        :func:`time.monotonic`.
+    """
 
     resource: WebSocketResource
     ws: WebSocketLike
