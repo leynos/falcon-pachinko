@@ -31,7 +31,16 @@ SHELL_COMMAND_SUBSTITUTION = re.compile(r"\$\((?!\()")
 SHELL_BACKTICK_SUBSTITUTION = re.compile(r"\\.|(?P<substitution>`(?:\\.|[^`\\])*`)")
 
 
-MAKE_COMMAND_SUBSTITUTION = re.compile(r"\$\$\((?!\()")
+MAKE_COMMAND_SUBSTITUTION = re.compile(r"\$\$?\((?!\()")
+
+
+SINGLE_QUOTED_TEXT = re.compile(r"'[^']*'")
+
+
+MAKEFILE_PROJECT_UV_COMMAND = re.compile(
+    r"(?:\buv\b|\$\$?\(UV\)|\$\{UV\})"
+    r"(?:(?:\s+-[^\s()]+)(?:\s+[^\s()]+)?)*\s+(?:run|sync)\b"
+)
 
 
 UV_COMMAND_IN_SUBSTITUTION = re.compile(r"\buv\b|\$\$?\(?UV\)?|\$\{UV\}")
@@ -294,15 +303,104 @@ def _shell_command_tokens(
         raise ShellCommandSyntaxError(message) from error
 
 
-def _quoted_substitution_contains_uv_command(
-    quoted: str, substitution: re.Pattern[str]
+def _command_substitution_contains_uv_command(
+    line: str, substitution: re.Pattern[str]
 ) -> bool:
-    """Return whether a quoted shell substitution contains a uv command."""
-    if not quoted.startswith('"'):
-        return False
-    if not substitution.search(quoted):
-        return False
-    return bool(UV_COMMAND_IN_SUBSTITUTION.search(quoted))
+    """Return whether an active command substitution can invoke uv."""
+    source = _strip_shell_comment(line)
+    index = 0
+    quote: str | None = None
+    while index < len(source):
+        candidate = _quoted_substitution_body(source, index, quote, substitution)
+        if candidate is not None:
+            end, body = candidate
+            if UV_COMMAND_IN_SUBSTITUTION.search(body):
+                return True
+            index = end + 1
+            continue
+        quote, index = _advance_shell_quote(source, index, quote)
+    return False
+
+
+def _quoted_substitution_body(
+    source: str,
+    index: int,
+    quote: str | None,
+    substitution: re.Pattern[str],
+) -> tuple[int, str] | None:
+    """Return a balanced double-quoted substitution body at this position."""
+    if quote != '"':
+        return None
+    opening = substitution.match(source, index)
+    if opening is None:
+        return None
+    end = _command_substitution_end(source, opening.end(), substitution)
+    if end is None:
+        return None
+    body = SINGLE_QUOTED_TEXT.sub(" ", source[opening.end() : end])
+    return end, body
+
+
+def _command_substitution_end(
+    source: str, start: int, substitution: re.Pattern[str]
+) -> int | None:
+    """Find the matching close for a substitution, including nested forms."""
+    depth = 1
+    quote: str | None = None
+    enclosing_quotes: list[str | None] = []
+    index = start
+    while index < len(source):
+        opening = _nested_substitution_at(source, index, quote, substitution)
+        if opening is not None:
+            enclosing_quotes.append(quote)
+            quote = None
+            depth += 1
+            index = opening.end()
+            continue
+        character = source[index]
+        if character != ")" or quote is not None:
+            quote, index = _advance_shell_quote(source, index, quote)
+            continue
+        depth -= 1
+        if depth == 0:
+            return index
+        quote = enclosing_quotes.pop()
+        index += 1
+    return None
+
+
+def _nested_substitution_at(
+    source: str,
+    index: int,
+    quote: str | None,
+    substitution: re.Pattern[str],
+) -> re.Match[str] | None:
+    """Return a nested active substitution, excluding single-quoted data."""
+    if quote == "'":
+        return None
+    return substitution.match(source, index)
+
+
+def _advance_shell_quote(
+    source: str, index: int, quote: str | None
+) -> tuple[str | None, int]:
+    """Advance one character while respecting shell quotes and escapes."""
+    character = source[index]
+    if character == "\\" and quote != "'":
+        return quote, index + 2
+    match quote:
+        case "'":
+            return (None if character == "'" else quote), index + 1
+        case '"':
+            return (None if character == '"' else quote), index + 1
+        case _:
+            match character:
+                case "'":
+                    return "'", index + 1
+                case '"':
+                    return '"', index + 1
+                case _:
+                    return None, index + 1
 
 
 def _backtick_substitution_contains_uv_command(line: str) -> bool:
@@ -347,23 +445,60 @@ def _protect_quoted_parentheses(
             f"{line_number}: {line!r}"
         )
         raise ShellCommandSyntaxError(message)
+    if is_makefile and _makefile_group_contains_uv_project_command(line):
+        message = (
+            f"Unsupported Makefile grouping or substitution at shell line "
+            f"{line_number}: {line!r}"
+        )
+        raise ShellCommandSyntaxError(message)
+    substitution = (
+        MAKE_COMMAND_SUBSTITUTION if is_makefile else SHELL_COMMAND_SUBSTITUTION
+    )
+    if _command_substitution_contains_uv_command(line, substitution):
+        message = (
+            f"Unsupported quoted command substitution at shell line {line_number}: "
+            f"{line!r}"
+        )
+        raise ShellCommandSyntaxError(message)
 
     def replace(match: re.Match[str]) -> str:
         quoted = match.group(0)
-        substitution = (
-            MAKE_COMMAND_SUBSTITUTION if is_makefile else SHELL_COMMAND_SUBSTITUTION
-        )
-        if _quoted_substitution_contains_uv_command(quoted, substitution):
-            message = (
-                f"Unsupported quoted command substitution at shell line "
-                f"{line_number}: {line!r}"
-            )
-            raise ShellCommandSyntaxError(message)
         return quoted.replace("(", QUOTED_OPEN_PARENTHESIS).replace(
             ")", QUOTED_CLOSE_PARENTHESIS
         )
 
     return SHELL_QUOTED_TEXT.sub(replace, line)
+
+
+def _makefile_group_contains_uv_project_command(line: str) -> bool:
+    """Return whether an unquoted Makefile group can hide a project uv call."""
+    source = SHELL_QUOTED_TEXT.sub(" ", _strip_shell_comment(line))
+    return any(
+        MAKEFILE_PROJECT_UV_COMMAND.search(source[start:end])
+        for start, end in _makefile_parenthesized_spans(source)
+    )
+
+
+def _makefile_parenthesized_spans(source: str) -> list[tuple[int, int]]:
+    """Return spans inside unquoted parentheses, including unfinished groups."""
+    open_parentheses: list[int] = []
+    spans: list[tuple[int, int]] = []
+    for index, character in enumerate(source):
+        match character:
+            case "(":
+                open_parentheses.append(index + 1)
+            case ")":
+                _append_makefile_group_span(open_parentheses, spans, index)
+    spans.extend((start, len(source)) for start in open_parentheses)
+    return spans
+
+
+def _append_makefile_group_span(
+    open_parentheses: list[int], spans: list[tuple[int, int]], end: int
+) -> None:
+    """Close one pending group, leaving unmatched closing brackets untouched."""
+    if open_parentheses:
+        spans.append((open_parentheses.pop(), end))
 
 
 def _commands_from_tokens(tokens: list[str], *, is_makefile: bool) -> list[list[str]]:

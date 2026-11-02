@@ -59,6 +59,54 @@ def test_makefile_uv_command_variables_require_the_lockfile() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "(cd sub && uv sync)",
+        "$$(uv sync)",
+        "$(shell uv sync)",
+    ],
+)
+def test_makefile_scanner_fails_closed_on_unquoted_uv_groups(source: str) -> None:
+    """Unquoted Makefile groups and expansions must not hide uv commands."""
+    with pytest.raises(
+        ShellCommandSyntaxError,
+        match=r"Unsupported Makefile grouping or substitution at shell line 1",
+    ):
+        unlocked_project_commands(source, is_makefile=True)
+
+
+def test_makefile_scanner_preserves_quoted_groups_and_uv_variables() -> None:
+    """Quoted data and a direct Make uv variable remain parseable."""
+    assert not unlocked_project_commands('echo "(uv sync)"', is_makefile=True), (
+        "quoted command text must remain data in a Makefile recipe"
+    )
+    assert not unlocked_project_commands(
+        "$(UV) run --locked pytest", is_makefile=True
+    ), "a direct Make uv variable must remain visible to lock validation"
+
+
+@pytest.mark.parametrize("manifest_name", ["action.yml", "action.yaml"])
+def test_ci_lock_scan_discovers_nested_composite_actions(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, manifest_name: str
+) -> None:
+    """Nested local action manifests participate in the project-lock scan."""
+    action = tmp_path / ".github" / "actions" / "group" / "nested" / manifest_name
+    action.parent.mkdir(parents=True)
+    action.write_text(
+        "runs:\n  using: composite\n  steps:\n    - run: uv sync\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("tests.test_uv_command_contracts.REPO_ROOT", tmp_path)
+
+    assert _ci_workflow_and_action_paths() == [action], (
+        "the lock scan must discover nested composite-action manifests"
+    )
+    assert _workflow_lock_violations(action) == [
+        f".github/actions/group/nested/{manifest_name}: uv sync"
+    ], "nested action run steps must be checked for unlocked uv commands"
+
+
 def _ci_workflow_and_action_paths() -> list[pathlib.Path]:
     """Return repository-owned GitHub workflow and action YAML files."""
     workflows = REPO_ROOT / ".github" / "workflows"
@@ -66,8 +114,8 @@ def _ci_workflow_and_action_paths() -> list[pathlib.Path]:
     return sorted([
         *workflows.glob("*.yml"),
         *workflows.glob("*.yaml"),
-        *actions.glob("*/action.yml"),
-        *actions.glob("*/action.yaml"),
+        *actions.rglob("action.yml"),
+        *actions.rglob("action.yaml"),
     ])
 
 
@@ -526,6 +574,36 @@ def test_command_scanner_fails_closed_on_quoted_command_substitutions() -> None:
         match=r"Unsupported quoted command substitution at shell line 1",
     ):
         unlocked_project_commands(script)
+
+
+@pytest.mark.parametrize(
+    ("script", "is_makefile"),
+    [
+        ('echo "$(cd "$d" && uv sync)"', False),
+        ('x="$(cd "$d" && uv sync)"', False),
+        ('echo "$$(cd "$d" && uv sync)"', True),
+        ('x="$$(cd "$d" && uv sync)"', True),
+        ('echo "$(shell uv sync)"', True),
+    ],
+)
+def test_command_scanner_rejects_nested_quote_uv_substitutions(
+    script: str, *, is_makefile: bool
+) -> None:
+    """Nested quotes must not split a substitution containing a uv call."""
+    with pytest.raises(
+        ShellCommandSyntaxError,
+        match=r"Unsupported quoted command substitution at shell line 1",
+    ):
+        unlocked_project_commands(script, is_makefile=is_makefile)
+
+
+def test_command_scanner_ignores_uv_text_in_single_quoted_substitution_data() -> None:
+    """A quoted argument inside a substitution is not an executable uv call."""
+    script = '''echo "$(printf '%s' 'uv sync')"'''
+
+    assert not unlocked_project_commands(script), (
+        "single-quoted data inside a substitution must not trigger the lock check"
+    )
 
 
 @pytest.mark.parametrize(
