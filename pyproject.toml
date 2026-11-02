@@ -36,7 +36,7 @@ dev = [
     "ruff",
     "pyright[nodejs]",
     "uvicorn>=0.34,<1",
-    "websockets>=11,<13",
+    "websockets>=11,<18",
     "pyyaml>=6.0.3",
     "hypothesis>=6.168.0",
     "packaging>=26.3,<27",
@@ -44,7 +44,7 @@ dev = [
 
 [project.optional-dependencies]
 examples = ["aiosqlite", "uvicorn>=0.34,<1", "websocket-client"]
-testing = ["uvicorn>=0.34,<1", "websockets>=11,<13"]
+testing = ["uvicorn>=0.34,<1", "websockets>=11,<18"]
 
 [tool.pyright]
 pythonVersion = "3.12"
