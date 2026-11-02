@@ -1,6 +1,6 @@
 """Map routed-session events to bounded DEBUG observations and outcomes.
 
-The session driver and session-work helpers use these functions to describe
+The session driver and instrumentation adapter use these functions to describe
 phase, close-code, and exception categories. They retain exception objects for
 loop reporting but omit exception values and other unbounded data from labels.
 """
@@ -16,7 +16,22 @@ from ._session import MAX_CLOSE_CODE
 from .diagnostics import _type_name
 
 if typ.TYPE_CHECKING:
-    from ._session_driver import _SessionExecution
+    import collections.abc as cabc
+
+    from ._session import SessionState
+
+
+class _SessionObservationContext(typ.Protocol):
+    """Fields needed to emit bounded observations at lifecycle boundaries."""
+
+    session: SessionState
+    resource: object
+    observation_clock: cabc.Callable[[], float]
+
+    @property
+    def primary_error(self) -> BaseException | None:
+        """Original session failure retained for bounded log metadata."""
+
 
 logger = logging.getLogger("falcon_pachinko._session_driver")
 _OBSERVATION_OPERATIONS = frozenset({
@@ -48,7 +63,7 @@ class _SessionObservation:
 
 
 def _log_session_observation(
-    execution: _SessionExecution,
+    execution: _SessionObservationContext,
     observation: _SessionObservation,
 ) -> None:
     """Emit bounded lifecycle metadata without reflecting caller values."""

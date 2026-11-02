@@ -33,9 +33,7 @@ class _DisconnectMarker:
     code: int
 
 
-class WebSocketSimulator(  # ruff: ignore[too-many-public-methods] -- harness waiter
-    _LifecycleSocket,
-):
+class WebSocketSimulator(_LifecycleSocket):
     """In-memory :class:`WebSocketLike` implementation for hermetic tests.
 
     Its public frame-count waiter keeps harnesses from reaching into the
@@ -72,11 +70,6 @@ class WebSocketSimulator(  # ruff: ignore[too-many-public-methods] -- harness wa
         """Return the number of queued inbound frames."""
         return self._inbound.qsize()
 
-    # pylint: disable-next=trivial-attribute-wrapper  # deliberate public API: the outbound queue is private, so callers need this accessor to inspect backlog depth
-    def pending_outbound(self) -> int:
-        """Return the number of queued outbound frames."""
-        return self._outbound.qsize()
-
     def _decoder_for(self, payload_type: type[object] | None) -> msjson.Decoder:
         """Return a cached decoder for ``payload_type``."""
         if payload_type is None:
@@ -85,20 +78,27 @@ class WebSocketSimulator(  # ruff: ignore[too-many-public-methods] -- harness wa
             decoder = self._decoders[payload_type] = msjson.Decoder(payload_type)
         return decoder
 
-    async def send_media(self, data: object) -> None:
+    async def send_media(
+        self, data: object, payload_type: object | None = None
+    ) -> None:
         """Record ``data`` as an outbound frame."""
+        del payload_type
         await self._outbound.put(data)
         self.sent_messages.append(data)
         self._outbound_event.set()
 
-    async def close(self, code: int = 1000) -> None:
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Close the socket and wake any pending receive operation."""
         if self.closed:
             return
-        await super().close(code)
-        # A full queue already wakes receivers. Preserve queued frames, then
-        # let the closed-and-empty check report the first close code.
-        close_code = self.close_code if self.close_code is not None else code
+        await super().close(code, reason)
+        # Keep queued inbound frames ahead of the disconnect notification. If
+        # the queue is full, the closed-and-empty path reports the close later.
+        close_code = self.close_code
+        if close_code is None:
+            close_code = code
+        if close_code is None:
+            close_code = 1000
         if not self._inbound.full():
             self._inbound.put_nowait(DisconnectSentinel(close_code))
 

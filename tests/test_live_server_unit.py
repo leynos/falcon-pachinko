@@ -154,7 +154,7 @@ class _FailingServeAdapter(_FakeAdapter):
 def _make_app() -> falcon.asgi.App:
     """Build a live app whose router owns accepted WebSocket sessions."""
     app = falcon.asgi.App()
-    router = WebSocketRouter(receive_loop=True)
+    router = WebSocketRouter()
     router.add_route("/socket", _AcceptingResource)
     router.attach(app, "/ws")
     app.add_route("/fail", _FailingHTTPResource())
@@ -200,7 +200,7 @@ async def test_base_url_survives_adapter_taking_socket_ownership() -> None:
 async def test_root_mount_accepts_a_websocket_connection() -> None:
     """Serve the exact root route as well as descendants of a root mount."""
     app = falcon.asgi.App()
-    router = WebSocketRouter(receive_loop=True)
+    router = WebSocketRouter()
     router.add_route("/", _AcceptingResource)
     router.attach(app, "/")
 

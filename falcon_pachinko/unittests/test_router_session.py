@@ -305,8 +305,9 @@ async def test_router_attach_preserves_binary_frames_and_serializes_responses() 
             """Record raw input and send it through Falcon's binary serializer."""
             self.received = message
             self.received_event.set()
-            socket = typ.cast("falcon.asgi.WebSocket", ws)
-            await socket.send_media(message, falcon.WebSocketPayloadType.BINARY)
+            await typ.cast("typ.Any", ws).send_media(
+                message, falcon.WebSocketPayloadType.BINARY
+            )
 
     payload = b"\x00\x01raw binary frame"
     BinaryEchoResource.instances.clear()

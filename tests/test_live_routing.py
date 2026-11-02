@@ -105,7 +105,7 @@ class _RoutingAdapter:
 
 def _create_live_router(observations: _LiveObservations) -> WebSocketRouter:
     """Register live routes and recording hooks on a mounted router."""
-    router = WebSocketRouter(receive_loop=True)
+    router = WebSocketRouter()
 
     def record_global_hook(context: HookContext) -> None:
         """Record global hook order around the resource-specific chain."""

@@ -35,20 +35,22 @@ async def test_on_disconnect_removes_connection_and_audits_closure() -> None:
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
+    await ws.accept()
+    await resource.on_session_start(ws)
     conn_id = resource._conn_id
-    assert conn_id is not None, "on_connect must assign a connection ID"
+    assert conn_id is not None, "session start must assign a connection ID"
     assert conn_mgr.websockets == {conn_id: ws}, (
-        "on_connect must register the effective socket"
+        "session start must register the effective socket"
     )
-    assert not ws.unaccepted, "on_connect must accept before readiness"
+    assert not ws.unaccepted, "session start must run after acceptance"
     assert ws.messages == [
         {
             "type": "session.ready",
             "payload": {"workspace": _WORKSPACE, "project": _PROJECT},
         }
-    ], "on_connect must send the session-ready event after acceptance"
+    ], "session start must send the ready event after acceptance"
     opened = [record for record in audit.records if record["event"] == "session.open"]
-    assert len(opened) == 1, "on_connect must record exactly one session.open event"
+    assert len(opened) == 1, "session start must record one session.open event"
     opened_metadata = opened[0]["metadata"]
     assert isinstance(opened_metadata, dict), "open metadata must be a mapping"
     assert opened_metadata["connection"] == conn_id, "open must carry this connection"
@@ -110,7 +112,8 @@ async def test_reserved_envelope_tag_leaves_live_membership_intact(tag: str) -> 
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
-    await resource.on_accepted(ws)
+    await ws.accept()
+    await resource.on_session_start(ws)
 
     await _dispatch(resource, ws, {"type": tag, "payload": 1000})
 
@@ -143,7 +146,8 @@ async def test_reserved_envelope_cannot_evict_through_real_lifecycle() -> None:
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
-    await resource.on_accepted(ws)
+    await ws.accept()
+    await resource.on_session_start(ws)
     conn_id = resource._conn_id
 
     await _dispatch(resource, ws, {"type": "disconnect", "payload": 1000})
@@ -180,7 +184,8 @@ async def test_connect_envelope_tag_does_not_reconnect() -> None:
     await resource.on_connect(
         _connect_request(), ws, workspace_id=_WORKSPACE, project_id=_PROJECT
     )
-    await resource.on_accepted(ws)
+    await ws.accept()
+    await resource.on_session_start(ws)
     ready_count = len(ws.messages)
 
     await _dispatch(resource, ws, {"type": "connect", "payload": True})

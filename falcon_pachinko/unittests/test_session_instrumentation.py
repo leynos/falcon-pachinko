@@ -9,6 +9,13 @@ import typing as typ
 import falcon
 import pytest
 
+from falcon_pachinko._disconnect import _PeerDisconnectedError
+from falcon_pachinko._session import SessionState
+from falcon_pachinko._session_instrumentation import (
+    _instrumentation_dimensions,
+    _SessionInstrumentationRun,
+)
+from falcon_pachinko._session_socket import _peer_disconnect_error
 from falcon_pachinko.observability import (
     CloseCodeCategory,
     Counter,
@@ -44,6 +51,31 @@ def _assert_observation_durations(caplog: pytest.LogCaptureFixture) -> None:
         and record.__dict__.get("outcome") == "completed"
         and record.__dict__.get("operation") in {"setup", "session"}
     ] == [("setup", 2.0), ("session", 7.0)], _ASSERTION_FAILURE
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_category"),
+    [
+        (falcon.WebSocketDisconnected(4000), ExceptionCategory.TRANSPORT),
+        (_PeerDisconnectedError(4000), ExceptionCategory.TRANSPORT),
+        (None, ExceptionCategory.NONE),
+    ],
+)
+def test_exception_dimension_preserves_transport_and_empty_categories(
+    error: BaseException | None, expected_category: ExceptionCategory
+) -> None:
+    """Transport signals remain bounded while absent failures use no category."""
+    attempt = _SessionInstrumentationRun(
+        SessionState(), RecordingInstrumentation(), lambda: 0.0, _peer_disconnect_error
+    )
+    dimensions = _instrumentation_dimensions(
+        attempt,
+        operation=Operation.SESSION,
+        outcome=Outcome.FAILED,
+        error=error,
+    )
+
+    assert dimensions.exception is expected_category, _ASSERTION_FAILURE
 
 
 @pytest.mark.asyncio
@@ -134,10 +166,10 @@ async def test_clock_failure_before_cleanup_uses_fallback_and_runs_disconnect(
     raise_cancellation: bool,
 ) -> None:
     """A diagnostics clock cannot prevent promised disconnect cleanup."""
-    # The twelfth read is the cleanup-start observation after a clean receive
-    # close; a fault there used to escape before the shielded task was created.
+    # The sixth read starts cleanup after a clean receive close. A clock fault
+    # there must not prevent the shielded task from running disconnect hooks.
     caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_driver")
-    clock = InjectedClock(fail_on_read=12, raise_cancellation=raise_cancellation)
+    clock = InjectedClock(fail_on_read=6, raise_cancellation=raise_cancellation)
     resource = RecordingResource()
     instrumentation = RecordingInstrumentation()
 
@@ -153,7 +185,7 @@ async def test_clock_failure_before_cleanup_uses_fallback_and_runs_disconnect(
     await drive_router(router, SessionSocket(falcon.WebSocketDisconnected(4000)))
 
     assert resource.disconnect_codes == [4000], _ASSERTION_FAILURE
-    assert len(clock.readings) > 12, _ASSERTION_FAILURE
+    assert len(clock.readings) > 6, _ASSERTION_FAILURE
     _, _, dimensions = session_counter(instrumentation)
     assert dimensions.outcome is Outcome.COMPLETED, _ASSERTION_FAILURE
     assert [span.end_count for span in instrumentation.spans] == [1, 1], (

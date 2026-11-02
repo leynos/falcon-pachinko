@@ -8,196 +8,266 @@ failure isolation prevent host callback errors from changing session outcomes.
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import typing as typ
 
-import falcon
-
 from . import observability as _observability
-from ._disconnect import _PeerDisconnectedError
-from ._session import SessionPhase
+from ._disconnect import neutral_disconnect_classifier
+from ._session import SessionPhase, SessionState
+from ._session_observation import (
+    _log_session_observation,
+    _outcome_for_error,
+    _SessionObservation,
+)
 
 if typ.TYPE_CHECKING:
-    from ._session_driver import _SessionExecution, _SessionOptions, _SessionRun
+    import collections.abc as cabc
+
+    from .observability import SessionInstrumentation
+    from .protocols import DisconnectClassifier
 
 
-class _SessionDriver(typ.Protocol):
-    """Inject session work without coupling telemetry to the driver module."""
+@dc.dataclass(slots=True)
+class _CleanupInstrumentation:
+    """Retain one cleanup span and its monotonic start time."""
 
-    async def __call__(
+    attempt: _SessionInstrumentationRun
+    started: float
+    span: _observability._SpanOwner
+
+
+class _SessionInstrumentationRun:
+    """Own bounded telemetry for one route attempt from negotiation to end."""
+
+    def __init__(
         self,
-        execution: _SessionExecution,
-        options: _SessionOptions,
-        started: float,
-    ) -> bool: ...
+        session: SessionState,
+        instrumentation: SessionInstrumentation,
+        clock: cabc.Callable[[], float],
+        disconnect_classifier: DisconnectClassifier,
+    ) -> None:
+        """Start the session span and retain its state for terminal reporting."""
+        self.session = session
+        self.instrumentation = instrumentation
+        self.observation_clock = clock
+        self.disconnect_classifier = disconnect_classifier
+        self.started = clock()
+        self.setup_started = self.started
+        self.resource: object = None
+        self.cleanup_failures: tuple[BaseException, ...] = ()
+        self._finished = False
+        dimensions = _instrumentation_dimensions(
+            self,
+            operation=_observability.Operation.SESSION,
+            outcome=_observability.Outcome.STARTED,
+            error=None,
+        )
+        self.session_span = _observability._start_span(
+            instrumentation, _observability.SpanName.SESSION, dimensions
+        )
+        _log_session_observation(
+            self, _SessionObservation("session", "started", self.started)
+        )
+        self.setup_started = clock()
+        _log_session_observation(
+            self, _SessionObservation("setup", "started", self.setup_started)
+        )
 
+    @property
+    def primary_error(self) -> BaseException | None:
+        """Original session failure for bounded log metadata."""
+        return self.session.primary_error
 
-class _SessionReleaser(typ.Protocol):
-    """Inject ownership release while keeping telemetry finalization central."""
+    def set_resource(self, resource: object) -> None:
+        """Retain the selected resource for type-only diagnostics."""
+        self.resource = resource
 
-    def __call__(
+    def finish_setup(self, error: BaseException | None = None) -> None:
+        """Log the negotiation/setup boundary without exposing caller values."""
+        outcome = _outcome_for_error(error)
+        if error is None and self.session.phase is SessionPhase.CONNECTING:
+            outcome = "rejected"
+        _log_session_observation(
+            self,
+            _SessionObservation("setup", outcome, self.setup_started, error=error),
+        )
+
+    def finish(
         self,
-        execution: _SessionExecution,
-        options: _SessionOptions,
+        error: BaseException | None = None,
         *,
-        handed_off_to_application: bool,
-    ) -> None: ...
+        handed_off: bool = False,
+    ) -> None:
+        """Record one outcome and end the attempt span exactly once."""
+        if self._finished:
+            return
+        self._finished = True
+        outcome = _session_outcome(self.session, error, handed_off=handed_off)
+        dimensions = _instrumentation_dimensions(
+            self,
+            operation=_observability.Operation.SESSION,
+            outcome=outcome,
+            error=_instrumentation_error(self, error),
+        )
+        _observability._increment(
+            self.instrumentation,
+            _observability.Counter.SESSION_OUTCOMES,
+            dimensions,
+        )
+        if self.session.has_established and not handed_off:
+            _observability._observe_duration(
+                self.instrumentation,
+                _observability.Duration.SESSION,
+                self.observation_clock() - self.started,
+                dimensions,
+            )
+        self.session_span.end(dimensions)
+        _log_session_observation(
+            self,
+            _SessionObservation(
+                "session",
+                outcome.value,
+                self.started,
+                error=_instrumentation_error(self, error),
+                cleanup_failures=self.cleanup_failures,
+            ),
+        )
 
 
-async def _drive_session_with_observation(
-    run: _SessionRun,
-    drive_session: _SessionDriver,
-) -> None:
-    """Retain classification data while preserving the original traceback."""
-    try:
-        run.handed_off_to_application = await drive_session(
-            run.execution, run.options, run.started
-        )
-    except BaseException as exc:
-        run.error = exc
-        run.outcome = _instrumentation_session_outcome(
-            run.execution,
-            exc,
-            handed_off_to_application=run.handed_off_to_application,
-        )
-        raise
-    run.outcome = _instrumentation_session_outcome(
-        run.execution,
-        None,
-        handed_off_to_application=run.handed_off_to_application,
+def start_session_instrumentation(
+    session: SessionState,
+    instrumentation: SessionInstrumentation,
+    clock: cabc.Callable[[], float],
+    disconnect_classifier: DisconnectClassifier = neutral_disconnect_classifier,
+) -> _SessionInstrumentationRun:
+    """Start telemetry before route hooks so setup and cleanup share a span."""
+    return _SessionInstrumentationRun(
+        session, instrumentation, clock, disconnect_classifier
     )
 
 
-def _release_and_observe_session(
-    run: _SessionRun,
-    release_session: _SessionReleaser,
+def start_cleanup_instrumentation(
+    attempt: _SessionInstrumentationRun | None,
+) -> _CleanupInstrumentation | None:
+    """Start a cleanup child span only after cleanup ownership is acquired."""
+    if attempt is None:
+        return None
+    started = attempt.observation_clock()
+    dimensions = _instrumentation_dimensions(
+        attempt,
+        operation=_observability.Operation.CLEANUP,
+        outcome=_observability.Outcome.STARTED,
+        error=None,
+    )
+    span = _observability._start_span(
+        attempt.instrumentation, _observability.SpanName.CLEANUP, dimensions
+    )
+    _log_session_observation(
+        attempt, _SessionObservation("cleanup", "started", started)
+    )
+    return _CleanupInstrumentation(attempt, started, span)
+
+
+def finish_cleanup_instrumentation(
+    cleanup: _CleanupInstrumentation | None,
+    failures: tuple[BaseException, ...],
 ) -> None:
-    """Release session ownership before emitting its one terminal observation."""
-    try:
-        release_session(
-            run.execution,
-            run.options,
-            handed_off_to_application=run.handed_off_to_application,
+    """Record cleanup failures and duration after the CLOSED transition."""
+    if cleanup is None:
+        return
+    attempt = cleanup.attempt
+    attempt.cleanup_failures = failures
+    outcome = (
+        _observability.Outcome.FAILED if failures else _observability.Outcome.COMPLETED
+    )
+    error = failures[0] if failures else None
+    dimensions = _instrumentation_dimensions(
+        attempt,
+        operation=_observability.Operation.CLEANUP,
+        outcome=outcome,
+        error=error,
+    )
+    if failures:
+        _observability._increment(
+            attempt.instrumentation,
+            _observability.Counter.CLEANUP_FAILURES,
+            dimensions,
+            len(failures),
         )
-    except BaseException as exc:
-        run.error = exc
-        run.outcome = _instrumentation_session_outcome(
-            run.execution,
-            exc,
-            handed_off_to_application=run.handed_off_to_application,
-        )
-        raise
-    finally:
-        _finish_session_instrumentation(run)
-
-
-def _start_session_span(
-    execution: _SessionExecution, options: _SessionOptions
-) -> _observability._SpanOwner:
-    """Create the session span before setup and receive work begin."""
-    return _observability._start_span(
-        options.instrumentation,
-        _observability.SpanName.SESSION,
-        _instrumentation_dimensions(
-            execution,
-            operation=_observability.Operation.SESSION,
-            outcome=_observability.Outcome.STARTED,
-            exception=None,
+    _observability._observe_duration(
+        attempt.instrumentation,
+        _observability.Duration.CLEANUP,
+        attempt.observation_clock() - cleanup.started,
+        dimensions,
+    )
+    cleanup.span.end(dimensions)
+    _log_session_observation(
+        attempt,
+        _SessionObservation(
+            "cleanup",
+            outcome.value,
+            cleanup.started,
+            error=error,
+            cleanup_failures=failures,
         ),
     )
 
 
-def _finish_session_instrumentation(run: _SessionRun) -> None:
-    """Count one attempt outcome and end its span after ownership is released."""
-    execution = run.execution
-    outcome = run.outcome or _instrumentation_session_outcome(
-        execution,
-        run.error,
-        handed_off_to_application=run.handed_off_to_application,
-    )
-    dimensions = _instrumentation_dimensions(
-        execution,
-        operation=_observability.Operation.SESSION,
-        outcome=outcome,
-        exception=_instrumentation_session_exception(execution, run.error),
-    )
-    session_duration = (
-        run.options.instrumentation_clock() - run.instrumentation_started
-        if execution.session.has_established and not run.handed_off_to_application
-        else None
-    )
-    _observability._increment(
-        run.options.instrumentation,
-        _observability.Counter.SESSION_OUTCOMES,
-        dimensions,
-    )
-    if session_duration is not None:
-        _observability._observe_duration(
-            run.options.instrumentation,
-            _observability.Duration.SESSION,
-            session_duration,
-            dimensions,
-        )
-    run.session_span.end(dimensions)
-
-
-def _instrumentation_session_outcome(
-    execution: _SessionExecution,
+def _session_outcome(
+    session: SessionState,
     error: BaseException | None,
     *,
-    handed_off_to_application: bool,
+    handed_off: bool,
 ) -> _observability.Outcome:
-    """Classify one router attempt without treating handoff as session end."""
+    """Classify the router attempt without unbounded labels."""
     if error is not None:
         return (
             _observability.Outcome.CANCELLED
             if isinstance(error, asyncio.CancelledError)
             else _observability.Outcome.FAILED
         )
-    if execution.session.phase is SessionPhase.CONNECTING:
+    if session.phase is SessionPhase.CONNECTING:
         return _observability.Outcome.REJECTED
-    return (
-        _observability.Outcome.HANDED_OFF
-        if handed_off_to_application
-        else _observability.Outcome.COMPLETED
-    )
+    if handed_off:
+        return _observability.Outcome.HANDED_OFF
+    return _observability.Outcome.COMPLETED
 
 
-def _instrumentation_session_exception(
-    execution: _SessionExecution,
-    session_error: BaseException | None,
+def _instrumentation_error(
+    attempt: _SessionInstrumentationRun, error: BaseException | None
 ) -> BaseException | None:
-    """Prefer the original cause over grouped cleanup failures for dimensions."""
-    if execution.primary_error is not None:
-        return execution.primary_error
-    if execution.cleanup_failures:
-        return execution.cleanup_failures[0]
-    return session_error
+    """Prefer the application cause over grouped cleanup errors."""
+    if attempt.session.primary_error is not None:
+        return attempt.session.primary_error
+    if attempt.cleanup_failures:
+        return attempt.cleanup_failures[0]
+    return error
 
 
 def _instrumentation_dimensions(
-    execution: _SessionExecution,
+    attempt: _SessionInstrumentationRun,
     *,
     operation: _observability.Operation,
     outcome: _observability.Outcome,
-    exception: BaseException | None,
+    error: BaseException | None,
 ) -> _observability.SessionDimensions:
-    """Build dimensions solely from fixed enums and effective close metadata."""
+    """Build labels only from closed enum categories."""
+    session = attempt.session
     phase = {
         SessionPhase.CONNECTING: _observability.Phase.CONNECTING,
         SessionPhase.ESTABLISHED: _observability.Phase.ESTABLISHED,
         SessionPhase.DISCONNECTING: _observability.Phase.DISCONNECTING,
         SessionPhase.CLOSED: _observability.Phase.CLOSED,
-    }[execution.session.phase]
-    close_code = execution.session.close_code
+    }[session.phase]
     return _observability.SessionDimensions(
         operation=operation,
         outcome=outcome,
         phase=phase,
-        close_code=_observability._close_code_category(close_code),
+        close_code=_observability._close_code_category(session.close_code),
         exception=_observability._exception_category(
-            exception,
-            is_transport=isinstance(
-                exception, (falcon.WebSocketDisconnected, _PeerDisconnectedError)
+            error,
+            is_transport=(
+                error is not None and attempt.disconnect_classifier(error) is not None
             ),
         ),
     )

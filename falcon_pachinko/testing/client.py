@@ -78,8 +78,12 @@ class TraceEvent:
         return f"TraceEvent({self.summary()!r})"
 
 
-class WebSocketSession:
-    """Facade around a websocket client connection with helpful utilities."""
+class WebSocketTestSession:
+    """Facade around a client-side connection opened by WebSocketTestClient.
+
+    This is distinct from the server-side ``falcon_pachinko.WebSocketSession``
+    returned by router negotiation.
+    """
 
     def __init__(
         self,
@@ -303,6 +307,11 @@ class WebSocketSession:
         self._log("close", "close", {"code": code, "reason": reason})
 
 
+# Preserve direct imports from this module while distinguishing the client
+# facade from the server-side WebSocketSession exported at package root.
+WebSocketSession = WebSocketTestSession
+
+
 class _ClientOptions(typ.TypedDict, total=False):
     """Optional configuration parameters for :class:`WebSocketTestClient`."""
 
@@ -480,8 +489,8 @@ class WebSocketTestClient:
         headers: cabc.Mapping[str, str] | None = None,
         subprotocols: cabc.Sequence[str] | None = None,
         trace: list[TraceEvent] | bool | None = None,
-    ) -> cabc.AsyncIterator[WebSocketSession]:
-        """Connect to ``path`` and yield a managed :class:`WebSocketSession`.
+    ) -> cabc.AsyncIterator[WebSocketTestSession]:
+        """Connect to ``path`` and yield a managed test-client session.
 
         ``trace`` accepts one of four values:
 
@@ -492,9 +501,9 @@ class WebSocketTestClient:
 
         Yields
         ------
-        WebSocketSession
-            A session bound to the open connection. The session is closed on
-            exit if the caller has not already closed it.
+        WebSocketTestSession
+            A client-side session bound to the open connection. It is closed
+            on exit if the caller has not already closed it.
         """
         ws_connect = self._ensure_ws_connect()
         (
@@ -511,7 +520,7 @@ class WebSocketTestClient:
             open_timeout=self._open_timeout,
         )
         async with connect_cm as connection:
-            session = WebSocketSession(
+            session = WebSocketTestSession(
                 connection,
                 path=normalized_path,
                 trace=trace_log,

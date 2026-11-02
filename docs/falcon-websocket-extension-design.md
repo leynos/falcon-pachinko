@@ -44,56 +44,27 @@ shared WebSocket media-handler mapping, preserving configured outgoing
 serializers. The public `configure_raw_frame_media(app)` helper provides the
 same setup for manually mounted routers and other Falcon WebSocket routes.
 
-After Falcon routes a connection to the router, `on_connect()` decides whether
-to accept it. The router accepts after the connection hooks run; a resource
-that sends during `on_connect()` must call `await ws.accept()` first. The
-resource's `on_accepted()` hook runs immediately after acceptance and is the
-place for accept-dependent I/O, such as registering the socket or sending an
-initial event. With `receive_loop=True`, the router owns ordered
-`receive_media()` calls and invokes `WebSocketResource.dispatch()` for each raw
-`str` or `bytes` frame; the default `False` returns after acceptance and leaves
-receives and cleanup to the application after successful setup. Failures in
-`after_connect`, acceptance, or `on_accepted` still run disconnect cleanup
-before the router returns or propagates the error. The live reference app opts
-into the router-owned path. It uses the shared session driver and public
-`LiveWebSocketServer` harness, rather than a private test adapter.
+After Falcon routes a connection to the router, `on_connect()` returns a falsey
+value to reject, `True` to accept with defaults, or `AcceptOptions` to select a
+subprotocol and response headers. The router accepts after `after_connect`
+hooks. The deprecated `ws.accept()` compatibility path accepts immediately
+inside `on_connect()` and changes that hook order. After acceptance,
+`WebSocketSession.run()` invokes `on_session_start()` before receiving frames,
+then invokes `WebSocketResource.dispatch()` in order until the session ends.
+The driver handles Falcon's `WebSocketDisconnected` exception and the
+simulator's framework-independent package signal. It attempts `on_disconnect`
+once for each accepted session when the router owns cleanup. A missing peer
+code uses `1006`; unexpected receive or dispatch failures close with `1011` and
+propagate. Cancellation preserves an already selected or reported code;
+otherwise it selects `1001` and attempts a best-effort close on the accepted
+transport. Shielded cleanup continues through each disconnect stage once, even
+when the caller is cancelled again. Rejected connections and failed
+`on_connect` calls do not call the callback. The optional host telemetry
+contract observes these lifecycle operations without changing error or
+cancellation behaviour; see
+[Optional lifecycle metrics and tracing](#optional-lifecycle-metrics-and-tracing).
 
-Once `on_connect()` approves or the resource accepts, `before_disconnect` hooks
-run before `on_disconnect`. Normal peer closure uses Falcon's
-`WebSocketDisconnected.code`; an unavailable code and an already-closed
-transport without a reported code use 1006 as callback metadata. Cancellation
-without an earlier selected or reported code selects 1001 and attempts a
-best-effort close when the accepted transport remains open. If caller
-cancellation arrives while peer-close cleanup is already running, the shielded
-task preserves the selected peer code and does not restart either cleanup
-stage. Unexpected receive or handler failures use 1011 while the transport
-remains open. If transport loss has already closed it without a reported code,
-cleanup uses 1006 and skips another close. A rejection that remains unaccepted
-does not call `on_disconnect`; if `on_connect()` accepts and then fails,
-cleanup still runs. Multiple ordinary failures are raised in a primary-first
-`ExceptionGroup`. Cancellation remains a bare `CancelledError`, and cleanup
-failures hidden by cancellation are reported to the event loop's exception
-handler.
-
-When a handler or server closes an open transport, the requested code (1000
-when omitted) becomes effective before the close send is awaited. A later
-peer-close response cannot replace it. If the close attempt fails while the
-transport remains open, the provisional code is rolled back; an already-closed
-transport contributes its reported code, or 1006 when none is available.
-
-The router may also use a host-configured `SessionInstrumentation` adapter. It
-is no-op by default and does not require a telemetry SDK or a global provider.
-The adapter receives one outcome counter for each routed attempt, cleanup
-failure counts, and session and cleanup durations with fixed operation,
-outcome, phase, close-code-category and exception-category dimensions. A
-setup-only `handed_off` outcome is distinct from an ended session; it has no
-session duration because the application owns the remaining connection life.
-The router creates one session span and, when cleanup is promised, a child span
-inside the shielded cleanup task with the parent context copied across task
-creation. Adapter callbacks are synchronous, non-blocking and failure-isolated;
-exporter lifetime and bounded asynchronous export belong to the host.
-
-The diagrams below show the opted-in `receive_loop=True` session path.
+The diagrams below show the router-owned session path.
 
 ### WebSocket session lifecycle
 
@@ -101,32 +72,38 @@ The diagrams below show the opted-in `receive_loop=True` session path.
 stateDiagram-v2
     accTitle: WebSocket session state transitions
     accDescr {
-        Approval or resource-owned acceptance promises cleanup. An unaccepted
-        false result returns without cleanup only when the resource did not
-        accept during on_connect. Peer closure, failure or cancellation moves
-        an established session through one cleanup phase.
+        The session starts while the router runs on_connect. A falsey result
+        rejects the upgrade; an accepting result leads to router acceptance,
+        on_session_start and the receive and dispatch loop. Disconnect,
+        failure or cancellation leads to cleanup and the disconnected state.
     }
 
     [*] --> Connecting
-    Connecting --> Established: on_connect approval or resource acceptance
-    Connecting --> [*]: false result while neither router nor resource accepts
-    Established --> Disconnecting: peer close, setup failure, receive failure or cancellation
-    Disconnecting --> Closed: before_disconnect and on_disconnect attempted
+    Connecting --> Accepted: on_connect returns True or AcceptOptions
+    Connecting --> Closed: on_connect returns falsey
+    Accepted --> Receiving: accept() then on_session_start
+    Receiving --> Receiving: receive_media() and dispatch(ws, raw)
+    Receiving --> CleanDisconnect: WebSocketDisconnected
+    Receiving --> Failed: dispatch exception
+    Receiving --> Cancelled: task cancellation
+    CleanDisconnect --> Disconnected: on_disconnect(peer code or 1006)
+    Failed --> Disconnected: close(1011), on_disconnect(ws, 1011)
+    Cancelled --> Disconnected: best-effort close(1001), on_disconnect(ws, 1001)
     Closed --> [*]
+    Disconnected --> [*]
 ```
 
-**Figure: Opted-in WebSocket session states from connection through acceptance,
-frame dispatch and disconnect cleanup.**
+**Figure: Router-owned WebSocket session states from connection through
+acceptance, frame dispatch and disconnect cleanup.**
 
 ```mermaid
 sequenceDiagram
     accTitle: Falcon WebSocket responder lifecycle
     accDescr {
-        With receive_loop enabled, Falcon routes the connection to
-        WebSocketRouter, which calls on_connect before accepting. After
-        acceptance it calls on_accepted, then receives and dispatches frames
-        until disconnect. Cleanup runs before_disconnect hooks before the
-        resource's on_disconnect hook.
+        Falcon routes the connection to WebSocketRouter, which calls on_connect
+        and after_connect before acceptance. The router then calls
+        on_session_start, receives and dispatches frames until disconnect, and
+        calls on_disconnect with the final close code.
     }
 
     participant Client
@@ -137,28 +114,67 @@ sequenceDiagram
 
     Client->>FalconApp: WebSocket connection
     FalconApp->>WebSocketRouter: on_websocket(req, ws)
-    WebSocketRouter->>WebSocketRouter: before_connect hooks
     WebSocketRouter->>WebSocketResource: on_connect(req, ws, params)
-    WebSocketResource-->>WebSocketRouter: approval or resource acceptance
-    WebSocketRouter->>WebSocketRouter: after_connect hooks
-    opt Socket remains unaccepted after setup hooks
-        WebSocketRouter->>WebSocket: accept()
-    end
-    WebSocketRouter->>WebSocketResource: on_accepted(ws)
+    WebSocketResource-->>WebSocketRouter: continue session
+    WebSocketRouter->>Hooks: after_connect
+    WebSocketRouter->>WebSocket: accept()
+    WebSocketRouter->>WebSocketResource: on_session_start(ws)
     loop Until disconnect
         WebSocketRouter->>WebSocket: receive_media()
         WebSocket-->>WebSocketRouter: raw str or bytes frame
         WebSocketRouter->>WebSocketResource: dispatch(ws, raw)
     end
-    WebSocketRouter->>WebSocketRouter: before_disconnect hooks
     WebSocketRouter->>WebSocketResource: on_disconnect(ws, close_code)
 ```
 
-**Figure: For an opted-in session, Falcon routes a WebSocket connection to the
-router, which accepts it, dispatches frames, and calls the disconnect hook.**
+**Figure: Falcon routes a WebSocket connection to the router, which negotiates,
+accepts, starts the session, dispatches frames, and calls the disconnect hook.**
 
 This implemented contract supersedes the future-tense responder and receive
 loop descriptions in the original proposal below.
+
+### Optional lifecycle metrics and tracing
+
+An application may assign a synchronous host adapter to
+`WebSocketRouter.lifecycle_observer` before serving requests. The default is
+`None`, and assigning `None` disables instrumentation. Router constructor
+signatures do not change, and the package does not install a telemetry SDK,
+exporter, or global configuration. Each connection retains the observer
+selected when negotiation starts, including through acceptance and cleanup.
+
+The contracts in `falcon_pachinko.observability` are `LifecycleObserver`,
+`LifecycleObservationEvent`, `LifecycleSpan`, and `LifecycleSpanResult`. The
+observer's `record_operation(event)` method receives an immutable event with a
+monotonic duration and bounded categorical fields. `start_span(name)` returns a
+host-owned span or `None`; the framework finishes a returned span once with an
+immutable result. The host adapter owns SDK setup, sampling, aggregation, and
+export.
+
+For each completed operation, the host adapter increments the counter
+`falcon_pachinko.websocket.lifecycle.operations` and records its duration in
+seconds in the histogram
+`falcon_pachinko.websocket.lifecycle.operation.duration`. The span names are
+`falcon_pachinko.websocket.negotiation`, `falcon_pachinko.websocket.session`,
+and `falcon_pachinko.websocket.finalization`.
+
+| Field                 | Fixed values                                                                                   |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| `operation`           | `negotiation`, `acceptance`, `session_start`, `receive_termination`, `finalization`, `cleanup` |
+| `outcome`             | `succeeded`, `rejected`, `failed`, `cancelled`                                                 |
+| `failure_category`    | `none`, `application`, `transport`, `cleanup`, `cancelled`, `other`                            |
+| `close_code_category` | `unknown`, `normal`, `going_away`, `protocol_error`, `server_error`, `abnormal`, `other`       |
+
+These fields produce at most 1,008 label combinations per metric instrument.
+Events and spans include no connection, room, node, or message identifiers; raw
+paths or URLs; payloads; credentials; exception messages; or arbitrary
+exception class names. Successful frames do not each emit an event: the receive
+measurement describes termination of the whole receive loop. Cleanup records
+errors returned as values as well as raised errors. Observer callbacks must
+return promptly; exceptions, including adapter-raised cancellation, are
+suppressed so instrumentation cannot change WebSocket error precedence,
+cancellation, or cleanup. See the
+[developer guide](developers-guide.md#optional-lifecycle-metrics-and-tracing)
+for the adapter and category details.
 
 ## 2. Literature Survey and Existing Solutions
 
@@ -337,7 +353,7 @@ originally provided `app.add_websocket_route()` to associate a URL path with a
 ```python
 from falcon_pachinko import WebSocketRouter
 
-router = WebSocketRouter(receive_loop=True)
+router = WebSocketRouter()
 router.add_route("/chat/{room_name}", ChatRoomResource, history_size=100)
 router.mount("/ws")
 router.attach(app)
@@ -402,46 +418,30 @@ logic.
 
 - **Lifecycle Methods**:
 
-  - `async def on_connect(self, req, ws, **params) -> bool`: WebSocket
-    connection is established and routed to this resource. `req` is the
-    standard Falcon `Request` object associated with the initial HTTP upgrade
-    request, and `ws` is a `WebSocketLike` **connection**. The protocol defines
-    the minimal `send_media`, `accept`, and `close` methods needed by the
-    resource. `params` will contain any path parameters from the route. It
-    returns `True` to continue the session or `False` to reject it. The router
-    accepts the connection after this hook unless the resource already accepted
-    it. Because the hook runs before router-owned acceptance, a resource that
-    sends from `on_connect()` must first call `await ws.accept()`.
+  - `async def on_connect(self, req, ws, **params) -> bool | AcceptOptions`:
+    Decide whether the router accepts the WebSocket connection. Return a falsey
+    value to reject, `True` to accept with defaults, or `AcceptOptions` to
+    select a subprotocol or response headers. `req` is the standard Falcon
+    `Request` associated with the HTTP upgrade, and `ws` is the guarded
+    `WebSocketLike` connection. The router accepts after `after_connect` hooks.
+    Calling `ws.accept()` remains temporarily supported with a deprecation
+    warning, but accepts immediately and changes the hook order. Move messages
+    and active-session work to `on_session_start()`.
 
-  - `async def on_accepted(self, ws: WebSocketLike)`: Called immediately after
-    the router accepts the socket. Use it for I/O that requires an accepted
-    connection, including registration with `WebSocketConnectionManager` and
-    sending an initial event. Failures are covered by disconnect cleanup; this
-    override point does not add a hook event.
+  - `async def on_session_start(self, ws: WebSocketLike) -> None`: Runs after
+    acceptance and before frame reception. Use it to send a ready frame,
+    register the accepted socket, or perform active-session setup. Its failures
+    close the connection and still run disconnect cleanup.
 
-  - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: After
-    `on_connect` permits the session, the router runs `before_disconnect`
-    hooks before attempting this callback once. With
-    `WebSocketRouter(receive_loop=True)`, the router owns cleanup after peer
-    closure, cancellation, or receive failure. Failures in `after_connect`,
-    `accept`, or `on_accepted` are cleaned up even when `receive_loop=False`.
-    `close_code` is `WebSocketDisconnected.code` for normal peer closure, or
-    1006 when the code is missing or the transport is already closed without a
-    code. Cancellation preserves a previously selected or reported close code;
-    otherwise it selects 1001 and attempts a close while the accepted transport
-    remains open. Code-less transport loss uses 1006. If caller
-    cancellation arrives during peer-close cleanup, the shielded task preserves
-    the selected peer code and does not restart either cleanup stage. Unexpected
-    receive or handler failures close with 1011 while the transport remains
-    open and propagate. Rejected negotiations and failures before approval or
-    acceptance do not call it; acceptance followed by a setup failure does.
-    After successful setup and observed acceptance with `receive_loop=False`,
-    the application owns session cleanup. Approval without completed
-    acceptance is cleaned up by the router before it returns. Lifecycle hooks
-    and handlers receive `SessionWebSocket` around native Falcon sockets in
-    either receive mode; the adapter is passed
-    to the application for its receive loop when setup succeeds with
-    `receive_loop=False`.
+  - `async def on_disconnect(self, ws: WebSocketLike, close_code: int)`: The
+    router attempts this once whenever it owns cleanup for an accepted session,
+    including failure in `on_session_start()` or message dispatch. `close_code`
+    is the peer's code or 1006 when missing. Cancellation preserves an already
+    selected or reported code; otherwise it selects 1001 and attempts a
+    best-effort close on the accepted transport. Shielded cleanup continues
+    through each disconnect stage once, even when the caller is cancelled again.
+    Unexpected receive or handler failures close with 1011 and propagate.
+    Rejected negotiations and failed `on_connect()` calls do not call it.
 
   - `async def on_unhandled(self, ws: WebSocketLike, message: Union[str,
     bytes])`
@@ -467,9 +467,8 @@ logic.
 
 A key feature of Falcon-Pachinko is its ability to dispatch incoming WebSocket
 messages to specific handler methods within the `WebSocketResource`. The
-resource handles decoding and handler resolution; when
-`WebSocketRouter(receive_loop=True)` is enabled, its session driver controls
-frame reception and dispatch order.
+resource handles decoding and handler resolution; the router-owned session
+driver controls frame reception and dispatch order.
 
 - **Message Format Assumption**: The dispatch mechanism assumes messages are
   JSON objects containing a 'type' field that acts as a discriminator, for
@@ -519,10 +518,11 @@ frame reception and dispatch order.
      saw. Only the conventional path narrows this way; explicit registration
      with `@handles_message` or `add_handler` is unaffected.
 
-     The `on_connect`, `on_disconnect` and `on_unhandled` callbacks are
-     reserved and are never admitted to the allowlist, along with any alias or
-     inherited copy of them. They are lifecycle-driven, so a peer-chosen tag
-     that names one would let a remote client drive cleanup for a live socket.
+     The callbacks `on_connect()`, `on_session_start()`, `on_disconnect()` and
+     `on_unhandled()` are reserved and never admitted to the allowlist, along
+     with any alias or inherited copy of them. They are lifecycle-driven, so a
+     peer-chosen tag that names one would let a remote client drive cleanup for
+     a live socket.
      The wrappers that hide the underlying function are unwrapped before
      identity is compared: a `functools.partial`, a `@handles_message`
      descriptor, a standard-library descriptor family
@@ -719,10 +719,11 @@ sequenceDiagram
 
 Applications register, join, publish and remove connections through the
 coordinator. Start `fanout.run` with `WorkerController` in the application
-lifespan and mount `WebSocketRouter(receive_loop=True)` so the router owns the
-accepted connection's receive loop and disconnect cleanup. The receive loop is
-opt-in; the default `False` returns after acceptance and leaves receives and
-cleanup to the application. Node IDs and connection IDs must be unique across
+lifespan and mount `WebSocketRouter()` so the router owns the accepted
+connection's receive loop and disconnect cleanup by default. Set
+`receive_loop=False` to run `on_session_start()` and then hand later receives
+and cleanup to the application; the router does not call `on_disconnect()`
+after a successful handoff. Node IDs and connection IDs must be unique across
 the cluster. A production Redis or RabbitMQ adapter implements only
 `FanoutTransport`; such an adapter is outside the scope of this release.
 
@@ -797,6 +798,7 @@ works with the production reference app.
 
 ```python
 # app.py
+import asyncio
 import falcon.asgi
 import falcon_pachinko as pachinko
 from falcon_pachinko import WorkerController, worker
@@ -812,9 +814,8 @@ async def announcement_worker(
 ) -> None:
     """Broadcasts a heartbeat message to all sockets every 30s."""
     while True:
-        await conn_mgr.broadcast_to_all(
-            {"type": "ping"},
-        )  # Assuming a broadcast_to_all method
+        async for websocket in conn_mgr.connections():
+            await websocket.send_media({"type": "ping"})
         await asyncio.sleep(30)
 
 
@@ -871,9 +872,18 @@ accustomed to Falcon.
 
 - **Connection Lifecycle**
 
-  - Key elements: `on_connect()`, `on_accepted()`, `on_disconnect()`
+  - Key elements: `on_connect()`, `on_session_start()`, `on_disconnect()`
   - Purpose: negotiate the connection, run accepted-only setup, then clean up.
   - Falcon analogy: request/response middleware.
+
+- **Lifecycle Observability**
+
+  - Key elements: `WebSocketRouter.lifecycle_observer` and the contracts in
+    `falcon_pachinko.observability`.
+  - Purpose: optional host-owned metrics and tracing with bounded labels,
+    disabled by default.
+  - Details: see
+    [Optional lifecycle metrics and tracing](#optional-lifecycle-metrics-and-tracing).
 
 - **Message Handling (Typed)**
 
@@ -960,15 +970,15 @@ class ChatRoomResource(WebSocketResource):
             return False  # Reject connection
 
         self.room_name = room_name
+        return True
 
+    async def on_session_start(self, ws: WebSocketLike) -> None:
         await self.join_room(self.room_name)
-
-        # on_connect runs before router-owned acceptance; accept before sending.
-        await ws.accept()
-
         await ws.send_media({
             "type": "serverSystemMessage",
-            "payload": {"text": f"Welcome {self.user.name} to room '{room_name}'!"},
+            "payload": {
+                "text": f"Welcome {self.user.name} to room '{self.room_name}'!"
+            },
         })
 
         await self.broadcast_to_room(
@@ -976,7 +986,6 @@ class ChatRoomResource(WebSocketResource):
             {"type": "serverUserJoined", "payload": {"user": self.user.name}},
             exclude_self=True,
         )
-        return True
 
     @handles_message("clientSendMessage")
     async def handle_send_message(self, ws: WebSocketLike, payload: dict):
@@ -1067,7 +1076,7 @@ app = falcon.asgi.App(middleware=[AuthMiddleware()])
 conn_mgr = falcon_pachinko.install(app)
 
 # Mount and attach the WebSocket router
-router = falcon_pachinko.WebSocketRouter(receive_loop=True)
+router = falcon_pachinko.WebSocketRouter()
 router.add_route("/chat/{room_name}", ChatRoomResource)
 router.mount("/ws")
 router.attach(app)
@@ -1269,11 +1278,9 @@ helpers used by message dispatch and hooks do not belong in the matcher.
 The diagrams below illustrate the flow of a WebSocket connection through the
 router and the relationships between the main classes.
 
-The router-owned receive path shown here is enabled with
-`WebSocketRouter(receive_loop=True)`; by default, the router returns after
-observed acceptance and the application owns subsequent receives and cleanup.
-Approval without completed acceptance is cleaned up by the router before it
-returns.
+The router-owned receive path accepts approved connections and runs the selected
+`WebSocketSession`; manual callers can negotiate and manage that session
+explicitly.
 
 ```mermaid
 sequenceDiagram
@@ -1295,7 +1302,7 @@ sequenceDiagram
         WebSocketRouter->>Client: Close WebSocket
     else on_connect returns True
         WebSocketRouter->>Client: Accept WebSocket
-        WebSocketRouter->>WebSocketResource: on_accepted(ws)
+        WebSocketRouter->>WebSocketResource: on_session_start(ws)
         loop while the session is open
             Client->>WebSocketRouter: TEXT or BINARY frame
             WebSocketRouter->>WebSocketRouter: receive_media()
@@ -1315,6 +1322,32 @@ sequenceDiagram
         WebSocketRouter->>WebSocketResource: Shielded on_disconnect(effective code)
     end
 ```
+
+With `receive_loop=True`, the router owns an established session through
+cleanup. With `receive_loop=False`, the automatic `on_websocket()` path runs
+`on_session_start()` after acceptance, then hands later receives and cleanup to
+the application without a later router `on_disconnect()` callback. If startup
+fails or closes the socket, normal router cleanup still applies. Falcon's
+reported disconnect code is passed to `on_disconnect`; absent a code, the
+effective code is `1006`. A server-initiated `ws.close(code)` sends that code
+to the peer; cleanup uses the disconnect code Falcon reports to the router.
+Cancellation preserves an already selected or reported code; otherwise it
+selects `1001` and attempts a best-effort close if the accepted transport
+remains open. Shielded cleanup continues through each disconnect stage once,
+even if the caller is cancelled again. An unexpected ordinary failure triggers
+a best-effort `1011` close and reports `1011`. Cleanup runs in a shielded task
+without a timeout, so `on_disconnect` must terminate. The router invokes
+`before_disconnect` before `on_disconnect` and prevents new receive or dispatch
+hooks once disconnect begins.
+
+A lone session or cleanup failure is re-raised unchanged. Multiple ordinary
+failures are grouped in an `ExceptionGroup`, with the primary session failure
+first. Cancellation remains a bare `CancelledError`; cleanup failures that
+cannot be grouped with cancellation are reported through the running loop's
+exception handler. Membership added after transport acceptance, normally in
+`on_session_start`, can then be removed by `on_disconnect`. State changes made
+before acceptance, such as in `on_connect`, need application-owned rollback if
+negotiation fails because pre-acceptance failures do not invoke `on_disconnect`.
 
 ```mermaid
 erDiagram
@@ -1560,18 +1593,23 @@ class ChatResource(WebSocketResource):
 
 #### 5.3.2. Automated Dispatch Logic
 
-With `WebSocketRouter(receive_loop=True)`, the router owns the receive loop for
-each accepted connection. Its session driver calls `receive_media()` and awaits
-`WebSocketResource.dispatch()` for each value before receiving the next one.
-With the default `False`, the router returns after acceptance and the
-application owns subsequent receives.
+By default, `WebSocketRouter` owns the receive loop for each accepted
+connection. Its session driver calls `receive_media()` and awaits
+`WebSocketResource.dispatch()` for each value before receiving the next one. Set
+`receive_loop=False` to run `on_session_start()` after acceptance, then hand
+subsequent reception and cleanup to the application. Manual callers can retain
+the accepted session returned by `WebSocketRouter.negotiate()` and manage
+startup and dispatch explicitly.
 
-Falcon may decode media before `receive_media()` returns it, so enabling the
-receive loop does not by itself guarantee exact raw frames. `attach()` enables
-raw input automatically. For manually mounted routers or other Falcon WebSocket
+Falcon may decode media before `receive_media()` returns it, so the receive
+loop does not by itself guarantee exact raw frames. `attach()` enables raw
+input automatically. For manually mounted routers or other Falcon WebSocket
 routes, call `configure_raw_frame_media(app)` before Falcon constructs
 WebSockets. Either setup path is app-wide and preserves the configured outgoing
-serializers for both frame types.
+serializers for both frame types. The native adapter preserves text and binary
+payloads before media decoding, so malformed JSON reaches `on_unhandled()`;
+injected transports retain the `receive_media()` adapter and encode other
+values as JSON.
 
 The resource's dispatch method performs these steps:
 
@@ -1589,8 +1627,8 @@ The resource's dispatch method performs these steps:
    `await self.on_send_message(ws, msg)`.
 
 This schema-driven dispatch keeps message validation and handler selection in
-the resource, separate from the transport receive loop used when the router's
-opt-in session is enabled.
+the resource, separate from the transport receive loop owned by the router's
+accepted session.
 
 #### 5.3.3. Error Handling
 
@@ -1667,33 +1705,25 @@ This provides maximum control, allowing outer layers to act as setup/teardown
 guards for inner layers. An exception in a `before_*` hook should terminate the
 connection attempt immediately.
 
-With `WebSocketRouter(receive_loop=True)`, after Falcon accepts the connection,
-the router owns a single inline receive loop. It passes each text or binary
-frame to the selected resource's dispatcher and waits for that dispatch to
-finish before receiving the next frame. The loop creates no task per frame. A
-normal peer close runs `before_disconnect` hooks and attempts `on_disconnect`
-once with `WebSocketDisconnected.code`; a missing peer close code maps to 1006.
-Cancellation propagates after cleanup with a previously selected or reported
-close code. Otherwise, it selects 1001 and attempts a best-effort close if the
-accepted transport remains open; code-less transport loss uses 1006. An
-unexpected receive or handler exception attempts close 1011 while the transport
-remains open, runs shielded cleanup, and propagates the original exception. A
-transport already closed without a code uses 1006 and is not closed again. An
-unaccepted failure during `after_connect` or `accept` uses 1006 for cleanup. An
-ordinary exception from `on_accepted` occurs after acceptance. The router
-preserves a close code already selected or reported; otherwise it attempts to
-close with 1011 while the accepted transport remains open and passes that code
-to the disconnect hooks, including when `receive_loop=False`. If the transport
-is already closed without a reported code, cleanup uses 1006 and does not
-attempt another close. Cancellation during `on_accepted` preserves any selected
-or reported close code; otherwise, it selects 1001 and attempts a close while
-the accepted transport remains open. Code-less transport loss uses 1006.
-Cancellation that arrives while the cleanup task runs waits for the same task
-to finish with the selected code; neither cleanup stage is restarted. After
-successful setup and observed acceptance with the default `receive_loop=False`,
-the router returns and the application owns receiving and cleanup. Approval
-without completed acceptance is cleaned up by the router. Returning normally
-from `on_unhandled` leaves an opted-in session open.
+By default, the router accepts the connection before starting its single inline
+receive loop. It passes each text or binary frame to the selected resource's
+dispatcher and waits for that dispatch to finish before receiving the next
+frame. The loop creates no task per frame. Set `receive_loop=False` to run
+`on_session_start()` and then hand subsequent reception and cleanup to the
+application. A successful handoff ends router cleanup ownership, so later
+application-owned closure does not invoke the router's disconnect hooks. A
+normal peer close on a router-owned session runs `before_disconnect` hooks and
+attempts `on_disconnect` once; a missing peer close code maps to 1006.
+Cancellation preserves an already selected or reported close code; otherwise it
+selects 1001 and attempts a best-effort close on the accepted transport.
+Shielded cleanup runs each disconnect stage once and propagates cancellation.
+An unexpected receive or handler exception closes with 1011, runs best-effort
+cleanup, and propagates the original exception. Failure before acceptance
+completes attempts a code-1000 handshake close and does not call
+`on_disconnect()`. Returning normally from `on_unhandled` leaves the session
+open. Manual negotiation returns a `WebSocketSession` after acceptance but
+before `on_session_start()`; `aclose()` waits without a timeout if `run()` is
+active, so bounded shutdown requires cancelling and awaiting that run task.
 
 ```mermaid
 stateDiagram-v2
@@ -1706,10 +1736,9 @@ stateDiagram-v2
     Active --> Closing: WebSocketDisconnected
     Active --> Failed: receive or handler exception
     Active --> Cancelled: task cancellation
-    Closing --> Disconnecting: peer close
-    Failed --> Disconnecting: receive or handler failure
-    Cancelled --> Disconnecting: task cancellation
-    Disconnecting --> Disconnected: best-effort close if needed / shielded cleanup
+    Closing --> Disconnected: before_disconnect / on_disconnect
+    Failed --> Disconnected: close(1011) / best-effort cleanup
+    Cancelled --> Disconnected: close(1001) / on_disconnect(1001)
     Rejected --> [*]
     Disconnected --> [*]
 ```
@@ -1881,17 +1910,28 @@ classDiagram
     StatusResource --> aiosqlite.Connection
 ```
 
+The comprehensive reference application under ``examples/reference_app`` builds
+on this pattern to exercise every advanced feature in one place. Its router is
+mounted at ``/ws`` and instantiates ``WorkspaceResource`` → ``ProjectResource``
+→ ``TaskStreamResource`` chains through the shared `ServiceContainer`, allowing
+hooks to seed per-connection state while message handlers rely on schema-driven
+dispatch. After acceptance, `on_session_start()` registers the socket and sends
+`session.ready`; the same container also wires the announcement worker and HTTP
+helpers, providing a concrete illustration of the stateful, per-connection
+resources described in §5.5.1.
+
 The reference application under ``examples/reference_app`` builds on this
 pattern to exercise nested resources, hooks, dependency injection,
 schema-driven dispatch, a lifespan worker, and connection management through a
 live Falcon ASGI responder. Its router is mounted at ``/ws`` and instantiates
 ``WorkspaceResource`` → ``ProjectResource`` → ``TaskStreamResource`` through
-the shared `ServiceContainer`. `on_accepted()` registers the accepted socket
-and sends `session.ready`; the router's shared session driver receives and
-dispatches the subsequent frames. The `LiveWebSocketServer` acceptance scenario
-verifies the nested authenticated `task.add` journey, worker broadcast, audit
-events, and cleanup through a real WebSocket client. The implementation uses
-the shared session driver and public `LiveWebSocketServer` harness.
+the shared `ServiceContainer`. `on_session_start()` registers the accepted
+socket and sends `session.ready`; the router's shared session driver receives
+and dispatches the subsequent frames. The `LiveWebSocketServer` acceptance
+scenario verifies the nested authenticated `task.add` journey, worker
+broadcast, audit events, and cleanup through a real WebSocket client. The
+implementation uses the shared session driver and public `LiveWebSocketServer`
+harness.
 
 ##### Usage Patterns
 
@@ -2168,12 +2208,10 @@ enables white-box testing of router behaviour without needing an ASGI server.
   Helper shortcuts (`send_json`, `pop_sent`) keep tests concise.
 
 - **Spying and Injection**: Tests enqueue inbound messages via
-  `await simulator.push_message({...})` before driving the router-owned session
-  for the resource with `receive_loop=True`. Outbound frames are recorded and
-  made available through `simulator.sent_messages`, enabling assertions about
-  order, payload, or metadata. Because the simulator is dependency-injectable,
-  resources can be exercised in isolation alongside fake connection managers or
-  hook managers.
+  `await simulator.push_message({...})` before driving the router-owned
+  session. Outbound frames are recorded in `simulator.sent_messages`, enabling
+  assertions about order, payload, or metadata. Dependency injection lets tests
+  exercise resources in isolation alongside fake connection or hook managers.
 
 - **Integration with Falcon-Pachinko**: The router exposes an optional
   `simulator_factory` parameter. When supplied, `WebSocketRouter` calls this

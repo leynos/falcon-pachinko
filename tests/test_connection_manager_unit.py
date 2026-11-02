@@ -19,6 +19,7 @@ class ErrorWebSocket(RecordingWebSocket):
 
     async def send_media(self, data: object) -> None:
         """Raise to simulate a broken connection."""
+        del data
         raise RuntimeError("boom")
 
 

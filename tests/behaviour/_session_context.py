@@ -16,11 +16,14 @@ import typing as typ
 from contextlib import AsyncExitStack
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from websockets.exceptions import ConnectionClosed
 
     from falcon_pachinko.testing import WebSocketTestClient
     from falcon_pachinko.testing.client import WebSocketSession
-    from tests.behaviour._live_server import DisconnectRecorder, LiveServer
+    from tests.behaviour._live_lifecycle_resources import DisconnectRecorder
+    from tests.behaviour._live_lifecycle_server import LiveServer
 
 _ASSERTION_FAILURE = "lifecycle expectation failed"
 
@@ -37,13 +40,19 @@ class LiveScenario:
     session: WebSocketSession | None = None
     observed_close_code: int | None = None
     rejected_handshake: Exception | None = None
+    post_accept_frames: list[str] = dc.field(default_factory=list)
 
 
-async def connect(context: LiveScenario, path: str = "/ws/session") -> None:
+async def connect(
+    context: LiveScenario,
+    path: str = "/ws/session",
+    *,
+    headers: cabc.Mapping[str, str] | None = None,
+) -> None:
     """Open the production router's mounted session through the test client."""
     if context.client_contexts is None:
         context.client_contexts = AsyncExitStack()
-    manager = context.client.connect(path)
+    manager = context.client.connect(path, headers=headers)
     context.session = await asyncio.wait_for(
         context.client_contexts.enter_async_context(manager), timeout=5
     )

@@ -14,6 +14,9 @@ import falcon
 import falcon.asgi
 import msgspec.json as msjson
 
+from ._disconnect import _PeerDisconnectedError
+from .protocols import _accept_arguments
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
@@ -25,22 +28,34 @@ _MIN_CLOSE_CODE = 1000
 _RESERVED_CLOSE_CODE_RANGES = ((1004, 1006), (1015, 1999))
 
 
+def _peer_disconnect_error(error: BaseException) -> _PeerDisconnectedError | None:
+    """Translate Falcon's transport signal into the framework-neutral form."""
+    match error:
+        case _PeerDisconnectedError() as disconnect:
+            return disconnect
+        case falcon.WebSocketDisconnected() as disconnect:
+            code = getattr(disconnect, "code", None)
+            return _PeerDisconnectedError(code if type(code) is int else None)
+        case _:
+            return None
+
+
 class SessionWebSocket:
     """Forward socket operations while retaining observed session acceptance."""
 
     def __init__(
-        self, websocket: WebSocketLike | falcon.asgi.WebSocket, session: SessionState
+        self,
+        websocket: WebSocketLike,
+        native_websocket: falcon.asgi.WebSocket,
+        session: SessionState,
     ) -> None:
-        """Track lifecycle facts that the transport may stop exposing."""
+        """Track transport lifecycle facts and acceptance history for the session."""
         self._websocket = websocket
+        self._native_websocket = native_websocket
         self._session = session
         # Falcon's unaccepted becomes False after a rejected handshake closes.
         # Record acceptance while the socket is open, before that history is lost.
-        self._accepted = (
-            not websocket.unaccepted and not websocket.closed
-            if isinstance(websocket, falcon.asgi.WebSocket)
-            else False
-        )
+        self._accepted = not native_websocket.unaccepted and not native_websocket.closed
         self._closing = False
         if self._accepted:
             session.establish()
@@ -70,32 +85,25 @@ class SessionWebSocket:
         headers: cabc.Mapping[str, str] | cabc.Iterable[tuple[str, str]] | None = None,
     ) -> None:
         """Establish cleanup from observed state or a completed acceptance call."""
-        kwargs: dict[str, object] = {}
-        if subprotocol is not None:
-            kwargs["subprotocol"] = subprotocol
-        if headers is not None:
-            kwargs["headers"] = headers
+        kwargs = _accept_arguments(subprotocol, headers)
         # Extra native keywords are outside WebSocketLike. Forward only supplied
         # options, letting each transport validate its own supported arguments.
         accept = typ.cast(
             "cabc.Callable[..., cabc.Awaitable[None]]", self._websocket.accept
         )
         was_closed = self.closed
-        succeeded = False
         try:
             await accept(**kwargs)
-            succeeded = True
         finally:
             # Missing state is initially unknown. Only a completed accept call
             # provides acceptance evidence when the transport has no probe.
-            unaccepted = getattr(self._websocket, "unaccepted", not succeeded)
-            if not was_closed and unaccepted is False:
+            if not was_closed and not self._native_websocket.unaccepted:
                 self._accepted = True
                 self._session.establish()
 
     async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Start the receive guard before suspending in the transport's close send."""
-        is_native = isinstance(self._websocket, falcon.asgi.WebSocket)
+        is_native = isinstance(self._native_websocket, falcon.asgi.WebSocket)
         # Falcon stops its receive pump before validating the code. Validate
         # first so a rejected argument cannot disable an accepted connection.
         if is_native:
@@ -163,15 +171,13 @@ class SessionWebSocket:
         """Retain transport metadata when a close began after transport loss."""
         if self._session.close_code is not None:
             return
-        reported_code = getattr(self._websocket, "close_code", None)
+        reported_code = getattr(self._native_websocket, "close_code", None)
         if type(reported_code) is int:
             self._session.close_code = reported_code
 
     async def receive_payload(self) -> object:
         """Preserve native frame types and support injected media transports."""
-        websocket = self._websocket
-        if not isinstance(websocket, falcon.asgi.WebSocket):
-            return await websocket.receive_media()
+        websocket = self._native_websocket
         if not websocket.ready:
             # Falcon marks the socket not ready as soon as its pump sees a
             # disconnect, even when earlier frames remain queued. Keep the
@@ -191,22 +197,46 @@ class SessionWebSocket:
         raise falcon.PayloadTypeError(msg)
 
 
+def _native_websocket(
+    ws: WebSocketLike | falcon.asgi.WebSocket,
+) -> WebSocketLike | falcon.asgi.WebSocket:
+    """Resolve a live-server delegate's native Falcon socket when available."""
+    candidate = getattr(ws, "_pachinko_native_websocket", ws)
+    if isinstance(candidate, falcon.asgi.WebSocket):
+        return candidate
+    return typ.cast("WebSocketLike", ws)
+
+
 def track_session_socket(ws: WebSocketLike, session: SessionState) -> WebSocketLike:
     """Record acceptance when native state loses history or no probe exists."""
-    if isinstance(ws, falcon.asgi.WebSocket) or not hasattr(ws, "unaccepted"):
+    native_websocket = _native_websocket(ws)
+    if isinstance(native_websocket, falcon.asgi.WebSocket):
         # Delegated methods preserve the protocol; structural typing cannot
         # recover their signatures through __getattr__.
-        return typ.cast("WebSocketLike", SessionWebSocket(ws, session))
+        return typ.cast(
+            "WebSocketLike", SessionWebSocket(ws, native_websocket, session)
+        )
     return ws
 
 
-async def receive_frame(ws: WebSocketLike | SessionWebSocket) -> str | bytes:
+async def receive_frame(ws: WebSocketLike) -> str | bytes:
     """Keep native frames raw and adapt injected media-only transports."""
-    media = (
-        await ws.receive_payload()
-        if isinstance(ws, SessionWebSocket)
-        else await ws.receive_media()
-    )
+    receive_payload = getattr(ws, "_receive_payload", None)
+    try:
+        media = (
+            await typ.cast(
+                "cabc.Callable[[], cabc.Awaitable[object]]", receive_payload
+            )()
+            if callable(receive_payload)
+            else await ws.receive_media()
+        )
+    except Exception as error:
+        disconnect = _peer_disconnect_error(error)
+        if disconnect is None:
+            raise
+        if disconnect is error:
+            raise
+        raise disconnect from error
     return media if isinstance(media, str | bytes) else msjson.encode(media)
 
 

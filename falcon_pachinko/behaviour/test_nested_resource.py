@@ -258,13 +258,40 @@ def _simulate_connection(
     router: WebSocketRouter = context["router"]
     ws = DummyWS()
     req = make_req(path)
+
+    async def negotiate_and_finalize() -> None:
+        session = await router.negotiate(req, ws)
+        if session is not None:
+            await session.aclose()
+
     if capture_exceptions:
         try:
-            asyncio.run(router.on_websocket(req, ws))
+            asyncio.run(negotiate_and_finalize())
         except falcon.HTTPNotFound as exc:
             context["exception"] = exc
     else:
-        asyncio.run(router.on_websocket(req, ws))
+        asyncio.run(negotiate_and_finalize())
+
+
+def test_simulated_nested_connection_finalizes_accepted_session() -> None:
+    """The manual nested-resource helper closes accepted sessions once."""
+    disconnect_codes: list[int] = []
+
+    class AcceptingResource(WebSocketResource):
+        async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            del req, ws, params
+            return True
+
+        async def on_disconnect(self, ws: object, close_code: int) -> None:
+            del ws
+            disconnect_codes.append(close_code)
+
+    router = WebSocketRouter()
+    router.add_route("/accepted", AcceptingResource)
+    router.mount("/")
+    _simulate_connection({"router": router}, "/accepted")
+
+    assert disconnect_codes == [1000], "accepted manual sessions must be finalized"
 
 
 @when('a client connects to "/parents/42/child"')

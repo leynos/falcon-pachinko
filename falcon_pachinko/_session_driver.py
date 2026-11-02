@@ -7,291 +7,290 @@ hook manager, while shielded cleanup preserves failure and cancellation policy.
 
 from __future__ import annotations
 
-import dataclasses as dc
-import time
+import asyncio
+import contextlib
 import typing as typ
 
-from . import observability as _observability
+from ._disconnect import _PeerDisconnectedError
+from ._observability import _LifecycleOptions, _observe_lifecycle
 from ._session import (
-    SessionPhase,
-    SessionState,
+    ABNORMAL_CLOSURE,
+    INTERNAL_ERROR,
+    effective_close_code,
 )
 from ._session_cleanup import (
-    CleanupContext,
     raise_session_failures,
     run_shielded_cleanup,
-)
-from ._session_instrumentation import (
-    _drive_session_with_observation,
-    _release_and_observe_session,
-    _start_session_span,
-)
-from ._session_observation import (
-    _cleanup_outcome,
-    _log_session_observation,
-    _SessionObservation,
-)
-from ._session_socket import track_session_socket
-from ._session_work import (
-    _is_websocket_accepted,
-    _log_session_failure,
-    _run_setup_and_receive,
 )
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from ._session_setup import SessionDispatch
-    from .hooks import HookContext, HookManager
-    from .resource import WebSocketResource
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _SessionOptions:
-    """Bundle receive ownership and diagnostic timing choices."""
-
-    receive_loop: bool
-    observation_clock: cabc.Callable[[], float] = time.monotonic
-    instrumentation_clock: cabc.Callable[[], float] = time.monotonic
-    instrumentation: _observability.SessionInstrumentation = (
-        _observability.NOOP_SESSION_INSTRUMENTATION
+    from ._observability import _LifecycleObservation
+    from ._session import SessionState
+    from ._session_context import SessionCleanupContext, SessionDriverContext
+    from .observability import (
+        LifecycleFailureCategory,
+        LifecycleOperation,
+        LifecycleSpanName,
     )
+    from .protocols import DisconnectClassifier
 
 
-@dc.dataclass(slots=True)
-class _SessionExecution:
-    """Keep the session's request, resource, and failure state together."""
+@contextlib.contextmanager
+def _observe_session_operation(
+    context: SessionDriverContext | SessionCleanupContext,
+    operation: LifecycleOperation,
+    *,
+    span_name: LifecycleSpanName | None = None,
+    failure_category: LifecycleFailureCategory = "other",
+) -> cabc.Iterator[_LifecycleObservation]:
+    """Capture the final close category before completing a session observation.
 
-    resource: WebSocketResource
-    dispatch: SessionDispatch
-    session: SessionState
-    hook_manager: HookManager
-    observation_clock: cabc.Callable[[], float]
-    instrumentation_clock: cabc.Callable[[], float]
-    instrumentation: _observability.SessionInstrumentation
-    context: HookContext | None = None
-    primary_error: BaseException | None = None
-    cleanup_failures: tuple[BaseException, ...] = ()
-
-
-@dc.dataclass(slots=True)
-class _SessionRun:
-    """Keep timing, span, and terminal state for one router-owned attempt."""
-
-    execution: _SessionExecution
-    options: _SessionOptions
-    started: float
-    instrumentation_started: float
-    session_span: _observability._SpanOwner
-    handed_off_to_application: bool = False
-    error: BaseException | None = None
-    outcome: _observability.Outcome | None = None
+    Yields
+    ------
+    _LifecycleObservation
+        State for operation-specific failure classification.
+    """
+    with _observe_lifecycle(
+        context.observation.observer,
+        operation,
+        options=_LifecycleOptions(
+            span_name=span_name,
+            failure_category=failure_category,
+            monotonic_clock=context.observation.monotonic_clock,
+        ),
+    ) as observation:
+        try:
+            yield observation
+        finally:
+            observation.set_close_code(context.session_state.close_code)
 
 
 async def run_session(
-    resource: WebSocketResource,
-    dispatch: SessionDispatch,
+    context: SessionDriverContext,
+    finalize: cabc.Callable[
+        [BaseException | None, BaseException | None], cabc.Awaitable[None]
+    ],
     *,
-    hook_manager: HookManager,
-    options: _SessionOptions,
+    receive_loop: bool = True,
 ) -> bool:
-    """Run one connection's setup, receive loop, and cleanup.
-
-    The observation clock controls diagnostic durations independently of
-    session state, so tests can assert timings without a real clock.
-
-    Parameters
-    ----------
-    resource:
-        Resource selected for this connection.
-    dispatch:
-        Request, socket, and route match owned by the router.
-    hook_manager:
-        Hook manager bound to the selected resource chain.
-    options:
-        Receive-loop ownership and diagnostic clock for this session.
+    """Run post-accept setup and either own cleanup or hand off the socket.
 
     Returns
     -------
     bool
-        ``True`` after this matched route handles the connection attempt.
+        Whether successful startup transferred later receive and cleanup
+        ownership to the application.
     """
-    run = _start_session_run(resource, dispatch, hook_manager, options)
+    primary_error: BaseException | None = None
+    finalization_error: BaseException | None = None
+    handed_off = False
+
     try:
-        await _drive_session_with_observation(run, _drive_session)
-        return True
+        handed_off = await _run_session_body(context, receive_loop=receive_loop)
+    except asyncio.CancelledError as exc:
+        primary_error, finalization_error = await _handle_session_failure(context, exc)
+    except Exception as exc:  # ruff: ignore[blind-except] - hooks are extensible
+        primary_error, finalization_error = await _handle_session_failure(context, exc)
     finally:
-        _release_and_observe_session(run, _release_session_ownership)
+        if not handed_off:
+            finalization_error = await _close_after_session_run(
+                context, finalization_error
+            )
+            await finalize(primary_error, finalization_error)
+    return handed_off
 
 
-def _start_session_run(
-    resource: WebSocketResource,
-    dispatch: SessionDispatch,
-    hook_manager: HookManager,
-    options: _SessionOptions,
-) -> _SessionRun:
-    """Bind session guards and start timing before setup invokes user code."""
-    execution = _prepare_session_execution(resource, dispatch, hook_manager, options)
-    started = options.observation_clock()
-    instrumentation_started = options.instrumentation_clock()
-    session_span = _start_session_span(execution, options)
-    _log_session_observation(
-        execution, _SessionObservation("session", "started", started)
-    )
-    return _SessionRun(
-        execution, options, started, instrumentation_started, session_span
-    )
-
-
-def _prepare_session_execution(
-    resource: WebSocketResource,
-    dispatch: SessionDispatch,
-    hook_manager: HookManager,
-    options: _SessionOptions,
-) -> _SessionExecution:
-    """Bind receive guards before setup can invoke any resource hooks."""
-    execution = _SessionExecution(
-        resource,
-        dispatch,
-        SessionState(),
-        hook_manager,
-        observation_clock=options.observation_clock,
-        instrumentation_clock=options.instrumentation_clock,
-        instrumentation=options.instrumentation,
-    )
-    dispatch.session = execution.session
-    dispatch.ws = track_session_socket(dispatch.ws, execution.session)
-    hook_manager.bind_session(execution.session)
-    return execution
-
-
-async def _drive_session(
-    execution: _SessionExecution,
-    options: _SessionOptions,
-    started: float,
+async def _run_session_body(
+    context: SessionDriverContext, *, receive_loop: bool
 ) -> bool:
-    """Run setup and cleanup, returning whether receive ownership was handed off."""
-    try:
-        setup_completed = await _run_setup_and_receive(
-            execution, receive_loop=options.receive_loop
-        )
-        if _should_finish_established_session(
-            execution,
-            receive_loop=options.receive_loop,
-            setup_completed=setup_completed,
-        ):
-            await _finish_established_session(execution)
-    except BaseException as exc:
-        _log_session_failure(execution, "session", started, exc)
-        raise
-
-    outcome = (
-        "rejected"
-        if execution.session.phase is SessionPhase.CONNECTING
-        else "completed"
-    )
-    _log_session_observation(
-        execution, _SessionObservation("session", outcome, started)
-    )
-    return _should_handoff_setup_session(execution, receive_loop=options.receive_loop)
-
-
-def _release_session_ownership(
-    execution: _SessionExecution,
-    options: _SessionOptions,
-    *,
-    handed_off_to_application: bool,
-) -> None:
-    """Release setup-only guards without weakening disconnect ownership."""
-    if handed_off_to_application:
-        # The router's receive guard must not outlive its setup-only lease.
-        execution.hook_manager.release_session(execution.session)
-        execution.session.mark_closed()
-    elif _should_release_setup_session(execution, receive_loop=options.receive_loop):
-        # Rejections and pre-approval failures must not leave stale state.
-        execution.session.mark_closed()
-
-
-def _should_finish_established_session(
-    execution: _SessionExecution,
-    *,
-    receive_loop: bool,
-    setup_completed: bool,
-) -> bool:
-    """Finish approved sessions when setup cannot hand off a live loop."""
-    session = execution.session
-    if session.phase is not SessionPhase.ESTABLISHED:
+    """Run resource setup, then receive frames or transfer their ownership."""
+    with _observe_session_operation(
+        context, "session_start", failure_category="application"
+    ):
+        await context.resource.on_session_start(context.websocket)
+    if not context.hook_manager.can_receive(context.websocket):
         return False
-    if not _is_websocket_accepted(execution.dispatch.ws):
-        return True
-    if receive_loop or not setup_completed:
-        return True
-    return bool(getattr(execution.dispatch.ws, "closed", False))
-
-
-def _should_release_setup_session(
-    execution: _SessionExecution,
-    *,
-    receive_loop: bool,
-) -> bool:
-    """Release ownership for rejected or setup-only router calls."""
-    phase = execution.session.phase
-    if phase is SessionPhase.CONNECTING:
-        return True
     if receive_loop:
+        await _receive_session(context)
         return False
-    return phase is SessionPhase.ESTABLISHED
+
+    context.hook_manager.release_session(context.session_state)
+    context.session_state.mark_closed()
+    return True
 
 
-def _should_handoff_setup_session(
-    execution: _SessionExecution,
-    *,
-    receive_loop: bool,
-) -> bool:
-    """Release receive hooks only after successful setup-only ownership transfer."""
-    return not receive_loop and execution.session.phase is SessionPhase.ESTABLISHED
+async def _close_after_session_run(
+    context: SessionDriverContext,
+    finalization_error: BaseException | None,
+) -> BaseException | None:
+    """Close an open transport and retain the first finalization failure."""
+    if isinstance(context.session_state.primary_error, asyncio.CancelledError) or bool(
+        getattr(context.websocket, "closed", False)
+    ):
+        return finalization_error
+    close_code = (
+        context.session_state.close_code
+        if context.session_state.close_code is not None
+        else 1000
+    )
+    try:
+        await context.websocket.close(close_code)
+    except asyncio.CancelledError as close_error:
+        return finalization_error or close_error
+    except Exception as close_error:  # ruff: ignore[blind-except] - adapter close
+        return finalization_error or close_error
+    return finalization_error
 
 
-async def _finish_established_session(
-    execution: _SessionExecution,
+async def _close_after_session_error(
+    context: SessionDriverContext, error: BaseException | None
+) -> BaseException | None:
+    """Close failed sessions with the code associated with their cause."""
+    if error is None:
+        return None
+    if isinstance(error, asyncio.CancelledError):
+        return await _close_cancelled_session(context, error)
+    if context.websocket.closed:
+        context.session_state.close_code = effective_close_code(
+            context.websocket.close_code, context.session_state, None
+        )
+        return None
+    close_code = INTERNAL_ERROR
+    if context.session_state.close_code is None:
+        context.session_state.close_code = close_code
+    return await _attempt_session_close(context, close_code)
+
+
+async def _close_cancelled_session(
+    context: SessionDriverContext, error: asyncio.CancelledError
+) -> BaseException | None:
+    """Close a cancelled session with its effective cancellation code."""
+    close_code = effective_close_code(
+        context.websocket.close_code, context.session_state, error
+    )
+    context.session_state.close_code = close_code
+    if context.websocket.closed:
+        return None
+    return await _attempt_session_close(context, close_code)
+
+
+async def _attempt_session_close(
+    context: SessionDriverContext, close_code: int
+) -> BaseException | None:
+    """Return a close failure so the session precedence policy can handle it."""
+    try:
+        await context.websocket.close(close_code)
+    except asyncio.CancelledError as close_error:
+        return close_error
+    except Exception as close_error:  # ruff: ignore[blind-except] - adapter close
+        return close_error
+    return None
+
+
+async def _handle_session_failure(
+    context: SessionDriverContext, error: BaseException
+) -> tuple[BaseException | None, BaseException | None]:
+    """Record a session failure and close using its lifecycle code."""
+    primary_error = _record_session_ending(
+        context.session_state, error, context.disconnect_classifier
+    )
+    finalization_error = await _close_after_session_error(context, primary_error)
+    return primary_error, finalization_error
+
+
+async def finalize_session(
+    context: SessionCleanupContext,
+    finalization_error: BaseException | None = None,
 ) -> None:
-    """Complete shielded cleanup with setup params and ordered failures."""
-    dispatch = execution.dispatch
-    context = execution.context
-    params = (
-        context.params
-        if context is not None and context.params is not None
-        else dict(dispatch.match.params)
+    """Close if needed, run disconnect hooks, then apply error precedence."""
+    with _observe_session_operation(
+        context,
+        "finalization",
+        span_name="falcon_pachinko.websocket.finalization",
+        failure_category="cleanup",
+    ) as observation:
+        await _finalize_session(context, observation, finalization_error)
+
+
+async def _finalize_session(
+    context: SessionCleanupContext,
+    observation: _LifecycleObservation,
+    finalization_error: BaseException | None,
+) -> None:
+    """Retain the finalization policy while reporting its selected failure."""
+    session = context.session_state
+    recorded_code = getattr(context.websocket, "close_code", None)
+    session.close_code = effective_close_code(
+        recorded_code, session, context.primary_error
     )
-    cleanup_context = CleanupContext(
-        resource=execution.resource,
-        dispatch=dispatch,
-        hook_manager=execution.hook_manager,
-        session=execution.session,
-        params=dict(params),
-        primary_error=execution.primary_error,
-        instrumentation=execution.instrumentation,
-        instrumentation_clock=execution.instrumentation_clock,
-    )
-    cleanup_started = execution.observation_clock()
-    _log_session_observation(
-        execution, _SessionObservation("cleanup", "started", cleanup_started)
-    )
-    cleanup_failures, interrupted = await run_shielded_cleanup(cleanup_context)
-    execution.cleanup_failures = cleanup_failures
-    _log_session_observation(
-        execution,
-        _SessionObservation(
-            "cleanup",
-            _cleanup_outcome(cleanup_failures, interrupted),
-            cleanup_started,
-            error=cleanup_failures[0] if cleanup_failures else None,
-            cleanup_failures=cleanup_failures,
-        ),
-    )
+
+    cleanup_failures, interrupted = await run_shielded_cleanup(context)
+    failures = (
+        (finalization_error,) if finalization_error is not None else ()
+    ) + cleanup_failures
+    if context.primary_error is not None:
+        observation.record_failure(context.primary_error, "application")
     raise_session_failures(
-        execution.primary_error,
-        cleanup_failures,
+        context.primary_error,
+        failures,
         interrupted,
-        session=execution.session,
+        session=context.session_state,
     )
+
+
+async def _receive_session(context: SessionDriverContext) -> None:
+    """Receive and route frames until the transport reports a disconnect."""
+    with _observe_session_operation(
+        context, "receive_termination", failure_category="transport"
+    ) as observation:
+        await _receive_session_body(context, observation)
+
+
+async def _receive_session_body(
+    context: SessionDriverContext, observation: _LifecycleObservation
+) -> None:
+    """Dispatch frames silently and classify the one receive-loop termination."""
+    resource = context.resource
+    session = context.session_state
+    hook_manager = context.hook_manager
+    while hook_manager.can_receive(context.websocket):
+        try:
+            raw = await context.frame_receiver(context.websocket)
+        except _PeerDisconnectedError as exc:
+            session.peer_disconnected = True
+            if session.close_code is None:
+                session.close_code = _effective_disconnect_code(exc)
+            return
+
+        # A close can be initiated by another task while receive_media is
+        # suspended. Do not dispatch the late frame into receive hooks.
+        if not hook_manager.can_receive(context.websocket):
+            return
+        try:
+            await resource.dispatch(context.websocket, raw)
+        except BaseException as error:
+            observation.record_failure(error, "application")
+            raise
+
+
+def _effective_disconnect_code(error: BaseException) -> int:
+    """Return the effective close code, using abnormal closure when absent."""
+    close_code = getattr(error, "code", None)
+    return close_code if isinstance(close_code, int) else ABNORMAL_CLOSURE
+
+
+def _record_session_ending(
+    session: SessionState,
+    error: BaseException,
+    disconnect_classifier: DisconnectClassifier,
+) -> BaseException | None:
+    """Distinguish a transport ending from an unexpected session failure."""
+    if (disconnect := disconnect_classifier(error)) is not None:
+        session.peer_disconnected = True
+        if session.close_code is None:
+            session.close_code = _effective_disconnect_code(disconnect)
+        return None
+    session.primary_error = error
+    return error

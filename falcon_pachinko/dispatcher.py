@@ -83,9 +83,10 @@ def find_conventional_handler(
     Only names in ``_conventional_handler_names`` are considered. That
     allowlist is built once when the class is created and excludes the
     lifecycle callbacks, so a peer-chosen tag cannot reach ``on_connect``,
-    ``on_accepted``, ``on_disconnect`` or ``on_unhandled``, nor an alias of one.
-    A class without the attribute (a non-monitored stand-in) offers no
-    conventional handlers at all.
+    ``on_session_start``, ``on_disconnect`` or ``on_unhandled``, nor an alias
+    of one. A class
+    without the attribute (a non-monitored stand-in) offers no conventional
+    handlers at all.
 
     Returns
     -------

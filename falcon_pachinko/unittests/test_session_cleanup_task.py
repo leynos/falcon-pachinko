@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses as dc
 import typing as typ
 
 import pytest
 
 from falcon_pachinko._session import SessionState
 from falcon_pachinko._session_cleanup import (
-    CleanupContext,
     raise_session_failures,
     run_shielded_cleanup,
+)
+from falcon_pachinko._session_context import (
+    SessionCleanupContext,
+    SessionObservationAdapter,
 )
 from falcon_pachinko.hooks import HookCollection, HookManager
 from falcon_pachinko.unittests._session_fixtures import (
@@ -24,13 +26,14 @@ from falcon_pachinko.unittests._session_fixtures import (
 if typ.TYPE_CHECKING:
     import falcon
 
-    from falcon_pachinko.protocols import WebSocketLike
+    from falcon_pachinko.lifecycle import LifecycleGuard
 
 
 class _FailingClosedState(SessionState):
     """Raise after hooks finish to exercise an unexpected cleanup task failure."""
 
     def __init__(self, failure: RuntimeError) -> None:
+        """Establish a session whose final state transition raises the test error."""
         super().__init__(close_code=4000)
         self.failure = failure
         self.establish()
@@ -41,31 +44,23 @@ class _FailingClosedState(SessionState):
         raise self.failure
 
 
-@dc.dataclass(slots=True)
-class _CleanupDispatch:
-    """Provide the request and socket fields consumed by disconnect cleanup."""
-
-    req: falcon.Request
-    ws: WebSocketLike
-
-
 def _cleanup_context(
     failure: RuntimeError, primary_error: Exception | None = None
-) -> CleanupContext:
+) -> SessionCleanupContext:
+    """Supply only cleanup dependencies and one housekeeping failure."""
     resource = RecordingResource()
     # The lightweight request supplies the fields exercised by these tests.
     socket = SessionSocket()
     socket.unaccepted = False
-    dispatch = _CleanupDispatch(
-        typ.cast("falcon.Request", make_session_request()), socket
-    )
-    return CleanupContext(
+    return SessionCleanupContext(
+        req=typ.cast("falcon.Request", make_session_request()),
         resource=resource,
-        dispatch=dispatch,
+        websocket=typ.cast("LifecycleGuard", socket),
+        session_state=_FailingClosedState(failure),
         hook_manager=HookManager(global_hooks=HookCollection(), resources=[resource]),
-        session=_FailingClosedState(failure),
         params={},
         primary_error=primary_error,
+        observation=SessionObservationAdapter(),
     )
 
 
@@ -113,6 +108,7 @@ async def test_unexpected_cleanup_task_failure_retains_cancellation() -> None:
     loop.set_exception_handler(lambda _loop, details: reported.append(details))
 
     async def finish_cleanup() -> None:
+        """Apply failure precedence after the shielded cleanup task completes."""
         failures, interruptions = await run_shielded_cleanup(context)
         raise_session_failures(None, failures, interruptions)
 

@@ -10,7 +10,7 @@ import msgspec.json as msjson
 import pytest
 from pytest_bdd import given, scenario, then, when
 
-from falcon_pachinko import SimulatorConnection, WebSocketResource, WebSocketSimulator
+from falcon_pachinko import SimulatorConnection, WebSocketResource
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing only
     import collections.abc as cabc
@@ -45,23 +45,22 @@ class EchoResource(WebSocketResource):
 
     def __init__(self) -> None:
         self.received: list[object] = []
+        self.websocket: WebSocketLike | None = None
         EchoResource.instances.append(self)
 
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
         """Approve the session; the router owns subsequent receives."""
-        assert isinstance(ws, WebSocketSimulator), (
-            "the harness must inject the simulator instance"
-        )
         del req, params
+        self.websocket = ws
         return True
 
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
         """Record and acknowledge a message delivered by the router loop."""
         payload = msjson.decode(message)
         self.received.append(payload)
-        await typ.cast("WebSocketSimulator", ws).send_json({
+        await ws.send_media({
             "type": "ack",
             "payload": payload,
         })
@@ -129,12 +128,12 @@ def then_resource_received(context: FixtureContext) -> None:
 
 @then("the simulator helper exposes the ack frame")
 def then_simulator_records_ack(context: FixtureContext) -> None:
-    """Ensure the helper decodes outbound JSON frames."""
+    """Ensure the helper exposes the structured acknowledgement media."""
     assert context.connection is not None, "a connection must have been opened"
-    assert context.connection.pop_sent_json() == {
+    assert context.connection.pop_sent() == {
         "type": "ack",
         "payload": {"type": "ping"},
-    }, "the connection must expose the decoded ack frame"
+    }, "the connection must expose the acknowledgement media"
 
 
 @then("the connection is closed by the fixture")

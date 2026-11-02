@@ -207,61 +207,24 @@ class TaskStreamResource(WebSocketResource):
         workspace_id: str,
         project_id: str,
     ) -> bool:
-        """Register, accept, and open a task-stream workspace session.
-
-        The socket is registered before acceptance. Acceptance precedes
-        workspace setup, pending-audit association, session recording, and
-        readiness delivery.
-
-        Parameters
-        ----------
-        req : falcon.Request
-            The WebSocket upgrade request. The ``X-User`` header or ``user``
-            query parameter identifies the session user.
-        ws : WebSocketLike
-            The socket to register and accept for the session.
-        workspace_id : str
-            Identifier of the workspace to join.
-        project_id : str
-            Identifier of the project for this session.
-
-        Returns
-        -------
-        bool
-            ``True`` after session setup and readiness delivery complete.
-
-        Notes
-        -----
-        If setup fails after registration, rollback removes connection-manager
-        membership unless the router owns accepted-session cleanup. The
-        original setup failure propagates after rollback. If direct or
-        unaccepted rollback is cancelled after membership removal succeeds,
-        the setup failure is retained as ``CancelledError.__cause__``. If
-        removal also fails while cancellation is in progress, the removal
-        error is ``CancelledError.__cause__`` and the setup failure remains in
-        ``CancelledError.__context__``. Other rollback failures preserve both
-        failures.
-        """
-        session = _TaskStreamSession(
-            conn_id=secrets.token_hex(12),
-            workspace_id=workspace_id,
-            project_id=project_id,
-            user=req.get_header("X-User") or req.get_param("user", default="guest"),
-        )
-        await self._conn_mgr.add_connection(session.conn_id, ws)
-        self._conn_id = session.conn_id
-        await self._open_session(session, ws)
+        """Store request identity after auth and resource hooks have run."""
+        user = req.get_header("X-User") or req.get_param("user", default="guest")
+        self.state["workspace_id"] = workspace_id
+        self.state["project_id"] = project_id
+        self.state["user"] = user
         return True
 
-    async def _open_session(
-        self,
-        session: _TaskStreamSession,
-        ws: WebSocketLike,
-    ) -> None:
-        """Accept before exposing workspace membership or publishing readiness."""
-        is_accepted = False
+    async def on_session_start(self, ws: WebSocketLike) -> None:
+        """Register and announce the session after the router accepts the socket."""
+        session = _TaskStreamSession(
+            conn_id=secrets.token_hex(12),
+            workspace_id=self.state["workspace_id"],
+            project_id=self.state["project_id"],
+            user=self.state.get("user", "guest"),
+        )
+        self._conn_id = session.conn_id
         try:
-            is_accepted = await self._accept_session(ws)
+            await self._conn_mgr.add_connection(session.conn_id, ws)
             await self._prepare_workspace_session(session)
             await self._associate_pending_audits(session)
             await self._record_open_session(session)
@@ -272,7 +235,7 @@ class TaskStreamResource(WebSocketResource):
                     owner=self,
                     session=session,
                     websocket=ws,
-                    is_accepted=is_accepted,
+                    is_accepted=True,
                     error=error,
                 )
             )
@@ -304,12 +267,6 @@ class TaskStreamResource(WebSocketResource):
         )
 
     @staticmethod
-    async def _accept_session(ws: WebSocketLike) -> bool:
-        """Observe acceptance before later setup can fail."""
-        await ws.accept()
-        return getattr(ws, "unaccepted", False) is False
-
-    @staticmethod
     async def _send_session_ready(
         ws: WebSocketLike,
         session: _TaskStreamSession,
@@ -328,8 +285,8 @@ class TaskStreamResource(WebSocketResource):
         if self._conn_id is None:
             return
         conn_id = self._conn_id
-        await self._conn_mgr.remove_connection(conn_id)
         self._conn_id = None
+        await self._conn_mgr.remove_connection(conn_id)
         await self._audit.record(
             "session.closed",
             connection=conn_id,
