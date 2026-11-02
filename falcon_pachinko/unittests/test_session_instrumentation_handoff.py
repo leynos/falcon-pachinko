@@ -57,20 +57,6 @@ class StartingResource(RecordingResource):
 
 
 @pytest.mark.asyncio
-async def test_setup_only_handoff_counts_outcome_without_claiming_session_end() -> None:
-    """A setup-only router reports transfer instead of a completed session."""
-    clock = InjectedClock()
-    resource = RecordingResource()
-    instrumentation = RecordingInstrumentation()
-    router = configured_router(resource, instrumentation, clock, receive_loop=False)
-
-    await drive_router(router, SessionSocket())
-
-    _assert_setup_only_outcome(instrumentation, Outcome.HANDED_OFF)
-    assert not resource.disconnect_codes, _ASSERTION_FAILURE
-
-
-@pytest.mark.asyncio
 async def test_application_handoff_runs_start_and_releases_router_dispatch_guard() -> (
     None
 ):
@@ -137,15 +123,28 @@ async def test_instrumentation_configuration_freezes_after_first_routed_session(
         router.configure_session_instrumentation(RecordingInstrumentation())
 
 
+@pytest.mark.parametrize(
+    ("scenario", "expected_outcome"),
+    [
+        ("handed-off", Outcome.HANDED_OFF),
+        ("rejected", Outcome.REJECTED),
+    ],
+    ids=["handed-off", "rejected"],
+)
 @pytest.mark.asyncio
-async def test_rejected_attempt_has_one_rejected_outcome_and_no_cleanup_span() -> None:
-    """A rejected handshake is counted without claiming an accepted session."""
+async def test_setup_outcomes_have_no_completed_session_duration(
+    scenario: typ.Literal["handed-off", "rejected"],
+    expected_outcome: Outcome,
+) -> None:
+    """Count handoff and rejection without recording completed durations."""
     clock = InjectedClock()
-    resource = RecordingResource(accepted=False)
+    resource = RecordingResource(accepted=scenario != "rejected")
     instrumentation = RecordingInstrumentation()
-    router = configured_router(resource, instrumentation, clock)
+    router = configured_router(
+        resource, instrumentation, clock, receive_loop=scenario != "handed-off"
+    )
 
     await drive_router(router, SessionSocket())
 
-    _assert_setup_only_outcome(instrumentation, Outcome.REJECTED)
+    _assert_setup_only_outcome(instrumentation, expected_outcome)
     assert not resource.disconnect_codes, _ASSERTION_FAILURE
