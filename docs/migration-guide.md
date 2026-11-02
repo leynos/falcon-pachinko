@@ -244,9 +244,11 @@ Envelope handlers whose payload annotations reject `None` no longer receive
 [#283](https://github.com/leynos/falcon-pachinko/issues/283) is fixed, however,
 a non-null JSON object with a `msgspec.Struct | None` annotation can raise
 `TypeError` under strict validation. As a workaround, use
-`@handles_message("type", strict=False)` or register the handler with
-`WebSocketResource.add_handler(…, payload_type=Payload | None, strict=False)`.
-This relaxes strict `msgspec.Struct` field validation and enables non-strict
+`@handles_message("type", strict=False)` or register the handler on its
+concrete resource class with
+`MyResource.add_handler(…, payload_type=Payload | None, strict=False)`, where
+`MyResource` is the `WebSocketResource` subclass used by the router. This
+relaxes strict `msgspec.Struct` field validation and enables non-strict
 conversions, so use it only when that trade-off is acceptable.
 
 1) **Update connection manager usage:**

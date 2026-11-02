@@ -506,11 +506,12 @@ are never applied, and untyped handlers still receive `None`.
 Until [#283](https://github.com/leynos/falcon-pachinko/issues/283) is fixed,
 however, a non-null JSON object with a `msgspec.Struct | None` annotation can
 raise `TypeError` under strict validation. As a workaround, use
-`@handles_message("type", strict=False)` or register the handler with
-`WebSocketResource.add_handler("type", handler, payload_type=T | None,
-strict=False)`.
-This relaxes strict `msgspec.Struct` field checks and enables non-strict
-conversions, so use it only when that trade-off is acceptable.
+`@handles_message("type", strict=False)` or register the handler on its
+concrete resource class with
+`MyResource.add_handler("type", handler, payload_type=T | None, strict=False)`,
+where `MyResource` is the `WebSocketResource` subclass routed by the
+application. This relaxes strict `msgspec.Struct` field checks and enables
+non-strict conversions, so use it only when that trade-off is acceptable.
 
 Falcon's default WebSocket media handlers may decode frames before
 `receive_media()` returns them. Raw-frame media setup is required when dispatch

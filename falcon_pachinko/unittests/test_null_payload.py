@@ -6,6 +6,11 @@ import msgspec as ms
 import pytest
 
 from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
+from falcon_pachinko.dispatcher import (
+    HandlerInvocationContext,
+    convert_and_invoke_handler,
+)
+from falcon_pachinko.handlers import HandlerInfo
 from falcon_pachinko.unittests.helpers import DummyWS
 
 
@@ -165,3 +170,30 @@ async def test_rejection_signal_omits_peer_payload(
     rendered = records[0].getMessage() + repr(vars(records[0]))
     assert sentinel not in rendered, "peer payload values must not leak"
     assert raw not in rendered, "the raw frame must not leak"
+
+
+@pytest.mark.asyncio
+async def test_rejection_signal_uses_injected_monotonic_clock(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Dispatch rejection duration can be controlled at the invocation boundary."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
+    resource = RecordingResource()
+    resource.bind_default_hook_manager()
+    clock_values = iter((10.0, 10.375))
+    context = HandlerInvocationContext(
+        resource,
+        DummyWS(),
+        '{"type": "integer", "payload": "invalid"}',
+        HandlerInfo(RecordingResource.on_integer, int),
+        "invalid",
+        monotonic_clock=lambda: next(clock_values),
+    )
+
+    await convert_and_invoke_handler(context)
+
+    records = _rejection_records(caplog)
+    assert len(records) == 1, "exactly one rejection signal expected"
+    assert vars(records[0])["duration_seconds"] == pytest.approx(0.375), (
+        "rejection duration must use the injected clock"
+    )
