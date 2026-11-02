@@ -85,6 +85,14 @@ class RecordingResource(WebSocketResource):
         self.seen.append(payload)
 
 
+@pytest.fixture
+def resource() -> RecordingResource:
+    """Provide a recording dispatcher resource with its default hooks bound."""
+    instance = RecordingResource()
+    instance.bind_default_hook_manager()
+    return instance
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "tag",
@@ -100,12 +108,13 @@ class RecordingResource(WebSocketResource):
 )
 @pytest.mark.parametrize("suffix", ["", ', "payload": null'])
 async def test_missing_payload_rejects_required_types(
-    tag: str, suffix: str, caplog: pytest.LogCaptureFixture
+    tag: str,
+    suffix: str,
+    caplog: pytest.LogCaptureFixture,
+    resource: RecordingResource,
 ) -> None:
     """Check the envelope contract for this handler and payload."""
     caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
-    resource = RecordingResource()
-    resource.bind_default_hook_manager()
     raw = f'{{"type": "{tag}"{suffix}}}'
     await resource.dispatch(DummyWS(), raw)
     assert resource.fallback == [raw], "required payloads must be rejected"
@@ -131,7 +140,7 @@ async def test_missing_payload_rejects_required_types(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("tag", "suffix", "expected"),
+    "scenario",
     [
         ("optional", "", None),
         ("optional", ', "payload": null', None),
@@ -142,12 +151,13 @@ async def test_missing_payload_rejects_required_types(
     ],
 )
 async def test_valid_payload_reaches_handler(
-    tag: str, suffix: str, expected: object, caplog: pytest.LogCaptureFixture
+    scenario: tuple[str, str, object],
+    caplog: pytest.LogCaptureFixture,
+    resource: RecordingResource,
 ) -> None:
     """Check the envelope contract for this handler and payload."""
+    tag, suffix, expected = scenario
     caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
-    resource = RecordingResource()
-    resource.bind_default_hook_manager()
     await resource.dispatch(DummyWS(), f'{{"type": "{tag}"{suffix}}}')
     assert resource.seen == [expected], "valid payloads must reach handlers"
     assert not resource.fallback, "valid payloads must not be rejected"
@@ -157,11 +167,10 @@ async def test_valid_payload_reaches_handler(
 @pytest.mark.asyncio
 async def test_rejection_signal_omits_peer_payload(
     caplog: pytest.LogCaptureFixture,
+    resource: RecordingResource,
 ) -> None:
     """A rejected conversion reports its shape without peer-supplied values."""
     caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
-    resource = RecordingResource()
-    resource.bind_default_hook_manager()
     sentinel = "CANARY-payload-secret"
     raw = f'{{"type": "integer", "payload": "{sentinel}"}}'
     await resource.dispatch(DummyWS(), raw)
@@ -182,11 +191,10 @@ async def test_rejection_signal_uses_injected_monotonic_clock(
     caplog: pytest.LogCaptureFixture,
     clock_readings: tuple[float, float],
     expected_duration: float,
+    resource: RecordingResource,
 ) -> None:
     """Dispatch duration uses the injected clock and clamps negative readings."""
     caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
-    resource = RecordingResource()
-    resource.bind_default_hook_manager()
     clock_values = iter(clock_readings)
     context = HandlerInvocationContext(
         resource,
