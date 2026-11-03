@@ -328,7 +328,7 @@ def _quoted_substitution_body(
     quote: str | None,
     substitution: re.Pattern[str],
 ) -> tuple[int, str] | None:
-    """Return a balanced double-quoted substitution body at this position."""
+    """Return a double-quoted substitution body, including unfinished input."""
     if quote != '"':
         return None
     opening = substitution.match(source, index)
@@ -336,42 +336,75 @@ def _quoted_substitution_body(
         return None
     end = _command_substitution_end(source, opening.end(), substitution)
     if end is None:
-        return None
+        # Incomplete syntax must not conceal a possible project command.
+        end = len(source)
     body = SINGLE_QUOTED_TEXT.sub(" ", source[opening.end() : end])
     return end, body
+
+
+class _ParameterExpansionBoundaries:
+    """Keep parameter words separate from their enclosing command groups."""
+
+    def __init__(self) -> None:
+        self._contexts: list[tuple[int, str | None]] = []
+
+    def advance(
+        self, source: str, index: int, quote: str | None, depth: int
+    ) -> tuple[str | None, int] | None:
+        """Advance within a parameter word at the current command depth."""
+        if quote != "'" and source.startswith("${", index):
+            self._contexts.append((depth, quote))
+            return quote, index + 2
+        if not self._contexts or self._contexts[-1][0] != depth:
+            return None
+        if source[index] == "}" and quote == self._contexts[-1][1]:
+            self._contexts.pop()
+        return _advance_shell_quote(source, index, quote)
 
 
 def _command_substitution_end(
     source: str, start: int, substitution: re.Pattern[str]
 ) -> int | None:
     """Find the matching close for a substitution, including nested forms."""
-    depth = 1
     quote: str | None = None
     enclosing_quotes: list[str | None] = []
+    parameter_expansions = _ParameterExpansionBoundaries()
     index = start
     while index < len(source):
         opening = _nested_substitution_at(source, index, quote, substitution)
         if opening is not None:
             enclosing_quotes.append(quote)
             quote = None
-            depth += 1
             index = opening.end()
             continue
-        character = source[index]
-        if character == "(" and quote is None:
-            enclosing_quotes.append(None)
-            depth += 1
-            index += 1
+        parameter_step = parameter_expansions.advance(
+            source, index, quote, len(enclosing_quotes) + 1
+        )
+        if parameter_step is not None:
+            quote, index = parameter_step
             continue
-        if character != ")" or quote is not None:
-            quote, index = _advance_shell_quote(source, index, quote)
-            continue
-        depth -= 1
-        if depth == 0:
+        quote, index, is_closed = _advance_substitution_body(
+            source, index, quote, enclosing_quotes
+        )
+        if is_closed:
             return index
-        quote = enclosing_quotes.pop()
-        index += 1
     return None
+
+
+def _advance_substitution_body(
+    source: str, index: int, quote: str | None, enclosing_quotes: list[str | None]
+) -> tuple[str | None, int, bool]:
+    """Advance shell data or groups, reporting the outer substitution close."""
+    character = source[index]
+    if character == "(" and quote is None:
+        enclosing_quotes.append(None)
+        return quote, index + 1, False
+    if character != ")" or quote is not None:
+        quote, index = _advance_shell_quote(source, index, quote)
+        return quote, index, False
+    if not enclosing_quotes:
+        return quote, index, True
+    return enclosing_quotes.pop(), index + 1, False
 
 
 def _nested_substitution_at(

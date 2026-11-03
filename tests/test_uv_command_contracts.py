@@ -601,6 +601,53 @@ def test_command_scanner_rejects_nested_quote_uv_substitutions(
         unlocked_project_commands(script, is_makefile=is_makefile)
 
 
+@pytest.mark.parametrize(
+    ("script", "is_makefile"),
+    [
+        ('echo "$(echo ${value//(/x}; uv sync)"', False),
+        ('echo "$(echo ${value//)/x}; uv sync)"', False),
+        ('echo "$$(echo $${value//(/x}; uv sync)"', True),
+        ('echo "$$(echo $${value//)/x}; uv sync)"', True),
+        ('echo "$(echo ${value:-$(uv sync)})"', False),
+        ('echo "$$(echo $${value:-$$(uv sync)})"', True),
+    ],
+    ids=(
+        "shell-open",
+        "shell-close",
+        "make-open",
+        "make-close",
+        "shell-nested",
+        "make-nested",
+    ),
+)
+def test_command_scanner_rejects_parameter_expansion_uv_substitutions(
+    script: str, *, is_makefile: bool
+) -> None:
+    """Parameter syntax must not hide commands within quoted substitutions."""
+    with pytest.raises(
+        ShellCommandSyntaxError,
+        match=r"Unsupported quoted command substitution at shell line 1",
+    ):
+        unlocked_project_commands(script, is_makefile=is_makefile)
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        'echo "$(echo ${value//(/x; uv sync)"',
+        'echo "$(uv sync"',
+    ],
+    ids=("unfinished-parameter", "unfinished-command"),
+)
+def test_command_scanner_rejects_unfinished_uv_substitutions(script: str) -> None:
+    """An unfinished substitution must still expose active project commands."""
+    with pytest.raises(
+        ShellCommandSyntaxError,
+        match=r"Unsupported quoted command substitution at shell line 1",
+    ):
+        unlocked_project_commands(script)
+
+
 def test_command_scanner_ignores_uv_text_in_single_quoted_substitution_data() -> None:
     """A quoted argument inside a substitution is not an executable uv call."""
     script = '''echo "$(printf '%s' 'uv sync')"'''
