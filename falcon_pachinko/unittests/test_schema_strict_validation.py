@@ -6,6 +6,7 @@ the strictness decision. These tests pin that contract: extras reach
 and msgspec's coercion, and nested Structs keep their own declarations.
 """
 
+import asyncio
 import collections.abc as cabc
 import decimal
 import typing as typ
@@ -13,6 +14,8 @@ import typing as typ
 import msgspec as ms
 import msgspec.json as msjson
 import pytest
+from hypothesis import example, given
+from hypothesis import strategies as st
 
 from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
 from falcon_pachinko.unittests.helpers import DummyWS
@@ -68,6 +71,21 @@ class ConventionalJoinResource(_RecordingResource):
     async def on_join(self, ws: WebSocketLike, payload: Join) -> None:
         """Record the conventional handler event."""
         self.events.append(("on_join", payload.room))
+
+
+class UnannotatedConventionalResource(_RecordingResource):
+    """Schema-backed resource whose conventional handler has no annotation.
+
+    Schema dispatch sets ``HandlerInvocationContext.target_type`` precisely so
+    this handler receives the resolved Struct instead of the inspection
+    mapping.
+    """
+
+    schema = Join
+
+    async def on_join(self, ws: WebSocketLike, payload) -> None:  # ruff: ignore[missing-type-function-argument] - unannotated on purpose
+        """Record the resolved payload type and room."""
+        self.events.append(("on_join", type(payload).__name__, payload.room))
 
 
 class LenientSchemaResource(_RecordingResource):
@@ -260,6 +278,31 @@ class LenientWireResource(_RecordingResource):
         ))
 
 
+class ExtremeNumberMessage(ms.Struct, tag="extreme_number"):
+    """Message carrying numbers outside the range of a binary float."""
+
+    amount: decimal.Decimal
+    values: list[decimal.Decimal]
+    blob: ms.Raw
+
+
+class ExtremeNumberResource(_RecordingResource):
+    """Resource receiving numbers a float-only inspection decode rejects."""
+
+    schema = ExtremeNumberMessage
+
+    async def on_extreme_number(
+        self, ws: WebSocketLike, payload: ExtremeNumberMessage
+    ) -> None:
+        """Record the exact decimal values and raw JSON."""
+        self.events.append((
+            "extreme_number",
+            payload.amount,
+            payload.values,
+            bytes(payload.blob),
+        ))
+
+
 class ClosedTopMessage(ms.Struct, tag="closed_top", forbid_unknown_fields=True):
     """Top-level message that always forbids undeclared fields."""
 
@@ -315,6 +358,33 @@ async def test_schema_extra_field_calls_fallback(
 
 
 @pytest.mark.asyncio
+async def test_unannotated_conventional_handler_receives_resolved_member() -> None:
+    """A handler with no payload annotation still receives the schema member.
+
+    ``target_type`` carries the resolved member past the missing annotation;
+    without it the handler would receive the inspection mapping instead.
+    """
+    r = UnannotatedConventionalResource()
+    r.bind_default_hook_manager()
+    await r.dispatch(DummyWS(), msjson.encode({"type": "join", "room": "a"}))
+    assert r.events == [("on_join", "Join", "a")], (
+        "an unannotated conventional handler must receive the resolved Struct"
+    )
+
+
+@pytest.mark.asyncio
+async def test_unannotated_conventional_handler_rejects_extra_field() -> None:
+    """The unannotated path still applies the strict unknown-field check."""
+    r = UnannotatedConventionalResource()
+    r.bind_default_hook_manager()
+    raw = msjson.encode({"type": "join", "room": "a", "extra": 1})
+    await r.dispatch(DummyWS(), raw)
+    assert r.events == [("raw", raw)], (
+        "an extra field must fall back even without a handler annotation"
+    )
+
+
+@pytest.mark.asyncio
 async def test_schema_strict_false_ignores_extra_field() -> None:
     """``strict=False`` delivers the Struct while ignoring the extra field."""
     r = LenientSchemaResource()
@@ -346,6 +416,9 @@ async def test_schema_unknown_tag_after_generic_decode_calls_fallback() -> None:
         # ``bool`` subclasses ``int``, so a plain equality lookup would let
         # ``True`` select the ``tag=1`` member.
         pytest.param({"type": True, "value": "one"}, id="boolean-tag"),
+        # An unhashable tag must be rejected by the exact-type guard before it
+        # reaches the dispatch table's ``get``.
+        pytest.param({"type": [], "value": "one"}, id="array-tag"),
         pytest.param([1, 2], id="array"),
         pytest.param("scalar", id="string"),
         pytest.param(7, id="integer"),
@@ -473,6 +546,43 @@ async def test_schema_lenient_coercion_keeps_wire_level_types() -> None:
 
 
 @pytest.mark.asyncio
+async def test_schema_inspection_preserves_out_of_float_range_numbers() -> None:
+    """Numbers outside the float range survive generic frame inspection.
+
+    The inspection mapping is never the converted payload, but a default
+    generic decoder still rejects ``1e400`` as out of range before the typed
+    wire decode can hand it to ``Decimal`` or capture it inside ``Raw`` JSON.
+    """
+    r = ExtremeNumberResource()
+    r.bind_default_hook_manager()
+    raw = (
+        b'{"type": "extreme_number", "amount": 1e400, '
+        b'"values": [-1e400], "blob": {"n": 1e400}}'
+    )
+    await r.dispatch(DummyWS(), raw)
+    assert r.events == [
+        (
+            "extreme_number",
+            decimal.Decimal("1E+400"),
+            [decimal.Decimal("-1E+400")],
+            b'{"n": 1e400}',
+        )
+    ], "out-of-float-range numbers must reach the typed payload unchanged"
+
+
+@pytest.mark.asyncio
+async def test_schema_lenient_ignores_out_of_float_range_extra() -> None:
+    """A lenient handler ignores an extreme value in an undeclared field."""
+    r = LenientSchemaResource()
+    r.bind_default_hook_manager()
+    raw = b'{"type": "join", "room": "a", "extra": 1e400}'
+    await r.dispatch(DummyWS(), raw)
+    assert r.events == [("join", "a")], (
+        "an ignored extreme extra must not turn a lenient frame into a fallback"
+    )
+
+
+@pytest.mark.asyncio
 async def test_schema_nested_structs_ignore_extras_by_default() -> None:
     """Nested Structs keep their own default: undeclared nested fields drop.
 
@@ -588,3 +698,49 @@ def test_array_like_schema_member_raises() -> None:
 
         class BadResource(WebSocketResource):
             schema = ArrayMessage
+
+
+_JOIN_WIRE_KEYS = frozenset({"type", "room"})
+_JSON_KEY = st.text(
+    alphabet=st.characters(min_codepoint=32, max_codepoint=126),
+    max_size=8,
+)
+
+
+@given(extra_keys=st.sets(_JSON_KEY, max_size=3))
+@example(extra_keys=set())
+@example(extra_keys={"extra"})
+@example(extra_keys={"type"})
+@example(extra_keys={"room", "extra"})
+def test_schema_strict_key_check_matches_the_declared_wire_keys(
+    extra_keys: set[str],
+) -> None:
+    """Strict dispatch rejects exactly the frames with an undeclared key.
+
+    Generated keys that the member already declares are dropped from the
+    frame, so only a key outside its encoded names can turn the message into
+    a fallback. The lenient handler must ignore every undeclared key.
+    """
+    frame: dict[str, object] = {"type": "join", "room": "lobby"}
+    frame.update({key: 1 for key in extra_keys if key not in _JOIN_WIRE_KEYS})
+    raw = msjson.encode(frame)
+
+    def dispatch(resource: _RecordingResource) -> list[object]:
+        resource.bind_default_hook_manager()
+        asyncio.run(resource.dispatch(DummyWS(), raw))
+        return resource.events
+
+    strict_events = dispatch(ConventionalJoinResource())
+    lenient_events = dispatch(LenientSchemaResource())
+
+    if extra_keys - _JOIN_WIRE_KEYS:
+        assert strict_events == [("raw", raw)], (
+            "strict dispatch must reject a frame with an undeclared key"
+        )
+    else:
+        assert strict_events == [("on_join", "lobby")], (
+            "strict dispatch must deliver a frame with only declared keys"
+        )
+    assert lenient_events == [("join", "lobby")], (
+        "a lenient handler must ignore undeclared keys"
+    )

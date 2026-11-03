@@ -370,9 +370,9 @@ temptation to catch it at the decode site: widening the handler would leave the
 invalid schema in place and disguise a schema bug as a malformed message.
 
 Schema dispatch resolves the target before conversion. The dispatcher decodes
-the frame generically with `msgspec.json.decode`, resolves the schema member
-from the tag, validates the retained mapping when the handler is strict, and
-then decodes the original frame into the resolved member with
+the frame generically with the inspection decoder described below, resolves the
+schema member from the tag, validates the retained mapping when the handler is
+strict, and then decodes the original frame into the resolved member with
 `msgspec.json.decode`, passing the handler's strictness. Decoding straight into
 the union would discard undeclared fields before the strict decision, but
 keeping the generic mapping as the conversion input would lose wire-level
@@ -388,6 +388,40 @@ validation or conversion routes to `on_unhandled`; a configuration `TypeError`
 (such as a mixed-tag union, an untagged Struct, or an `array_like` member) must
 propagate and must not reach `on_unhandled`. See
 [ADR 003](adr-003-schema-mode-strict-validation.md).
+
+The inspection decode uses a `msgspec.json.Decoder` whose `float_hook` builds a
+`decimal.Decimal`, not `msgspec.json.decode`. The inspection mapping is never
+converted, but a default decoder would still reject a literal such as `1e400`
+as out of float range before the typed wire decode could hand it to a `Decimal`
+field or capture it inside `msgspec.Raw` JSON. Keep the hook on the inspection
+decoder only: the wire decode must use the member's declared types, and its
+`strict` value comes from the handler.
+
+`HandlerInvocationContext.target_type` is the resolved schema member. Schema
+dispatch sets it whenever a member is selected, so a conventional `on_<tag>`
+handler with no payload annotation still receives the Struct rather than the
+inspection mapping. It defaults to `None`; conversion falls back to the
+handler's annotated `payload_type` when it is unset. Envelope dispatch leaves
+it as `None`.
+
+`SchemaDispatch` and the cached `schema_dispatch()` resolver expose the schema
+member table. `resolve()` performs an exact-type tag lookup: a missing,
+boolean, wrong-kind, or unhashable tag returns `None` rather than raising or
+selecting a member. `schema_dispatch()` validates the schema before building
+the table and raises `TypeError` for a configuration error; the table itself is
+frozen and its member mapping is read-only.
+
+Schema dispatch emits one bounded DEBUG record per decision on the
+`falcon_pachinko.dispatcher` logger, with the message
+`Schema dispatch observation`. Its `extra` fields are `operation`
+(`schema_dispatch`), `outcome` (one of `delivered`, `malformed`, `unknown_tag`,
+`no_handler`, `rejected_fields`, `conversion_failed`, `configuration_error`),
+`resource_type` (the resource class name), `handler_mode` (`registered` or
+`conventional`, once a handler is selected), and `strict` (the selected
+handler's strictness, once known). The record never includes the raw frame,
+payload values, field values, or peer-supplied tag text. Operators can alert on
+an unexpected share of `rejected_fields` or `no_handler` outcomes without
+collecting message content.
 
 ## Safe diagnostics
 

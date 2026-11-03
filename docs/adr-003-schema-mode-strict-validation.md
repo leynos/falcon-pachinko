@@ -16,8 +16,11 @@ converting it.
 
 Decode schema frames generically and validate before conversion:
 
-1. Decode the frame with `msgspec.json.decode` into a plain mapping, retaining
-   every key.
+1. Decode the frame with a `msgspec.json.Decoder` into a plain mapping,
+   retaining every key. The inspection decoder installs a `decimal.Decimal`
+   `float_hook`: the mapping is never converted, but a default decoder would
+   still reject a literal such as `1e400` as out of float range before the wire
+   decode could preserve it for a `Decimal` or `msgspec.Raw` field.
 2. Resolve the schema member from the tag field. Missing, wrong-kind, boolean
    and unknown tags fall back to `on_unhandled`.
 3. Validate the retained mapping against the resolved member when the handler
@@ -76,4 +79,7 @@ encoded wire name. Schema frames are decoded twice (generic decode for the
 strict decision, then a wire decode into the member), while the tag table and
 allowed-key sets are cached per schema. The tag table is resolved before the
 frame is decoded, so a misconfigured schema raises `TypeError` for any frame,
-including one that would otherwise fall back as malformed.
+including one that would otherwise fall back as malformed. Each dispatch
+decision also emits one bounded DEBUG observation with a fixed outcome
+category; raw frames, payload values, and peer-supplied tag text are never
+recorded.

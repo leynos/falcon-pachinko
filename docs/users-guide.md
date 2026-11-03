@@ -481,7 +481,8 @@ class ChatResource(WebSocketResource):
   discard undeclared fields before the strict decision, so a strict handler
   would run on a message that violated its no-extra-fields contract. Converting
   the plain object instead would lose wire-level values such as integer mapping
-  keys, `msgspec.Raw` JSON, and exact `Decimal` numbers. A `strict=False`
+  keys, `msgspec.Raw` JSON, and exact `Decimal` numbers, including values such
+  as `1e400` that are outside the range of a binary float. A `strict=False`
   handler decodes the original frame with lax coercion for the same reason, so
   those values survive alongside a coerced field. With default-strict
   validation, any undeclared top-level field sends the raw frame to

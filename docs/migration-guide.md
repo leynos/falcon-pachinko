@@ -32,9 +32,16 @@ Redacted samples are bounded and intended for trusted local debugging.
 Conventional-handler DEBUG messages retain their lazy format but now include
 only a bounded handler name and exception class.
 
-`HookContext`, `HandlerInvocationContext`, and `TraceEvent` keep their fields,
-constructors, slots, equality behaviour and operational payload values, but
-their representations now show safe metadata instead of raw or decoded values.
+`HookContext`, `HandlerInvocationContext`, and `TraceEvent` keep their existing
+fields, constructors, slots, equality behaviour and operational payload values,
+but their representations now show safe metadata instead of raw or decoded
+values. `HandlerInvocationContext` gains one optional field, `target_type`,
+which defaults to `None`; schema dispatch sets it to the resolved Struct so a
+conventional handler without a payload annotation still receives the typed
+member. Existing positional and keyword construction is unchanged. Schema
+dispatch also emits bounded DEBUG observations on the
+`falcon_pachinko.dispatcher` logger; see the
+[developer guide](developers-guide.md#validation-error-import-boundary).
 `TraceEvent.summary()` is new and returns the same kind of metadata. Code that
 relied on payload values appearing in `repr()` must read the explicit payload
 field at a trusted boundary.
