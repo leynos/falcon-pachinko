@@ -30,18 +30,7 @@ def _require_struct_type(candidate: object) -> type[ms.Struct]:
 
 
 def _require_tagged_struct(candidate: object) -> msinspect.StructType:
-    """Ensure ``candidate`` is a tagged, object-encoded Struct.
-
-    Returns
-    -------
-    msinspect.StructType
-        The inspected Struct, already known to be tagged and object-encoded.
-
-    Raises
-    ------
-    TypeError
-        If ``candidate`` is not a tagged Struct, or is encoded as a JSON array.
-    """
+    """Ensure ``candidate`` is a tagged, object-encoded Struct."""
     # Narrow before inspecting metadata: a non-struct member must fail on the
     # membership check rather than inside ``msgspec.inspect``.
     struct = _require_struct_type(candidate)
@@ -132,35 +121,23 @@ class SchemaDispatch:
 
 
 def _schema_member_infos(schema: type) -> tuple[msinspect.StructType, ...]:
-    """Return the inspected Struct members of ``schema`` in declaration order.
-
-    ``type_info`` derives the union itself, which is what reports msgspec's
-    mixed-tag and mismatched-tag-field diagnostics for a schema installed after
-    class creation.
-
-    Returns
-    -------
-    tuple[msinspect.StructType, ...]
-        The inspected Struct members, in declaration order.
-    """
+    """Return the inspected Struct members of ``schema`` in declaration order."""
+    # ``type_info`` derives the union itself, which is what reports msgspec's
+    # mixed-tag and mismatched-tag-field diagnostics for a schema installed
+    # after class creation.
     info = msinspect.type_info(schema)
     validate_schema_types(schema)
-    if isinstance(info, msinspect.UnionType):
-        return typ.cast("tuple[msinspect.StructType, ...]", info.types)
-    return (typ.cast("msinspect.StructType", info),)
+    match info:
+        case msinspect.UnionType(types=members):
+            return typ.cast("tuple[msinspect.StructType, ...]", members)
+        case _:
+            return (typ.cast("msinspect.StructType", info),)
 
 
 def _tagged_member(member_info: msinspect.StructType) -> tuple[object, type[ms.Struct]]:
-    """Return ``member_info``'s declared tag and Struct class.
-
-    ``validate_schema_types`` has already rejected untagged members, so the tag
-    is present.
-
-    Returns
-    -------
-    tuple[object, type[msgspec.Struct]]
-        The member's declared tag and its Struct class.
-    """
+    """Return ``member_info``'s declared tag and Struct class."""
+    # ``validate_schema_types`` has already rejected untagged members, so the
+    # tag is present.
     return typ.cast("object", member_info.tag), member_info.cls
 
 
@@ -235,23 +212,10 @@ def requires_strict_validation(
 
 @functools.cache
 def _allowed_wire_keys(payload_type: type) -> frozenset[str]:
-    """Return the keys a strict frame may declare for ``payload_type``.
-
-    ``msinspect.type_info`` walks the whole type graph, and schema mode now
-    validates every strict frame, so the key set is computed once per Struct
-    rather than once per message.
-
-    Parameters
-    ----------
-    payload_type : type
-        The declared type of a handler's payload.
-
-    Returns
-    -------
-    frozenset[str]
-        The encoded wire names plus the tag field, or an empty set when
-        ``payload_type`` is not a Struct and therefore has no such contract.
-    """
+    """Return the keys a strict frame may declare for ``payload_type``."""
+    # ``msinspect.type_info`` walks the whole type graph, and schema mode now
+    # validates every strict frame, so the key set is computed once per Struct
+    # rather than once per message. A non-Struct has no such contract.
     info = msinspect.type_info(payload_type)
     if not isinstance(info, msinspect.StructType):
         return frozenset()

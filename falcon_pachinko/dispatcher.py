@@ -126,36 +126,17 @@ def find_conventional_handler(
 
 
 def _convert_payload(context: HandlerInvocationContext, payload_type: type) -> object:
-    """Convert the retained payload, or re-decode a schema frame from the wire.
-
-    Schema dispatch decodes frames generically so undeclared keys can be
-    inspected. That mapping has already lost wire-level detail: integer mapping
-    keys arrive as strings, ``msgspec.Raw`` fields arrive as decoded JSON, and
-    ``Decimal`` fields pass through a ``float``. Re-decoding the original frame
-    into the resolved member restores msgspec's wire semantics.
-
-    The wire decode carries the handler's strictness rather than falling back
-    to converting the mapping. A fallback would let one field that needs lax
-    coercion change how its neighbours decode, losing the wire values the
-    second decode exists to preserve.
-
-    Parameters
-    ----------
-    context : HandlerInvocationContext
-        The invocation carrying the retained payload and the original frame.
-    payload_type : type
-        The type to convert into.
-
-    Returns
-    -------
-    object
-        The converted payload.
-
-    Raises
-    ------
-    msgspec.ValidationError
-        If the payload does not satisfy ``payload_type``.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by msgspec
+    """Convert the retained payload, or re-decode a schema frame from the wire."""
+    # Schema dispatch decodes frames generically so undeclared keys can be
+    # inspected. That mapping has already lost wire-level detail: integer
+    # mapping keys arrive as strings, ``msgspec.Raw`` fields arrive as decoded
+    # JSON, and ``Decimal`` fields pass through a ``float``. Re-decoding the
+    # original frame into the resolved member restores msgspec's wire semantics.
+    #
+    # The wire decode carries the handler's strictness rather than falling back
+    # to converting the mapping. A fallback would let one field that needs lax
+    # coercion change how its neighbours decode, losing the wire values the
+    # second decode exists to preserve.
     if context.target_type is None:
         return ms.convert(
             context.payload,
@@ -203,24 +184,11 @@ async def dispatch(
 
 
 def _decode_schema_frame(raw: str | bytes) -> dict[str, object] | None:
-    """Decode ``raw`` to a JSON object, or return ``None`` when it is not one.
-
-    Returning from inside the ``except`` suite keeps the vendor decode error out
-    of ``__context__``: callers fall back outside it, so no application error is
-    raised while that exception is being handled. The decode error can quote
-    the frame, so it must not be chained to a reply.
-
-    Parameters
-    ----------
-    raw : str | bytes
-        The received frame.
-
-    Returns
-    -------
-    dict[str, object] | None
-        The decoded JSON object, or ``None`` when the frame is malformed or is
-        not a JSON object.
-    """
+    """Decode ``raw`` to a JSON object, or return ``None`` when it is not one."""
+    # Returning from inside the ``except`` suite keeps the vendor decode error
+    # out of ``__context__``: callers fall back outside it, so no application
+    # error is raised while that exception is being handled. The decode error
+    # can quote the frame, so it must not be chained to a reply.
     try:
         payload = msjson.decode(raw)
     except (ms.DecodeError, ms.ValidationError):
