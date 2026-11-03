@@ -124,7 +124,8 @@ AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(DF12_PYTHON) \
 	--from '$(DF12_PYTHON_LINTS)' --with pylint==$(PYLINT_VERSION) \
 	--with astroid==$(ASTROID_VERSION) ambrleaks
 
-.PHONY: help all clean build build-release lint interrogate lint-pylint lint-df12 \
+.PHONY: help all clean build build-release release-wheel update-build-constraints \
+	lint interrogate lint-pylint lint-df12 \
 	pylint-pypy-python fmt check-fmt markdownlint nixie spelling test test-ci \
 	test-workflow-contracts check-cv005 typecheck install-nose duplication \
 	duplication-test duplication-allow mutation mutation-results \
@@ -148,7 +149,32 @@ build: uv .venv uv.lock ## Build virtual-env and install deps
 # `uv build` writes both artefacts into `dist/`, which is the directory
 # `make clean` removes and `.gitignore` excludes.
 build-release: ## Build artefacts (sdist & wheel)
-	uv build --out-dir dist
+	SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" uv build --out-dir dist --no-cache --build-constraint build-constraints.txt --require-build-hashes
+
+update-build-constraints: ## Regenerate isolated build dependency hashes
+	python3 -c 'import tomllib; print("\n".join(tomllib.load(open("pyproject.toml", "rb"))["build-system"]["requires"]))' | uv pip compile - --generate-hashes --universal --python-version 3.12 --output-file build-constraints.txt
+
+RELEASE_WHEEL_DIR ?= dist
+release-wheel: ## Build and compare two wheels from the same sdist
+	@set -eu; \
+	export SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)"; \
+	out='$(RELEASE_WHEEL_DIR)'; mkdir -p "$$out"; \
+	repeat="$$(mktemp -d "$${out%/}-repeat.XXXXXXXX")"; \
+	rm -f "$$out"/*.whl "$$out"/*.tar.gz; \
+	rm -rf build ./*.egg-info; \
+	uv build --sdist --out-dir "$$out" --no-cache --build-constraint build-constraints.txt --require-build-hashes; \
+	set -- "$$out"/*.tar.gz; test "$$#" -eq 1 && test -f "$$1"; sdist="$$1"; \
+	rm -rf build ./*.egg-info; \
+	uv build "$$sdist" --wheel --out-dir "$$out" --no-cache --build-constraint build-constraints.txt --require-build-hashes; \
+	rm -rf build ./*.egg-info; \
+	uv build "$$sdist" --wheel --out-dir "$$repeat" --no-cache --build-constraint build-constraints.txt --require-build-hashes; \
+	set -- "$$out"/*.whl; test "$$#" -eq 1 && test -f "$$1"; first="$$1"; \
+	set -- "$$repeat"/*.whl; test "$$#" -eq 1 && test -f "$$1"; second="$$1"; \
+	test "$${first##*/}" = "$${second##*/}"; \
+	first_hash="$$(sha256sum "$$first" | cut -d' ' -f1)"; \
+	second_hash="$$(sha256sum "$$second" | cut -d' ' -f1)"; \
+	if [ "$$first_hash" != "$$second_hash" ]; then printf 'Wheel digests differ: %s %s\n' "$$first_hash" "$$second_hash" >&2; exit 1; fi; \
+	rm -rf "$$repeat"
 
 clean: ## Remove build artefacts
 	rm -rf build dist *.egg-info \

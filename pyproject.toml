@@ -534,7 +534,7 @@ pytest_add_cli_args = [
 ]
 
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools==84.2.1", "wheel==0.48.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
