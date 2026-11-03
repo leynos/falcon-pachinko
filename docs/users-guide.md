@@ -349,7 +349,9 @@ class ChatResource(WebSocketResource):
   discard undeclared fields before the strict decision, so a strict handler
   would run on a message that violated its no-extra-fields contract. Converting
   the plain object instead would lose wire-level values such as integer mapping
-  keys, `msgspec.Raw` JSON, and exact `Decimal` numbers. With default-strict
+  keys, `msgspec.Raw` JSON, and exact `Decimal` numbers. A `strict=False`
+  handler decodes the original frame with lax coercion for the same reason, so
+  those values survive alongside a coerced field. With default-strict
   validation, any undeclared top-level field sends the raw frame to
   `on_unhandled`.
 - The allowed keys are the Struct's encoded wire names plus its tag field. A

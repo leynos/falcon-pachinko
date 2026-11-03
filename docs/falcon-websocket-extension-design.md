@@ -549,12 +549,13 @@ frame reception and dispatch order.
      `strict=False` skips the key check and uses lax coercion. A Struct
      declared with `forbid_unknown_fields=True` still rejects extras.
   4. **Conversion.** The original frame is decoded into the selected Struct
-     with `msgspec.json.decode`, so wire-level values survive: integer mapping
-     keys, `msgspec.Raw` JSON, and exact `Decimal` numbers. A `strict=False`
-     handler falls back to `msgspec.convert` of the retained object when the
-     wire decode rejects a value that lax coercion accepts. A `ValidationError`
-     from validation or conversion sends the raw frame to `on_unhandled`; a
-     configuration `TypeError` propagates.
+     with `msgspec.json.decode`, passing the handler's strictness, so
+     wire-level values survive: integer mapping keys, `msgspec.Raw` JSON, and
+     exact `Decimal` numbers. Keeping the generically decoded object as the
+     conversion input, as a lax fallback would, degrades those values whenever
+     another field needs coercion. A `ValidationError` from validation or
+     conversion sends the raw frame to `on_unhandled`; a configuration
+     `TypeError` propagates.
 
   Decoding directly into the schema union is deliberately not used: `msgspec`
   drops undeclared fields during that decode, which would let a strict handler

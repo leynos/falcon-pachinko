@@ -7,6 +7,7 @@ import dataclasses as dc
 import typing as typ
 
 import falcon.asgi
+import msgspec as ms
 
 from falcon_pachinko import WebSocketResource, WebSocketRouter
 
@@ -22,10 +23,18 @@ class LiveAppState:
     recorded_event: asyncio.Event = dc.field(default_factory=asyncio.Event)
     disconnected: asyncio.Event = dc.field(default_factory=asyncio.Event)
     disconnect_code: int | None = None
+    schema_calls: list[int] = dc.field(default_factory=list)
+    unhandled_messages: list[str | bytes] = dc.field(default_factory=list)
 
 
-class LiveWebSocketResource(WebSocketResource):
-    """Exercise connect, frame handlers, and disconnect over a real socket."""
+class LiveSchemaMessage(ms.Struct, tag="live_schema"):
+    """Schema member used to prove extras reach ``on_unhandled`` live."""
+
+    value: int
+
+
+class _LiveResource(WebSocketResource):
+    """Share acceptance and the welcome frame across live route resources."""
 
     def __init__(self, shared: LiveAppState) -> None:
         self.shared = shared
@@ -38,6 +47,32 @@ class LiveWebSocketResource(WebSocketResource):
         await ws.accept()
         await ws.send_media({"type": "welcome", "message": "welcome from Falcon"})
         return True
+
+
+class LiveSchemaResource(_LiveResource):
+    """Exercise strict schema dispatch over a real socket.
+
+    A frame with an extra top-level field must reach ``on_unhandled`` while the
+    same connection keeps accepting valid frames.
+    """
+
+    schema = LiveSchemaMessage
+
+    async def on_live_schema(
+        self, ws: WebSocketLike, payload: LiveSchemaMessage
+    ) -> None:
+        """Record and acknowledge a valid schema frame."""
+        self.shared.schema_calls.append(payload.value)
+        await ws.send_media({"type": "schema_ok", "value": payload.value})
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record the rejected frame without closing the session."""
+        del ws
+        self.shared.unhandled_messages.append(message)
+
+
+class LiveWebSocketResource(_LiveResource):
+    """Exercise connect, frame handlers, and disconnect over a real socket."""
 
     async def on_echo(self, ws: WebSocketLike, payload: str) -> None:
         """Reply to an echo frame from the connected client."""
@@ -67,5 +102,6 @@ def build_live_app(shared: LiveAppState) -> falcon.asgi.App:
     app = falcon.asgi.App()
     router = WebSocketRouter(receive_loop=True)
     router.add_route("/socket", LiveWebSocketResource, shared=shared)
+    router.add_route("/schema", LiveSchemaResource, shared=shared)
     router.attach(app, "/ws")
     return app

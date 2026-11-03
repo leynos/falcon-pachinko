@@ -6,6 +6,7 @@ import dataclasses as dc
 import typing as typ
 from contextlib import AsyncExitStack
 
+import msgspec.json as msjson
 import pytest
 from pytest_bdd import given, scenario, then, when
 from websockets.exceptions import ConnectionClosed
@@ -36,6 +37,7 @@ class LiveScenario:
     acknowledgement: object | None = None
     echo_frames: list[object] = dc.field(default_factory=list)
     client_close_code: int | None = None
+    schema_reply: object | None = None
 
 
 def _session(context: LiveScenario) -> WebSocketSession:
@@ -120,6 +122,16 @@ def test_live_websocket_server_failure_is_surfaced() -> (
     """Register the server-error acceptance scenario."""
 
 
+@scenario(
+    "live_websocket_server.feature",
+    "an extra schema field is rejected without breaking the session",
+)
+def test_live_websocket_extra_schema_field_is_rejected() -> (
+    None
+):  # pragma: no cover - BDD registration
+    """Register the schema fallback acceptance scenario."""
+
+
 @given(
     "a Falcon ASGI app mounted with the live WebSocket router",
     target_fixture="context",
@@ -140,19 +152,30 @@ def given_live_falcon_app(
     return context
 
 
-@when('the client opens "/ws/socket"', target_fixture="context")
-def when_client_opens_connection(context: LiveScenario) -> LiveScenario:
-    """Open a real RFC WebSocket and consume the server's welcome frame."""
+def _open_connection(context: LiveScenario, path: str) -> LiveScenario:
+    """Open a real RFC WebSocket and consume the route's welcome frame."""
     connection_stack = AsyncExitStack()
     context.connection_stack = connection_stack
     context.session = context.runner.run(
-        _enter_connection(connection_stack, context.server.connect("/ws/socket")),
+        _enter_connection(connection_stack, context.server.connect(path)),
         timeout=3.0,
     )
     context.welcome_frame = context.runner.run(
         _session(context).receive_json(), timeout=2.0
     )
     return context
+
+
+@when('the client opens "/ws/socket"', target_fixture="context")
+def when_client_opens_connection(context: LiveScenario) -> LiveScenario:
+    """Open the conventional-handler route."""
+    return _open_connection(context, "/ws/socket")
+
+
+@when('the client opens "/ws/schema"', target_fixture="context")
+def when_client_opens_schema_connection(context: LiveScenario) -> LiveScenario:
+    """Open the schema-backed route."""
+    return _open_connection(context, "/ws/schema")
 
 
 @when('the client records "from the client"', target_fixture="context")
@@ -205,6 +228,33 @@ def when_client_triggers_server_failure(context: LiveScenario) -> LiveScenario:
     else:
         pytest.fail("the failing responder must close the client connection")
     context.runner.run(context.app_state.disconnected.wait(), timeout=2.0)
+    return context
+
+
+@when(
+    "the client sends an extra-field schema frame then a valid one",
+    target_fixture="context",
+)
+def when_client_sends_schema_frames(context: LiveScenario) -> LiveScenario:
+    """Send a rejected frame followed by a valid one on the same connection.
+
+    Frames are dispatched sequentially, so receiving the reply to the second
+    frame proves the first has already reached ``on_unhandled``.
+
+    Returns
+    -------
+    LiveScenario
+        The scenario carrying the reply to the valid frame.
+    """
+    session = _session(context)
+    context.runner.run(
+        session.send_json({"type": "live_schema", "value": 1, "extra": True}),
+        timeout=2.0,
+    )
+    context.runner.run(
+        session.send_json({"type": "live_schema", "value": 2}), timeout=2.0
+    )
+    context.schema_reply = context.runner.run(session.receive_json(), timeout=2.0)
     return context
 
 
@@ -282,3 +332,25 @@ def then_harness_exposes_server_exception(context: LiveScenario) -> None:
     assert isinstance(acknowledged[0], RuntimeError), (
         "the scenario must acknowledge the captured RuntimeError"
     )
+
+
+@then("the extra-field frame reaches on_unhandled and the valid frame is answered")
+def then_extra_field_frame_reaches_fallback(context: LiveScenario) -> None:
+    """Assert the rejected frame stayed visible and the session survived it."""
+    assert len(context.app_state.unhandled_messages) == 1, (
+        "the extra-field frame must reach on_unhandled exactly once"
+    )
+    rejected = context.app_state.unhandled_messages[0]
+    assert isinstance(rejected, str), "a text frame must reach on_unhandled as text"
+    assert msjson.decode(rejected) == {
+        "type": "live_schema",
+        "value": 1,
+        "extra": True,
+    }, "on_unhandled must receive the original frame with the extra field intact"
+    assert context.app_state.schema_calls == [2], (
+        "only the valid frame must reach the schema handler"
+    )
+    assert context.schema_reply == {"type": "schema_ok", "value": 2}, (
+        "the valid frame must be answered over the same connection"
+    )
+    assert not _session(context).closed, "the rejected frame must not close the session"

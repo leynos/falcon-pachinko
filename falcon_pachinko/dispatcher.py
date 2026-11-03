@@ -134,10 +134,10 @@ def _convert_payload(context: HandlerInvocationContext, payload_type: type) -> o
     ``Decimal`` fields pass through a ``float``. Re-decoding the original frame
     into the resolved member restores msgspec's wire semantics.
 
-    A ``strict=False`` handler keeps its documented lax coercion: when the wire
-    decode rejects a value the lax rules would accept, such as the string
-    ``"5"`` in an integer field, the already-decoded mapping is converted
-    instead.
+    The wire decode carries the handler's strictness rather than falling back
+    to converting the mapping. A fallback would let one field that needs lax
+    coercion change how its neighbours decode, losing the wire values the
+    second decode exists to preserve.
 
     Parameters
     ----------
@@ -155,23 +155,15 @@ def _convert_payload(context: HandlerInvocationContext, payload_type: type) -> o
     ------
     msgspec.ValidationError
         If the payload does not satisfy ``payload_type``.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by msgspec
     if context.target_type is None:
         return ms.convert(
             context.payload,
             type=payload_type,
             strict=context.handler_info.strict,
         )
-    try:
-        return msjson.decode(context.raw, type=payload_type)
-    except ms.ValidationError:
-        if context.handler_info.strict:
-            raise
-    # Convert after leaving the ``except`` suite so a failure here does not
-    # retain the wire-decode error as its ``__context__``: the vendor message
-    # can quote peer-supplied field names.
-    return ms.convert(
-        context.payload,
+    return msjson.decode(
+        context.raw,
         type=payload_type,
         strict=context.handler_info.strict,
     )

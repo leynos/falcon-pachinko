@@ -24,12 +24,13 @@ Decode schema frames generically and validate before conversion:
    is strict. The allowed keys are the member's encoded wire names plus its tag
    field.
 4. Decode the original frame into the resolved member with
-   `msgspec.json.decode`. The generically decoded mapping is inspection-only:
-   converting it would lose wire-level detail, turning integer mapping keys
-   into strings, `msgspec.Raw` fields into decoded JSON, and `Decimal` fields
-   into `float`-derived values. A `strict=False` handler that hits a wire
-   decode rejection falls back to `msgspec.convert` of the retained mapping so
-   lax coercion still applies.
+   `msgspec.json.decode`, passing the handler's strictness. The generically
+   decoded mapping is inspection-only: converting it would lose wire-level
+   detail, turning integer mapping keys into strings, `msgspec.Raw` fields into
+   decoded JSON, and `Decimal` fields into `float`-derived values. A fallback
+   to converting the mapping would also let one field that needs lax coercion
+   change how its neighbours decode, so the wire decode carries `strict`
+   directly.
 
 Both dispatch modes now share one validate-then-convert path. `strict=False`
 has the same meaning in both: undeclared top-level fields are ignored and
@@ -59,6 +60,11 @@ conversion `ValidationError`s become `on_unhandled` fallbacks.
 - **Deep validation of nested mappings.** Reimplementing `msgspec`'s nested
   Struct rules would duplicate its semantics and disagree with
   `forbid_unknown_fields` and custom decoders.
+- **Convert the retained mapping when a lenient wire decode rejects a
+  value.** This makes coercion depend on the frame as a whole: a message that
+  needs one lax conversion would silently round a neighbouring `Decimal`,
+  stringify integer mapping keys, and fail to capture `msgspec.Raw` fields.
+  Passing `strict=False` to the wire decode keeps every field on one path.
 
 ## Consequences
 

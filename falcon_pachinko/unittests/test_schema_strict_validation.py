@@ -232,6 +232,34 @@ class WireTypesResource(_RecordingResource):
         ))
 
 
+class LenientWireMessage(ms.Struct, tag="lenient_wire"):
+    """Message mixing a coercible field with wire-only field types."""
+
+    count: int
+    scores: dict[int, str]
+    blob: ms.Raw
+    amount: decimal.Decimal
+
+
+class LenientWireResource(_RecordingResource):
+    """Resource whose lenient handler still receives wire-level values."""
+
+    schema = LenientWireMessage
+
+    @handles_message("lenient_wire", strict=False)
+    async def handle_lenient_wire(
+        self, ws: WebSocketLike, payload: LenientWireMessage
+    ) -> None:
+        """Record every mixed field after lax coercion."""
+        self.events.append((
+            "lenient_wire",
+            payload.count,
+            payload.scores,
+            msjson.decode(payload.blob),
+            payload.amount,
+        ))
+
+
 class ClosedTopMessage(ms.Struct, tag="closed_top", forbid_unknown_fields=True):
     """Top-level message that always forbids undeclared fields."""
 
@@ -401,12 +429,47 @@ async def test_schema_member_decodes_wire_level_types() -> None:
     r.bind_default_hook_manager()
     raw = (
         b'{"type": "wire_types", "scores": {"1": "a"}, '
-        b'"blob": {"nested": true}, "amount": 0.1}'
+        b'"blob": {"nested": true}, '
+        b'"amount": 0.12345678901234567890123456789}'
     )
     await r.dispatch(DummyWS(), raw)
     assert r.events == [
-        ("wire_types", {1: "a"}, {"nested": True}, decimal.Decimal("0.1"))
+        (
+            "wire_types",
+            {1: "a"},
+            {"nested": True},
+            decimal.Decimal("0.12345678901234567890123456789"),
+        )
     ], "wire-level values must survive into the typed payload unchanged"
+
+
+@pytest.mark.asyncio
+async def test_schema_lenient_coercion_keeps_wire_level_types() -> None:
+    """Lax coercion must not cost the neighbouring wire-level values.
+
+    A lenient handler needs msgspec's lax coercion for ``"5"`` in an integer
+    field. Decoding the frame with the handler's strictness keeps that coercion
+    while still preserving integer mapping keys, ``Raw`` JSON and the exact
+    decimal, which a conversion of the generic mapping would degrade.
+    """
+    r = LenientWireResource()
+    r.bind_default_hook_manager()
+    raw = (
+        b'{"type": "lenient_wire", "count": "5", "scores": {"1": "a"}, '
+        b'"blob": {"nested": true}, '
+        b'"amount": 0.12345678901234567890123456789}'
+    )
+    await r.dispatch(DummyWS(), raw)
+    expected_event = (
+        "lenient_wire",
+        5,
+        {1: "a"},
+        {"nested": True},
+        decimal.Decimal("0.12345678901234567890123456789"),
+    )
+    assert r.events == [expected_event], (
+        "lax coercion must not degrade the other wire-level field values"
+    )
 
 
 @pytest.mark.asyncio
