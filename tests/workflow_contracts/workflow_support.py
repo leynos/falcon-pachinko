@@ -25,6 +25,7 @@ workflow fails the same way whether or not assertions are enabled.
 from __future__ import annotations
 
 import dataclasses as dc
+import os
 import pathlib
 import typing as typ
 
@@ -249,7 +250,8 @@ class WorkflowSource:
         except OSError as error:
             raise UnreadableWorkflowError(path) from error
 
-    def _load(self, path: pathlib.Path, subject: str) -> object:
+    @staticmethod
+    def load(path: pathlib.Path, subject: str) -> object:
         """Read and parse one YAML file.
 
         Parameters
@@ -272,7 +274,7 @@ class WorkflowSource:
             the last of two equal keys in silence, so a lane could carry a
             paid label in the discarded half and read as hosted here.
         """
-        text = self.text(path)
+        text = WorkflowSource.text(path)
         try:
             return yaml.load(text, Loader=StrictLoader)  # ruff: ignore[unsafe-yaml-load] - strict SafeLoader subclass
         except yaml.YAMLError as error:
@@ -282,7 +284,7 @@ class WorkflowSource:
         """Parse one workflow document.
 
         A file that cannot be read, is not valid UTF-8, or is not parsable
-        YAML fails through the errors `_load` raises.
+        YAML fails through the errors :meth:`load` raises.
 
         Parameters
         ----------
@@ -301,7 +303,7 @@ class WorkflowSource:
         NotAMappingError
             If the document does not parse to a mapping.
         """
-        document = self._load(self.workflow_dir / name, name)
+        document = self.load(self.workflow_dir / name, name)
         if not isinstance(document, dict):
             raise NotAMappingError(name)
         # Copied rather than returned as parsed, so the declared type is true
@@ -374,7 +376,7 @@ class WorkflowSource:
         Routed through the source rather than read at its global path, so the
         registry contract can be driven over a temporary pair of directory
         and configuration. A configuration that is not parsable YAML fails
-        through the error `_load` raises.
+        through the error :meth:`load` raises.
 
         Returns
         -------
@@ -393,7 +395,7 @@ class WorkflowSource:
         """
         subject = self.actionlint_config.name
         section = self._runner_section(
-            self._load(self.actionlint_config, subject), subject
+            self.load(self.actionlint_config, subject), subject
         )
         registered = section.get("labels")
         if not isinstance(registered, list):
@@ -409,3 +411,96 @@ class WorkflowSource:
 #: This repository's own workflows and registry. The contracts read through
 #: this; the tests that prove the readers build their own.
 REPOSITORY: typ.Final[WorkflowSource] = WorkflowSource(WORKFLOW_DIR, ACTIONLINT_CONFIG)
+
+
+class NotAListError(WorkflowShapeError):
+    """A required list has another shape.
+
+    Parameters
+    ----------
+    site : str
+        Location of the malformed container.
+    """
+
+    def __init__(self, site: str) -> None:
+        super().__init__(f"{site} must be a list")
+
+
+class UnsupportedUsesError(WorkflowShapeError):
+    """An action reference cannot be accepted by the pinning policy.
+
+    Parameters
+    ----------
+    site : str
+        Location of the reference.
+    value : object
+        The rejected value.
+    """
+
+    def __init__(self, site: str, value: object) -> None:
+        super().__init__(f"{site}: unsupported or mutable uses {value!r}")
+
+
+def _raise_unreadable_directory(error: OSError) -> typ.NoReturn:
+    """Translate directory walk failures to the shared contract error."""
+    raise UnreadableWorkflowError(pathlib.Path(error.filename or ROOT)) from error
+
+
+@dc.dataclass(frozen=True, slots=True)
+class ActionManifestSource:
+    """Read action manifests from a directory of local actions.
+
+    Attributes
+    ----------
+    action_dir : pathlib.Path
+        Directory containing action subdirectories.
+    """
+
+    action_dir: pathlib.Path
+
+    def names(self) -> list[str]:
+        """Find supported manifests in every local action directory.
+
+        Directory traversal failures are translated to
+        ``UnreadableWorkflowError``.
+
+        Returns
+        -------
+        list[str]
+            Sorted paths relative to the action directory.
+        """
+        return sorted(
+            (pathlib.Path(directory) / name).relative_to(self.action_dir).as_posix()
+            for directory, _, filenames in os.walk(
+                self.action_dir, onerror=_raise_unreadable_directory
+            )
+            for name in {"action.yml", "action.yaml"}.intersection(filenames)
+        )
+
+    def document(self, name: str) -> dict[str, object]:
+        """Parse a manifest with the workflow loader's strict error handling.
+
+        Parameters
+        ----------
+        name : str
+            Manifest path relative to the action directory.
+
+        Returns
+        -------
+        dict[str, object]
+            The parsed manifest.
+
+        Raises
+        ------
+        NotAMappingError
+            If the manifest does not parse as a mapping.
+        """
+        document = as_mapping(WorkflowSource.load(self.action_dir / name, name))
+        if document is None:
+            raise NotAMappingError(name)
+        return document
+
+
+ACTION_MANIFESTS: typ.Final[ActionManifestSource] = ActionManifestSource(
+    ROOT / ".github" / "actions"
+)

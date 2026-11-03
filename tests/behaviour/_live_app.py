@@ -34,19 +34,14 @@ class LiveSchemaMessage(ms.Struct, tag="live_schema"):
 
 
 class _LiveResource(WebSocketResource):
-    """Share acceptance and the welcome frame across live route resources."""
+    """Share the welcome frame across live route resources."""
 
     def __init__(self, shared: LiveAppState) -> None:
         self.shared = shared
 
-    async def on_connect(
-        self, req: object, ws: WebSocketLike, **params: object
-    ) -> bool:
-        """Accept and greet the real client before router session dispatch."""
-        del req, params
-        await ws.accept()
+    async def on_session_start(self, ws: WebSocketLike) -> None:
+        """Greet the real client once the router has accepted the session."""
         await ws.send_media({"type": "welcome", "message": "welcome from Falcon"})
-        return True
 
 
 class LiveSchemaResource(_LiveResource):

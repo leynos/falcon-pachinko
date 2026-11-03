@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import types
 import typing as typ
+from collections import deque
 
-from falcon_pachinko._disconnect import _PeerDisconnectedError
+import falcon
+
 from falcon_pachinko.websocket import (
     ConnectionBackend,
     WebSocketConnectionNotFoundError,
@@ -20,33 +23,64 @@ if typ.TYPE_CHECKING:
 class RecordingWebSocket:
     """WebSocket stub that records lifecycle changes and sent payloads."""
 
-    def __init__(self) -> None:
+    def __init__(self, *frames: object) -> None:
+        self.unaccepted = True
         self.accepted = False
         self.closed = False
         self.close_code: int | None = None
+        self.lifecycle_event = asyncio.Event()
         self.messages: list[object] = []
         self.receive_calls = 0
+        self._frames = deque(frames)
 
-    async def accept(self, subprotocol: str | None = None) -> None:
+    async def accept(
+        self, subprotocol: str | None = None, headers: object = None
+    ) -> None:
         """Record that the handshake was accepted."""
+        del subprotocol, headers
+        if self.closed or self.accepted:
+            return
         self.accepted = True
+        self.unaccepted = False
+        self.lifecycle_event.set()
 
     # pylint: disable-next=trivial-attribute-wrapper  # protocol stub: WebSocketLike fixes send_media's shape and recording the payload is this stub's entire purpose
     async def send_media(self, data: object) -> None:
         """Record data sent through the stub."""
         self.messages.append(data)
 
-    async def close(self, code: int = 1000) -> None:
+    async def close(self, code: int | None = 1000, reason: str | None = None) -> None:
         """Record closure metadata."""
+        del reason
+        if self.closed:
+            return
         self.closed = True
-        self.close_code = code
+        self.close_code = 1000 if code is None else code
+        self.lifecycle_event.set()
+
+    async def send_text(self, message: str) -> None:
+        """Record one text frame through the shared media path."""
+        await self.send_media(message)
 
     async def receive_media(self) -> object:
         """End setup-only router tests with a normal peer disconnect."""
         self.receive_calls += 1
-        self.closed = True
-        self.close_code = self.close_code or 1000
-        raise _PeerDisconnectedError(code=self.close_code)
+        if self.closed:
+            raise falcon.WebSocketDisconnected(self.close_code)
+        if self._frames:
+            frame = self._frames.popleft()
+            if isinstance(frame, BaseException):
+                raise frame
+            return frame
+        raise falcon.WebSocketDisconnected(1000)
+
+    async def receive_text(self) -> str:
+        """Receive one frame and require it to be text."""
+        message = await self.receive_media()
+        if not isinstance(message, str):
+            msg = "expected a text WebSocket frame"
+            raise TypeError(msg)
+        return message
 
 
 class RequestStub:

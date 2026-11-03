@@ -1,183 +1,221 @@
-"""Live Falcon ASGI WebSocket server fixture for router-session scenarios."""
+"""Real Uvicorn harness for production-router WebSocket lifecycle scenarios."""
 
 from __future__ import annotations
 
 import asyncio
+import collections.abc as cabc
 import dataclasses as dc
 import typing as typ
+from contextlib import contextmanager, suppress
 
-import falcon.asgi
-import pytest
 import uvicorn
 
-from falcon_pachinko import (
-    WebSocketResource,
-    WebSocketRouter,
-    configure_raw_frame_media,
-)
-from falcon_pachinko.hooks import HookContext, HookEvent
-from falcon_pachinko.testing import WebSocketTestClient
-
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
+    import falcon.asgi
+
+from tests.behaviour._live_lifecycle_app import LiveApplication, create_live_application
+
+type _LoopExceptionHandler = cabc.Callable[
+    [asyncio.AbstractEventLoop, dict[str, typ.Any]], None
+]
+_SESSION_TASK_JOIN_TIMEOUT = 5
+
+
+def _assert_no_loop_errors(loop_errors: list[dict[str, object]]) -> None:
+    """Fail when a scenario leaves a server-side error unacknowledged."""
+    unexpected = [
+        error.get("exception") or error.get("message") for error in loop_errors
+    ]
+    assert not unexpected, f"live server reported loop errors: {unexpected!r}"
+
+
+class SignalFreeServer(uvicorn.Server):
+    """Leave process signal ownership with the test runner."""
+
+    @contextmanager
+    @typ.override
+    def capture_signals(self) -> cabc.Generator[None, None, None]:
+        """Serve without installing or restoring process signal handlers."""
+        yield
 
 
 @dc.dataclass(slots=True)
-class SessionRecorder:
-    """Collect handler, fallback, hook, failure, and disconnect observations."""
+class LiveServerTransport:
+    """Run Uvicorn on a caller-owned event loop and capture loop errors."""
 
-    handler_calls: list[str] = dc.field(default_factory=list)
-    unhandled_messages: list[str | bytes] = dc.field(default_factory=list)
-    disconnect_codes: list[int] = dc.field(default_factory=list)
-    after_receive_errors: list[BaseException | None] = dc.field(default_factory=list)
-    handler_failure: BaseException | None = None
-    disconnected: asyncio.Event = dc.field(default_factory=asyncio.Event)
+    server: uvicorn.Server
+    serve_task: asyncio.Task[None]
+    loop: asyncio.AbstractEventLoop
+    port: int
+    loop_errors: list[dict[str, object]]
+    _previous_exception_handler: _LoopExceptionHandler | None = dc.field(repr=False)
+    _stopped: bool = dc.field(default=False, init=False)
 
-
-@dc.dataclass(slots=True)
-class LiveServerContext:
-    """Expose the real server, test client, and recorder to a scenario."""
-
-    event_loop: asyncio.AbstractEventLoop
-    server: _SignalFreeServer
-    server_task: asyncio.Task[None]
-    base_url: str
-    client: WebSocketTestClient
-    recorder: SessionRecorder
-
-
-class _SignalFreeServer(uvicorn.Server):
-    """Uvicorn server that leaves signal ownership to the pytest process."""
-
-    def install_signal_handlers(self) -> None:
-        """Do not replace the test runner's process signal handlers."""
-
-
-def _create_app(
-    recorder: SessionRecorder,
-    resource_factory: cabc.Callable[[SessionRecorder], WebSocketResource],
-) -> falcon.asgi.App:
-    """Build Falcon with raw frame media and the recording router hook."""
-    app = falcon.asgi.App()
-    configure_raw_frame_media(app)
-    router = WebSocketRouter(receive_loop=True)
-    router.add_route("/", lambda: resource_factory(recorder))
-
-    def record_after_receive(context: HookContext) -> None:
-        recorder.after_receive_errors.append(context.error)
-
-    router.global_hooks.add(HookEvent.AFTER_RECEIVE, record_after_receive)
-    router.mount("/ws")
-    app.add_route("/ws", router)
-    return app
-
-
-def _launch_server(
-    event_loop: asyncio.AbstractEventLoop, app: falcon.asgi.App
-) -> tuple[_SignalFreeServer, asyncio.Task[None], str]:
-    """Start Uvicorn and return its task and bound WebSocket URL."""
-    server = _SignalFreeServer(
-        uvicorn.Config(
+    @classmethod
+    async def launch(
+        cls,
+        loop: asyncio.AbstractEventLoop,
+        app: falcon.asgi.App[falcon.asgi.Request, falcon.asgi.Response],
+        *,
+        server_factory: cabc.Callable[
+            [uvicorn.Config], uvicorn.Server
+        ] = SignalFreeServer,
+        wait_ready: cabc.Callable[
+            [cabc.Coroutine[object, object, None]], cabc.Awaitable[None]
+        ]
+        | None = None,
+    ) -> LiveServerTransport:
+        """Start one ephemeral Uvicorn listener and wait for readiness."""
+        config = uvicorn.Config(
             app,
             host="127.0.0.1",
             port=0,
+            ws="websockets",
             lifespan="off",
+            timeout_graceful_shutdown=1,
+            access_log=False,
             log_level="critical",
         )
-    )
-    server_task = event_loop.create_task(server.serve())
-    event_loop.run_until_complete(
-        asyncio.wait_for(
-            _wait_until_started(event_loop, server, server_task), timeout=10
+        server = server_factory(config)
+        loop_errors: list[dict[str, object]] = []
+        previous_handler = typ.cast(
+            "_LoopExceptionHandler | None", loop.get_exception_handler()
         )
-    )
-    return server, server_task, _resolve_server_url(server)
+
+        def record_loop_error(
+            _loop: asyncio.AbstractEventLoop, context: dict[str, typ.Any]
+        ) -> None:
+            loop_errors.append(context)
+
+        loop.set_exception_handler(record_loop_error)
+        serve_task = asyncio.create_task(server.serve())
+
+        try:
+            if wait_ready is None:
+                await asyncio.wait_for(
+                    _wait_until_started(server, serve_task), timeout=5
+                )
+            else:
+                await wait_ready(_wait_until_started(server, serve_task))
+        except (Exception, asyncio.CancelledError):
+            serve_task.cancel()
+            try:
+                await asyncio.gather(serve_task, return_exceptions=True)
+            finally:
+                loop.set_exception_handler(previous_handler)
+            raise
+
+        sockets = server.servers
+        if not sockets or not sockets[0].sockets:
+            serve_task.cancel()
+            try:
+                await asyncio.gather(serve_task, return_exceptions=True)
+            finally:
+                loop.set_exception_handler(previous_handler)
+            msg = "Uvicorn reported started without a listening socket"
+            raise RuntimeError(msg)
+        port = sockets[0].sockets[0].getsockname()[1]
+        return cls(
+            server,
+            serve_task,
+            loop,
+            port,
+            loop_errors,
+            previous_handler,
+        )
+
+    @property
+    def base_url(self) -> str:
+        """Insecure loopback URL used by the local test client."""
+        return f"ws://127.0.0.1:{self.port}"
+
+    async def stop(self) -> None:
+        """Ask Uvicorn to shut down and join its serving task."""
+        if self._stopped:
+            return
+        self._stopped = True
+        self.server.should_exit = True
+        primary_error: BaseException | None = None
+        try:
+            try:
+                await self._stop_serving()
+            except BaseException as exc:
+                primary_error = exc
+                raise
+        finally:
+            try:
+                await self._join_sessions(preserve_primary=primary_error is not None)
+            finally:
+                self.loop.set_exception_handler(self._previous_exception_handler)
+
+    async def _stop_serving(self) -> None:
+        try:
+            await asyncio.wait_for(asyncio.shield(self.serve_task), timeout=5)
+        except TimeoutError:
+            self.serve_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.serve_task
+            raise
+
+    async def _join_sessions(self, *, preserve_primary: bool) -> None:
+        # Uvicorn cancels ASGI tasks without joining them after its graceful
+        # timeout, so keep the loop alive until their shielded cleanup ends.
+        session_tasks = tuple(self.server.server_state.tasks)
+        if not session_tasks:
+            return
+        joined = asyncio.gather(*session_tasks, return_exceptions=True)
+        try:
+            await asyncio.wait_for(joined, timeout=_SESSION_TASK_JOIN_TIMEOUT)
+        except TimeoutError:
+            if not preserve_primary:
+                raise
+
+
+@dc.dataclass(slots=True)
+class LiveServer(LiveServerTransport):
+    """Keep lifecycle application observations alongside the shared transport."""
+
+    application: LiveApplication
+
+    @classmethod
+    async def start(
+        cls,
+        loop: asyncio.AbstractEventLoop,
+        *,
+        application_factory: cabc.Callable[
+            [], LiveApplication
+        ] = create_live_application,
+        server_factory: cabc.Callable[
+            [uvicorn.Config], uvicorn.Server
+        ] = SignalFreeServer,
+        wait_ready: cabc.Callable[
+            [cabc.Coroutine[object, object, None]], cabc.Awaitable[None]
+        ]
+        | None = None,
+    ) -> LiveServer:
+        """Build the recording application and start its owned transport."""
+        application = application_factory()
+        transport = await LiveServerTransport.launch(
+            loop, application.app, server_factory=server_factory, wait_ready=wait_ready
+        )
+        return cls(
+            application=application,
+            server=transport.server,
+            serve_task=transport.serve_task,
+            loop=transport.loop,
+            port=transport.port,
+            loop_errors=transport.loop_errors,
+            _previous_exception_handler=transport._previous_exception_handler,
+        )
 
 
 async def _wait_until_started(
-    event_loop: asyncio.AbstractEventLoop,
-    server: _SignalFreeServer,
-    server_task: asyncio.Task[None],
+    server: uvicorn.Server, serve_task: asyncio.Task[None]
 ) -> None:
-    """Wait for Uvicorn startup while surfacing early server-task failures."""
-    deadline = event_loop.time() + 10
+    """Wait for the listener while preserving an early serving failure."""
     while not server.started:
-        if server_task.done():
-            await server_task
+        if serve_task.done():
+            serve_task.result()
             msg = "Uvicorn stopped before its live server started"
             raise RuntimeError(msg)
-        if event_loop.time() >= deadline:
-            msg = "Uvicorn live server did not start within 10 seconds"
-            raise TimeoutError(msg)
         await asyncio.sleep(0.01)
-
-
-def _resolve_server_url(server: _SignalFreeServer) -> str:
-    """Return the WebSocket URL for Uvicorn's first bound socket."""
-    bound_servers = server.servers
-    if not bound_servers or not bound_servers[0].sockets:
-        msg = "Uvicorn started without exposing a bound server socket"
-        raise RuntimeError(msg)
-    host, port, *_ = bound_servers[0].sockets[0].getsockname()
-    return f"ws://{host}:{port}"
-
-
-def _start_live_context(
-    event_loop: asyncio.AbstractEventLoop,
-    resource_factory: cabc.Callable[[SessionRecorder], WebSocketResource],
-) -> LiveServerContext:
-    """Build the test recorder, Falcon app, and running Uvicorn context."""
-    recorder = SessionRecorder()
-    app = _create_app(recorder, resource_factory)
-    server, server_task, base_url = _launch_server(event_loop, app)
-    client = WebSocketTestClient(base_url=base_url, allow_insecure=True)
-    return LiveServerContext(
-        event_loop=event_loop,
-        server=server,
-        server_task=server_task,
-        base_url=base_url,
-        client=client,
-        recorder=recorder,
-    )
-
-
-@pytest.fixture
-def event_loop(
-    event_loop_policy: asyncio.AbstractEventLoopPolicy,
-) -> cabc.Iterator[asyncio.AbstractEventLoop]:
-    """Provide a dedicated event loop for the live WebSocket server."""
-    loop = event_loop_policy.new_event_loop()
-    try:
-        asyncio.set_event_loop(loop)
-        yield loop
-    finally:
-        asyncio.set_event_loop(None)
-        loop.close()
-
-
-@pytest.fixture
-def live_server(
-    event_loop: asyncio.AbstractEventLoop,
-) -> cabc.Iterator[
-    cabc.Callable[
-        [cabc.Callable[[SessionRecorder], WebSocketResource]], LiveServerContext
-    ]
-]:
-    """Return a server builder that injects one shared recorder per scenario."""
-    contexts: list[LiveServerContext] = []
-
-    def start(
-        resource_factory: cabc.Callable[[SessionRecorder], WebSocketResource],
-    ) -> LiveServerContext:
-        context = _start_live_context(event_loop, resource_factory)
-        contexts.append(context)
-        return context
-
-    try:
-        yield start
-    finally:
-        for context in contexts:
-            context.server.should_exit = True
-            event_loop.run_until_complete(
-                asyncio.wait_for(context.server_task, timeout=10)
-            )

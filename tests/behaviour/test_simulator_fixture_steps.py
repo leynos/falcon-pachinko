@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
 import typing as typ
 
+import msgspec.json as msjson
 import pytest
 from pytest_bdd import given, scenario, then, when
 
-from falcon_pachinko import SimulatorConnection, WebSocketResource, WebSocketSimulator
+from falcon_pachinko import SimulatorConnection, WebSocketResource
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing only
-    import asyncio
     import collections.abc as cabc
 
     import falcon
@@ -44,19 +45,25 @@ class EchoResource(WebSocketResource):
 
     def __init__(self) -> None:
         self.received: list[object] = []
+        self.websocket: WebSocketLike | None = None
         EchoResource.instances.append(self)
 
     async def on_connect(
         self, req: falcon.Request, ws: WebSocketLike, **params: object
     ) -> bool:
-        """Handle the echo interaction for the simulator scenario."""
-        assert isinstance(ws, WebSocketSimulator), (
-            "the harness must inject the simulator instance"
-        )
-        payload = await ws.receive_json(dict)
+        """Approve the session; the router owns subsequent receives."""
+        del req, params
+        self.websocket = ws
+        return True
+
+    async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
+        """Record and acknowledge a message delivered by the router loop."""
+        payload = msjson.decode(message)
         self.received.append(payload)
-        await ws.send_json({"type": "ack", "payload": payload})
-        return False
+        await ws.send_media({
+            "type": "ack",
+            "payload": payload,
+        })
 
 
 @dc.dataclass(slots=True)
@@ -101,6 +108,7 @@ def when_connect(
             "/echo",
             initial_inbound=frames,
         ) as connection:
+            await asyncio.wait_for(connection.wait_for_sent_count(1), timeout=5)
             return connection
 
     connection = event_loop.run_until_complete(_open())
@@ -120,12 +128,12 @@ def then_resource_received(context: FixtureContext) -> None:
 
 @then("the simulator helper exposes the ack frame")
 def then_simulator_records_ack(context: FixtureContext) -> None:
-    """Ensure the helper decodes outbound JSON frames."""
+    """Ensure the helper exposes the structured acknowledgement media."""
     assert context.connection is not None, "a connection must have been opened"
-    assert context.connection.pop_sent_json() == {
+    assert context.connection.pop_sent() == {
         "type": "ack",
         "payload": {"type": "ping"},
-    }, "the connection must expose the decoded ack frame"
+    }, "the connection must expose the acknowledgement media"
 
 
 @then("the connection is closed by the fixture")

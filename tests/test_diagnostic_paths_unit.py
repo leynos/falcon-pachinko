@@ -312,6 +312,7 @@ async def test_harness_decode_error_omits_vendor_values() -> None:
         object(),
         _OriginalWebSocket(),
     )
+    assert connection.session is None, "legacy construction should omit the new session"
     with pytest.raises(
         ms.ValidationError, match="Failed to decode JSON payload"
     ) as caught:
@@ -345,6 +346,7 @@ async def test_text_frame_encoding_error_omits_raw_frame(path: str) -> None:
             simulator,
             object(),
             _OriginalWebSocket(),
+            None,
         )
 
     async def decode() -> None:

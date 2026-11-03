@@ -666,24 +666,6 @@ async def test_router_uses_falcons_uri_template_for_mounted_route() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("path", "expected"),
-    [("/ok", True), ("/oops", False)],
-    ids=["matching_path", "unmatched_path"],
-)
-async def test_try_route(path: str, *, expected: bool) -> None:
-    """_try_route should report whether the path matched its route."""
-    router = WebSocketRouter()
-    router.add_route("/ok", AcceptingResource)
-    router.mount("/")
-    route = router._routes[0]
-
-    req = make_req(path, "/")
-    handled = await router._try_route(route, req, DummyWS())
-    assert handled is expected, f"_try_route should return {expected} for path {path!r}"
-
-
-@pytest.mark.asyncio
 async def test_malformed_remaining_path_not_matched() -> None:
     """Paths without a slash after the prefix should not match."""
     router = WebSocketRouter()

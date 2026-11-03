@@ -8,12 +8,12 @@ import logging
 import pytest
 
 from falcon_pachinko import ClusterFanout, WebSocketConnectionManager
-from falcon_pachinko._router_session import _ConnectionSession
-from falcon_pachinko.hooks import HookCollection, HookManager
 from falcon_pachinko.testing import InMemoryFanoutTransport
+from falcon_pachinko.unittests.helpers import make_req
 from falcon_pachinko.unittests.router_session_helpers import (
     SessionResource,
     SessionSocket,
+    session_router,
 )
 from tests._stubs import RecordingWebSocket
 
@@ -90,15 +90,13 @@ async def test_disconnect_cleanup_emits_one_observation(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Idempotent cleanup has one observable completion without socket details."""
-    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._router_session")
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko._session_cleanup")
     resource = SessionResource()
     socket = SessionSocket()
-    hooks = HookManager(global_hooks=HookCollection(), resources=[resource])
-    session = _ConnectionSession(resource, socket, hooks)
-    async with session:
-        pass
-    async with session:
-        pass
+    session = await session_router(resource).negotiate(make_req("/session"), socket)
+    assert session is not None, "the registered route must return a session"
+    await session.aclose()
+    await session.aclose()
     completed = [
         record
         for record in caplog.records
