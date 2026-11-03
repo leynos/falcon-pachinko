@@ -29,8 +29,8 @@ def _require_struct_type(candidate: object) -> type[ms.Struct]:
     return candidate
 
 
-def _require_tagged_struct(struct: type[ms.Struct]) -> msinspect.StructType:
-    """Ensure ``struct`` declares the tag schema dispatch relies upon.
+def _require_tagged_struct(candidate: object) -> msinspect.StructType:
+    """Ensure ``candidate`` is a tagged, object-encoded Struct.
 
     Returns
     -------
@@ -40,8 +40,11 @@ def _require_tagged_struct(struct: type[ms.Struct]) -> msinspect.StructType:
     Raises
     ------
     TypeError
-        If ``struct`` is not tagged, or if it is encoded as a JSON array.
+        If ``candidate`` is not a tagged Struct, or is encoded as a JSON array.
     """
+    # Narrow before inspecting metadata: a non-struct member must fail on the
+    # membership check rather than inside ``msgspec.inspect``.
+    struct = _require_struct_type(candidate)
     info = msinspect.type_info(struct)
     if not isinstance(info, msinspect.StructType) or info.tag is None:
         msg = "schema Struct types must define a tag"
@@ -72,12 +75,8 @@ def validate_schema_types(schema: type) -> None:
     # Named ``members`` rather than ``types`` so the module import stays
     # visible in this scope.
     members = typ.get_args(schema) or (schema,)
-    kinds: set[type] = set()
-    for t in members:
-        # Narrow before inspecting metadata: a non-struct member must fail on
-        # the membership check rather than inside ``msgspec.inspect``.
-        struct = _require_struct_type(t)
-        kinds.add(type(_require_tagged_struct(struct).tag))
+    infos = [_require_tagged_struct(member) for member in members]
+    kinds = {type(info.tag) for info in infos}
     # msgspec accepts both integer and string tags, but rejects a union mixing
     # them -- and only when it first derives that union at decode time. Left
     # unchecked the schema would pass class creation and then break the receive
@@ -121,18 +120,48 @@ class SchemaDispatch:
             The selected Struct and its tag, or ``None`` when the frame has no
             usable tag or names no member.
         """
-        if self.tag_field not in payload:
-            return None
-        tag = payload[self.tag_field]
+        tag = payload.get(self.tag_field)
         # ``bool`` subclasses ``int``, so an identity check is what keeps JSON
         # ``true`` from selecting the integer tag ``1``. It also rejects any
-        # other tag kind the union did not declare.
-        if type(tag) is not self.tag_kind:
-            return None
-        member = self.members.get(tag)
+        # other tag kind the union did not declare, and keeps an unhashable
+        # payload value away from ``members.get``.
+        member = self.members.get(tag) if type(tag) is self.tag_kind else None
         if member is None:
             return None
         return member, tag
+
+
+def _schema_member_infos(schema: type) -> tuple[msinspect.StructType, ...]:
+    """Return the inspected Struct members of ``schema`` in declaration order.
+
+    ``type_info`` derives the union itself, which is what reports msgspec's
+    mixed-tag and mismatched-tag-field diagnostics for a schema installed after
+    class creation.
+
+    Returns
+    -------
+    tuple[msinspect.StructType, ...]
+        The inspected Struct members, in declaration order.
+    """
+    info = msinspect.type_info(schema)
+    validate_schema_types(schema)
+    if isinstance(info, msinspect.UnionType):
+        return typ.cast("tuple[msinspect.StructType, ...]", info.types)
+    return (typ.cast("msinspect.StructType", info),)
+
+
+def _tagged_member(member_info: msinspect.StructType) -> tuple[object, type[ms.Struct]]:
+    """Return ``member_info``'s declared tag and Struct class.
+
+    ``validate_schema_types`` has already rejected untagged members, so the tag
+    is present.
+
+    Returns
+    -------
+    tuple[object, type[msgspec.Struct]]
+        The member's declared tag and its Struct class.
+    """
+    return typ.cast("object", member_info.tag), member_info.cls
 
 
 @functools.cache
@@ -158,27 +187,12 @@ def schema_dispatch(schema: type) -> SchemaDispatch:
     ------
     TypeError
         If ``schema`` is not a valid tagged-Struct schema, or mixes tag kinds.
-    """
-    # ``type_info`` derives the union itself, which is what reports msgspec's
-    # mixed-tag and mismatched-tag-field diagnostics for a schema installed
-    # after class creation.
-    info = msinspect.type_info(schema)
-    validate_schema_types(schema)
-    if isinstance(info, msinspect.UnionType):
-        members_info = typ.cast("tuple[msinspect.StructType, ...]", info.types)
-    else:
-        members_info = (typ.cast("msinspect.StructType", info),)
-    tag_field = members_info[0].tag_field
-    if tag_field is None:  # pragma: no cover - validate_schema_types guarantees a tag
-        msg = "schema Struct types must define a tag"
-        raise TypeError(msg)
-    members: dict[object, type[ms.Struct]] = {}
-    for member_info in members_info:
-        tag = member_info.tag
-        if tag is None:  # pragma: no cover - validate_schema_types guarantees a tag
-            msg = "schema Struct types must define a tag"
-            raise TypeError(msg)
-        members[tag] = member_info.cls
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
+    members_info = _schema_member_infos(schema)
+    # ``validate_schema_types`` guarantees every member is tagged, so msgspec
+    # supplies a tag field name as well.
+    tag_field = typ.cast("str", members_info[0].tag_field)
+    members = dict(map(_tagged_member, members_info))
     return SchemaDispatch(
         tag_field=tag_field,
         tag_kind=type(members_info[0].tag),
@@ -189,19 +203,26 @@ def schema_dispatch(schema: type) -> SchemaDispatch:
     )
 
 
+def _register_struct_handler(
+    mapping: dict[type, HandlerInfo], info: HandlerInfo
+) -> None:
+    """Map ``info``'s payload Struct, rejecting a duplicate registration."""
+    payload_type = info.payload_type
+    if payload_type is None or not issubclass(payload_type, ms.Struct):
+        return
+    if mapping.get(payload_type) is not None:
+        handler = info.handler
+        handler_name: str = getattr(handler, "__qualname__", repr(handler))
+        msg = duplicate_payload_type_msg(payload_type, handler_name)
+        raise ValueError(msg)
+    mapping[payload_type] = info
+
+
 def populate_struct_handlers(cls: type[WebSocketResource]) -> dict[type, HandlerInfo]:
     """Create mapping of struct types to handlers for ``cls``."""
     mapping: dict[type, HandlerInfo] = {}
     for info in cls.handlers.values():
-        handler = info.handler
-        payload_type = info.payload_type
-        if payload_type is None or not issubclass(payload_type, ms.Struct):
-            continue
-        existing = mapping.get(payload_type)
-        if existing is not None:
-            handler_name: str = getattr(handler, "__qualname__", repr(handler))
-            raise ValueError(duplicate_payload_type_msg(payload_type, handler_name))
-        mapping[payload_type] = info
+        _register_struct_handler(mapping, info)
     return mapping
 
 
@@ -213,7 +234,7 @@ def requires_strict_validation(
 
 
 @functools.cache
-def _allowed_wire_keys(payload_type: type) -> frozenset[str] | None:
+def _allowed_wire_keys(payload_type: type) -> frozenset[str]:
     """Return the keys a strict frame may declare for ``payload_type``.
 
     ``msinspect.type_info`` walks the whole type graph, and schema mode now
@@ -227,13 +248,13 @@ def _allowed_wire_keys(payload_type: type) -> frozenset[str] | None:
 
     Returns
     -------
-    frozenset[str] | None
-        The encoded wire names plus the tag field, or ``None`` when
+    frozenset[str]
+        The encoded wire names plus the tag field, or an empty set when
         ``payload_type`` is not a Struct and therefore has no such contract.
     """
     info = msinspect.type_info(payload_type)
     if not isinstance(info, msinspect.StructType):
-        return None
+        return frozenset()
     # Compare wire names, not Python attribute names: ``rename`` changes what
     # a valid frame may contain. The tag field travels beside the fields, so it
     # is a declared key too.
@@ -270,8 +291,5 @@ def validate_strict_payload(
     """  # ruff: ignore[docstring-extraneous-exception] - raised by raise_unknown_fields
     if not requires_strict_validation(payload, payload_type, strict=strict):
         return
-    allowed = _allowed_wire_keys(payload_type)
-    if allowed is None:
-        return
-    if extra := set(payload) - allowed:
+    if extra := set(payload) - _allowed_wire_keys(payload_type):
         raise_unknown_fields(extra, expected_type=payload_type)
