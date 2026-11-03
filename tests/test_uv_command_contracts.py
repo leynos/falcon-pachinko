@@ -634,6 +634,40 @@ def test_command_scanner_rejects_parameter_expansion_uv_substitutions(
 @pytest.mark.parametrize(
     "script",
     [
+        'echo "$(echo ${value//(/x}) uv sync"',
+        'echo "$(echo ${value//)/x}) uv sync"',
+    ],
+    ids=("open-pattern", "close-pattern"),
+)
+def test_command_scanner_ignores_uv_text_after_parameter_substitutions(
+    script: str,
+) -> None:
+    """Text after a closed substitution in the same quote remains data."""
+    assert not unlocked_project_commands(script), (
+        "a balanced parameter expansion must not absorb following quoted data"
+    )
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        'echo "$(echo ${value//(/x})"; uv sync',
+        'echo "$(echo ${value//)/x})"; uv sync',
+    ],
+    ids=("open-pattern", "close-pattern"),
+)
+def test_command_scanner_finds_uv_after_balanced_parameter_substitutions(
+    script: str,
+) -> None:
+    """A closed substitution must leave following project commands visible."""
+    assert unlocked_project_commands(script) == [(1, "uv sync")], (
+        "parameter expansion parentheses must preserve later command boundaries"
+    )
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
         'echo "$(echo ${value//(/x; uv sync)"',
         'echo "$(uv sync"',
     ],
