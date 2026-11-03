@@ -250,9 +250,10 @@ a non-null JSON object with a `msgspec.Struct | None` annotation can raise
 `TypeError` under strict validation. As a workaround, use
 `@handles_message("type", strict=False)` or register the handler on its
 concrete resource class with
-`MyResource.add_handler(…, payload_type=Payload | None, strict=False)`, where
-`MyResource` is the `WebSocketResource` subclass used by the router. This
-relaxes strict `msgspec.Struct` field validation and enables non-strict
+`MyResource.add_handler("type", handler, payload_type=Payload | None,
+strict=False)`,
+where `MyResource` is the `WebSocketResource` subclass used by the router.
+This relaxes strict `msgspec.Struct` field validation and enables non-strict
 conversions, so use it only when that trade-off is acceptable.
 
 1) **Update connection manager usage:**
