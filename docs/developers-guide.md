@@ -377,16 +377,18 @@ strict, and then decodes the original frame into the resolved member with
 the union would discard undeclared fields before the strict decision, but
 keeping the generic mapping as the conversion input would lose wire-level
 detail: integer mapping keys would arrive as strings, `msgspec.Raw` fields as
-decoded JSON, and `Decimal` fields through a `float`. Do not fall back to
-converting that mapping when a lenient wire decode rejects a value: one field
-needing lax coercion would then change how its neighbours decode. The shared
-`validate_strict_payload` path compares top-level keys with the target's
-encoded field names and tag field; the check is shallow, so nested Structs keep
-their own `forbid_unknown_fields` semantics. `strict=False` skips that check
-and uses lax coercion in both dispatch modes. A `ValidationError` from
-validation or conversion routes to `on_unhandled`; a configuration `TypeError`
-(such as a mixed-tag union, an untagged Struct, or an `array_like` member) must
-propagate and must not reach `on_unhandled`. See
+decoded JSON, and neither the member's declared field types nor the handler's
+strictness would be applied. Inspection floats do decode as `Decimal`, so their
+values stay exact, but the mapping is still not the declared payload. Do not
+fall back to converting that mapping when a lenient wire decode rejects a
+value: one field needing lax coercion would then change how its neighbours
+decode. The shared `validate_strict_payload` path compares top-level keys with
+the target's encoded field names and tag field; the check is shallow, so nested
+Structs keep their own `forbid_unknown_fields` semantics. `strict=False` skips
+that check and uses lax coercion in both dispatch modes. A `ValidationError`
+from validation or conversion routes to `on_unhandled`; a configuration
+`TypeError` (such as a mixed-tag union, an untagged Struct, or an `array_like`
+member) must propagate and must not reach `on_unhandled`. See
 [ADR 003](adr-003-schema-mode-strict-validation.md).
 
 The inspection decode uses a `msgspec.json.Decoder` whose `float_hook` builds a

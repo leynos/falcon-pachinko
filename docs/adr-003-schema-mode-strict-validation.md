@@ -30,10 +30,12 @@ Decode schema frames generically and validate before conversion:
    `msgspec.json.decode`, passing the handler's strictness. The generically
    decoded mapping is inspection-only: converting it would lose wire-level
    detail, turning integer mapping keys into strings, `msgspec.Raw` fields into
-   decoded JSON, and `Decimal` fields into `float`-derived values. A fallback
-   to converting the mapping would also let one field that needs lax coercion
-   change how its neighbours decode, so the wire decode carries `strict`
-   directly.
+   decoded JSON, and leaving the member's declared field types and the
+   handler's strictness unapplied. Inspection floats do decode as `Decimal`, so
+   their values stay exact, but the mapping is still not the declared payload.
+   A fallback to converting the mapping would also let one field that needs lax
+   coercion change how its neighbours decode, so the wire decode carries
+   `strict` directly.
 
 Both dispatch modes now share one validate-then-convert path. `strict=False`
 has the same meaning in both: undeclared top-level fields are ignored and

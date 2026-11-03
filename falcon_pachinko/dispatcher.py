@@ -184,10 +184,13 @@ def find_conventional_handler(
 def _convert_payload(context: HandlerInvocationContext, payload_type: type) -> object:
     """Convert the retained payload, or re-decode a schema frame from the wire."""
     # Schema dispatch decodes frames generically so undeclared keys can be
-    # inspected. That mapping has already lost wire-level detail: integer
-    # mapping keys arrive as strings, ``msgspec.Raw`` fields arrive as decoded
-    # JSON, and ``Decimal`` fields pass through a ``float``. Re-decoding the
-    # original frame into the resolved member restores msgspec's wire semantics.
+    # inspected. That mapping is inspection-only: integer mapping keys arrive as
+    # strings, ``msgspec.Raw`` fields arrive as decoded JSON, and neither the
+    # member's declared field types nor the handler's strictness are applied.
+    # Inspection floats do decode through ``decimal.Decimal``, so their values
+    # stay exact, but the mapping is still not the declared payload. Re-decoding
+    # the original frame into the resolved member restores msgspec's wire
+    # semantics.
     #
     # The wire decode carries the handler's strictness rather than falling back
     # to converting the mapping. A fallback would let one field that needs lax
