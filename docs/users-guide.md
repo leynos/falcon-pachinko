@@ -91,9 +91,7 @@ class ChatResource(WebSocketResource):
 
     @handles_message("chat.message")
     async def handle_message(self, ws, payload: ChatPayload) -> None:
-        # The router leaves an absent payload as None.
-        if payload is None:
-            return
+        # An omitted or null payload is rejected before this handler runs.
         await ws.send_media({"type": "echo", "text": payload.text})
 
 
@@ -170,9 +168,26 @@ app.add_route("/ws/{rest:path}", RouterAdapter(router))
   to accept, or return a falsey value to reject the connection.
 - Each connection receives a **fresh resource instance** and a **shared state
   proxy** scoped to that connection.
-- With `receive_loop=True`, the router accepts approved connections, runs
-  `on_session_start()`, then receives and dispatches frames sequentially until
-  the session ends.
+- With `receive_loop=True` (the default), the router accepts approved
+  connections, runs `on_session_start()`, then receives and dispatches frames
+  sequentially until the session ends.
+- Pass `receive_loop=False` explicitly to return after acceptance and leave
+  receives and cleanup to the application.
+- When `payload` is present and valid, the `ChatPayload` annotation makes the
+  router pass a `ChatPayload` instance to the handler. An omitted or JSON
+  `null` payload is rejected before the handler runs, so no frame is sent and
+  the connection stays usable.
+- An unannotated handler receives the decoded JSON value directly, such as a
+  `dict` for an object, a list for an array, or `None` when the payload is
+  absent.
+
+Save the Python snippet as `quickstart.py`. An ASGI server is required to serve
+the WebSocket connection; Uvicorn is included in the `examples` extra or the
+`dev` dependency group.
+
+```sh
+uvicorn quickstart:app
+```
 
 ### The `add_route` signature
 
@@ -481,6 +496,23 @@ class ChatResource(WebSocketResource):
   frame is dispatched. Returning normally from `on_unhandled` keeps the session
   open; application code can call `await ws.close(code=...)` when its policy
   requires closure.
+
+For messages without a schema, the envelope's `payload` may be omitted or set
+to JSON `null`; both decode to `None` and cannot be distinguished. A typed
+handler validates either value against its annotation. Annotations that reject
+`None` send both to `on_unhandled`; use `T | None` to accept a missing payload.
+`T | None` and `typing.Any` accept both values as `None`. Parameter defaults
+are never applied, and untyped handlers still receive `None`.
+
+Until [#283](https://github.com/leynos/falcon-pachinko/issues/283) is fixed,
+however, a non-null JSON object with a `msgspec.Struct | None` annotation can
+raise `TypeError` under strict validation. As a workaround, use
+`@handles_message("type", strict=False)` or register the handler on its
+concrete resource class with
+`MyResource.add_handler("type", handler, payload_type=T | None, strict=False)`,
+where `MyResource` is the `WebSocketResource` subclass routed by the
+application. This relaxes strict `msgspec.Struct` field checks and enables
+non-strict conversions, so use it only when that trade-off is acceptable.
 
 Falcon's default WebSocket media handlers may decode frames before
 `receive_media()` returns them. Raw-frame media setup is required when dispatch

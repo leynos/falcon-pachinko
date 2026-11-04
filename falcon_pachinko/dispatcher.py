@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses as dc
 import inspect
 import logging
+import time
 import typing as typ
 
 import msgspec as ms
@@ -24,12 +25,14 @@ from .utils import to_snake_case
 logger = logging.getLogger(__name__)
 
 if typ.TYPE_CHECKING:  # pragma: no cover - type hints only
+    import collections.abc as cabc
+
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
 
 
 class Envelope(ms.Struct, frozen=True):
-    """Simple envelope for messages without a schema."""
+    """Envelope where omitted and null payloads both decode to ``None``."""
 
     type: str
     payload: typ.Any | None = None
@@ -37,13 +40,21 @@ class Envelope(ms.Struct, frozen=True):
 
 @dc.dataclass(slots=True, repr=False)
 class HandlerInvocationContext:
-    """Context for invoking a message handler."""
+    """Context for invoking a message handler.
+
+    Attributes
+    ----------
+    monotonic_clock : cabc.Callable[[], float]
+        Clock used to measure typed-payload rejection time. Defaults to
+        :func:`time.monotonic`.
+    """
 
     resource: WebSocketResource
     ws: WebSocketLike
     raw: str | bytes
     handler_info: HandlerInfo
     payload: object
+    monotonic_clock: cabc.Callable[[], float] = time.monotonic
 
     def __repr__(self) -> str:
         """Describe the invocation without displaying raw or decoded values."""
@@ -124,11 +135,15 @@ def find_conventional_handler(
 
 
 async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
-    """Convert ``payload`` to the handler's type and invoke it."""
+    """Validate typed payloads, including omitted and null values, then invoke.
+
+    Omission and null are equivalent; handler parameter defaults are not applied.
+    """
     payload_type = context.handler_info.payload_type
     payload = context.payload
-    failed = False
-    if payload_type is not None and payload is not None:
+    rejected = False
+    if payload_type is not None:
+        started = context.monotonic_clock()
         try:
             validate_strict_payload(
                 payload, payload_type, strict=context.handler_info.strict
@@ -138,9 +153,25 @@ async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
                 type=payload_type,
                 strict=context.handler_info.strict,
             )
-        except ms.ValidationError:
-            failed = True
-    if failed:
+        except ms.ValidationError as exc:
+            duration_seconds = max(0.0, context.monotonic_clock() - started)
+            # Application telemetry can count rejections without seeing frames
+            # or payload values; the default on_unhandled is silent.
+            logger.debug(
+                "Operation observation",
+                extra={
+                    "operation": "dispatch",
+                    "outcome": "rejected",
+                    "duration_seconds": duration_seconds,
+                    "exception_type": _type_name(exc),
+                    "expected_type": _expected_type_label(context.handler_info),
+                },
+            )
+            rejected = True
+    if rejected:
+        # The fallback runs outside the ``except`` block so an error it raises
+        # does not retain the vendor validation error as its implicit
+        # ``__context__``; diagnostics tests rely on that detachment.
         await context.resource.on_unhandled(context.ws, context.raw)
         return
     await context.handler_info.handler(context.resource, context.ws, payload)

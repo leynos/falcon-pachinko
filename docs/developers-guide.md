@@ -199,16 +199,30 @@ cleanup may emit standard DEBUG events with fixed fields `operation`, `outcome`,
 fixed operation and outcome values for publication, membership maintenance,
 listener termination and disconnect cleanup. Keep successful message decoding
 and local delivery silent, distinguish decode failures from delivery failures,
-and emit no unconditional per-frame events. Exclude identifiers, payloads,
-exception values and tracebacks. Host logging handlers may aggregate metrics or
-start and end spans using task or context; broker decorators may measure queue
-waits and operations, while existing lifecycle hooks support resource
-instrumentation. Filter, sample or aggregate to bound event volume because
-publication and lease renewal are frequent and DEBUG is off by default. Metrics
-must use fixed operation and outcome dimensions, never room, message,
-connection or node IDs as labels. Keep instrumentation optional and
-host-configured, with no mandatory SDK, public constructor changes or
-`WorkerController` changes.
+and emit no unconditional per-frame events. Envelope payload conversion is
+observed too: when `convert_and_invoke_handler` catches a
+`msgspec.ValidationError`, it emits one DEBUG `Operation observation` record
+whose `operation` is `dispatch` and `outcome` is `rejected`, carrying the
+bounded `expected_type` label and `exception_type`. Schema decode failures that
+reach `on_unhandled` before this conversion step do not emit that record.
+Accepted payloads, including optional payloads, emit nothing. Exclude
+identifiers, payloads, exception values and tracebacks. Host logging handlers
+may aggregate metrics or start and end spans using task or context; broker
+decorators may measure queue waits and operations, while existing lifecycle
+hooks support resource instrumentation. Filter, sample or aggregate to bound
+event volume because publication and lease renewal are frequent and DEBUG is
+off by default. Metrics must use fixed operation and outcome dimensions, never
+room, message, connection or node IDs as labels. Keep instrumentation optional
+and host-configured, with no mandatory SDK, public resource or router
+constructor changes, or `WorkerController` changes.
+
+Dispatch rejection timing uses `HandlerInvocationContext.monotonic_clock`,
+typed as `collections.abc.Callable[[], float]` and defaulting to
+`time.monotonic`. `convert_and_invoke_handler` reads it around typed-payload
+conversion so the rejection observation reports a non-negative duration.
+Dispatcher-created contexts use the default. Tests that construct
+`HandlerInvocationContext` directly can inject controlled readings to verify
+exact and clamped durations without patching the dispatcher module clock.
 
 ## Dependency bounds
 
@@ -370,6 +384,10 @@ temptation to catch it at the decode site: widening the handler would leave the
 invalid schema in place and disguise a schema bug as a malformed message.
 
 ## Safe diagnostics
+
+`convert_and_invoke_handler` converts every typed envelope payload, including
+`None` from omission or JSON `null`. Validation failures reach `on_unhandled`;
+handler defaults are not applied.
 
 Framework diagnostics must not call `repr()` or `str()` on raw payloads,
 decoded caller values, or other caller-controlled objects. Use the shared
