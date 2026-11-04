@@ -36,6 +36,7 @@ from tests._makefile import (
     run_command,
     tool_environment,
 )
+from tests.workflow_contracts.strict_yaml import load_strict_yaml
 
 if typ.TYPE_CHECKING:
     import pathlib
@@ -43,6 +44,7 @@ if typ.TYPE_CHECKING:
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 UV_LOCK = REPO_ROOT / "uv.lock"
 DEPENDABOT = REPO_ROOT / ".github" / "dependabot.yml"
+COVERAGE_MAIN = REPO_ROOT / ".github" / "workflows" / "coverage-main.yml"
 
 #: The package ecosystems Dependabot offers for Python dependencies. It reads
 #: `requirements*.txt` and the older `pyproject.toml` layout under `pip`, and
@@ -89,8 +91,8 @@ def _rule_declaration(target: str) -> str:
     return match.group(0)
 
 
-def test_uv_lock_is_committed_and_not_ignored() -> None:
-    """The lockfile must be a tracked file, not a local convenience.
+def test_uv_lock_is_committed_and_gitignore_does_not_name_it() -> None:
+    """The lockfile must be tracked without an ignore rule naming it.
 
     A lockfile that exists but is ignored is worse than none: it pins the
     author's environment while every other checkout keeps resolving freely,
@@ -113,6 +115,21 @@ def test_uv_lock_is_committed_and_not_ignored() -> None:
     assert tracked.returncode == 0, (
         "uv.lock must be committed; `git ls-files --error-unmatch uv.lock` "
         f"failed: {tracked.stderr.strip()}"
+    )
+
+    ignore_lines = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    matches = [
+        (line_number, line)
+        for line_number, line in enumerate(ignore_lines, start=1)
+        if re.search(r"\buv\.lock\b", line)
+    ]
+
+    assert not matches, (
+        ".gitignore must not mention the committed uv.lock, including in "
+        "comments:\n"
+        + "\n".join(
+            f".gitignore:{line_number}: {line}" for line_number, line in matches
+        )
     )
 
 
@@ -155,6 +172,85 @@ def test_make_build_installs_the_locked_dependency_set() -> None:
     assert "uv.lock" in prerequisites.split(), (
         "uv.lock must be a prerequisite of build, so a lockfile change is "
         f"visible in the build graph; the rule reads:\n{_rule_declaration('build')}"
+    )
+
+
+def test_make_test_installs_the_examples_extra() -> None:
+    """The standard test target must run example-only tests instead of skipping."""
+    recipe = makefile_recipe("test")
+
+    assert "uv run --locked --extra examples pytest -v" in recipe, (
+        "make test must request the examples extra for tests that need "
+        f"aiosqlite; its recipe is:\n{recipe}"
+    )
+
+
+def test_main_coverage_checks_the_lock_before_the_shared_action() -> None:
+    """The external main coverage action must be preceded by a lock check."""
+    workflow = typ.cast(
+        "dict[str, dict[str, dict[str, list[dict[str, object]]]]]",
+        load_strict_yaml(COVERAGE_MAIN.read_text(encoding="utf-8")),
+    )
+    steps = workflow["jobs"]["coverage-upload"]["steps"]
+    step_names = [step.get("name") for step in steps]
+
+    assert "Check project lock" in step_names, (
+        ".github/workflows/coverage-main.yml must check the committed lock "
+        "before calling the pinned shared coverage action"
+    )
+    assert "Generate coverage" in step_names, (
+        ".github/workflows/coverage-main.yml must keep its coverage step"
+    )
+    lock_step_index = step_names.index("Check project lock")
+    coverage_step_index = step_names.index("Generate coverage")
+    assert steps[lock_step_index].get("run") == "uv lock --check", (
+        ".github/workflows/coverage-main.yml must use `uv lock --check` "
+        "for the external action's project sync"
+    )
+    lock_step = steps[lock_step_index]
+    assert "if" not in lock_step, (
+        ".github/workflows/coverage-main.yml must not skip the lock check"
+    )
+    assert "continue-on-error" not in lock_step, (
+        ".github/workflows/coverage-main.yml must let the lock check fail the job"
+    )
+    assert lock_step_index < coverage_step_index, (
+        ".github/workflows/coverage-main.yml must check the lock before "
+        "Generate coverage"
+    )
+
+
+def test_contributor_guidance_recommends_only_locked_syncs() -> None:
+    """Contributor-facing install commands must use the reviewed lockfile."""
+    guidance_files = [
+        REPO_ROOT / "AGENTS.md",
+        REPO_ROOT / "README.md",
+        REPO_ROOT / "docs" / "developers-guide.md",
+        REPO_ROOT / "docs" / "release-workflow.md",
+        *sorted((REPO_ROOT / ".rules").glob("*.md")),
+    ]
+    violations = [
+        f"{path.relative_to(REPO_ROOT)}:{line_number}: {line.strip()}"
+        for path in guidance_files
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        )
+        if re.search(r"\buv\s+sync\b", line) and "--locked" not in line
+    ]
+
+    assert not violations, (
+        "contributor guidance must recommend `uv sync --locked`:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_developer_guide_has_the_authoritative_lock_policy() -> None:
+    """Keep the lock-file policy in one discoverable guide subsection."""
+    guide = (REPO_ROOT / "docs" / "developers-guide.md").read_text(encoding="utf-8")
+
+    assert re.search(r"^## Lock-file policy$", guide, flags=re.MULTILINE), (
+        "docs/developers-guide.md must contain the authoritative "
+        "`## Lock-file policy` subsection"
     )
 
 
@@ -237,6 +333,21 @@ _COLLIDING_MODULE = "test_shared_name.py"
 #: That module's body. One test is enough: collection, not execution, is what
 #: raises the import-path mismatch.
 _COLLIDING_TEST = "def test_placeholder() -> None:\n    assert True\n"
+
+
+def test_mutmut_excludes_repository_contract_modules() -> None:
+    """Repository contracts must not run against mutmut's incomplete copy.
+
+    The command contracts read the repository-root Makefile, which mutmut
+    does not copy into its baseline environment.
+    """
+    configuration = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    mutation_args = configuration["tool"]["mutmut"]["pytest_add_cli_args"]
+
+    assert "--ignore=tests/test_uv_command_contracts.py" in mutation_args, (
+        "the uv command contracts read the root Makefile, which mutmut does "
+        "not copy into its test environment"
+    )
 
 
 def test_pytest_does_not_collect_the_generated_mutants_tree(
