@@ -159,7 +159,7 @@ class SimulatorRouterHarness:
 
     @staticmethod
     def _normalize_mount(prefix: str) -> str:
-        """Return a canonical mount prefix with a leading slash and no trailing one."""
+        """Return the mount prefix with a leading slash and no trailing one, except `/`."""
         if not prefix:
             return "/"
         if not prefix.startswith("/"):

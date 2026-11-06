@@ -27,7 +27,7 @@ class _UnreadyServer:
     """Keep an owned serving task alive without announcing readiness."""
 
     def __init__(self) -> None:
-        """Create the unset startup, serving, and stop events."""
+        """Start with `started` false and unset serving and stopped events."""
         self.started = False
         self.serving = asyncio.Event()
         self.stopped = asyncio.Event()

@@ -706,13 +706,17 @@ gates with `make markdownlint` and `make spelling`.
 
 ## Lint and Typecheck Toolchain
 
-`make lint` provisions nose, then runs Ruff, both Pylint passes, ambrleaks and
-the blocking nose duplication gate. `make typecheck` runs
-`ty check --extra-search-path .` against `falcon_pachinko`, `tests`, `tools`,
-and the release helpers `scripts/release_assets.py`,
-`scripts/release_assets_cli.py`, `scripts/release_version.py` and
-`scripts/release_provenance.py`. These are the complete local and CI checks;
-they need no wrapper or second manual step.
+`make lint` provisions nose, then runs Ruff, interrogate (`--fail-under 100`
+over `falcon_pachinko`, `examples`, `scripts`, `tests` and `tools`, so every
+module, class and function needs a docstring), both Pylint passes, ambrleaks
+and the blocking nose duplication gate. The one `@typ.overload`ed method,
+`notify_before_disconnect`, is ignored by name in `[tool.interrogate]` because
+interrogate does not recognise the `typ` alias and Ruff (D418) forbids a
+docstring on a stub. `make typecheck` runs `ty check --extra-search-path .`
+against `falcon_pachinko`, `tests`, `tools`, and the release helpers
+`scripts/release_assets.py`, `scripts/release_assets_cli.py`,
+`scripts/release_version.py` and `scripts/release_provenance.py`. These are the
+complete local and CI checks; they need no wrapper or second manual step.
 
 Ruff is pinned at 0.16.4 via `RUFF_VERSION` in the Makefile, and the same
 version is installed in `.github/workflows/ci.yml` with

@@ -115,11 +115,11 @@ def test_duplicate_handler_raises() -> None:
 
             @handles_message("dup")
             async def h1(self, ws: WebSocketLike, payload: object) -> None:
-                """Register the first handler for the duplicated tag."""
+                """Stub the first handler; the decorator registers it for the duplicated tag."""
 
             @handles_message("dup")
             async def h2(self, ws: WebSocketLike, payload: object) -> None:
-                """Register the second handler for the duplicated tag."""
+                """Stub the second handler; the decorator registers it for the duplicated tag."""
 
 
 def test_missing_payload_param_raises() -> None:
