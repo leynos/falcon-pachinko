@@ -8,9 +8,10 @@ passes a lone gap in a large repository), and CI must have uv before it runs
 target against a stub tool, so a deleted flag, a dropped prerequisite or a
 guard that stops failing breaks a test rather than silently restoring the gap.
 
-The one overloaded method is excluded by name in `pyproject.toml`, because
-interrogate does not recognise this repository's `typ.overload` alias. The
-exclusion is held to that name, and its implementation is held to a docstring.
+The one overloaded method name is excluded in `pyproject.toml`, because
+interrogate does not recognize this repository's `typ.overload` alias. The
+exclusion is held to that name, and every definition of the name that is not an
+overload stub is held to a docstring.
 
 Run via ``make test-workflow-contracts``.
 """
@@ -31,7 +32,6 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = ROOT / "Makefile"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
-HOOKS = ROOT / "falcon_pachinko" / "hooks.py"
 OVERLOADED = "notify_before_disconnect"
 
 
@@ -105,7 +105,7 @@ def test_the_tool_is_pinned_and_run_through_uv() -> None:
 
 
 def test_the_flags_demand_a_full_exact_report() -> None:
-    """Exactly: every definition printed, threshold 100, stubs when present.
+    """Exactly: every non-excluded definition printed, threshold 100.
 
     Equality, not a deny-list: any other flag (an ignore or exclude option, or
     `-q` and `-o`, which suppress or redirect the report the guard reads) could
@@ -129,8 +129,8 @@ def test_every_python_directory_is_a_target() -> None:
     assert not uncovered, f"add these to INTERROGATE_TARGETS: {uncovered}"
 
 
-def test_the_configuration_excludes_only_the_overloaded_method() -> None:
-    """The pyproject exclusion names exactly one method, anchored."""
+def test_the_configuration_excludes_only_the_overloaded_name() -> None:
+    """The pyproject exclusion is one anchored name, matched wherever it occurs."""
     config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     settings = config["tool"]["interrogate"]
     assert settings.get("ignore-regex") == [f"^{OVERLOADED}$"], (
@@ -140,26 +140,29 @@ def test_the_configuration_excludes_only_the_overloaded_method() -> None:
     assert not forbidden & set(settings), "no other exclusion may relax the gate"
 
 
-def test_the_excluded_method_keeps_a_documented_implementation() -> None:
-    """The exclusion hides the overload stubs, so it must not hide the body.
+def test_every_non_overload_definition_of_the_excluded_name_is_documented() -> None:
+    """The exclusion hides the overload stubs, so it must not hide a body.
 
-    interrogate skips every definition of the excluded name, the implementation
-    included, so the presence of its docstring is checked here.
+    interrogate skips every class or function of the excluded name in every
+    file, the implementation included, so each such definition that is not an
+    overload stub is checked for a docstring here.
     """
-    tree = ast.parse(HOOKS.read_text(encoding="utf-8"))
-    definitions = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef)
-        and node.name == OVERLOADED
-    ]
-    implementations = [
-        node
-        for node in definitions
-        if not any("overload" in ast.unparse(d) for d in node.decorator_list)
-    ]
-    assert len(implementations) == 1, "expected one implementation and its overloads"
-    assert ast.get_docstring(implementations[0]), f"{OVERLOADED} needs a docstring"
+    stubs: list[str] = []
+    undocumented: list[str] = []
+    for name in _tracked("*.py"):
+        tree = ast.parse((ROOT / name).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef | ast.ClassDef)
+                and node.name == OVERLOADED
+            ):
+                continue
+            if any("overload" in ast.unparse(d) for d in node.decorator_list):
+                stubs.append(f"{name}:{node.lineno}")
+            elif not ast.get_docstring(node):
+                undocumented.append(f"{name}:{node.lineno}")
+    assert stubs, f"expected overload stubs of {OVERLOADED}; is the exclusion stale?"
+    assert not undocumented, f"{OVERLOADED} needs a docstring at {undocumented}"
 
 
 def test_ci_installs_uv_before_it_runs_make_lint() -> None:
@@ -220,7 +223,7 @@ def test_the_target_passes_the_configured_flags_and_targets(tmp_path: Path) -> N
 
 
 def test_the_target_fails_when_the_tool_fails(tmp_path: Path) -> None:
-    """The tool's own non-zero status is kept."""
+    """A failing tool fails the target."""
     result = _run_target(tmp_path, "echo 'FAILED'\nexit 1\n")
     assert result.returncode != 0, "a failing tool must fail the target"
 
@@ -233,7 +236,7 @@ def test_the_target_fails_when_the_tool_fails(tmp_path: Path) -> None:
 def test_the_target_fails_on_a_missed_row_the_percentage_hid(
     tmp_path: Path, cell: str
 ) -> None:
-    """Rounded to 100.0% with exit 0, a MISSED row still fails the target.
+    """A MISSED row in a report from a successful run still fails the target.
 
     The guard must not depend on how many spaces pad the status cell.
     """
