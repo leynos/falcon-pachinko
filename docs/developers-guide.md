@@ -711,7 +711,7 @@ over `falcon_pachinko`, `examples`, `scripts`, `tests` and `tools`, so every
 module, class and function needs a docstring), both Pylint passes, ambrleaks
 and the blocking nose duplication gate. The one `@typ.overload`ed method,
 `notify_before_disconnect`, is ignored by name in `[tool.interrogate]` because
-interrogate does not recognise the `typ` alias and Ruff (D418) forbids a
+interrogate does not recognize the `typ` alias and Ruff (D418) forbids a
 docstring on a stub. `make typecheck` runs `ty check --extra-search-path .`
 against `falcon_pachinko`, `tests`, `tools`, and the release helpers
 `scripts/release_assets.py`, `scripts/release_assets_cli.py`,
