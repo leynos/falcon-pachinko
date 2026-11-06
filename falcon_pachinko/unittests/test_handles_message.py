@@ -111,11 +111,15 @@ def test_duplicate_handler_raises() -> None:
         class BadResource(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
             WebSocketResource
         ):
-            @handles_message("dup")
-            async def h1(self, ws: WebSocketLike, payload: object) -> None: ...
+            """Resource that registers two handlers for the same message tag."""
 
             @handles_message("dup")
-            async def h2(self, ws: WebSocketLike, payload: object) -> None: ...
+            async def h1(self, ws: WebSocketLike, payload: object) -> None:
+                """Register the first handler for the duplicated tag."""
+
+            @handles_message("dup")
+            async def h2(self, ws: WebSocketLike, payload: object) -> None:
+                """Register the second handler for the duplicated tag."""
 
 
 def test_missing_payload_param_raises() -> None:
@@ -129,10 +133,13 @@ def test_missing_payload_param_raises() -> None:
         class BadSig(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
             WebSocketResource
         ):
+            """Resource whose handler signature omits the payload parameter."""
+
             @handles_message(  # pyright: ignore[reportArgumentType]  # deliberately bad signature under test
                 "oops"
             )
-            async def bad(self, ws: WebSocketLike) -> None: ...
+            async def bad(self, ws: WebSocketLike) -> None:
+                """Declare a handler without a payload parameter, which is rejected."""
 
 
 def test_ambiguous_payload_param_raises() -> None:
@@ -142,13 +149,16 @@ def test_ambiguous_payload_param_raises() -> None:
         class Ambiguous(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
             WebSocketResource
         ):
+            """Resource whose handler has two annotated candidate payloads."""
+
             @handles_message("amb")
             async def bad(
                 self,
                 ws: WebSocketLike,
                 first: int,
                 second: str,
-            ) -> None: ...
+            ) -> None:
+                """Declare a handler with two annotated payload candidates."""
 
 
 def test_decorating_lifecycle_callback_is_rejected() -> None:
@@ -162,10 +172,11 @@ def test_decorating_lifecycle_callback_is_rejected() -> None:
         class DecoratedDisconnect(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
             WebSocketResource
         ):
+            """Resource that decorates a reserved disconnect callback."""
+
             @handles_message("disconnect")
-            async def on_disconnect(
-                self, ws: WebSocketLike, payload: object
-            ) -> None: ...
+            async def on_disconnect(self, ws: WebSocketLike, payload: object) -> None:
+                """Declare a handler under the reserved disconnect callback name."""
 
 
 def test_decorating_on_session_start_callback_is_rejected() -> None:
@@ -175,10 +186,13 @@ def test_decorating_on_session_start_callback_is_rejected() -> None:
         class DecoratedAccepted(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
             WebSocketResource
         ):
+            """Resource that decorates a reserved session-start hook."""
+
             @handles_message("accepted")
             async def on_session_start(
                 self, ws: WebSocketLike, payload: object
-            ) -> None: ...
+            ) -> None:
+                """Declare a handler under the reserved session-start hook name."""
 
 
 def test_decorating_lifecycle_name_under_unrelated_tag_is_rejected() -> None:
@@ -194,8 +208,11 @@ def test_decorating_lifecycle_name_under_unrelated_tag_is_rejected() -> None:
         class DecoratedConnect(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
             WebSocketResource
         ):
+            """Resource that decorates on_connect under an unrelated tag."""
+
             @handles_message("anything")
-            async def on_connect(self, ws: WebSocketLike, payload: object) -> None: ...
+            async def on_connect(self, ws: WebSocketLike, payload: object) -> None:
+                """Declare a handler under the reserved on_connect name."""
 
 
 def test_decorating_real_lifecycle_signature_is_rejected() -> None:
@@ -212,12 +229,15 @@ def test_decorating_real_lifecycle_signature_is_rejected() -> None:
         class DecoratedRealConnect(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
             WebSocketResource
         ):
+            """Resource that decorates the real on_connect lifecycle signature."""
+
             @handles_message(  # ty: ignore[invalid-argument-type]  # the real lifecycle signature returns bool
                 "anything"
             )
             async def on_connect(
                 self, req: object, ws: WebSocketLike, **params: object
             ) -> bool:
+                """Declare the real on_connect lifecycle signature as a handler."""
                 return True
 
 
@@ -253,6 +273,8 @@ def test_decorated_handler_under_reserved_name_is_rejected() -> None:
         class DescriptorAlias(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
             WebSocketResource
         ):
+            """Resource that stores a message descriptor under a reserved name."""
+
             async def cleanup(self, ws: WebSocketLike, close_code: int) -> None:
                 """Stand in for a lifecycle callback under a neutral name."""
 
@@ -431,6 +453,8 @@ def test_lifecycle_predicate_recognises_every_rejected_shape() -> None:
     partial_disconnect = functools.partial(LifecycleParent.on_disconnect)
 
     class Aliased(WebSocketResource):
+        """Resource that exposes its disconnect callback under another name."""
+
         async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
             """Stand in for the lifecycle callback under test."""
 
@@ -740,6 +764,7 @@ def test_unannotated_payload_type_is_none() -> None:
         """A resource whose handler intentionally omits its payload type."""
 
         def __init__(self) -> None:
+            """Create the resource with no received payload recorded yet."""
             self.received: object | None = None
 
         @handles_message("unannotated")

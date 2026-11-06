@@ -186,8 +186,15 @@ check-fmt: uv $(MDTABLEFIX) ## Verify formatting
 	$(RUFF) format --check
 	$(MDTABLEFIX) --check $(MDTABLEFIX_SELECT) $(MDTABLEFIX_RULES)
 
+# Docstring presence for every Python file the repository owns. Ruff keeps docstring
+# style; interrogate only checks that a docstring exists.
+INTERROGATE_VERSION ?= 1.7.0
+INTERROGATE ?= $(UV) tool run --from interrogate==$(INTERROGATE_VERSION) interrogate --fail-under 100
+INTERROGATE_TARGETS ?= falcon_pachinko examples scripts tests tools
+
 lint: uv install-nose ## Run linters
 	$(RUFF) check .
+	$(INTERROGATE) $(INTERROGATE_TARGETS)
 	$(MAKE) --no-print-directory lint-pylint
 	$(MAKE) --no-print-directory lint-df12
 	$(DUPLICATION_GATE) check

@@ -92,6 +92,7 @@ class WebSocketTestSession:
         path: str,
         trace: list[TraceEvent] | None,
     ) -> None:
+        """Wrap ``connection`` for ``path``, recording into ``trace`` if given."""
         self._connection = connection
         self.path = path
         self.trace = trace

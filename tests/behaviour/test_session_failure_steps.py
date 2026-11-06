@@ -56,6 +56,7 @@ def when_handler_raises(context: LiveScenario) -> LiveScenario:
     """Trigger a real handler exception on an already accepted WebSocket."""
 
     async def exercise() -> None:
+        """Connect, send a frame that makes the handler fail, and await the close."""
         await connect(context)
         assert context.session is not None, _ASSERTION_FAILURE
         await asyncio.wait_for(context.session.send_json({"type": "boom"}), timeout=5)
@@ -122,6 +123,7 @@ def when_server_stops_idle(context: LiveScenario) -> LiveScenario:
     """Stop Uvicorn while a client remains accepted and idle."""
 
     async def exercise() -> None:
+        """Connect, stop the server, and record the close code the client sees."""
         await connect(context)
         conn_id = context.recorder.connection_ids[-1]
         await context.server.stop()
@@ -156,6 +158,7 @@ def when_server_stops_blocked(context: LiveScenario) -> LiveScenario:
     """Cancel a live session task while its resource handler is blocked."""
 
     async def exercise() -> None:
+        """Connect, block the handler, stop the server, and await the disconnect."""
         await connect(context)
         assert context.session is not None, _ASSERTION_FAILURE
         await asyncio.wait_for(context.session.send_json({"type": "block"}), timeout=5)

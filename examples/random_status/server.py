@@ -45,6 +45,7 @@ except ImportError:
         """Falcon ASGI App with a minimal lifespan decorator (local fallback)."""
 
         def __init__(self) -> None:
+            """Create the app with no lifespan handler registered yet."""
             super().__init__()
             self._lifespan_handler: (
                 cabc.Callable[[LifespanApp], cl.AbstractAsyncContextManager[None]]
@@ -81,7 +82,8 @@ if typ.TYPE_CHECKING:
             resource: type[WebSocketResource] | cabc.Callable[..., WebSocketResource],
             *args: object,
             **kwargs: object,
-        ) -> None: ...
+        ) -> None:
+            """Register a WebSocket resource under the given URI template."""
 
 
 def _resolve_as[T](container: ServiceContainer, name: str, expected: type[T]) -> T:
@@ -94,6 +96,7 @@ def _resolve_as[T](container: ServiceContainer, name: str, expected: type[T]) ->
 
 
 async def _setup_db() -> aiosqlite.Connection:
+    """Open an in-memory SQLite database seeded with a ready status row."""
     conn = await aiosqlite.connect(":memory:")
     await conn.execute("CREATE TABLE status(value TEXT)")
     await conn.execute("INSERT INTO status(value) VALUES('ready')")
@@ -132,6 +135,7 @@ class StatusResource(WebSocketResource):
         conn_mgr: WebSocketConnectionManager,
         db: aiosqlite.Connection,
     ) -> None:
+        """Store the connection manager and database used by this resource."""
         self._conn_mgr = conn_mgr
         self._db = db
         self._conn_id: str | None = None
@@ -170,6 +174,7 @@ class StatusEndpoint:
     """HTTP endpoint for retrieving the current status value."""
 
     def __init__(self, container: ServiceContainer) -> None:
+        """Store the container from which the database service is resolved."""
         self._container = container
 
     async def on_get(self, req: falcon.Request, resp: falcon.Response) -> None:
@@ -195,6 +200,7 @@ def create_app() -> falcon_asgi.App:
 
     @app.lifespan
     async def lifespan(app_instance: LifespanApp) -> cabc.AsyncIterator[None]:
+        """Open the database, run the random worker, then close both on shutdown."""
         db = await _setup_db()
         container.register("db", db)
         await controller.start(random_worker, conn_mgr=conn_mgr)

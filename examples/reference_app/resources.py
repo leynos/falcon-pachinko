@@ -76,6 +76,7 @@ TaskSchema = AddTask | CompleteTask | AssignTask | ListTasks | BroadcastNote
 
 
 def _workspace_room(workspace_id: str) -> str:
+    """Return the connection-manager room name for a workspace."""
     return f"workspace:{workspace_id}"
 
 
@@ -102,6 +103,7 @@ class WorkspaceResource(WebSocketResource):
         announcement_feed: AnnouncementFeed,
         conn_mgr: WebSocketConnectionManager,
     ) -> None:
+        """Store the shared dependencies and mount the project subroute."""
         self._repo = workspace_repo
         self._audit = audit_trail
         self._feed = announcement_feed
@@ -129,6 +131,7 @@ class ProjectResource(WebSocketResource):
         announcement_feed: AnnouncementFeed,
         conn_mgr: WebSocketConnectionManager,
     ) -> None:
+        """Store the shared dependencies and mount the task stream subroute."""
         self._repo = workspace_repo
         self._audit = audit_trail
         self._feed = announcement_feed
@@ -177,6 +180,7 @@ class TaskStreamResource(WebSocketResource):
         announcement_feed: AnnouncementFeed,
         conn_mgr: WebSocketConnectionManager,
     ) -> None:
+        """Store the shared dependencies and build the task operation configs."""
         self._repo = workspace_repo
         self._audit = audit_trail
         self._feed = announcement_feed
@@ -407,6 +411,10 @@ class TaskStreamResource(WebSocketResource):
 
 
 async def _seed_workspace(context: HookContext) -> None:
+    """Load the workspace named in the connect params and audit the load.
+
+    Does nothing unless the params carry a string ``workspace_id``.
+    """
     resource = context.resource
     if not isinstance(resource, WorkspaceResource) or not context.params:
         return
@@ -421,6 +429,11 @@ async def _seed_workspace(context: HookContext) -> None:
 
 
 async def _seed_project(context: HookContext) -> None:
+    """Load the project named in the connect params and audit the load.
+
+    Does nothing unless the params carry string ``workspace_id`` and
+    ``project_id`` values.
+    """
     resource = context.resource
     if not isinstance(resource, ProjectResource):
         return
@@ -461,6 +474,7 @@ async def _record_receive(context: HookContext) -> None:
 
 
 async def _record_receive_result(context: HookContext) -> None:
+    """Audit the result of each message the task stream has processed."""
     resource = context.target
     if not isinstance(resource, TaskStreamResource):
         return

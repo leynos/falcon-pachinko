@@ -63,6 +63,7 @@ class CancellingAcceptedResource(SessionResource):
 
     @typ.override
     async def on_session_start(self, ws: object) -> None:
+        """Raise CancelledError in place of post-acceptance setup."""
         raise asyncio.CancelledError
 
 
@@ -71,6 +72,7 @@ class FailingAcceptedResource(SessionResource):
 
     @typ.override
     async def on_session_start(self, ws: object) -> None:
+        """Raise a RuntimeError in place of post-acceptance setup."""
         msg = "accepted setup failed"
         raise RuntimeError(msg)
 
@@ -80,6 +82,7 @@ class RejectingResource(SessionResource):
 
     @typ.override
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+        """Return False so the router rejects the handshake."""
         return False
 
 
@@ -273,6 +276,8 @@ async def test_rejected_connection_does_not_run_disconnect_hook() -> None:
     """Rejected pre-accept decisions never enter disconnect cleanup."""
 
     class RejectingResource(SessionResource):
+        """Resource that rejects every handshake before acceptance."""
+
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
             """Reject the handshake before the router accepts it."""
             del req, ws, params

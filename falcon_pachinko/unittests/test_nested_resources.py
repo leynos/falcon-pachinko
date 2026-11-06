@@ -76,6 +76,8 @@ def _create_literal_sibling_router(
     """Build competing nested literal routes and their hook chains."""
 
     class DottedChild(WebSocketResource):
+        """Resource for the dotted literal route child.v1."""
+
         def __init__(self) -> None:
             """Record construction of the dotted sibling."""
             created.append("dotted")
@@ -86,6 +88,8 @@ def _create_literal_sibling_router(
             return False
 
     class SlashedChild(WebSocketResource):
+        """Resource for the slash-delimited literal route child/v1."""
+
         def __init__(self) -> None:
             """Record construction of the slash-delimited sibling."""
             created.append("slashed")
@@ -96,6 +100,8 @@ def _create_literal_sibling_router(
             return False
 
     class ParentWithLiteralSiblings(WebSocketResource):
+        """Parent resource that registers both literal sibling routes."""
+
         def __init__(self) -> None:
             """Register both literal sibling routes in the requested order."""
             routes = [
@@ -183,11 +189,15 @@ async def test_nested_parameter_merging_with_literal_sibling() -> None:
     """A parameter sibling retains parent and child connect parameters."""
 
     class LiteralChild(WebSocketResource):
+        """Literal sibling resource that always refuses the connection."""
+
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
             """Refuse the literal sibling connection used by this test."""
             return False
 
     class ParameterChild(WebSocketResource):
+        """Parameter sibling that records the merged connect parameters."""
+
         instances: typ.ClassVar[list[ParameterChild]] = []
         params: dict[str, object]
 
@@ -201,6 +211,8 @@ async def test_nested_parameter_merging_with_literal_sibling() -> None:
             return False
 
     class ParentWithMixedSiblings(WebSocketResource):
+        """Parent resource with literal and parameter child routes."""
+
         def __init__(self) -> None:
             """Register literal and parameter siblings for the merge test."""
             self.add_subroute("child.v1", LiteralChild)

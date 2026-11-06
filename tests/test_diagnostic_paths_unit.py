@@ -41,6 +41,7 @@ class FallbackResource(WebSocketResource):
     """Retain the raw fallback value before raising an application error."""
 
     def __init__(self) -> None:
+        """Start with no retained raw fallback value."""
         self.raw: str | bytes | None = None
 
     async def on_unhandled(self, ws: object, message: str | bytes) -> None:
@@ -134,6 +135,7 @@ def test_conventional_handler_debug_log_omits_exception_text(
     """Debug logging reports only handler and exception class metadata."""
 
     def fail_signature(_: object) -> typ.Never:
+        """Raise a handler signature error whose message holds the canary."""
         raise HandlerSignatureError(CANARY)
 
     monkeypatch.setattr(dispatcher, "get_payload_type", fail_signature)
@@ -350,6 +352,7 @@ async def test_text_frame_encoding_error_omits_raw_frame(path: str) -> None:
         )
 
     async def decode() -> None:
+        """Decode the raw frame via the receive path or the sent-frame path."""
         if path == "receive_json":
             await simulator.receive_json()
         else:

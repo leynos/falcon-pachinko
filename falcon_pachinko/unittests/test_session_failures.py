@@ -26,14 +26,18 @@ async def test_accepted_on_connect_failure_and_after_hook_failure_are_grouped() 
     hook_error = RuntimeError("after-connect failed")
 
     class AcceptThenFail(RecordingResource):
+        """Resource that accepts the socket and then fails during setup."""
+
         async def on_connect(
             self, req: falcon.Request, ws: object, **params: object
         ) -> bool:
+            """Accept the socket, then raise the primary setup failure."""
             del req, params
             await typ.cast("SessionSocket", ws).accept()
             raise primary
 
     def fail_after_connect(context: object) -> None:
+        """Raise the after-connect hook failure."""
         del context
         raise hook_error
 
@@ -61,14 +65,18 @@ async def test_after_connect_cancellation_reports_original_setup_failure() -> No
     cancellation = asyncio.CancelledError("after-connect cancelled")
 
     class AcceptThenFail(RecordingResource):
+        """Resource that accepts the socket and then fails during setup."""
+
         async def on_connect(
             self, req: falcon.Request, ws: object, **params: object
         ) -> bool:
+            """Accept the socket, then raise the primary setup failure."""
             del req, params
             await typ.cast("SessionSocket", ws).accept()
             raise primary
 
     def cancel_after_connect(context: object) -> None:
+        """Raise a cancellation from the after-connect hook."""
         del context
         raise cancellation
 
@@ -103,11 +111,15 @@ async def test_session_and_disconnect_failures_are_grouped_primary_first() -> No
     cleanup = LookupError("disconnect failed")
 
     class FailingResource(RecordingResource):
+        """Resource whose dispatch and disconnect hooks both fail."""
+
         async def dispatch(self, ws: object, raw: str | bytes) -> None:
+            """Raise the primary handler failure for any frame."""
             del ws, raw
             raise primary
 
         async def on_disconnect(self, ws: object, close_code: int) -> None:
+            """Run the recording cleanup, then raise a cleanup failure."""
             await super().on_disconnect(ws, close_code)
             raise cleanup
 
@@ -132,7 +144,10 @@ async def test_cleanup_only_failure_is_propagated_unchanged() -> None:
     cleanup = LookupError("disconnect failed")
 
     class FailingCleanupResource(RecordingResource):
+        """Resource whose disconnect cleanup always fails."""
+
         async def on_disconnect(self, ws: object, close_code: int) -> None:
+            """Run the recording cleanup, then raise a cleanup failure."""
             await super().on_disconnect(ws, close_code)
             raise cleanup
 
@@ -154,13 +169,17 @@ async def test_before_disconnect_failure_does_not_skip_resource_cleanup() -> Non
     resource_error = ValueError("resource cleanup failed")
 
     class FailingCleanupResource(RecordingResource):
+        """Resource whose disconnect cleanup fails after recording."""
+
         async def on_disconnect(self, ws: object, close_code: int) -> None:
+            """Run the recording cleanup, then raise a resource failure."""
             await super().on_disconnect(ws, close_code)
             raise resource_error
 
     router = make_session_router(FailingCleanupResource)
 
     def fail_before_disconnect(context: object) -> None:
+        """Raise the before-disconnect hook failure."""
         del context
         raise before_error
 
@@ -185,11 +204,15 @@ async def test_before_disconnect_receives_code_and_primary_error() -> None:
     context_values: list[tuple[int | None, BaseException | None]] = []
 
     def record_before_disconnect(context: object) -> None:
+        """Record the close code and error that the disconnect hook sees."""
         typed_context = typ.cast("typ.Any", context)
         context_values.append((typed_context.close_code, typed_context.error))
 
     class FailingDispatchResource(RecordingResource):
+        """Resource whose dispatch always raises the primary failure."""
+
         async def dispatch(self, ws: object, raw: str | bytes) -> None:
+            """Raise the primary handler failure for any frame."""
             del ws, raw
             raise primary
 
@@ -212,20 +235,27 @@ async def test_handler_failure_after_code_less_transport_loss_uses_1006() -> Non
     primary = RuntimeError("handler failed after transport loss")
 
     class TrackingSocket(SessionSocket):
+        """WebSocket double that counts close attempts."""
+
         def __init__(self, *frames: object) -> None:
+            """Queue the frames and start with no close attempts recorded."""
             super().__init__(*frames)
             self.close_attempts = 0
 
         async def close(
             self, code: int | None = 1000, reason: str | None = None
         ) -> None:
+            """Count the close attempt, then delegate to the base close."""
             self.close_attempts += 1
             await super().close(code, reason)
 
     socket = TrackingSocket(b"frame")
 
     class PeerGoneThenFailResource(RecordingResource):
+        """Resource that sees the peer leave and then fails dispatch."""
+
         async def dispatch(self, ws: object, raw: str | bytes) -> None:
+            """Mark the socket closed, then raise the primary failure."""
             del ws, raw
             socket.closed = True
             raise primary

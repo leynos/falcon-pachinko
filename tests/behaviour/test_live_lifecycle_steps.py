@@ -23,6 +23,7 @@ def _open_and_close_session(
     """Complete a successful live connection and wait for disconnect cleanup."""
 
     async def exercise() -> None:
+        """Connect, wait for readiness, close with 1000, and await cleanup."""
         await connect(context, path, headers=headers)
         await asyncio.wait_for(context.recorder.connection_ready.wait(), timeout=5)
         assert context.session is not None, _ASSERTION_FAILURE
@@ -102,6 +103,7 @@ def when_missing_header(context: LiveScenario) -> LiveScenario:
     """Attempt an upgrade with no token metadata and retain the HTTP response."""
 
     async def exercise() -> None:
+        """Attempt the upgrade and record the rejection, failing if accepted."""
         try:
             await connect(context, "/ws/reject")
         except InvalidStatusCode as exc:
@@ -161,6 +163,7 @@ def when_hello_exchange(context: LiveScenario) -> LiveScenario:
     frames: list[str] = []
 
     async def exercise() -> None:
+        """Receive, reply, and close over the live socket, collecting frames."""
         await connect(context, "/ws/hello")
         assert context.session is not None, _ASSERTION_FAILURE
         frames.append(await asyncio.wait_for(context.session.receive_text(), timeout=5))
@@ -191,6 +194,7 @@ def when_client_sends_json_during_setup(context: LiveScenario) -> LiveScenario:
     payload = {"token": "session-secret"}
 
     async def exercise() -> None:
+        """Send JSON, check the echoed reply, and close the session."""
         await connect(context, "/ws/decoded-media")
         assert context.session is not None, _ASSERTION_FAILURE
         await asyncio.wait_for(context.session.send_json(payload), timeout=5)
@@ -216,6 +220,7 @@ def when_session_start_fails(context: LiveScenario) -> LiveScenario:
     """Observe the live close and wait until disconnect cleanup completes."""
 
     async def exercise() -> None:
+        """Wait for the server close and for disconnect cleanup to finish."""
         await connect(context, "/ws/start-failure")
         assert context.session is not None, _ASSERTION_FAILURE
         with suppress(ConnectionClosed):
@@ -248,6 +253,7 @@ def when_nested_session(context: LiveScenario) -> LiveScenario:
     """Capture connect, acceptance, session, receive, and disconnect ordering."""
 
     async def exercise() -> None:
+        """Exchange one frame on the nested route and close it normally."""
         await connect(context, "/ws/lifecycle/child")
         assert context.session is not None, _ASSERTION_FAILURE
         await asyncio.wait_for(context.recorder.connection_ready.wait(), timeout=5)

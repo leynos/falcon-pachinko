@@ -147,6 +147,7 @@ class ReservedTagResource(WebSocketResource):
     schema = ReservedTag
 
     def __init__(self) -> None:
+        """Create the lifecycle and raw-frame recorders for the reserved-tag tests."""
         self.lifecycle: list[int] = []
         self.raw: list[str | bytes] = []
 
@@ -368,9 +369,13 @@ def test_invalid_schema_type_raises() -> None:
     """Only msgspec.Struct types are allowed in ``schema``."""
 
     class Good(ms.Struct, tag="good"):
+        """Valid msgspec Struct with a string tag, used as a legal schema member."""
+
         pass
 
     class Bad:
+        """Plain class that is not a msgspec Struct, so the schema must reject it."""
+
         pass
 
     with pytest.raises(
@@ -378,6 +383,8 @@ def test_invalid_schema_type_raises() -> None:
     ):
 
         class BadResource(WebSocketResource):
+            """Resource whose schema includes a plain class that must be rejected."""
+
             schema = Good | Bad
 
 
@@ -385,11 +392,15 @@ def test_untagged_schema_struct_raises() -> None:
     """Every msgspec.Struct in ``schema`` must declare a dispatch tag."""
 
     class Untagged(ms.Struct):
+        """Struct without a dispatch tag, which the schema must reject."""
+
         pass
 
     with pytest.raises(TypeError, match="schema Struct types must define a tag"):
 
         class BadResource(WebSocketResource):
+            """Resource whose schema includes an untagged Struct."""
+
             schema = Untagged
 
 
@@ -397,18 +408,24 @@ def test_duplicate_payload_type_raises() -> None:
     """Handlers with the same payload type should not be allowed."""
 
     class Payload(ms.Struct, tag="dup"):
+        """Tagged Struct shared by two handlers to trigger the duplicate check."""
+
         val: int
 
     with pytest.raises(ValueError, match="Duplicate payload type") as exc:
 
         class BadResource(WebSocketResource):
+            """Resource with two handlers that accept the same payload type."""
+
             schema = Payload
 
             @handles_message("a")
-            async def h1(self, ws: WebSocketLike, payload: Payload) -> None: ...
+            async def h1(self, ws: WebSocketLike, payload: Payload) -> None:
+                """Handle the first message type for the duplicate-payload check."""
 
             @handles_message("b")
-            async def h2(self, ws: WebSocketLike, payload: Payload) -> None: ...
+            async def h2(self, ws: WebSocketLike, payload: Payload) -> None:
+                """Handle the second message type that duplicates the first."""
 
     assert "Payload" in str(exc.value), "error should name the duplicated payload type"
     assert "BadResource.h2" in str(exc.value), (
@@ -427,6 +444,8 @@ def test_mixed_tag_kinds_raise() -> None:
     ):
 
         class BadResource(WebSocketResource):
+            """Resource whose schema mixes integer and string tags."""
+
             schema = IntegerTaggedMessage | StringTaggedMessage
 
 
@@ -439,6 +458,8 @@ def test_mixed_tag_kinds_error_names_every_member() -> None:
     with pytest.raises(TypeError) as exc:
 
         class BadResource(WebSocketResource):
+            """Resource whose mixed-tag schema must name each offending Struct."""
+
             schema = IntegerTaggedMessage | StringTaggedMessage
 
     message = str(exc.value)
@@ -454,6 +475,8 @@ def test_class_name_sentinel_mixed_with_integer_tag_raises() -> None:
     """``tag=True`` supplies a string tag, so it cannot mix with integer tags."""
 
     class ClassNameTagged(ms.Struct, tag=True):
+        """Struct tagged with its class name, which makes its tag a string."""
+
         pass
 
     with pytest.raises(
@@ -461,6 +484,8 @@ def test_class_name_sentinel_mixed_with_integer_tag_raises() -> None:
     ):
 
         class BadResource(WebSocketResource):
+            """Resource that mixes a class-name-tagged Struct with integer tags."""
+
             schema = ClassNameTagged | IntegerTaggedMessage
 
 
@@ -468,12 +493,17 @@ def test_homogeneous_integer_tags_are_accepted() -> None:
     """An all-integer tag schema is valid and still dispatches conventionally."""
 
     class Peer(ms.Struct, tag=12):
+        """Integer-tagged Struct (tag 12) that sits beside IntegerMessage."""
+
         value: str
 
     class Resource(WebSocketResource):
+        """Resource whose schema holds only integer-tagged Structs."""
+
         schema = IntegerMessage | Peer
 
         def __init__(self) -> None:
+            """Create the event log that the integer-tag handlers append to."""
             self.events: list[tuple[str, str | bytes]] = []
 
         async def on_1(self, ws: WebSocketLike, payload: IntegerMessage) -> None:

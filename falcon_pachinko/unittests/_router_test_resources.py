@@ -13,6 +13,7 @@ class DummyResource(WebSocketResource):
     instances: typ.ClassVar[list[DummyResource]] = []
 
     def __init__(self) -> None:
+        """Register this instance so tests can inspect every created resource."""
         DummyResource.instances.append(self)
 
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:

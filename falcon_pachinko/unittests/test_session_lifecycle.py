@@ -28,7 +28,10 @@ async def test_rejected_connection_closes_without_disconnect_cleanup() -> None:
     socket = SessionSocket()
 
     class RejectingResource(RecordingResource):
+        """Recording resource that declines acceptance before the session starts."""
+
         def __init__(self) -> None:
+            """Create the recording resource with acceptance disabled."""
             super().__init__(accepted=False)
 
     router = make_session_router(RejectingResource)
@@ -76,9 +79,12 @@ async def test_resource_observed_disconnect_retains_transport_code(stage: str) -
     """A disconnect raised during resource work is a transport ending."""
 
     class DisconnectedResource(RecordingResource):
+        """Recording resource that raises a 4005 disconnect during its work."""
+
         async def on_connect(
             self, req: falcon.Request, ws: object, **params: object
         ) -> bool:
+            """Accept, then raise a 4005 disconnect when staged in on_connect."""
             del req, params
             socket = typ.cast("SessionSocket", ws)
             await socket.accept()
@@ -88,6 +94,7 @@ async def test_resource_observed_disconnect_retains_transport_code(stage: str) -
             return True
 
         async def on_unhandled(self, ws: object, message: str | bytes) -> None:
+            """Close with 4005 and raise a 4005 disconnect for unhandled frames."""
             del message
             await typ.cast("SessionSocket", ws).close(4005)
             raise falcon.WebSocketDisconnected(4005)
@@ -110,9 +117,12 @@ async def test_accepted_on_connect_failure_runs_cleanup_and_preserves_failure() 
     primary = ValueError("setup failed")
 
     class AcceptThenFail(RecordingResource):
+        """Recording resource that accepts the socket and then fails setup."""
+
         async def on_connect(
             self, req: falcon.Request, ws: object, **params: object
         ) -> bool:
+            """Accept the socket and raise the primary setup error."""
             del req, params
             await typ.cast("SessionSocket", ws).accept()
             raise primary
@@ -135,6 +145,8 @@ async def test_accept_failure_after_approval_runs_disconnect_cleanup() -> None:
     """An accept error after approval still closes the promised session."""
 
     class AcceptFailureSocket(SessionSocket):
+        """Socket whose accept succeeds on the wire and then raises OSError."""
+
         async def accept(
             self,
             subprotocol: str | None = None,
@@ -142,6 +154,7 @@ async def test_accept_failure_after_approval_runs_disconnect_cleanup() -> None:
             | cabc.Iterable[tuple[str, str]]
             | None = None,
         ) -> None:
+            """Accept through the base socket, then raise an OSError."""
             await super().accept(subprotocol, headers)
             raise OSError("failed")
 
@@ -164,6 +177,7 @@ async def test_after_connect_failure_after_approval_rejects_before_acceptance() 
     router = make_session_router()
 
     def fail_after_connect(context: object) -> None:
+        """Raise the configured error from the after-connect hook."""
         del context
         raise error
 
@@ -186,6 +200,8 @@ async def test_noop_transport_acceptance_never_starts_a_session() -> None:
     """Reject transports whose accept call returns without accepting."""
 
     class UnacceptedSocket(SessionSocket):
+        """Socket whose accept call returns without accepting the connection."""
+
         async def accept(
             self,
             subprotocol: str | None = None,
@@ -193,6 +209,7 @@ async def test_noop_transport_acceptance_never_starts_a_session() -> None:
             | cabc.Iterable[tuple[str, str]]
             | None = None,
         ) -> None:
+            """Return without accepting, leaving the transport unaccepted."""
             del subprotocol, headers
 
     router = make_session_router()
@@ -214,9 +231,12 @@ async def test_resource_acceptance_with_falsey_result_reads_close_code() -> None
     """Resource-owned acceptance establishes cleanup even when it rejects."""
 
     class AcceptAndReject(RecordingResource):
+        """Recording resource that accepts the socket and then rejects it."""
+
         async def on_connect(
             self, req: falcon.Request, ws: object, **params: object
         ) -> bool:
+            """Accept the socket and return False to reject the session."""
             del req, params
             await typ.cast("SessionSocket", ws).accept()
             return False

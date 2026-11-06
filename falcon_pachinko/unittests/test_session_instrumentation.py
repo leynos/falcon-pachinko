@@ -89,12 +89,14 @@ async def test_normal_close_records_once_with_exact_durations_and_child_span(
     instrumentation = RecordingInstrumentation()
 
     async def on_connect(req: object, ws: object, **params: object) -> bool:
+        """Advance the injected clock to 2.0 and approve the connection."""
         del req, ws, params
         clock.value = 2.0
         await asyncio.sleep(0)
         return True
 
     async def on_disconnect(ws: object, close_code: int) -> None:
+        """Record the close code, advance the injected clock to 7.0 and yield."""
         del ws
         resource.disconnect_codes.append(close_code)
         clock.value = 7.0
@@ -174,6 +176,7 @@ async def test_clock_failure_before_cleanup_uses_fallback_and_runs_disconnect(
     instrumentation = RecordingInstrumentation()
 
     async def on_disconnect(ws: object, close_code: int) -> None:
+        """Yield, record the close code and move the clock to 1.25."""
         del ws
         await asyncio.sleep(0)
         resource.disconnect_codes.append(close_code)
@@ -301,7 +304,7 @@ async def test_handler_failure_records_bounded_exception_category() -> None:
     """A handler exception uses fixed dimensions and retains its identity."""
 
     class SecretFailureError(RuntimeError):
-        pass
+        """Runtime error whose message must never become a metric label."""
 
     failure = SecretFailureError("payload and connection ID must not become labels")
     clock = InjectedClock()
@@ -336,6 +339,7 @@ async def test_setup_failure_after_accept_records_session_and_cleanup_durations(
     instrumentation = RecordingInstrumentation()
 
     async def on_connect(req: object, ws: object, **params: object) -> bool:
+        """Accept the socket, advance the clock, then fail during setup."""
         del req, params
         await typ.cast("typ.Any", ws).accept()
         clock.value = 3.0
@@ -343,6 +347,7 @@ async def test_setup_failure_after_accept_records_session_and_cleanup_durations(
         raise failure
 
     async def on_disconnect(ws: object, close_code: int) -> None:
+        """Record the close code, advance the injected clock to 9.0 and yield."""
         del ws
         resource.disconnect_codes.append(close_code)
         clock.value = 9.0
@@ -380,6 +385,7 @@ async def test_cleanup_failure_is_counted_once_and_keeps_cleanup_span_complete()
     instrumentation = RecordingInstrumentation()
 
     async def on_disconnect(ws: object, close_code: int) -> None:
+        """Record the close code, advance the clock to 4.0, then fail cleanup."""
         del ws
         resource.disconnect_codes.append(close_code)
         clock.value = 4.0

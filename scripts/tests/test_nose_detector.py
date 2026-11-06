@@ -305,6 +305,7 @@ class TestResolveBinary:
         calls: list[tuple[Path, cabc.Mapping[str, str]]] = []
 
         def discover(root: Path, environment: cabc.Mapping[str, str]) -> str:
+            """Return the fixed binary path and record the arguments received."""
             calls.append((root, environment))
             return str(discovered)
 
@@ -629,6 +630,7 @@ class TestRunDetector:
             _repository_root: Path,
             _environment: cabc.Mapping[str, str],
         ) -> str:
+            """Return a version banner, then non-JSON output for the query."""
             return "nose 0.20.0\n" if "--version" in command else "not json"
 
         context = stub_detector_context(tmp_path, command_runner=runner)
@@ -641,6 +643,7 @@ class TestRunDetector:
         """A slow detector becomes an actionable execution error."""
 
         def timeout(*_args: object, **_kwargs: object) -> typ.NoReturn:
+            """Raise TimeoutExpired as if the detector ran past its limit."""
             raise detector.subprocess.TimeoutExpired(["nose", "query"], 120)
 
         monkeypatch.setattr(detector.subprocess, "run", timeout)
@@ -658,6 +661,7 @@ class TestRunDetector:
         def failing(
             *_args: object, **_kwargs: object
         ) -> detector.subprocess.CompletedProcess[str]:
+            """Return a CompletedProcess that exits with status 2 and stderr."""
             return detector.subprocess.CompletedProcess(
                 args=["nose", "query"], returncode=2, stdout="", stderr="bad query\n"
             )
@@ -678,6 +682,7 @@ class TestRunDetector:
         def empty_scan(
             command: cabc.Sequence[str], *_args: object, **_kwargs: object
         ) -> detector.subprocess.CompletedProcess[str]:
+            """Return a successful empty report with Nose's no-source warning."""
             return detector.subprocess.CompletedProcess(
                 args=list(command),
                 returncode=0,
@@ -704,6 +709,7 @@ class TestRunDetector:
         def clean_scan(
             command: cabc.Sequence[str], *_args: object, **_kwargs: object
         ) -> detector.subprocess.CompletedProcess[str]:
+            """Return a successful empty report with no warnings on stderr."""
             return detector.subprocess.CompletedProcess(
                 args=list(command),
                 returncode=0,
@@ -724,6 +730,7 @@ class TestRunDetector:
         """An unrunnable detector points at the install remediation."""
 
         def unrunnable(*_args: object, **_kwargs: object) -> typ.NoReturn:
+            """Raise a permission error as if the detector cannot execute."""
             raise OSError(13, "Permission denied")
 
         monkeypatch.setattr(detector.subprocess, "run", unrunnable)

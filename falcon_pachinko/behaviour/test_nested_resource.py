@@ -80,6 +80,7 @@ class GrandchildResource(WebSocketResource):
     instances: typ.ClassVar[list[GrandchildResource]] = []
 
     def __init__(self) -> None:
+        """Register this instance in the class-level instance list."""
         GrandchildResource.instances.append(self)
 
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
@@ -260,6 +261,7 @@ def _simulate_connection(
     req = make_req(path)
 
     async def negotiate_and_finalize() -> None:
+        """Negotiate the connection and close the session if one is accepted."""
         session = await router.negotiate(req, ws)
         if session is not None:
             await session.aclose()
@@ -278,11 +280,15 @@ def test_simulated_nested_connection_finalizes_accepted_session() -> None:
     disconnect_codes: list[int] = []
 
     class AcceptingResource(WebSocketResource):
+        """Accept connections and record the close code of each session."""
+
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Accept the connection unconditionally."""
             del req, ws, params
             return True
 
         async def on_disconnect(self, ws: object, close_code: int) -> None:
+            """Record the close code of the finalized session."""
             del ws
             disconnect_codes.append(close_code)
 

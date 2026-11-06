@@ -60,6 +60,7 @@ def test_validation_error_is_usable_in_type_annotations() -> None:
     """Callers can use the public exception name as an annotation."""
 
     def handle(error: utils.ValidationError) -> str:
+        """Return the message of an error typed with the public alias."""
         return str(error)
 
     assert handle(ms.ValidationError("invalid payload")) == "invalid payload", (

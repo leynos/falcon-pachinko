@@ -106,6 +106,7 @@ def test_push_and_receive_text_round_trips_in_order(messages: list[str]) -> None
     """Queued text payloads round-trip unchanged and in FIFO order."""
 
     async def _exercise() -> list[str]:
+        """Push every message, then receive them back in the order sent."""
         simulator = WebSocketSimulator()
         for message in messages:
             await simulator.push_text(message)

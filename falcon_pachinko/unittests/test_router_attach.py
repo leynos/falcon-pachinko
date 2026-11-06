@@ -23,7 +23,10 @@ def test_attach_can_retry_after_route_registration_failure(
     router.add_route("/rooms/{room}", WebSocketResource)
 
     class FailingFalconApp(falcon.asgi.App):
+        """Falcon ASGI app whose route registration fails once at a chosen index."""
+
         def __init__(self) -> None:
+            """Create the app with its failure flag and route-index counter."""
             super().__init__()
             self._failed_once = False
             self._route_registration_index = 0
@@ -35,6 +38,7 @@ def test_attach_can_retry_after_route_registration_failure(
             resource: object,
             **kwargs: object,
         ) -> None:
+            """Fail the chosen route registration once, then delegate to Falcon."""
             route_index = self._route_registration_index
             self._route_registration_index += 1
             if route_index == failing_route_index and not self._failed_once:

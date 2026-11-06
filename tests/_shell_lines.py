@@ -346,6 +346,7 @@ class _ParameterExpansionBoundaries:
     """Keep parameter words separate from their enclosing command groups."""
 
     def __init__(self) -> None:
+        """Start with no open parameter-expansion contexts."""
         self._contexts: list[tuple[int, str | None]] = []
 
     def advance(
@@ -500,6 +501,7 @@ def _protect_quoted_parentheses(
         raise ShellCommandSyntaxError(message)
 
     def replace(match: re.Match[str]) -> str:
+        """Replace parentheses inside a quoted span with inert placeholders."""
         quoted = match.group(0)
         return quoted.replace("(", QUOTED_OPEN_PARENTHESIS).replace(
             ")", QUOTED_CLOSE_PARENTHESIS

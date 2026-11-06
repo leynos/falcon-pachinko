@@ -344,12 +344,15 @@ async def test_quickstart_adapter_preserves_request_headers(
     observed_headers: list[str | None] = []
 
     class HeaderProbeResource(quickstart_module.ChatResource):
+        """Chat resource that records a request header before connecting."""
+
         async def on_connect(
             self,
             req: falcon.asgi.Request,
             ws: falcon.asgi.WebSocket,
             room: str = "lobby",
         ) -> bool:
+            """Record the test header, then delegate to the chat connect hook."""
             observed_headers.append(req.get_header("X-Quickstart-Test"))
             return await super().on_connect(req, ws, room)
 

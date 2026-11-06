@@ -167,6 +167,7 @@ class WebSocketResource:
 
     @state.setter
     def state(self, mapping: cabc.MutableMapping[str, typ.Any]) -> None:
+        """Replace the state, rejecting values that are not MutableMappings."""
         # Probing for __getitem__/__setitem__/__iter__ admitted any subscriptable
         # iterable: a list satisfies all three and was silently accepted as
         # state. MutableMapping registers only genuine mappings.
@@ -200,6 +201,7 @@ class WebSocketResource:
 
     @classmethod
     def _collect_base_handlers(cls) -> dict[str, HandlerInfo]:
+        """Merge the handler registries of every base class in MRO order."""
         combined: dict[str, HandlerInfo] = {}
         for base in cls.__mro__[1:]:
             base_handlers = getattr(base, "handlers", None)
@@ -209,6 +211,7 @@ class WebSocketResource:
 
     @classmethod
     def _apply_overrides(cls, handlers: dict[str, HandlerInfo]) -> None:
+        """Point inherited handlers at this class's overriding coroutine methods."""
         shadowed = {
             name
             for name, obj in cls.__dict__.items()
@@ -274,6 +277,7 @@ class WebSocketResource:
 
     @classmethod
     def _init_schema_registry(cls) -> None:
+        """Validate the class's schema union and index its message structs."""
         cls._struct_handlers = {}
         schema = getattr(cls, "schema", None)
         if schema is None:

@@ -85,6 +85,7 @@ class LiveServerTransport:
         def record_loop_error(
             _loop: asyncio.AbstractEventLoop, context: dict[str, typ.Any]
         ) -> None:
+            """Append each asyncio loop error context for later acknowledgement."""
             loop_errors.append(context)
 
         loop.set_exception_handler(record_loop_error)
@@ -149,6 +150,7 @@ class LiveServerTransport:
                 self.loop.set_exception_handler(self._previous_exception_handler)
 
     async def _stop_serving(self) -> None:
+        """Wait for Uvicorn to exit, cancelling the serve task on timeout."""
         try:
             await asyncio.wait_for(asyncio.shield(self.serve_task), timeout=5)
         except TimeoutError:
@@ -158,6 +160,7 @@ class LiveServerTransport:
             raise
 
     async def _join_sessions(self, *, preserve_primary: bool) -> None:
+        """Join session tasks, tolerating a timeout when a primary error exists."""
         # Uvicorn cancels ASGI tasks without joining them after its graceful
         # timeout, so keep the loop alive until their shielded cleanup ends.
         session_tasks = tuple(self.server.server_state.tasks)

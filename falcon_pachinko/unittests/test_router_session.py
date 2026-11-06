@@ -42,6 +42,7 @@ class SessionResource(WebSocketResource):
     instances: typ.ClassVar[list[SessionResource]] = []
 
     def __init__(self) -> None:
+        """Create empty frame and disconnect records for one session test."""
         self.frames: list[str | bytes] = []
         self.disconnect_codes: list[int] = []
         SessionResource.instances.append(self)
@@ -65,6 +66,7 @@ class AttachedPathResource(WebSocketResource):
     instances: typ.ClassVar[list[AttachedPathResource]] = []
 
     def __init__(self) -> None:
+        """Create empty route-parameter, frame, and event recorders."""
         self.params: dict[str, object] = {}
         self.received: list[str | bytes] = []
         self.received_event = asyncio.Event()
@@ -85,6 +87,7 @@ class NestedAttachedPathResource(WebSocketResource):
     """Mount a final responder below a workspace path parameter."""
 
     def __init__(self) -> None:
+        """Mount AttachedPathResource under the nested tasks sub-route."""
         self.add_subroute("projects/{project_id}/tasks", AttachedPathResource)
 
 
@@ -94,6 +97,7 @@ class _QueuedWebSocket(RecordingWS):
     def __init__(
         self, frames: cabc.Iterable[object], *, close_code: int = 1000
     ) -> None:
+        """Queue frames for receive_media and the close code for the disconnect."""
         super().__init__()
         self.frames = list(frames)
         self.disconnect_code = close_code
@@ -101,6 +105,7 @@ class _QueuedWebSocket(RecordingWS):
 
     @typ.override
     async def receive_media(self) -> object:
+        """Return the next queued frame, then raise a peer disconnect."""
         self.receive_started.set()
         if self.frames:
             return self.frames.pop(0)
@@ -111,7 +116,10 @@ def test_router_attach_registers_asgi_routes_and_wraps_media_once() -> None:
     """Attach registers mount routes and installs media wrappers idempotently."""
 
     class RouteRecordingApp(falcon.asgi.App):
+        """Falcon ASGI app that records each route template it receives."""
+
         def __init__(self) -> None:
+            """Create the app with an empty registered-route list."""
             super().__init__()
             self.registered_routes: list[str] = []
 
@@ -119,6 +127,7 @@ def test_router_attach_registers_asgi_routes_and_wraps_media_once() -> None:
         def add_route(
             self, uri_template: str, resource: object, **kwargs: object
         ) -> None:
+            """Record the URI template before delegating to Falcon."""
             self.registered_routes.append(uri_template)
             super().add_route(uri_template, resource, **kwargs)
 
@@ -167,7 +176,10 @@ def test_root_router_attach_registers_exact_and_descendant_routes() -> None:
     """Register the root route and a path converter for descendants."""
 
     class RouteRecordingApp(falcon.asgi.App):
+        """Falcon ASGI app that records each route template it receives."""
+
         def __init__(self) -> None:
+            """Create the app with an empty registered-route list."""
             super().__init__()
             self.registered_routes: list[str] = []
 
@@ -175,6 +187,7 @@ def test_root_router_attach_registers_exact_and_descendant_routes() -> None:
         def add_route(
             self, uri_template: str, resource: object, **kwargs: object
         ) -> None:
+            """Record the URI template before delegating to Falcon."""
             self.registered_routes.append(uri_template)
             super().add_route(uri_template, resource, **kwargs)
 
@@ -278,21 +291,29 @@ async def test_router_attach_preserves_binary_frames_and_serializes_responses() 
     """Preserve inbound bytes and use the wrapped binary serializer on send."""
 
     class BinaryMediaHandler:
+        """Fake binary media handler that records the payloads it serializes."""
+
         def __init__(self) -> None:
+            """Create an empty log of serialized media."""
             self.serialized: list[object] = []
 
         def deserialize(self, payload: object) -> object:
+            """Return fixed bytes in place of decoding the inbound payload."""
             return b"decoded by the original handler"
 
         def serialize(self, media: object) -> bytes:
+            """Record the media and prefix its bytes with a serialized marker."""
             self.serialized.append(media)
             assert isinstance(media, bytes), "binary media must remain bytes"
             return b"serialized:" + media
 
     class BinaryEchoResource(WebSocketResource):
+        """Echo binary frames back through Falcon's binary media serializer."""
+
         instances: typ.ClassVar[list[BinaryEchoResource]] = []
 
         def __init__(self) -> None:
+            """Create a recorder for the received frame and its arrival event."""
             self.received: str | bytes | None = None
             self.received_event = asyncio.Event()
             type(self).instances.append(self)
@@ -345,11 +366,15 @@ async def test_attach_documents_raw_media_contract_for_other_falcon_routes() -> 
     """Falcon responders on the same app observe the installed raw handlers."""
 
     class PlainWebSocketResource:
+        """Falcon-native WebSocket responder that bypasses WebSocketResource."""
+
         def __init__(self) -> None:
+            """Create a recorder for the first raw frame the responder receives."""
             self.received: str | bytes | None = None
             self.received_event = asyncio.Event()
 
         async def on_websocket(self, req: object, ws: WebSocketLike) -> None:
+            """Accept, receive one raw frame, record it, and close the socket."""
             await ws.accept()
             payload = await ws.receive_media()
             assert isinstance(payload, str | bytes), "raw media must stay a frame"
@@ -378,10 +403,14 @@ def test_attach_warns_when_websocket_media_handlers_are_customized() -> None:
     """Warn when attach replaces custom app-wide WebSocket deserializers."""
 
     class CustomTextHandler:
+        """Fake text media handler whose decoder wraps payloads in a dict."""
+
         def deserialize(self, payload: object) -> object:
+            """Wrap the raw payload so the handler is visibly customized."""
             return {"decoded": payload}
 
         def serialize(self, media: object) -> object:
+            """Return the media unchanged."""
             return media
 
     app = falcon.asgi.App()
@@ -432,11 +461,15 @@ async def test_on_websocket_dispatches_multiple_frames_and_cleans_once() -> None
     events: list[str] = []
 
     class OrderedSessionResource(SessionResource):
+        """Session resource that logs its dispatch and disconnect calls in order."""
+
         async def on_unhandled(self, ws: object, message: str | bytes) -> None:
+            """Log the dispatch, then record the frame as the base session does."""
             events.append("dispatch")
             await super().on_unhandled(ws, message)
 
         async def on_disconnect(self, ws: object, close_code: int) -> None:
+            """Log the resource disconnect, then record the close code."""
             events.append("resource.disconnect")
             await super().on_disconnect(ws, close_code)
 
@@ -513,12 +546,16 @@ async def test_cancelled_session_runs_cleanup_then_reraises() -> None:
     SessionResource.instances.clear()
 
     class BlockingWebSocket(RecordingWS):
+        """Socket whose receive_media blocks until the task is cancelled."""
+
         @typ.override
         async def receive_media(self) -> object:
+            """Signal that receive started, then wait until cancellation."""
             self.receive_started.set()
             await asyncio.Event().wait()
 
         def __init__(self) -> None:
+            """Create the receive-started event that the test waits on."""
             super().__init__()
             self.receive_started = asyncio.Event()
 
@@ -544,7 +581,10 @@ async def test_dispatch_error_closes_with_1011_and_runs_cleanup() -> None:
     """A handler error propagates after 1011 close and cleanup."""
 
     class ExplodingResource(SessionResource):
+        """Session resource whose explode handler always fails."""
+
         async def on_explode(self, ws: object, payload: object) -> None:
+            """Raise RuntimeError to simulate a failing message handler."""
             raise RuntimeError
 
     router = WebSocketRouter(receive_loop=True)
@@ -566,7 +606,10 @@ async def test_disconnect_raised_during_dispatch_is_a_normal_disconnect() -> Non
     """A send failure caused by peer disconnect keeps the peer close code."""
 
     class DisconnectingResource(SessionResource):
+        """Session resource whose dispatch reports that the peer has left."""
+
         async def on_unhandled(self, ws: object, message: str | bytes) -> None:
+            """Raise a 1001 disconnect while the frame is being dispatched."""
             raise falcon.WebSocketDisconnected(code=1001)
 
     router = WebSocketRouter(receive_loop=True)
@@ -682,9 +725,12 @@ async def test_router_does_not_accept_an_already_accepted_socket() -> None:
     """A resource-owned accept is not repeated by the router."""
 
     class AcceptingResource(WebSocketResource):
+        """Resource that accepts the socket itself during on_connect."""
+
         async def on_connect(
             self, req: object, ws: WebSocketLike, **params: object
         ) -> bool:
+            """Accept the socket from the resource before returning True."""
             await ws.accept()
             return True
 

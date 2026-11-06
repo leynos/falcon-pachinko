@@ -28,6 +28,7 @@ class LiveWebSocketResource(WebSocketResource):
     """Exercise connect, frame handlers, and disconnect over a real socket."""
 
     def __init__(self, shared: LiveAppState) -> None:
+        """Keep a reference to the shared state the live app reports into."""
         self.shared = shared
 
     async def on_connect(

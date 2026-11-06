@@ -274,6 +274,7 @@ class _SampleBuilder:
     remaining: int = dc.field(init=False)
 
     def __post_init__(self) -> None:
+        """Set the output budget from the sanitizer's maximum output length."""
         self.remaining = self.config.max_output_length
 
     def _emit(self, text: str) -> None:

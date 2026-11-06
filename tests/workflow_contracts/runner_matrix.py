@@ -47,6 +47,7 @@ class CompositeMatrixDeclarationError(WorkflowShapeError):
     """
 
     def __init__(self, where: str, raw: str) -> None:
+        """Build a message naming the declaration and why it is refused."""
         super().__init__(
             f"{where}: {raw!r} composes a runner label from the matrix; only "
             "a declaration that is exactly one ${{ matrix.<key> }} is read, "
@@ -66,6 +67,7 @@ class UnreadableMatrixValueError(WorkflowShapeError):
     """
 
     def __init__(self, where: str, value: object) -> None:
+        """Build a message naming the matrix value that is not a label."""
         super().__init__(
             f"{where} is read as a runner label but declares {value!r}; "
             "refusing rather than dropping it from the labels in use"

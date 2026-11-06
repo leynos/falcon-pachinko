@@ -157,6 +157,7 @@ class TestEnsureInstalled:
         captured: list[installer.InstallerContext] = []
 
         def capture(context: installer.InstallerContext) -> None:
+            """Record the installer context that the CLI passes on."""
             captured.append(context)
 
         monkeypatch.setattr(installer, "ensure_installed", capture)
@@ -181,6 +182,7 @@ class TestEnsureInstalled:
         messages: list[str] = []
 
         def unexpected_download(_url: str) -> bytes:
+            """Fail the test if a download is attempted."""
             pytest.fail("A matching cached binary must not trigger a download")
 
         process_calls: list[tuple[list[str], Path, dict[str, str]]] = []
@@ -190,6 +192,7 @@ class TestEnsureInstalled:
             repository_root: Path,
             environment: cabc.Mapping[str, str],
         ) -> subprocess.CompletedProcess[str]:
+            """Record the verification command, then run the real process."""
             process_calls.append((list(command), repository_root, dict(environment)))
             return installer._run_process(command, repository_root, environment)
 
@@ -233,6 +236,7 @@ class TestEnsureInstalled:
         messages: list[str] = []
 
         def download(url: str) -> bytes:
+            """Record the requested URL and return the release archive."""
             downloads.append(url)
             return archive
 
@@ -243,6 +247,7 @@ class TestEnsureInstalled:
             repository_root: Path,
             environment: cabc.Mapping[str, str],
         ) -> subprocess.CompletedProcess[str]:
+            """Record the verification command, then run the real process."""
             process_calls.append((list(command), repository_root, dict(environment)))
             return installer._run_process(command, repository_root, environment)
 
@@ -333,6 +338,7 @@ class TestEnsureInstalled:
         )
 
         def fail_write(*_args: object, **_kwargs: object) -> None:
+            """Raise PermissionError in place of the atomic binary write."""
             raise PermissionError
 
         monkeypatch.setattr(installer, "atomic_write", fail_write)

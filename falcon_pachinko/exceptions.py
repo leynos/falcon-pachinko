@@ -7,6 +7,7 @@ class HandlerSignatureError(TypeError):
     """Raised when a handler function has an invalid signature."""
 
     def __init__(self, func_name: str) -> None:
+        """Build the message naming the handler with the bad signature."""
         super().__init__(f"Handler {func_name} must accept self, ws, and a payload")
 
 
@@ -14,6 +15,7 @@ class HandlerNotAsyncError(TypeError):
     """Raised when a handler function is not async."""
 
     def __init__(self, func_qualname: str) -> None:
+        """Build the message naming the handler that is not async."""
         super().__init__(f"Handler {func_qualname} must be async")
 
 
@@ -21,6 +23,7 @@ class SignatureInspectionError(RuntimeError):
     """Raised when a handler's signature can't be inspected."""
 
     def __init__(self, func_qualname: str) -> None:
+        """Build the message naming the handler whose signature failed."""
         super().__init__(f"Cannot inspect signature for handler {func_qualname}")
 
 
@@ -40,6 +43,7 @@ class ReservedHandlerRegistrationError(RuntimeError):
     """
 
     def __init__(self, message_type: str, func_qualname: str) -> None:
+        """Build the message naming the lifecycle callback and the rejected tag."""
         super().__init__(
             f"Cannot register lifecycle callback {func_qualname} as a message "
             f"handler for {message_type!r}; reserved lifecycle names are not "

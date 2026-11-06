@@ -59,11 +59,13 @@ class SessionResource(WebSocketResource):
     failures: typ.ClassVar[list[Exception]] = []
 
     def __init__(self) -> None:
+        """Start with empty dispatch, fallback, and disconnect records."""
         self.calls: list[str] = []
         self.unhandled: list[str | bytes] = []
         self.disconnects: list[int] = []
 
     async def _respond_to_ping(self, ws: WebSocketLike, payload: Ping) -> None:
+        """Record the ping payload and send it back as a reply."""
         self.calls.append(payload.payload)
         await ws.send_media({"type": "reply", "payload": payload.payload})
 
@@ -164,7 +166,10 @@ async def test_disconnect_runs_hooks_before_resource_cleanup_with_peer_code() ->
     events: list[str] = []
 
     class RecordingDisconnectResource(SessionResource):
+        """Record resource disconnect events alongside the close code."""
+
         async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+            """Record the close code, then run the base disconnect recording."""
             events.append(f"resource:{close_code}")
             await super().on_disconnect(ws, close_code)
 
@@ -172,6 +177,7 @@ async def test_disconnect_runs_hooks_before_resource_cleanup_with_peer_code() ->
     router = _router_for(resource)
 
     def before_disconnect(context: HookContext) -> None:
+        """Record the close code seen by the global disconnect hook."""
         events.append(f"hook:{context.close_code}")
 
     router.global_hooks.add("before_disconnect", before_disconnect)
@@ -240,7 +246,10 @@ async def test_failure_cleanup_errors_are_grouped_after_handler_error() -> None:
     hook_error = LookupError(sensitive_value)
 
     class BrokenDisconnectResource(SessionResource):
+        """Resource whose disconnect cleanup always raises an error."""
+
         async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+            """Record the cleanup attempt, then raise the configured error."""
             del ws
             events.append(f"resource:{close_code}")
             await asyncio.sleep(0)
@@ -251,6 +260,7 @@ async def test_failure_cleanup_errors_are_grouped_after_handler_error() -> None:
     ws = RecordingWS([msjson.encode(Fail(payload="boom"))])
 
     def broken_before_disconnect(context: HookContext) -> None:
+        """Record the close code, then raise the configured hook error."""
         events.append(f"hook:{context.close_code}")
         raise hook_error
 
@@ -276,15 +286,19 @@ async def test_cancellation_uses_1001_and_skips_after_receive() -> None:
     """Cancellation attempts going-away close without emitting after_receive."""
 
     class WaitingResource(SessionResource):
+        """Resource whose ping handler blocks until the test releases it."""
+
         hooks = HookCollection()
 
         def __init__(self) -> None:
+            """Initialize the base records and the entered and release events."""
             super().__init__()
             self.entered = asyncio.Event()
             self.release = asyncio.Event()
 
         @handles_message("ping")
         async def handle_ping(self, ws: WebSocketLike, payload: Ping) -> None:
+            """Signal entry, wait for release, then acknowledge the ping."""
             self.entered.set()
             await self.release.wait()
             await self._respond_to_ping(ws, payload)
@@ -319,6 +333,7 @@ async def test_cancellation_during_disconnect_hook_preserves_selected_code() -> 
     release_hook = asyncio.Event()
 
     async def pause_for_peer_close(context: HookContext) -> None:
+        """Block the 4008 disconnect hook until the test releases it."""
         hook_codes.append(context.close_code)
         if context.close_code == 4008:
             hook_entered.set()
@@ -352,8 +367,11 @@ async def test_application_close_code_is_used_for_disconnect_cleanup() -> None:
     """An application close ends the receive loop with its chosen code."""
 
     class ClosingResource(SessionResource):
+        """Resource that closes the socket with 4002 on a ping."""
+
         @handles_message("ping")
         async def handle_ping(self, ws: WebSocketLike, payload: Ping) -> None:
+            """Record the ping payload and close the socket with 4002."""
             self.calls.append(payload.payload)
             await ws.close(4002)
 
@@ -375,9 +393,12 @@ async def test_rejected_connection_does_not_start_session_or_disconnect() -> Non
     """A rejected handshake closes without receiving or disconnect cleanup."""
 
     class RejectingResource(SessionResource):
+        """Resource whose on_connect rejects every connection."""
+
         async def on_connect(
             self, req: falcon.Request, ws: WebSocketLike, **params: object
         ) -> bool:
+            """Reject the connection by returning False."""
             del req, ws, params
             return False
 
@@ -400,30 +421,39 @@ async def test_nested_session_keeps_di_hooks_and_shared_state() -> None:
     instances: list[WebSocketResource] = []
 
     class ChildResource(WebSocketResource):
+        """Nested resource that stores pings in shared state."""
+
         schema = Ping
         hooks = HookCollection()
 
         def __init__(self, dependency: object) -> None:
+            """Store the injected dependency and register this instance."""
             self.dependency = dependency
             instances.append(self)
 
         @handles_message("ping")
         async def handle_ping(self, ws: WebSocketLike, payload: Ping) -> None:
+            """Store the ping payload in the shared state under the child key."""
             self.state["child"] = payload.payload
 
         async def on_disconnect(self, ws: WebSocketLike, close_code: int) -> None:
+            """Record the child disconnect with its close code."""
             events.append(f"disconnect:{close_code}")
 
     class ParentResource(WebSocketResource):
+        """Parent resource that mounts the child and shares its state."""
+
         hooks = HookCollection()
 
         def __init__(self, dependency: object) -> None:
+            """Store the dependency, seed shared state, and mount the child route."""
             self.dependency = dependency
             self.state["parent"] = "shared"
             self.add_subroute("/child", ChildResource)
             instances.append(self)
 
         def get_child_context(self) -> dict[str, object]:
+            """Pass the parent shared state through to the child resource."""
             return {"state": self.state}
 
     ParentResource.hooks.add(

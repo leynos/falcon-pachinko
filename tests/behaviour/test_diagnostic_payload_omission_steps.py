@@ -50,6 +50,7 @@ def given_accepted_authentication_frame() -> DiagnosticScenario:
     context = DiagnosticScenario(raw=f'{{"token":"{CANARY}","type":"client.hello"')
 
     async def prepare() -> None:
+        """Accept the simulated connection, then push the malformed token frame."""
         await context.simulator.accept()
         await context.simulator.push_text(context.raw)
 

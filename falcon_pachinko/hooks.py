@@ -125,6 +125,7 @@ class HookCollection:
         *,
         parent: HookCollection | None = None,
     ) -> None:
+        """Seed per-event hook lists from ``initial`` and link the ``parent``."""
         self._registry: dict[str, list[HookCallable]] = {
             event: list(initial.get(event, ())) if initial else []
             for event in _SUPPORTED_EVENTS
@@ -182,6 +183,7 @@ class HookManager:
         global_hooks: HookCollection,
         resources: cabc.Sequence[WebSocketResource],
     ) -> None:
+        """Store the global hooks and resources, rejecting an empty resource chain."""
         if not resources:
             msg = "HookManager requires at least one resource"
             raise ValueError(msg)
@@ -222,6 +224,10 @@ class HookManager:
     async def _run_hooks(
         self, event: EventType, context: HookContext, *, reverse: bool = False
     ) -> None:
+        """Run each hook layer for ``event``, reversing the order when requested.
+
+        Receive hooks stop early once the session can no longer receive.
+        """
         event_name = str(event)
         layers = self._build_hook_layers(event_name, context)
 

@@ -146,11 +146,13 @@ class _NoOpSpan:
     def set_dimensions(  # ruff: ignore[no-self-use] - protocol shape
         self, dimensions: SessionDimensions
     ) -> None:
+        """Discard the dimensions because this span keeps no state."""
         del dimensions
 
     def end(  # ruff: ignore[no-self-use] - protocol shape
         self,
     ) -> None:
+        """Do nothing, because the no-op span has nothing to finish."""
         return
 
 
@@ -239,6 +241,7 @@ class _SpanOwner:
         name: SpanName,
         dimensions: SessionDimensions,
     ) -> None:
+        """Keep the instrumentation, span name and dimensions until start()."""
         self._instrumentation = instrumentation
         self._name = name
         self._dimensions = dimensions

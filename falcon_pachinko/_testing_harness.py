@@ -18,17 +18,20 @@ class _OriginalWebSocket(_LifecycleSocket):
     """Minimal stub representing the ASGI-provided websocket."""
 
     def __init__(self) -> None:
+        """Start with an empty log of sent frames."""
         super().__init__()
         self.sent: list[object] = []
 
     async def send_media(  # pylint: disable=trivial-attribute-wrapper  # protocol stub
         self, data: object
     ) -> None:
+        """Record a media payload sent through the original ASGI stub."""
         self.sent.append(data)  # pragma: no cover - unused
 
     async def receive_media(  # ruff: ignore[no-self-use] - protocol needs an instance method
         self,
     ) -> object:
+        """Refuse to receive, because the original stub has no inbound frames."""
         raise RuntimeError(_ORIGINAL_WS_RECEIVE_MSG)  # pragma: no cover - unused
 
     async def send_text(self, message: str) -> None:
@@ -48,6 +51,7 @@ class _HarnessSimulator(WebSocketSimulator):
     """Simulator variant that mirrors lifecycle events to the original stub."""
 
     def __init__(self) -> None:
+        """Create the simulator with an unset readiness event."""
         super().__init__()
         self.ready_event = asyncio.Event()
 

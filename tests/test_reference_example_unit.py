@@ -34,6 +34,7 @@ _TASKS_PATH = "/ws/workspaces/atlas/projects/triage/tasks"
 
 
 def _build_router() -> tuple[WebSocketRouter, ServiceContainer]:
+    """Build the reference app's WebSocket router and its service container."""
     conn_mgr = WebSocketConnectionManager()
     container = build_container(conn_mgr)
     router = build_router(container)
@@ -93,6 +94,7 @@ async def test_router_accepts_with_valid_token() -> None:
 
 
 def _rejections(container: ServiceContainer) -> list[dict[str, object]]:
+    """Return the ``auth.rejected`` audit records held by the container."""
     audit = container.resolve("audit_trail")
     assert isinstance(audit, AuditTrail), "the container must hold the AuditTrail"
     return [record for record in audit.records if record["event"] == "auth.rejected"]
