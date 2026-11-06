@@ -24,12 +24,14 @@ class _CloseSession:
     """Model one generated outcome from a client close handshake."""
 
     def __init__(self, outcome: str, index: int) -> None:
+        """Record the scripted outcome and position of one generated session."""
         self.outcome = outcome
         self.index = index
         self.closed = False
         self.close_calls = 0
 
     async def close(self) -> None:
+        """Count the close attempt, then apply the scripted outcome."""
         self.close_calls += 1
         match self.outcome:
             case "timeout":

@@ -44,6 +44,7 @@ class EchoResource(WebSocketResource):
     instances: typ.ClassVar[list[EchoResource]] = []
 
     def __init__(self) -> None:
+        """Start with no received payloads and register this instance."""
         self.received: list[object] = []
         self.websocket: WebSocketLike | None = None
         EchoResource.instances.append(self)
@@ -104,6 +105,7 @@ def when_connect(
     ]
 
     async def _open() -> SimulatorConnection:
+        """Open the echo route with the seeded frames and wait for the send."""
         async with context.harness.connect(
             "/echo",
             initial_inbound=frames,

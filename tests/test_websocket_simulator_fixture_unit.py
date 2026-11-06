@@ -40,6 +40,7 @@ class EchoResource(WebSocketResource):
     instances: typ.ClassVar[list[EchoResource]] = []
 
     def __init__(self) -> None:
+        """Create the resource and record it in the shared instance list."""
         self.received: list[object] = []
         self.websocket: WebSocketLike | None = None
         EchoResource.instances.append(self)
@@ -102,6 +103,7 @@ class ClosingResource(WebSocketResource):
     instances: typ.ClassVar[list[ClosingResource]] = []
 
     def __init__(self) -> None:
+        """Create the resource with an unset closed event and record it."""
         self.closed_event = asyncio.Event()
         ClosingResource.instances.append(self)
 
@@ -247,6 +249,7 @@ class TestWebSocketSimulatorFixture:
         def fail_operation(
             self: WebSocketSimulator, *_: object
         ) -> asyncio.Future[None]:
+            """Return a failed future in place of the simulator operation."""
             del self
             return _failed_future(operation_error)
 
@@ -276,13 +279,16 @@ class TestWebSocketSimulatorFixture:
             simulator: WebSocketSimulator,
             router_task: asyncio.Task[None],
         ) -> asyncio.Future[None]:
+            """Return a failed future in place of the readiness wait."""
             del simulator, router_task
             return _failed_future(readiness_error)
 
         def fail_cleanup(router_task: asyncio.Task[None]) -> asyncio.Future[None]:
+            """Return a future that fails with the cleanup error once the task ends."""
             future = asyncio.get_running_loop().create_future()
 
             def finish_cleanup(task: asyncio.Task[None]) -> None:
+                """Record the cleanup error on the future when the task finishes."""
                 if not task.cancelled():
                     task.exception()
                 future.set_exception(cleanup_error)
@@ -307,6 +313,7 @@ class TestWebSocketSimulatorFixture:
         """A cancellation timeout is reported as the harness shutdown error."""
 
         async def wait_forever() -> None:
+            """Block until cancelled so the router task never finishes by itself."""
             await asyncio.Event().wait()
 
         router_task = asyncio.create_task(wait_forever())
@@ -317,6 +324,7 @@ class TestWebSocketSimulatorFixture:
         def fail_wait(
             awaitable: cabc.Awaitable[object], *, timeout: float
         ) -> asyncio.Future[None]:
+            """Fail the first wait with a timeout, then cancel and fail the next."""
             del awaitable, timeout
             nonlocal wait_calls
             wait_calls += 1
@@ -353,6 +361,7 @@ class TestWebSocketSimulatorFixture:
         close_errors = iter((primary_error, retry_error, rollback_error))
 
         async def fail_close(code: int = 1000) -> None:
+            """Yield to the loop, then raise the next scripted close error."""
             del code
             await asyncio.sleep(0)
             raise next(close_errors)
@@ -361,6 +370,7 @@ class TestWebSocketSimulatorFixture:
         router_finished = asyncio.Event()
 
         async def finish_router_task() -> None:
+            """Mark the router task as finished after a short delay."""
             await asyncio.sleep(0.02)
             router_finished.set()
 
@@ -393,6 +403,7 @@ class TestWebSocketSimulatorFixture:
         )
 
         async def remain_pending() -> None:
+            """Block until cancelled, standing in for a router task that never ends."""
             await asyncio.Event().wait()
 
         router_task = asyncio.create_task(remain_pending())
@@ -417,9 +428,12 @@ class TestWebSocketSimulatorFixture:
         failure = RuntimeError("responder failed before accepting")
 
         class EarlyFailingResource(WebSocketResource):
+            """Resource whose on_connect fails before the socket is accepted."""
+
             async def on_connect(
                 self, req: falcon.Request, ws: WebSocketLike, **params: object
             ) -> bool:
+                """Raise the preset startup failure before accepting."""
                 raise failure
 
         websocket_simulator.router.add_route("/early-failure", EarlyFailingResource)

@@ -178,6 +178,7 @@ def run_step_scripts(document: object) -> list[str]:
     scripts: list[str] = []
 
     def visit(value: object) -> None:
+        """Append each ``run`` string under ``value``, recursing through containers."""
         match value:
             case dict():
                 run_script = value.get("run")

@@ -94,6 +94,7 @@ def _exchange_raw_frame(
     """Verify exact payloads through the native socket and fallback."""
 
     async def exercise() -> None:
+        """Send the raw frame and check the reply and recorded payload."""
         await connect(context)
         assert context.session is not None, _ASSERTION_FAILURE
         await asyncio.wait_for(context.session.send(raw), timeout=5)
@@ -117,6 +118,7 @@ def when_manager_close_validation_fails(context: LiveScenario) -> LiveScenario:
     """Verify rejected close arguments leave message handling available."""
 
     async def exercise() -> None:
+        """Attempt an invalid close, then check that messages still dispatch."""
         await connect(context)
         conn_id = context.recorder.connection_ids[-1]
         socket = context.server.application.manager.websockets[conn_id]
@@ -143,6 +145,7 @@ def when_manager_sends_native_media(context: LiveScenario) -> LiveScenario:
     """Preserve native keyword arguments through the acceptance adapter."""
 
     async def exercise() -> None:
+        """Send native media keywords and check the client receives them."""
         await connect(context)
         conn_id = context.recorder.connection_ids[-1]
         socket = context.server.application.manager.websockets[conn_id]

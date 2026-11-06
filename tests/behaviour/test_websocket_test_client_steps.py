@@ -74,6 +74,7 @@ def echo_service(event_loop: asyncio.AbstractEventLoop) -> cabc.Iterator[ClientC
     protocols = [Subprotocol("json")]
 
     async def handler(websocket: ws_server.WebSocketServerProtocol, path: str) -> None:
+        """Record the handshake details, then echo every message back."""
         record.paths.append(path)
         record.headers.append(dict(websocket.request_headers))
         record.subprotocols.append(websocket.subprotocol)
@@ -140,6 +141,7 @@ def when_send_json(context: ClientContext) -> ClientContext:
     """Send a JSON payload using the test client and capture the response."""
 
     async def exercise() -> None:
+        """Open the echo route, send the ping, and store the reply and trace."""
         async with context.client.connect("/echo") as session:
             await session.send_json({"type": "ping"})
             context.response = await session.receive_json()
@@ -160,6 +162,7 @@ def when_receive_malformed_frames(context: ClientContext) -> ClientContext:
     context.raw_frames = [malformed_text, malformed_text.encode("utf-8")]
 
     async def exercise() -> None:
+        """Send each malformed frame and record the decode error it provokes."""
         async with context.client.connect("/malformed-auth") as session:
             for frame in context.raw_frames:
                 if isinstance(frame, str):

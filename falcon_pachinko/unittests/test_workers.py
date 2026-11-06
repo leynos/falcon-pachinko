@@ -32,6 +32,7 @@ def noop_worker() -> WorkerFn:
     """Provide a simple worker that immediately yields control."""
 
     async def noop() -> None:
+        """Yield control once and return, so the worker finishes immediately."""
         await asyncio.sleep(0)
 
     return noop
@@ -116,6 +117,7 @@ async def test_stop_propagates_worker_exception(controller: WorkerController) ->
     """Exceptions raised by workers should bubble up when stopping."""
 
     async def boom() -> None:
+        """Yield once, then raise, so that stop must surface the exception."""
         await asyncio.sleep(0)
         raise RuntimeError("boom")
 

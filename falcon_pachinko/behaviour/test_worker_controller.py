@@ -40,6 +40,7 @@ def given_logging_worker(context: dict[str, typ.Any]) -> None:
     log: list[str] = []
 
     async def logging_worker(*, log: list[str]) -> None:
+        """Append ``ping`` to ``log`` on each loop until cancelled."""
         while True:
             log.append("ping")
             await asyncio.sleep(0)
@@ -80,6 +81,7 @@ def when_run_worker(context: dict[str, typ.Any]) -> None:
     worker = context["worker"]
 
     async def _run() -> None:
+        """Start the worker, let it run briefly, then stop it."""
         await controller.start(worker, log=log)
         await asyncio.sleep(0.01)
         await controller.stop()
@@ -94,6 +96,7 @@ def when_both_workers_start(context: dict[str, typ.Any]) -> None:
     created_tasks: list[asyncio.Task[None]] = []
 
     async def _run() -> None:
+        """Start the failing worker and record any task created before the error."""
         original_create_task = asyncio.create_task
 
         def capture_task(
@@ -138,6 +141,7 @@ def when_restart_logging_worker(context: dict[str, typ.Any]) -> None:
     context["log"].clear()
 
     async def _run() -> None:
+        """Restart the valid worker, let it run once, then stop it."""
         await controller.start(context["worker"])
         await asyncio.sleep(0)
         await controller.stop()

@@ -28,6 +28,7 @@ class WorkerController:
     __slots__ = ("_tasks",)
 
     def __init__(self) -> None:
+        """Start with no scheduled worker tasks."""
         self._tasks: list[asyncio.Task[None]] = []
 
     async def start(self, *workers: WorkerFn, **context: object) -> None:

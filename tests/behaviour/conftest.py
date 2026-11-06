@@ -51,7 +51,10 @@ def given_live_server(
     )
 
     def cleanup() -> None:
+        """Finish the live server and client on the event loop at teardown."""
+
         async def finish() -> None:
+            """Stop the server if it is still running and close the client."""
             if not context.server._stopped:
                 await context.server.stop()
             await close_client_context(context)

@@ -540,3 +540,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["falcon_pachinko*"]
 exclude = ["falcon_pachinko.behaviour*", "falcon_pachinko.unittests*"]
+
+[tool.interrogate]
+# Overload signatures share the implementation's docstring, and Ruff (D418) forbids
+# one on each stub. interrogate only recognises `@overload` and `@typing.overload`,
+# not this repository's `@typ.overload` alias, so the one overloaded method is ignored
+# by name; its implementation is documented.
+ignore-overloaded-functions = true
+ignore-regex = ["^notify_before_disconnect$"]

@@ -37,6 +37,11 @@ class InjectedClock:
         fail_on_read: int | None = None,
         raise_cancellation: bool = False,
     ) -> None:
+        """Start at zero, optionally failing on one numbered read.
+
+        ``fail_on_read`` is the 1-based read that fails. ``raise_cancellation``
+        selects ``CancelledError`` over ``RuntimeError`` as that failure.
+        """
         self.value = 0.0
         self.readings: list[float] = []
         self.fail_on_read = fail_on_read
@@ -61,6 +66,7 @@ class RecordedSpan:
         name: SpanName,
         dimensions: SessionDimensions,
     ) -> None:
+        """Open a span nested under the owner's currently active span."""
         self.owner = owner
         self.name = name
         self.parent = owner.active_span.get()
@@ -82,6 +88,7 @@ class RecordingInstrumentation:
     """Collect synchronous telemetry events and their bounded dimensions."""
 
     def __init__(self) -> None:
+        """Create empty telemetry logs with no span active."""
         self.active_span: contextvars.ContextVar[RecordedSpan | None] = (
             contextvars.ContextVar("active_test_span", default=None)
         )
@@ -163,6 +170,7 @@ class FailingSpan:
     """Fail span updates and completion after recording each completion try."""
 
     def __init__(self) -> None:
+        """Create a span whose end has not been attempted yet."""
         self.end_count = 0
 
     def set_dimensions(self, dimensions: SessionDimensions) -> None:
@@ -180,6 +188,7 @@ class FailingSpanInstrumentation(FailingInstrumentation):
     """Return spans whose finalization callbacks fail independently."""
 
     def __init__(self) -> None:
+        """Create an empty log of the failing spans this instrumentation starts."""
         self.spans: list[FailingSpan] = []
 
     def start_span(

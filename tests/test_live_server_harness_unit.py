@@ -27,6 +27,7 @@ class _UnreadyServer:
     """Keep an owned serving task alive without announcing readiness."""
 
     def __init__(self) -> None:
+        """Start with `started` false and unset serving and stopped events."""
         self.started = False
         self.serving = asyncio.Event()
         self.stopped = asyncio.Event()
@@ -51,6 +52,7 @@ class _StartedWithoutSocketServer:
         fail_during_shutdown: bool = False,
         wait_during_shutdown: bool = False,
     ) -> None:
+        """Store the shutdown behaviour switches and create lifecycle events."""
         self.started = False
         self.servers: list[object] = []
         self.stop_requested = asyncio.Event()
@@ -115,6 +117,7 @@ async def test_startup_failure_joins_owned_serving_task(
     async def fail_readiness(
         pending: cabc.Coroutine[object, object, None],
     ) -> None:
+        """Close the pending readiness wait and raise the startup error."""
         await asyncio.wait_for(server.serving.wait(), timeout=1)
         pending.close()
         raise startup_error
@@ -199,6 +202,7 @@ async def test_readiness_wait_preserves_finished_serving_failure() -> None:
     failure = RuntimeError("listener failed")
 
     async def fail_serving() -> None:
+        """Yield once, then raise the listener failure."""
         await asyncio.sleep(0)
         raise failure
 
@@ -224,6 +228,7 @@ def test_live_server_preserves_test_runner_signal_handlers(
     calls: list[int] = []
 
     def record_signal(signum: int, handler: object) -> int:
+        """Record the signal number and report the default disposition."""
         del handler
         calls.append(signum)
         return signal.SIG_DFL
@@ -264,6 +269,7 @@ async def test_stop_preserves_serve_failure_when_session_join_times_out(
     failure = RuntimeError("serve loop failed")
 
     async def fail_serve() -> None:
+        """Yield once, then raise the serve-loop failure."""
         await asyncio.sleep(0)
         raise failure
 
@@ -336,6 +342,7 @@ async def test_stop_reports_session_join_timeout_inside_caller_exception(
     caller_failure = ValueError()
 
     def raise_caller_failure() -> None:
+        """Raise the caller's ValueError to simulate a handled outer error."""
         raise caller_failure
 
     try:
@@ -361,6 +368,7 @@ async def test_live_server_retains_supplied_application_metadata() -> None:
     calls: list[_live_lifecycle_app.LiveApplication] = []
 
     def make_application() -> _live_lifecycle_app.LiveApplication:
+        """Record the call and return the prebuilt application bundle."""
         calls.append(application)
         return application
 

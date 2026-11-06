@@ -92,6 +92,7 @@ class _FallbackRecorder(WebSocketResource):
     fallback: list[str | bytes]
 
     def __init__(self) -> None:
+        """Start with an empty fallback record."""
         self.fallback = []
 
     async def on_unhandled(self, ws: WebSocketLike, message: str | bytes) -> None:
@@ -405,6 +406,7 @@ class InertProbeResource(WebSocketResource):
     """
 
     def __init__(self) -> None:
+        """Start with empty lifecycle, neutral, and fallback records."""
         self.lifecycle: list[int] = []
         self.neutral: list[object] = []
         self.fallback: list[str | bytes] = []

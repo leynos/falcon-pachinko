@@ -23,6 +23,7 @@ class ServiceNotFoundError(LookupError):
     name: str
 
     def __init__(self, name: str) -> None:
+        """Record the missing service name and build the lookup error message."""
         self.name = name
         super().__init__(f"service {name!r} is not registered")
 
@@ -31,6 +32,7 @@ class ServiceContainer:
     """Minimal container used to demonstrate router-level DI wiring."""
 
     def __init__(self) -> None:
+        """Create an empty service registry and signature cache."""
         self._services: dict[str, object] = {}
         self._signature_cache: dict[cabc.Callable[..., object], inspect.Signature] = {}
 

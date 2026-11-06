@@ -57,8 +57,11 @@ async def test_cancellation_after_handler_close_preserves_selected_code() -> Non
     handler_started = asyncio.Event()
 
     class CloseThenWaitResource(RecordingResource):
+        """Recording resource that closes with 4001, then blocks forever."""
+
         @typ.override
         async def dispatch(self, ws: object, raw: str | bytes) -> None:
+            """Close the socket with 4001, then wait until cancelled."""
             del raw
             await typ.cast("typ.Any", ws).close(4001)
             handler_started.set()
@@ -93,7 +96,10 @@ async def test_cancellation_reports_cleanup_failure_to_loop_handler() -> None:
     loop.set_exception_handler(lambda _loop, context: reported.append(context))
 
     class FailingCleanupResource(RecordingResource):
+        """Recording resource whose disconnect cleanup always raises."""
+
         async def on_disconnect(self, ws: object, close_code: int) -> None:
+            """Record the disconnect, then raise the configured cleanup error."""
             await super().on_disconnect(ws, close_code)
             raise cleanup
 
@@ -138,11 +144,15 @@ async def _exercise_repeated_cancellation(repetitions: int) -> None:
     """Hold disconnect cleanup while delivering a bounded cancellation burst."""
 
     class CancellationRecordingResource(RecordingResource):
+        """Recording resource that notes whether disconnect cleanup is cancelled."""
+
         def __init__(self) -> None:
+            """Initialize the base records and the cancellation flag."""
             super().__init__()
             self.disconnect_cancelled = False
 
         async def on_disconnect(self, ws: object, close_code: int) -> None:
+            """Record disconnect cancellation and re-raise it."""
             try:
                 await super().on_disconnect(ws, close_code)
             except asyncio.CancelledError:
@@ -181,7 +191,10 @@ async def test_cancellation_during_clean_disconnect_preserves_selected_code() ->
     """Late cancellation finishes cleanup without rewriting the close outcome."""
 
     class WaitingCleanupResource(RecordingResource):
+        """Recording resource that holds its disconnect cleanup open."""
+
         def __init__(self) -> None:
+            """Initialize the base records and enable the disconnect wait."""
             super().__init__()
             self.wait_in_disconnect = True
 

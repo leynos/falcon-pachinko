@@ -29,6 +29,7 @@ class HookedChild(WebSocketResource):
     instances: typ.ClassVar[list[HookedChild]] = []
 
     def __init__(self) -> None:
+        """Register this instance in the class-level list of children."""
         HookedChild.instances.append(self)
 
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
@@ -49,6 +50,7 @@ class HookedParent(WebSocketResource):
     """Parent resource that mounts :class:`HookedChild`."""
 
     def __init__(self) -> None:
+        """Mount the hooked child resource at the ``child`` subroute."""
         self.add_subroute("child", HookedChild)
 
 
@@ -199,7 +201,10 @@ def test_connect_client_preserves_original_exception_without_child() -> None:
     failure = RuntimeError("route construction failed")
 
     class FailingRouter:
+        """Stand-in router whose websocket entry point always fails."""
+
         async def on_websocket(self, req: object, ws: object) -> None:
+            """Raise the preset routing failure without touching the socket."""
             del req, ws
             raise failure
 
@@ -352,11 +357,13 @@ def test_connect_client_preserves_original_setup_error(failure_stage: str) -> No
     router = WebSocketRouter(receive_loop=True)
 
     def create_child() -> HookedChild:
+        """Return a child, or raise the setup failure at the factory stage."""
         if failure_stage == "factory":
             raise failure
         return HookedChild()
 
     def fail_before_connect(context: HookContext) -> None:
+        """Raise the setup failure from the before-connect hook."""
         del context
         raise failure
 

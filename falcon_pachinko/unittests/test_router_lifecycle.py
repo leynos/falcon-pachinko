@@ -28,9 +28,12 @@ async def test_negotiate_accepts_options_once_and_returns_session() -> None:
     """Negotiation applies resource options through one framework acceptance."""
 
     class OptionResource(WebSocketResource):
+        """Resource that accepts with a subprotocol and a session header."""
+
         async def on_connect(
             self, req: object, ws: object, **params: object
         ) -> AcceptOptions:
+            """Return accept options carrying a subprotocol and a header."""
             del req, ws, params
             return AcceptOptions(subprotocol="chat", headers=(("x-session", "ready"),))
 
@@ -70,7 +73,10 @@ async def test_invalid_connection_decision_runs_after_connect_with_error() -> No
     hook_contexts: list[HookContext] = []
 
     class InvalidDecisionResource(WebSocketResource):
+        """Resource whose `on_connect` returns a non-boolean decision."""
+
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Return an invalid, non-boolean connection decision."""
             del req, ws, params
             return typ.cast("bool", 1)
 
@@ -95,7 +101,10 @@ async def test_deprecated_resource_accept_is_not_repeated() -> None:
     """Legacy resource acceptance warns and is not repeated by the router."""
 
     class LegacyResource(WebSocketResource):
+        """Resource that accepts the socket itself inside `on_connect`."""
+
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Accept the socket directly and approve the connection."""
             del req, params
             await typ.cast("RecordingWS", ws).accept(subprotocol="legacy")
             return True
@@ -121,7 +130,10 @@ async def test_pre_accept_io_names_session_start_as_supported_phase(
     """Pre-accept data operations fail with migration guidance and close."""
 
     class PrematureIoResource(WebSocketResource):
+        """Resource that performs a data operation before acceptance."""
+
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Run the parametrised data operation before the socket is accepted."""
             del req, params
             socket = typ.cast("RecordingWS", ws)
             if operation == "send_media":
@@ -148,16 +160,21 @@ async def test_session_start_failure_closes_and_disconnects_once() -> None:
     error = RuntimeError("session start failed")
 
     class FailingResource(WebSocketResource):
+        """Resource whose session start raises and which records disconnects."""
+
         disconnect_codes: typ.ClassVar[list[int]] = []
 
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Approve the connection so that the session starts."""
             return True
 
         async def on_session_start(self, ws: object) -> None:
+            """Raise the preset error when the session starts."""
             del ws
             raise error
 
         async def on_disconnect(self, ws: object, close_code: int) -> None:
+            """Record the close code passed to the disconnect callback."""
             del ws
             self.disconnect_codes.append(close_code)
 
@@ -183,7 +200,10 @@ async def test_setup_failure_preserves_existing_exception_cause() -> None:
     error.__cause__ = cause
 
     class FailingResource(WebSocketResource):
+        """Resource whose `on_connect` always raises the preset setup error."""
+
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Raise the preset setup error before the socket is accepted."""
             del req, ws, params
             raise error
 
@@ -204,12 +224,16 @@ async def test_legacy_disconnect_propagates_finalization_failure() -> None:
     cleanup_error = RuntimeError("disconnect cleanup failed")
 
     class LegacyDisconnectedResource(WebSocketResource):
+        """Resource that accepts, then reports a disconnect without an error."""
+
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Accept the socket and raise `WebSocketDisconnected`."""
             del req, params
             await typ.cast("typ.Any", ws).accept()
             raise falcon.WebSocketDisconnected(1000)
 
         async def on_disconnect(self, ws: object, close_code: int) -> None:
+            """Raise the preset cleanup error during finalization."""
             del ws, close_code
             raise cleanup_error
 
@@ -234,11 +258,15 @@ async def test_session_failure_preserves_cause_through_finalization_and_close() 
     error.__cause__ = cause
 
     class FailingResource(WebSocketResource):
+        """Resource whose session start raises the preset error."""
+
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Approve the connection so that the session starts."""
             del req, ws, params
             return True
 
         async def on_session_start(self, ws: object) -> None:
+            """Raise the preset session error."""
             del ws
             raise error
 
@@ -269,7 +297,10 @@ async def test_disconnect_failure_preserves_existing_exception_cause() -> None:
     error.__cause__ = cause
 
     class FailingResource(AcceptingResource):
+        """Accepting resource whose disconnect callback raises the preset error."""
+
         async def on_disconnect(self, ws: object, close_code: int) -> None:
+            """Raise the preset disconnect error."""
             del ws, close_code
             raise error
 
@@ -294,6 +325,7 @@ async def test_after_connect_result_mutation_does_not_change_acceptance() -> Non
     router.mount("/")
 
     def mutate_result(context: HookContext) -> None:
+        """Attempt to flip the after-connect result to False."""
         context.result = False
 
     router.global_hooks.add("after_connect", mutate_result)
@@ -333,7 +365,10 @@ async def test_peer_close_code_is_retained_by_session_guard() -> None:
     disconnect_codes: list[int] = []
 
     class DisconnectResource(AcceptingResource):
+        """Accepting resource that records the close codes it is given."""
+
         async def on_disconnect(self, ws: object, close_code: int) -> None:
+            """Append the close code received at disconnect."""
             del ws
             disconnect_codes.append(close_code)
 
@@ -358,7 +393,10 @@ async def test_none_close_code_uses_normal_closure_code() -> None:
     disconnect_codes: list[int] = []
 
     class DisconnectResource(AcceptingResource):
+        """Accepting resource that records the close codes it is given."""
+
         async def on_disconnect(self, ws: object, close_code: int) -> None:
+            """Append the close code received at disconnect."""
             del ws
             disconnect_codes.append(close_code)
 
@@ -382,7 +420,10 @@ async def test_guarded_binary_helpers_use_native_data_transport() -> None:
     """Direct binary helpers preserve Falcon's raw data frame API."""
 
     class NativeDataWS(RecordingWS):
+        """RecordingWS whose binary helpers use mocked native data transport."""
+
         def __init__(self) -> None:
+            """Install mock native send and receive data transports."""
             super().__init__()
             self.send_data: mock.AsyncMock = mock.AsyncMock()
             self.receive_data: mock.AsyncMock = mock.AsyncMock(return_value=b"reply")
@@ -417,6 +458,7 @@ async def test_aclose_waits_for_run_completion_not_caller_completion() -> None:
     continue_after_run = asyncio.Event()
 
     async def run_then_wait() -> None:
+        """Run the session, then hold the owner task until released."""
         await session.run()
         run_returned.set()
         await continue_after_run.wait()
@@ -438,12 +480,16 @@ async def test_session_cancellation_closes_with_going_away_and_finalizes() -> No
     disconnect_codes: list[int] = []
 
     class BlockingResource(AcceptingResource):
+        """Accepting resource whose session start never returns on its own."""
+
         async def on_session_start(self, ws: object) -> None:
+            """Signal that the session has started, then block until cancelled."""
             del ws
             started.set()
             await asyncio.Event().wait()
 
         async def on_disconnect(self, ws: object, close_code: int) -> None:
+            """Record the close code passed to the disconnect callback."""
             del ws
             disconnect_codes.append(close_code)
 

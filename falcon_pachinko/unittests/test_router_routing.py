@@ -198,21 +198,29 @@ async def test_overlapping_routes() -> None:
     """Ensure the first matching route is used when paths overlap."""
 
     class First(WebSocketResource):
+        """Resource on the parameterised route that records each instance."""
+
         instances: typ.ClassVar[list[First]] = []
 
         def __init__(self) -> None:
+            """Record this instance in the shared class-level list."""
             First.instances.append(self)
 
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Reject the connection so that the matched route can be observed."""
             return False
 
     class Second(WebSocketResource):
+        """Resource on the overlapping static route that records each instance."""
+
         instances: typ.ClassVar[list[Second]] = []
 
         def __init__(self) -> None:
+            """Record this instance in the shared class-level list."""
             Second.instances.append(self)
 
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Reject the connection so that the matched route can be observed."""
             return False
 
     router = WebSocketRouter()

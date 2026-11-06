@@ -22,6 +22,7 @@ def test_gate_cli_composes_an_explicit_detector_context(
     def run(
         selected: detector.NoseSettings, *, context: detector.DetectorContext
     ) -> list[detector.Finding]:
+        """Capture the settings and context the CLI passes to the detector."""
         captured.append((selected, context))
         return []
 

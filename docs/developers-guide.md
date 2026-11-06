@@ -706,8 +706,19 @@ gates with `make markdownlint` and `make spelling`.
 
 ## Lint and Typecheck Toolchain
 
-`make lint` provisions nose, then runs Ruff, both Pylint passes, ambrleaks and
-the blocking nose duplication gate. `make typecheck` runs
+`make lint` provisions nose, then runs `make interrogate` (`--fail-under 100`
+over `falcon_pachinko`, `examples`, `scripts`, `tests` and `tools`, so every
+module, class and function needs a docstring), Ruff, both Pylint passes,
+ambrleaks and the blocking nose duplication gate. The `interrogate` target also
+fails on any `MISSED` row, because interrogate rounds its percentage to one
+decimal and so passes a lone gap in a repository this size. The one
+`@typ.overload`ed method, `notify_before_disconnect`, is ignored by name in
+`[tool.interrogate]` because interrogate does not recognize the `typ` alias and
+Ruff (D418) forbids a docstring on a stub; because that name also hides the
+implementation, `tests/workflow_contracts/test_interrogate_gate.py` asserts
+that the exclusion names only that method and that the implementation has a
+docstring. The same test holds the pin, the flags, the targets, CI's uv setup
+and the failing paths of the target. `make typecheck` runs
 `ty check --extra-search-path .` against `falcon_pachinko`, `tests`, `tools`,
 and the release helpers `scripts/release_assets.py`,
 `scripts/release_assets_cli.py`, `scripts/release_version.py` and

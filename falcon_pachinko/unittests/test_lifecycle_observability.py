@@ -95,6 +95,7 @@ async def test_lifecycle_observations_use_the_configured_monotonic_clock() -> No
     clock_value = 0.0
 
     def monotonic_clock() -> float:
+        """Advance the fake clock by ten seconds on every read."""
         nonlocal clock_value
         clock_value += 10.0
         return clock_value
@@ -125,6 +126,7 @@ async def test_first_clock_failure_keeps_fallback_timebase_and_application_error
     clock_calls = 0
 
     def monotonic_clock() -> float:
+        """Fail the first read, then return a large fixed-step reading."""
         nonlocal clock_calls
         clock_calls += 1
         if clock_calls == 1:
@@ -168,6 +170,7 @@ async def test_later_clock_failures_reuse_last_reading_until_recovery(
     last_reading = 0.0
 
     def monotonic_clock() -> float:
+        """Raise the armed clock error, or advance the reading by ten seconds."""
         nonlocal failure_count, failures_remaining, last_reading
         if failures_remaining:
             failures_remaining -= 1
@@ -185,6 +188,7 @@ async def test_later_clock_failures_reuse_last_reading_until_recovery(
         """Arm clock failures immediately before transport acceptance."""
 
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Arm the two clock failures, then accept through the observed resource."""
             fail_next_two_reads(None)
             return await super().on_connect(req, ws, **params)
 
@@ -443,6 +447,8 @@ async def test_transport_acceptance_failure_is_bounded_and_never_runs_session() 
     failure = RuntimeError("private handshake failure")
 
     class FailingAcceptance(DummyWS):
+        """Socket whose transport handshake always fails with a private error."""
+
         async def accept(
             self,
             subprotocol: str | None = None,

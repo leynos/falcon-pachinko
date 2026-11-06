@@ -1,5 +1,7 @@
 """Tests for WebSocketResource functionality."""
 
+# pylint: disable=too-many-lines  # the resource fixtures and their tests share one module
+
 from __future__ import annotations
 
 import collections
@@ -135,6 +137,7 @@ class ConventionalResource(WebSocketResource):
     """Resource used to test ``on_{tag}`` dispatch."""
 
     def __init__(self) -> None:
+        """Start with an empty list of seen payloads."""
         self.seen: list[typ.Any] = []
 
     async def on_echo(self, ws: WebSocketLike, payload: object) -> None:
@@ -153,6 +156,7 @@ class CamelResource(WebSocketResource):
     schema = SendMessage
 
     def __init__(self) -> None:
+        """Start with an empty list of received message texts."""
         self.messages: list[str] = []
 
     async def on_send_message(self, ws: WebSocketLike, payload: SendMessage) -> None:
@@ -164,6 +168,7 @@ class SyncHandlerResource(WebSocketResource):
     """Resource with a synchronous ``on_{tag}`` handler."""
 
     def __init__(self) -> None:
+        """Start with empty logs of handled payloads and fallback messages."""
         self.seen: list[typ.Any] = []
         self.fallback: list[str | bytes] = []
 
@@ -182,6 +187,7 @@ class StrictResource(WebSocketResource):
     """Resource with strict payload conversion (default)."""
 
     def __init__(self) -> None:
+        """Start with empty logs of validated values and fallback messages."""
         self.seen: list[int] = []
         self.fallback: list[str | bytes] = []
 
@@ -203,6 +209,7 @@ class LifecycleResource(WebSocketResource):
     """
 
     def __init__(self) -> None:
+        """Start with empty lifecycle, fallback, and message logs."""
         self.lifecycle: list[str] = []
         self.fallback: list[str | bytes] = []
         self.messages: list[object] = []
@@ -248,6 +255,7 @@ class AliasedLifecycleResource(WebSocketResource):
     """Resource that aliases ``on_disconnect`` under a dispatchable name."""
 
     def __init__(self) -> None:
+        """Start with empty lifecycle and fallback logs."""
         self.lifecycle: list[int] = []
         self.fallback: list[str | bytes] = []
 
@@ -300,6 +308,7 @@ class ClassmethodLifecycleResource(WebSocketResource):
     """
 
     def __init__(self) -> None:
+        """Start with an empty fallback log."""
         self.fallback: list[str | bytes] = []
 
     on_disconnect = classmethod(_record_classmethod_close)
@@ -321,6 +330,7 @@ class StaticLifecycleResource(WebSocketResource):
     """
 
     def __init__(self) -> None:
+        """Start with an empty fallback log."""
         self.fallback: list[str | bytes] = []
 
     on_disconnect = staticmethod(_record_staticmethod_close)
@@ -344,6 +354,7 @@ class DecoratedReservedTagResource(WebSocketResource):
     """Resource that reuses a reserved tag on an ordinary method."""
 
     def __init__(self) -> None:
+        """Start with empty lifecycle and message logs."""
         self.lifecycle: list[int] = []
         self.messages: list[object] = []
 
@@ -361,6 +372,7 @@ class PunctuationResource(WebSocketResource):
     """Resource whose handler name only matches after normalisation."""
 
     def __init__(self) -> None:
+        """Start with an empty list of seen payloads."""
         self.seen: list[object] = []
 
     async def on_send_message(self, ws: WebSocketLike, payload: object) -> None:
@@ -372,6 +384,7 @@ class LenientResource(WebSocketResource):
     """Resource with lenient payload conversion (allows extra fields)."""
 
     def __init__(self) -> None:
+        """Start with empty logs of validated values and fallback messages."""
         self.seen: list[int] = []
         self.fallback: list[str | bytes] = []
 
@@ -691,6 +704,7 @@ class DescriptorWrappedResource(WebSocketResource):
     """
 
     def __init__(self) -> None:
+        """Start with an empty fallback log."""
         self.fallback: list[str | bytes] = []
 
     @staticmethod

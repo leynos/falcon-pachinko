@@ -87,6 +87,7 @@ def when_client_closes(context: LiveScenario) -> LiveScenario:
     """Close an active accepted client connection with an application code."""
 
     async def exercise() -> None:
+        """Connect, close with code 4000, and wait for the server to record cleanup."""
         await connect(context)
         assert context.session is not None, _ASSERTION_FAILURE
         await asyncio.wait_for(context.session.close(4000), timeout=5)
@@ -105,6 +106,7 @@ def when_manager_closes(context: LiveScenario) -> LiveScenario:
     """Close the live Falcon socket through its registered manager entry."""
 
     async def exercise() -> None:
+        """Connect, close through the manager, and record the code the client saw."""
         await connect(context)
         conn_id = context.recorder.connection_ids[-1]
         websocket = context.server.application.manager.websockets[conn_id]
@@ -147,6 +149,7 @@ def when_handler_closes(
     """Ask the resource handler to initiate its close frame."""
 
     async def exercise() -> None:
+        """Ask the handler to close, then record the code the client observed."""
         await connect(context)
         assert context.session is not None, _ASSERTION_FAILURE
         await asyncio.wait_for(
@@ -195,6 +198,7 @@ def when_client_exchanges_and_closes(context: LiveScenario) -> LiveScenario:
     """Send multiple frames through the live router before client close."""
 
     async def exercise() -> None:
+        """Exchange three echo frames, close with code 4000, and wait for cleanup."""
         await connect(context)
         assert context.session is not None, _ASSERTION_FAILURE
         for index in range(3):
@@ -230,6 +234,7 @@ def when_rejected_handshake(
     """Attempt a resource handshake that returns false before acceptance."""
 
     async def exercise() -> None:
+        """Attempt the handshake and fail the test if the resource accepts it."""
         try:
             await connect(context, path)
             pytest.fail("the rejecting resource must fail the handshake")
@@ -253,6 +258,7 @@ def when_resource_accepts_then_closes(context: LiveScenario) -> LiveScenario:
     """Observe an accepted handshake and close from inside on_connect."""
 
     async def exercise() -> None:
+        """Connect to the accept-then-close route and record the close code seen."""
         await connect(context, "/ws/accept-close")
         assert context.session is not None, _ASSERTION_FAILURE
         try:

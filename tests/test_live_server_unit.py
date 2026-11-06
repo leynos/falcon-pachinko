@@ -28,12 +28,16 @@ if typ.TYPE_CHECKING:
 
 
 class _AcceptingResource(WebSocketResource):
+    """Accept every WebSocket connection so tests can hold sessions open."""
+
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
         """Keep the connection open until the client disconnects."""
         return True
 
 
 class _FailingHTTPResource:
+    """Provide an HTTP route whose GET responder always raises."""
+
     async def on_get(self, req: object, resp: object) -> None:
         """Raise through Falcon's HTTP responder path."""
         msg = "HTTP responder failed"
@@ -41,6 +45,8 @@ class _FailingHTTPResource:
 
 
 class _FailingStartupMiddleware:
+    """Provide ASGI middleware whose lifespan startup always raises."""
+
     async def process_startup(self, scope: object, event: object) -> None:
         """Fail Falcon's ASGI lifespan startup handshake."""
         msg = "Falcon lifespan startup failed"
@@ -51,6 +57,7 @@ class _StalledSession:
     """Represent a client close handshake that never completes."""
 
     async def close(self) -> None:
+        """Block forever so tests can exercise a close handshake timeout."""
         await asyncio.Future()
 
 
@@ -58,10 +65,12 @@ class _ConfigurableSession:
     """Record successful closure or reproduce a failed close handshake."""
 
     def __init__(self, close_error: Exception | None = None) -> None:
+        """Store the optional error that close raises instead of closing."""
         self.close_error = close_error
         self.closed = False
 
     async def close(self) -> None:
+        """Raise the configured close error, or record a successful close."""
         if self.close_error is not None:
             raise self.close_error
         self.closed = True
@@ -71,10 +80,12 @@ class _RecordingWebSocket:
     """Record the close code selected by Falcon's exception handler."""
 
     def __init__(self) -> None:
+        """Start with the socket open and no close code recorded."""
         self.closed = False
         self.close_code: int | None = None
 
     async def close(self, *, code: int | None = None) -> None:
+        """Record that the socket closed and the code it was closed with."""
         self.closed = True
         self.close_code = code
 
@@ -137,16 +148,19 @@ class _FailingServeAdapter(_FakeAdapter):
     """Exit after readiness to exercise serve-task error reporting."""
 
     def __init__(self) -> None:
+        """Initialize the adapter with its exit-failure flag cleared."""
         super().__init__()
         self._fail_on_exit = False
 
     async def _serve(self) -> None:
+        """Wait for shutdown, then raise if a failure was requested."""
         await self._finished.wait()
         if self._fail_on_exit:
             msg = "serve task failed"
             raise RuntimeError(msg)
 
     def fail(self) -> None:
+        """Make the serve task raise when it exits and release it now."""
         self._fail_on_exit = True
         self._finished.set()
 
@@ -216,6 +230,7 @@ async def test_concurrent_servers_receive_distinct_ephemeral_ports() -> None:
     """Allocate independent ephemeral listeners for concurrent servers."""
 
     async def port_for() -> int:
+        """Start a live server and return the ephemeral port it bound."""
         async with LiveWebSocketServer(_make_app()) as server:
             port = int(server.base_url.rsplit(":", maxsplit=1)[1])
         assert port > 0, "each live listener must use a valid ephemeral port"
@@ -235,6 +250,7 @@ async def test_server_instance_cannot_be_entered_twice() -> None:
     async with server:
 
         async def reenter_server() -> None:
+            """Attempt to enter the already-entered server a second time."""
             async with server:
                 pytest.fail("the context must reject repeated entry")
 
@@ -254,6 +270,7 @@ async def test_startup_failure_raises_before_entering_context() -> None:
     )
 
     async def start_server() -> None:
+        """Enter a live server whose adapter startup fails."""
         async with LiveWebSocketServer(_make_app(), adapter=adapter):
             pytest.fail("the context must not yield after startup fails")
 
@@ -273,6 +290,7 @@ async def test_cancelling_startup_releases_partial_resources() -> None:
     server = LiveWebSocketServer(_make_app(), adapter=adapter)
 
     async def enter_server() -> None:
+        """Enter a live server whose startup stays pending until cancelled."""
         async with server:
             pytest.fail("the context must not yield while startup is pending")
 
@@ -317,6 +335,7 @@ async def test_falcon_lifespan_failure_raises_before_entering_context() -> None:
     router.attach(app, "/ws")
 
     async def start_server() -> None:
+        """Enter a live server whose Falcon lifespan startup fails."""
         async with LiveWebSocketServer(app, startup_timeout=1.0):
             pytest.fail("the context must not yield after lifespan failure")
 
@@ -508,7 +527,10 @@ async def test_escaped_asgi_exception_is_recorded_and_reraised() -> None:
     """Record failures escaping the ASGI app while preserving propagation."""
 
     class EscapingApp(falcon.asgi.App):
+        """Falcon app whose ASGI call raises a RuntimeError."""
+
         async def __call__(self, scope: object, receive: object, send: object) -> None:
+            """Raise the escaped failure instead of handling the request."""
             msg = "escaped ASGI failure"
             raise RuntimeError(msg)
 
@@ -533,7 +555,10 @@ async def test_escaped_asgi_exception_is_not_recorded_when_capture_is_disabled()
     failure = RuntimeError("escaped ASGI failure")
 
     class EscapingApp(falcon.asgi.App):
+        """Falcon app whose ASGI call raises a preset failure."""
+
         async def __call__(self, scope: object, receive: object, send: object) -> None:
+            """Raise the preset failure without handling the request."""
             raise failure
 
     app = EscapingApp()
@@ -556,6 +581,7 @@ async def test_serve_task_failure_is_reported_during_teardown() -> None:
     adapter = _FailingServeAdapter()
 
     async def run_server() -> None:
+        """Fail the serve task inside the context and wait for it to finish."""
         async with LiveWebSocketServer(_make_app(), adapter=adapter):
             adapter.fail()
             done, _pending = await asyncio.wait({adapter.task}, timeout=1.0)
@@ -577,6 +603,7 @@ async def test_body_exception_is_preserved_with_server_error_note() -> None:
     body_failure = ValueError("body failed")
 
     async def run_server() -> None:
+        """Record a server failure, then raise a test-body error inside it."""
         async with LiveWebSocketServer(_make_app(), adapter=_FakeAdapter()) as server:
             server.record_error(failure)
             raise body_failure
@@ -594,6 +621,7 @@ async def test_http_responder_failure_is_captured_and_returns_generic_500() -> N
     """Return generic HTTP failure details and retain the application error."""
 
     async def request_failure() -> None:
+        """Request the failing HTTP route and check the generic 500 reply."""
         async with LiveWebSocketServer(_make_app()) as server:
             port = int(server.base_url.rsplit(":", maxsplit=1)[1])
             reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -636,6 +664,7 @@ async def test_uvicorn_import_failure_raises_missing_dependency_error(
     import_module = uvicorn_adapter.importlib.import_module
 
     def fail_uvicorn_import(name: str, package: str | None = None) -> object:
+        """Raise ModuleNotFoundError for uvicorn and delegate other imports."""
         if name == "uvicorn":
             msg = "No module named 'uvicorn'"
             raise ModuleNotFoundError(msg)
@@ -674,6 +703,7 @@ async def test_uvicorn_stop_cancels_task_during_startup_race() -> None:
         await original_task
 
     async def block_forever() -> None:
+        """Wait on an event that is never set."""
         await asyncio.Event().wait()
 
     blocked_task = asyncio.create_task(block_forever())
@@ -697,6 +727,7 @@ def test_live_server_runner_finishes_pending_async_work() -> None:
     generator_finalized = asyncio.Event()
 
     async def pending_task() -> None:
+        """Await a future forever and record that its finally block ran."""
         task_started.set()
         try:
             await asyncio.Future()
@@ -704,6 +735,7 @@ def test_live_server_runner_finishes_pending_async_work() -> None:
             task_finalized.set()
 
     async def pending_generator() -> cabc.AsyncGenerator[str, None]:
+        """Yield once and record that its finally block ran."""
         await asyncio.sleep(0)
         try:
             yield "ready"
@@ -711,11 +743,13 @@ def test_live_server_runner_finishes_pending_async_work() -> None:
             generator_finalized.set()
 
     async def start_pending_task() -> asyncio.Task[None]:
+        """Start pending_task and wait until it has begun running."""
         task = asyncio.create_task(pending_task())
         await task_started.wait()
         return task
 
     async def start_generator() -> str:
+        """Advance the async generator to its first yielded value."""
         return await generator.__anext__()
 
     task = runner.run(start_pending_task())

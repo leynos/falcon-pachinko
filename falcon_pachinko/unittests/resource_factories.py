@@ -17,6 +17,7 @@ def resource_factory(service: object) -> ResourceFactory:
     def build(
         route_factory: cabc.Callable[..., WebSocketResource],
     ) -> WebSocketResource:
+        """Build a resource and pass ``service`` to it as a keyword argument."""
         target = getattr(route_factory, "func", route_factory)
         args = getattr(route_factory, "args", ())
         base_kwargs = dict(getattr(route_factory, "keywords", {}) or {})

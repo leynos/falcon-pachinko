@@ -34,11 +34,14 @@ if typ.TYPE_CHECKING:
 class _LiveSession(typ.Protocol):
     """The public client operations used by a live scenario."""
 
-    async def send_json(self, payload: object) -> None: ...
+    async def send_json(self, payload: object) -> None:
+        """Send one JSON-serializable payload to the live server."""
 
-    async def receive_json(self) -> object: ...
+    async def receive_json(self) -> object:
+        """Return the next JSON message received from the live server."""
 
-    async def close(self, code: int = 1000, reason: str = "") -> None: ...
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        """Close the live session with the given code and reason."""
 
 
 @dc.dataclass(slots=True)
@@ -131,6 +134,7 @@ def when_valid_client_connects(context: LiveReferenceContext) -> LiveReferenceCo
     """Open the documented nested route with its documented auth headers."""
 
     async def connect() -> _LiveSession:
+        """Enter the tasks route with valid auth and return the live session."""
         session = await context.stack.enter_async_context(
             context.client.connect(
                 _TASKS_PATH,
@@ -240,6 +244,7 @@ def then_connection_removed(context: LiveReferenceContext) -> None:
     manager = _connection_manager(context)
 
     async def wait_for_removal() -> None:
+        """Poll the manager until the connection leaves or the wait times out."""
         deadline = context.event_loop.time() + _WAIT_TIMEOUT
         while connection_id in manager.websockets:
             if context.event_loop.time() >= deadline:
@@ -308,6 +313,7 @@ def when_invalid_client_connects(context: LiveReferenceContext) -> LiveReference
     """Attempt the real handshake and retain Falcon's HTTP rejection status."""
 
     async def connect() -> None:
+        """Enter the tasks route with a wrong token so the handshake is refused."""
         await context.stack.enter_async_context(
             context.client.connect(
                 _TASKS_PATH,

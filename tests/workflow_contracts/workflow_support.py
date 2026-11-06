@@ -92,6 +92,7 @@ class UnreadableWorkflowError(WorkflowShapeError):
     """
 
     def __init__(self, path: pathlib.Path) -> None:
+        """Build a message naming the path that could not be read."""
         super().__init__(f"{path} must be readable")
 
 
@@ -108,6 +109,7 @@ class UndecodableWorkflowError(WorkflowShapeError):
     """
 
     def __init__(self, path: pathlib.Path) -> None:
+        """Build a message naming the path whose bytes are not UTF-8."""
         super().__init__(f"{path} must be UTF-8")
 
 
@@ -121,6 +123,7 @@ class UnparsableWorkflowError(WorkflowShapeError):
     """
 
     def __init__(self, name: str) -> None:
+        """Build a message naming the workflow file that is not valid YAML."""
         super().__init__(f"{name} must parse as YAML")
 
 
@@ -134,6 +137,7 @@ class NotAMappingError(WorkflowShapeError):
     """
 
     def __init__(self, subject: str) -> None:
+        """Build a message naming the subject that did not parse to a mapping."""
         super().__init__(f"{subject} must parse to a mapping")
 
 
@@ -149,6 +153,7 @@ class NotALabelError(WorkflowShapeError):
     """
 
     def __init__(self, subject: str, value: object) -> None:
+        """Build a message quoting the non-string registry entry and its value."""
         super().__init__(f"{subject} must be a runner label; got {value!r}")
 
 
@@ -423,6 +428,7 @@ class NotAListError(WorkflowShapeError):
     """
 
     def __init__(self, site: str) -> None:
+        """Build a message naming the malformed container's location."""
         super().__init__(f"{site} must be a list")
 
 
@@ -438,6 +444,7 @@ class UnsupportedUsesError(WorkflowShapeError):
     """
 
     def __init__(self, site: str, value: object) -> None:
+        """Build a message naming the location and the rejected reference."""
         super().__init__(f"{site}: unsupported or mutable uses {value!r}")
 
 

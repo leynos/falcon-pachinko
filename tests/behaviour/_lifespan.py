@@ -16,6 +16,7 @@ class LifespanApp(falcon.asgi.App):
     """Falcon ASGI App with a minimal lifespan decorator."""
 
     def __init__(self) -> None:
+        """Create the app with no lifespan handler registered yet."""
         super().__init__()
         self._lifespan_handler: (
             cabc.Callable[[LifespanApp], cl_typing.AbstractAsyncContextManager[None]]

@@ -57,6 +57,7 @@ def _create_app(
     router.add_route("/", lambda: resource_factory(recorder))
 
     def record_after_receive(context: HookContext) -> None:
+        """Append the hook's error, or None, so tests can see the receive outcome."""
         recorder.after_receive_errors.append(context.error)
 
     router.global_hooks.add(HookEvent.AFTER_RECEIVE, record_after_receive)
@@ -93,6 +94,7 @@ def live_server(
     def start(
         resource_factory: cabc.Callable[[SessionRecorder], WebSocketResource],
     ) -> LiveServerContext:
+        """Launch a live server for resource_factory and track it for teardown."""
         context = _start_live_context(live_event_loop, resource_factory)
         contexts.append(context)
         return context

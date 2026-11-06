@@ -105,6 +105,7 @@ class _LifecycleSocket:
     """Track websocket lifecycle state and mirror events to an optional peer."""
 
     def __init__(self) -> None:
+        """Start unaccepted and open, with no peer and no close code recorded."""
         self._accepted = False
         self._closed = False
         self._close_code: int | None = None

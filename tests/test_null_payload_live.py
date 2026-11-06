@@ -18,6 +18,7 @@ class _Resource(WebSocketResource):
     """Record dispatch outcomes through a real connection."""
 
     def __init__(self, events: asyncio.Queue[tuple[str, object]]) -> None:
+        """Store the queue that receives each validated dispatch outcome."""
         self.events = events
 
     async def on_typed(self, ws: WebSocketLike, payload: int) -> None:

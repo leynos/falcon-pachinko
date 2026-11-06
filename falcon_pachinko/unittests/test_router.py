@@ -56,6 +56,7 @@ class DummyResource(WebSocketResource):
     instances: typ.ClassVar[list[DummyResource]] = []
 
     def __init__(self) -> None:  # pragma: no cover - simple init
+        """Record the instance so tests can inspect the params it saw."""
         DummyResource.instances.append(self)
 
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
@@ -78,20 +79,26 @@ async def test_router_global_hooks_wrap_lifecycle() -> None:
     events: list[str] = []
 
     class GlobalHookResource(WebSocketResource):
+        """Resource that records its connect params and dispatched messages."""
+
         instances: typ.ClassVar[list[GlobalHookResource]] = []
 
         def __init__(self) -> None:
+            """Record the instance and start with empty connect params."""
             GlobalHookResource.instances.append(self)
             self.params: dict[str, object] = {}
 
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Store the connect params and accept the connection."""
             self.params = params
             return True
 
         async def on_unhandled(self, ws: object, message: str | bytes) -> None:
+            """Record that the message reached the handler dispatch."""
             events.append("handler.dispatch")
 
     def global_hook(context: HookContext) -> None:
+        """Log each lifecycle event and inject a param before connecting."""
         if context.event == "before_connect":
             if context.params is None:
                 context.params = {}
@@ -354,21 +361,29 @@ async def test_overlapping_routes() -> None:
     """Ensure the first matching route is used when paths overlap."""
 
     class First(WebSocketResource):
+        """Earlier-registered resource that should win an overlapping match."""
+
         instances: typ.ClassVar[list[First]] = []
 
         def __init__(self) -> None:
+            """Record the instance so the test can see it was built."""
             First.instances.append(self)
 
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Refuse the connection after the route has matched."""
             return False
 
     class Second(WebSocketResource):
+        """Later-registered resource that the overlapping route should shadow."""
+
         instances: typ.ClassVar[list[Second]] = []
 
         def __init__(self) -> None:
+            """Record the instance so the test can detect that it was built."""
             Second.instances.append(self)
 
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Refuse the connection if this resource is ever reached."""
             return False
 
     router = WebSocketRouter()
@@ -409,7 +424,10 @@ async def test_on_connect_exception_closes_ws() -> None:
     """Exceptions in ``on_connect`` should close the connection."""
 
     class BadResource(WebSocketResource):
+        """Resource whose on_connect always raises RuntimeError."""
+
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Raise RuntimeError to simulate a failing connection handler."""
             raise RuntimeError("boom")
 
     ws = await _expect_close(BadResource, path="/boom", expected_exc=RuntimeError)
@@ -424,14 +442,18 @@ async def test_resource_init_args_kwargs() -> None:
     """Ensure ``add_route`` forwards init args and kwargs."""
 
     class ParamResource(WebSocketResource):
+        """Resource that records its positional and keyword init arguments."""
+
         instances: typ.ClassVar[list[ParamResource]] = []
 
         def __init__(self, foo: str, *, bar: int) -> None:
+            """Store the positional and keyword arguments and record the instance."""
             self.foo = foo
             self.bar = bar
             ParamResource.instances.append(self)
 
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Store the connect params and refuse the connection."""
             self.params = params
             return False
 
@@ -452,6 +474,7 @@ class InjectedResource(WebSocketResource):
     instances: typ.ClassVar[list[InjectedResource]] = []
 
     def __init__(self, *, config: str, service: object) -> None:
+        """Store the injected config and service and record the instance."""
         self.config = config
         self.service = service
         InjectedResource.instances.append(self)
@@ -468,6 +491,7 @@ class InjectedChild(WebSocketResource):
     instances: typ.ClassVar[list[InjectedChild]] = []
 
     def __init__(self, *, service: object) -> None:
+        """Store the injected service and record the instance."""
         self.service = service
         InjectedChild.instances.append(self)
 
@@ -483,6 +507,7 @@ class InjectedParent(WebSocketResource):
     instances: typ.ClassVar[list[InjectedParent]] = []
 
     def __init__(self, *, label: str, service: object) -> None:
+        """Store the injected dependencies and mount the child subroute."""
         self.label = label
         self.service = service
         InjectedParent.instances.append(self)
@@ -546,12 +571,16 @@ async def test_router_resource_factory_failure_closes_connection() -> None:
     """Router closes the websocket when a resource factory raises."""
 
     class FailingResource(WebSocketResource):
+        """Resource that must never be built because its factory fails."""
+
         async def on_connect(
             self, req: object, ws: object, **params: object
         ) -> bool:  # pragma: no cover - not reached
+            """Accept the connection; the test expects this to be unreachable."""
             return True
 
     def failing_factory(_: cabc.Callable[..., WebSocketResource]) -> WebSocketResource:
+        """Fail every resource build with a RuntimeError."""
         msg = "resource factory failed"
         raise RuntimeError(msg)
 
@@ -576,10 +605,14 @@ async def test_resource_missing_init_args() -> None:
     """Invalid or missing init args should raise ``TypeError`` and close the WS."""
 
     class NeedsArgs(WebSocketResource):
+        """Resource whose initializer requires an argument the route omits."""
+
         def __init__(self, value: int) -> None:
+            """Store the required value; construction fails without it."""
             self.value = value
 
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Refuse the connection if construction ever succeeds."""
             return False
 
     ws = await _expect_close(NeedsArgs, path="/w", expected_exc=TypeError)
@@ -592,7 +625,10 @@ async def test_resource_unexpected_init_kwargs() -> None:
     """Unexpected kwargs should raise ``TypeError`` and close the WS."""
 
     class NoKwargs(WebSocketResource):
+        """Resource using the default initializer, which takes no keywords."""
+
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Refuse the connection; construction should fail first."""
             return False
 
     ws = await _expect_close(
@@ -610,14 +646,19 @@ async def test_add_route_accepts_factory() -> None:
     created: dict[str, object] = {}
 
     class FactoryResource(WebSocketResource):
+        """Resource built through a factory that records what it received."""
+
         def __init__(self, value: int) -> None:
+            """Record the init value forwarded by the factory."""
             created["init"] = value
 
         async def on_connect(self, req: object, ws: object, **params: object) -> bool:
+            """Record the connect params and refuse the connection."""
             created["params"] = params
             return False
 
     def factory(value: int) -> FactoryResource:
+        """Build a FactoryResource from the value the route forwards."""
         return FactoryResource(value)
 
     router = WebSocketRouter()
@@ -704,7 +745,10 @@ async def test_resource_initializer_may_require_its_own_name() -> None:
     built: list[str] = []
 
     class NamedResource(WebSocketResource):
+        """Resource whose initializer takes its own ``name`` keyword."""
+
         def __init__(self, *, name: str) -> None:
+            """Record the initializer's name in the list and on the instance."""
             built.append(name)
             self.resource_name = name
 

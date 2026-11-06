@@ -20,6 +20,7 @@ class SessionSocket(WebSocketLike):
         *,
         accept_error: Exception | None = None,
     ) -> None:
+        """Queue ``frames``, or block receives forever when it is ``None``."""
         self.accepted = False
         self.closed = False
         self.close_codes: list[int] = []
@@ -72,6 +73,7 @@ class SessionResource(WebSocketResource):
     """Record session dispatch and exactly-once disconnect cleanup."""
 
     def __init__(self, *, dispatch_error: Exception | None = None) -> None:
+        """Start empty frame and disconnect logs, optionally failing dispatch."""
         self.frames: list[str | bytes] = []
         self.disconnects: list[tuple[object, int]] = []
         self.dispatch_error = dispatch_error

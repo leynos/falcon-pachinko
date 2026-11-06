@@ -48,6 +48,7 @@ class NotARunnerExpressionError(WorkflowShapeError):
     """
 
     def __init__(self, raw: str) -> None:
+        """Build a message quoting the label that is not a conditional."""
         super().__init__(f"{raw!r} is not a conditional runner label")
 
 

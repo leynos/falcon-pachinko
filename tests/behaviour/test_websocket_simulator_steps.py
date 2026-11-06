@@ -25,6 +25,7 @@ class EchoResource(WebSocketResource):
     instances: typ.ClassVar[list[EchoResource]] = []
 
     def __init__(self) -> None:
+        """Create an empty receive log and register the instance for assertions."""
         self.websocket: object | None = None
         self.received: list[object] = []
         EchoResource.instances.append(self)
@@ -102,6 +103,7 @@ def when_connection(
     assert context.payload is not None, "the simulator payload must be prepared"
 
     async def connect() -> SimulatorConnection:
+        """Open the seeded connection and wait until the router has replied."""
         async with context.harness.connect(
             "/echo", initial_inbound=[(context.payload, "json")]
         ) as connection:

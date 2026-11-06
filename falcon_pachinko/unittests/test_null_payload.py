@@ -36,6 +36,7 @@ class RecordingResource(WebSocketResource):
     """Record selected handlers and rejected frames."""
 
     def __init__(self) -> None:
+        """Create empty records of accepted payloads and rejected frames."""
         self.seen: list[object] = []
         self.fallback: list[str | bytes] = []
 

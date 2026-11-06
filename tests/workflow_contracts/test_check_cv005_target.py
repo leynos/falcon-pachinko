@@ -50,6 +50,7 @@ pytestmark = pytest.mark.skipif(MAKE is None, reason="make is not installed")
 
 
 def _make(*args: str) -> subprocess.CompletedProcess[str]:
+    """Run quiet make targets from the repository root, unchecked."""
     assert MAKE is not None, "make is required"
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv, no shell
         [MAKE, "--no-print-directory", "--silent", *args],

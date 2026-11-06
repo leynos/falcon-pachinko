@@ -35,6 +35,7 @@ def create_app_with_worker() -> AppWithWorker:
     async def run_until_cancelled(
         *, state: dict[str, bool], started: asyncio.Event, stopped: asyncio.Event
     ) -> None:
+        """Mark the run, signal start, then wait until cancelled and signal stop."""
         state["ran"] = True
         started.set()
         try:
@@ -44,6 +45,7 @@ def create_app_with_worker() -> AppWithWorker:
 
     @app.lifespan
     async def lifespan(app_instance: LifespanApp) -> cabc.AsyncGenerator[None, None]:
+        """Start the worker on entry and stop it when the application shuts down."""
         await controller.start(
             run_until_cancelled, state=state, started=started, stopped=stopped
         )
@@ -59,6 +61,7 @@ def run_lifespan(app_with_worker: AppWithWorker) -> None:
     app, _, started, _ = app_with_worker
 
     async def _runner() -> None:
+        """Enter the app's lifespan and wait for the worker to start."""
         async with app.lifespan_context():
             await asyncio.wait_for(started.wait(), timeout=START_TIMEOUT)
 

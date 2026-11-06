@@ -179,6 +179,7 @@ class InProcessBackend(ConnectionBackend):
     """
 
     def __init__(self) -> None:
+        """Create empty socket and room registries guarded by one lock."""
         self._websockets: dict[str, WebSocketLike] = {}
         self._rooms: dict[str, set[str]] = {}
         self._lock = asyncio.Lock()
@@ -275,6 +276,7 @@ class WebSocketConnectionManager:
     """
 
     def __init__(self, backend: ConnectionBackend | None = None) -> None:
+        """Use the given backend, or an in-process registry when none is given."""
         self._backend = backend or InProcessBackend()
 
     @property
@@ -346,6 +348,7 @@ class WebSocketConnectionManager:
         """Return a coroutine factory for sending ``data`` with ``timeout``."""
 
         def _send(ws: WebSocketLike) -> cabc.Awaitable[None]:
+            """Send ``data`` to ``ws``, applying ``timeout`` when one is set."""
             send = ws.send_media(data)
             return asyncio.wait_for(send, timeout) if timeout is not None else send
 
@@ -360,6 +363,7 @@ class WebSocketConnectionManager:
         errors: list[Exception] = []
 
         async def _send_with_capture(ws: WebSocketLike) -> None:
+            """Send to one socket and collect any exception instead of raising it."""
             try:
                 await send_fn(ws)
             except Exception as exc:  # ruff: ignore[blind-except] - every recipient failure is aggregated and re-raised
@@ -372,6 +376,7 @@ class WebSocketConnectionManager:
 
     @staticmethod
     def _handle_broadcast_errors(errors: list[Exception]) -> None:
+        """Raise the sole error, or an ``ExceptionGroup`` when there are several."""
         if not errors:
             return
         if len(errors) == 1:

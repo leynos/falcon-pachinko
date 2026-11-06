@@ -161,6 +161,7 @@ def stub_runner(
         _repository_root: Path,
         _environment: cabc.Mapping[str, str],
     ) -> str:
+        """Return the stub output for a version, stats, or query command."""
         if "--version" in command:
             return f"{version}\n"
         if len(command) > 1 and command[1] == "stats":
