@@ -111,15 +111,15 @@ def test_duplicate_handler_raises() -> None:
         class BadResource(  # pyright: ignore[reportUnusedClass]  # class exists only to trigger the error
             WebSocketResource
         ):
-            """Resource that registers two handlers for the same message tag."""
+            """Resource whose second handler repeats the first handler's message tag."""
 
             @handles_message("dup")
             async def h1(self, ws: WebSocketLike, payload: object) -> None:
-                """Stub the first handler; the decorator registers it for the tag."""
+                """Stub the first handler, whose descriptor registers the tag."""
 
             @handles_message("dup")
             async def h2(self, ws: WebSocketLike, payload: object) -> None:
-                """Stub the second handler; the decorator registers it for the tag."""
+                """Stub the second handler, whose descriptor rejects the tag."""
 
 
 def test_missing_payload_param_raises() -> None:

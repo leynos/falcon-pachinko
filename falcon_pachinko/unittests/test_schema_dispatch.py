@@ -421,11 +421,11 @@ def test_duplicate_payload_type_raises() -> None:
 
             @handles_message("a")
             async def h1(self, ws: WebSocketLike, payload: Payload) -> None:
-                """Handle the first message type for the duplicate-payload check."""
+                """Declare a no-op handler for tag "a" with the shared payload type."""
 
             @handles_message("b")
             async def h2(self, ws: WebSocketLike, payload: Payload) -> None:
-                """Handle the second message type that duplicates the first."""
+                """Declare a no-op handler for tag "b" with the same payload type."""
 
     assert "Payload" in str(exc.value), "error should name the duplicated payload type"
     assert "BadResource.h2" in str(exc.value), (

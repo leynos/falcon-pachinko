@@ -388,7 +388,7 @@ def handles_message(
     def decorator(
         func: cabc.Callable[..., cabc.Awaitable[None]],
     ) -> _HandlesMessageDescriptor:
-        """Wrap func in a handler descriptor registered under message_type."""
+        """Wrap func in a descriptor that registers it when the class is created."""
         return _HandlesMessageDescriptor(message_type, func, strict=strict)
 
     return decorator
