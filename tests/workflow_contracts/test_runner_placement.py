@@ -66,7 +66,6 @@ LANE_CEILINGS = {
     ("ci.yml", "lint-test"): 15,
     ("ci.yml", "falcon-minimum"): 30,
     ("ci.yml", "build-dist"): 15,
-    ("coverage-main.yml", "coverage-upload"): 15,
     ("release.yml", "check-version"): 30,
     ("release.yml", "build-wheels"): 30,
     ("release.yml", "attest"): 30,
@@ -78,7 +77,6 @@ LANE_CEILINGS = {
 #: them, so they name their label outright; a guard here would be noise that
 #: reads as protection.
 PUSH_ONLY_UBICLOUD_LANES = (
-    ("coverage-main.yml", "coverage-upload"),
     ("release.yml", "check-version"),
     ("release.yml", "build-wheels"),
     ("release.yml", "attest"),
@@ -90,6 +88,7 @@ PUSH_ONLY_UBICLOUD_LANES = (
 #: dispatch and `pull_request_target` work is not what this migration
 #: targets, and public-repository minutes are free there.
 GITHUB_HOSTED_JOBS = {
+    ("coverage-main.yml", "coverage-upload"): "main coverage upload blocks no work",
     ("delayed-pr-comment.yml", "delay_and_comment"): "workflow_dispatch only",
 }
 

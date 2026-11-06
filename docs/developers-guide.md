@@ -1246,24 +1246,25 @@ Repository-owned Linux lanes run on Ubicloud managed runners. Scheduled,
 dispatch-only and `pull_request_target` work stays GitHub-hosted, where
 public-repository minutes are free and where this migration has nothing to gain.
 
-| Job                                   | Trigger            | Ceiling |
-| ------------------------------------- | ------------------ | ------- |
-| `ci.yml` `lint-test`                  | pull request, push | 15 min  |
-| `ci.yml` `falcon-minimum`             | pull request, push | 30 min  |
-| `ci.yml` `build-dist`                 | pull request, push | 15 min  |
-| `coverage-main.yml` `coverage-upload` | push to `main`     | 15 min  |
-| `release.yml` `check-version`         | tag push           | 30 min  |
-| `release.yml` `build-wheels`          | tag push           | 30 min  |
-| `release.yml` `attest`                | tag push           | 30 min  |
-| `release.yml` `draft-release`         | tag push           | 30 min  |
-| `release.yml` `publish-pypi`          | tag push           | 30 min  |
-| `release.yml` `publish-release`       | tag push           | 30 min  |
+| Job                             | Trigger            | Ceiling |
+| ------------------------------- | ------------------ | ------- |
+| `ci.yml` `lint-test`            | pull request, push | 15 min  |
+| `ci.yml` `falcon-minimum`       | pull request, push | 30 min  |
+| `ci.yml` `build-dist`           | pull request, push | 15 min  |
+| `release.yml` `check-version`   | tag push           | 30 min  |
+| `release.yml` `build-wheels`    | tag push           | 30 min  |
+| `release.yml` `attest`          | tag push           | 30 min  |
+| `release.yml` `draft-release`   | tag push           | 30 min  |
+| `release.yml` `publish-pypi`    | tag push           | 30 min  |
+| `release.yml` `publish-release` | tag push           | 30 min  |
 
 *Table: the lanes that run on Ubicloud.*
 
-Everything else stays GitHub-hosted. `delayed-pr-comment.yml`'s
-`delay_and_comment` is dispatch-only. `dependabot-automerge.yml`'s `automerge`
-calls a reusable workflow and declares no runner of its own.
+Everything else stays GitHub-hosted. `coverage-main.yml`'s `coverage-upload`
+runs on `ubuntu-latest`, because a main coverage upload blocks no one's work.
+`delayed-pr-comment.yml`'s `delay_and_comment` is dispatch-only.
+`dependabot-automerge.yml`'s `automerge` calls a reusable workflow and declares
+no runner of its own.
 
 ### Pull-request lanes use a fork-safe runner expression
 
