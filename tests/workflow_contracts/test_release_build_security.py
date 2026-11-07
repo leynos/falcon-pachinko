@@ -22,7 +22,7 @@ WHEEL_ACTION = ROOT / ".github" / "actions" / "pure-python-wheel" / "action.yml"
 
 _BUILD_COMMAND = re.compile(
     r"(?<![\w-])(?:"
-    r"uvx?|make|pyproject-build|setup\.py"
+    r"uvx?|make|pyproject-build|setup\.py|release_wheel"
     r"|pip3?\s+wheel"
     r"|python3?\s+-m\s+build"
     r")(?![\w-])"
@@ -416,6 +416,8 @@ def test_verification_precedes_every_publication_action(
         "python3 -m build",
         "pip wheel .",
         "python setup.py bdist_wheel",
+        "python3 -m scripts.release_wheel",
+        "python3 scripts/release_wheel.py",
     ],
 )
 def test_every_rebuild_form_is_detected(command: str) -> None:

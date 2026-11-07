@@ -146,10 +146,12 @@ all: build check-fmt test test-workflow-contracts typecheck spelling
 build: uv .venv uv.lock ## Build virtual-env and install deps
 	uv sync --group dev --locked
 
+# `build-release` is the short name older checklists use. It runs the one
+# reviewed release recipe rather than a second, single-wheel build whose flags
+# could drift from the recipe that is actually exercised.
 # `uv build` writes both artefacts into `dist/`, which is the directory
 # `make clean` removes and `.gitignore` excludes.
-build-release: build-constraints.txt ## Build artefacts (sdist & wheel)
-	SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" $(UV) build --out-dir dist --no-cache --build-constraint build-constraints.txt --require-build-hashes
+build-release: release-wheel ## Build artefacts (sdist & wheel)
 
 update-build-constraints: ## Regenerate isolated build dependency hashes
 	@set -eu; \
