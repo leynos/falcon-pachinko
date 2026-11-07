@@ -68,6 +68,7 @@ async def start_echo_server(
     state = EchoState(paths=[], headers=[], messages=[], subprotocols=[])
 
     async def handler(websocket: ws_server.WebSocketServerProtocol, path: str) -> None:
+        """Delegate each connection to the echo handler with shared state."""
         await _echo_handler(websocket, path, state)
 
     protocols = [Subprotocol(proto) for proto in subprotocols]
@@ -210,6 +211,8 @@ async def test_receive_json_with_custom_type(
 
     @dc.dataclass(slots=True)
     class Payload:
+        """Typed reply carrying a single message string."""
+
         message: str
 
     async with client.connect("/typed") as session:
@@ -235,6 +238,8 @@ async def test_receive_json_wraps_typed_validation_failure(
 
     @dc.dataclass(slots=True)
     class Payload:
+        """Typed reply expecting an integer count."""
+
         count: int
 
     async with client.connect("/typed") as session:

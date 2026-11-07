@@ -120,6 +120,8 @@ def test_the_filter_table_covers_every_push_triggered_ubicloud_workflow() -> Non
     would be filtered by nothing and checked by nothing.
     """
     ubicloud = {FORK_FALLBACK_LANE[0]} | {name for name, _ in PUSH_ONLY_UBICLOUD_LANES}
+    # The main coverage upload is push-triggered too, but GitHub-hosted.
+    ubicloud |= {"coverage-main.yml"}
 
     assert set(PUSH_FILTERS) == ubicloud, (
         "every Ubicloud workflow's push filter must be asserted; the table "

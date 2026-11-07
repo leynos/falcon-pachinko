@@ -80,6 +80,7 @@ def given_reference_router(event_loop: asyncio.AbstractEventLoop) -> ReferenceSc
     def recording_factory(
         route_factory: cabc.Callable[..., WebSocketResource],
     ) -> WebSocketResource:
+        """Create the route resource through the container and keep it."""
         instance = container.create_resource(route_factory)
         instances.append(instance)
         return instance
@@ -106,6 +107,7 @@ def given_reference_router(event_loop: asyncio.AbstractEventLoop) -> ReferenceSc
 
 
 def _select_task_resource(instances: list[WebSocketResource]) -> TaskStreamResource:
+    """Return the most recent TaskStreamResource, or fail if none exists."""
     for instance in reversed(instances):
         if isinstance(instance, TaskStreamResource):
             return instance

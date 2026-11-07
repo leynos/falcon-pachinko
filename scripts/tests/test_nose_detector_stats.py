@@ -53,6 +53,7 @@ def test_each_root_is_checked_before_one_combined_query(tmp_path: Path) -> None:
         repository_root: Path,
         environment: cabc.Mapping[str, str],
     ) -> str:
+        """Record each detector call, then delegate to the canned runner."""
         calls.append((list(command), repository_root, dict(environment)))
         return canned_runner(command, repository_root, environment)
 
@@ -97,6 +98,7 @@ def test_empty_python_stats_fail_before_the_combined_query(tmp_path: Path) -> No
         _repository_root: Path,
         _environment: cabc.Mapping[str, str],
     ) -> str:
+        """Report Python stats for the visible root and JavaScript for the rest."""
         calls.append(list(command))
         if "--version" in command:
             return "nose 0.20.0\n"
@@ -143,6 +145,7 @@ def test_malformed_stats_cannot_be_treated_as_valid(
         _repository_root: Path,
         _environment: cabc.Mapping[str, str],
     ) -> str:
+        """Answer the version check, then return the malformed stats report."""
         if "--version" in command:
             return "nose 0.20.0\n"
         return stats_report

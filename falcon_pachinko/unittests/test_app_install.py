@@ -115,7 +115,7 @@ def dummy_resource_cls(dummy_app: SupportsWebSocket) -> type[WebSocketResource]:
     """
 
     class DummyResource(WebSocketResource):
-        pass
+        """Bare WebSocketResource subclass used as a registrable route target."""
 
     return DummyResource
 
@@ -305,7 +305,10 @@ def test_route_specific_init_args(dummy_app: SupportsWebSocket) -> None:
     """Test that WebSocket resources are initialized with route-specific arguments."""
 
     class ConfigResource(WebSocketResource):
+        """Resource whose constructor requires a route-specific value."""
+
         def __init__(self, value: int) -> None:
+            """Store the value supplied with the route registration."""
             self.value = value
 
     dummy_app.add_websocket_route("/one", ConfigResource, 1)

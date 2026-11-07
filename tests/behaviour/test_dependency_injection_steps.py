@@ -35,6 +35,7 @@ class InjectedChild(WebSocketResource):
     instances: typ.ClassVar[list[InjectedChild]] = []
 
     def __init__(self, *, service: str) -> None:
+        """Store the injected service and record this instance."""
         self.service = service
         self.params: dict[str, object] = {}
         InjectedChild.instances.append(self)
@@ -51,6 +52,7 @@ class InjectedParent(WebSocketResource):
     instances: typ.ClassVar[list[InjectedParent]] = []
 
     def __init__(self, *, label: str, service: str) -> None:
+        """Store the injected label and service, then mount the child subroute."""
         self.label = label
         self.service = service
         self.params: dict[str, object] = {}

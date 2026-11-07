@@ -189,6 +189,7 @@ class _OperationContext:
 
 
 async def _apply_accept(context: _OperationContext) -> None:
+    """Accept when pre-accept, otherwise expect a LifecycleError."""
     if context.model.connection_phase is ConnectionPhase.PRE_ACCEPT:
         await context.guard._accept()
         context.model.connection_phase = ConnectionPhase.ACCEPTED
@@ -199,6 +200,7 @@ async def _apply_accept(context: _OperationContext) -> None:
 
 
 async def _apply_send(context: _OperationContext, index: int) -> None:
+    """Send one indexed frame when accepted, otherwise expect a LifecycleError."""
     if context.model.connection_phase is ConnectionPhase.ACCEPTED:
         await context.guard.send_media(f"frame-{index}")
     else:
@@ -207,6 +209,7 @@ async def _apply_send(context: _OperationContext, index: int) -> None:
 
 
 async def _apply_receive(context: _OperationContext) -> None:
+    """Receive a frame when accepted, otherwise expect a LifecycleError."""
     if context.model.connection_phase is ConnectionPhase.ACCEPTED:
         assert await context.guard.receive_media() == "frame", (
             "accepted receives must return transport frames"
@@ -217,6 +220,7 @@ async def _apply_receive(context: _OperationContext) -> None:
 
 
 async def _apply_peer_disconnect(context: _OperationContext) -> None:
+    """Simulate a peer disconnect when accepted, updating the reference model."""
     if context.model.connection_phase is ConnectionPhase.ACCEPTED:
         context.transport.disconnect_next = True
         with pytest.raises(_PeerDisconnectedError) as disconnect:
@@ -233,6 +237,7 @@ async def _apply_peer_disconnect(context: _OperationContext) -> None:
 
 
 async def _apply_close(context: _OperationContext, index: int) -> None:
+    """Close with an index-derived code unless the model is already closed."""
     if context.model.connection_phase is not ConnectionPhase.CLOSED:
         close_code = 4100 + index
         await context.guard.close(code=close_code)
@@ -242,6 +247,7 @@ async def _apply_close(context: _OperationContext, index: int) -> None:
 
 
 async def _apply_cancellation(context: _OperationContext) -> None:
+    """Cancel the operation that is pending in the modelled connection phase."""
     match context.model.connection_phase:
         case ConnectionPhase.PRE_ACCEPT:
             await _cancel_pending_accept(context.guard, context.transport)
@@ -253,6 +259,7 @@ async def _apply_cancellation(context: _OperationContext) -> None:
 
 
 async def _apply_cleanup(context: _OperationContext, index: int) -> None:
+    """Begin disconnect, closing the connection if the session owns cleanup."""
     should_own = context.model.session_phase is SessionPhase.ESTABLISHED
     owns_cleanup = context.session.begin_disconnect()
     assert owns_cleanup is should_own, (
@@ -276,6 +283,7 @@ async def _apply_cleanup(context: _OperationContext, index: int) -> None:
 async def _apply_operation(
     context: _OperationContext, operation: _Operation, index: int
 ) -> None:
+    """Dispatch one generated operation to its applier."""
     match operation:
         case "accept":
             await _apply_accept(context)
@@ -294,6 +302,7 @@ async def _apply_operation(
 
 
 def _assert_model_invariants(context: _OperationContext) -> None:
+    """Assert production phases, close codes and counters match the model."""
     assert context.guard.phase is context.model.connection_phase, (
         "the connection phase must match the generated reference model"
     )
@@ -365,6 +374,7 @@ async def test_lifecycle_guard_uses_injected_transport_disconnect_classifier() -
     def classify_disconnect(
         error: BaseException,
     ) -> _PeerDisconnectedError | None:
+        """Map an adapter disconnect to a peer disconnect, or return None."""
         if isinstance(error, _AdapterDisconnectError):
             return _PeerDisconnectedError(error.code)
         return None

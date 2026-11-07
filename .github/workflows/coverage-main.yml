@@ -35,9 +35,11 @@ concurrency:
 
 jobs:
   coverage-upload:
-    # Push-only, so no fork can reach it and the label needs no guard.
-    runs-on: ubicloud-standard-2
-    # The longest observed run of this job is 34 s.
+    # Push-only, so no fork can reach it and the label needs no guard. Coverage
+    # upload on main blocks no one's work, so it runs on a GitHub-hosted runner
+    # rather than a paid Ubicloud one.
+    runs-on: ubuntu-latest
+    # The longest observed run of this job on Ubicloud was 34 s.
     timeout-minutes: 15
     # The CodeScene token lives in this environment, whose deployment policy
     # admits `main` alone; the shared CV-005 library's environment.placement
@@ -61,10 +63,15 @@ jobs:
           python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      # The pinned shared action owns this environment's sync. Check the
+      # repository lock here so a stale lock fails before that external step.
+      - name: Check project lock
+        run: uv lock --check
 
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@872f59f53717b5bebe8e24b2f4a7496b089a939a
+        uses: leynos/shared-actions/.github/actions/generate-coverage@6ca3d5217016143c5857d23a63eb649ea5fcd538
         with:
           output-path: coverage.xml
           format: cobertura
@@ -100,7 +107,7 @@ jobs:
         # verifies the archive against that manifest's digest, so an
         # `archive-checksum` could only agree with it or go stale and fail.
         if: steps.codescene-token.outputs.available == 'true' && github.ref == 'refs/heads/main'
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@872f59f53717b5bebe8e24b2f4a7496b089a939a
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@6ca3d5217016143c5857d23a63eb649ea5fcd538
         with:
           format: cobertura
           mode: upload

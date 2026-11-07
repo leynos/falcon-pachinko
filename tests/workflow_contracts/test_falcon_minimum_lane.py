@@ -192,11 +192,11 @@ def _install_command(command: CommandGroup) -> bool:
 
 def _version_check_command(command: CommandGroup) -> bool:
     """Report whether a no-sync Python command checks installed Falcon."""
-    if not _is_command(command, "uv", "run", "--no-sync", "python", "-c"):
+    if not _is_command(command, "uv", "run", "--locked", "--no-sync", "python", "-c"):
         return False
     # Accept only known checks whose exit status is nonzero on a mismatch.
     try:
-        tree = ast.dump(ast.parse(" ".join(command[5:])))
+        tree = ast.dump(ast.parse(" ".join(command[6:])))
     except SyntaxError:
         return False
     return any(tree == ast.dump(ast.parse(check)) for check in VERSION_CHECK_PROGRAMS)
@@ -204,7 +204,7 @@ def _version_check_command(command: CommandGroup) -> bool:
 
 def _pytest_command(command: CommandGroup) -> bool:
     """Report whether a command runs the full suite without syncing the environment."""
-    return command == ("uv", "run", "--no-sync", "pytest", "-v")
+    return command == ("uv", "run", "--locked", "--no-sync", "pytest", "-v")
 
 
 def _unsafe_environment_command(command: CommandGroup) -> bool:
@@ -360,8 +360,8 @@ def _required_commands(
     descriptions = (
         ("build", "run make build"),
         ("install", f"install falcon==${{{FALCON_ENV}}}"),
-        ("verify", "verify Falcon with uv run --no-sync"),
-        ("pytest", "run pytest with uv run --no-sync"),
+        ("verify", "verify Falcon with uv run --locked --no-sync"),
+        ("pytest", "run pytest with uv run --locked --no-sync"),
     )
     violations = [
         f"{MINIMUM_JOB} must {description}"
@@ -613,6 +613,7 @@ def test_version_check_must_fail_on_a_mismatch(program: str) -> None:
     assert not _version_check_command((
         "uv",
         "run",
+        "--locked",
         "--no-sync",
         "python",
         "-c",
@@ -700,7 +701,7 @@ def test_generated_lower_bounds_choose_the_strongest(
 def test_command_step_finds_the_unique_checked_command() -> None:
     """Fixture rewrites share the same checked step and command."""
     step, command = _command_step(valid_workflow(), "pytest -v")
-    assert step["run"] == command == "uv run --no-sync pytest -v", "wrong step"
+    assert step["run"] == command == "uv run --locked --no-sync pytest -v", "wrong step"
     with pytest.raises(ValueError, match="expected one"):
         _command_step(valid_workflow(), "missing marker")
 

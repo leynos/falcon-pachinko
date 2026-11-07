@@ -43,6 +43,7 @@ class StartingResource(RecordingResource):
     """Record startup for the automatic application-owned handoff path."""
 
     def __init__(self, *, startup_error: Exception | None = None) -> None:
+        """Store the optional startup error and start with no recorded calls."""
         super().__init__()
         self.startup_error = startup_error
         self.start_calls = 0

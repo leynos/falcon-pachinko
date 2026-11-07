@@ -22,6 +22,7 @@ class ProtocolSocket:
     """Record protocol calls without exposing Falcon's acceptance probe."""
 
     def __init__(self, frame: bytes) -> None:
+        """Seed the socket with one inbound frame and empty call records."""
         self.frames: cl.deque[bytes] = cl.deque((frame,))
         self.closed = False
         self.close_code = 1000
@@ -73,6 +74,7 @@ class ProtocolResource(WebSocketResource):
     """Track membership across approval, resource acceptance, and setup failure."""
 
     def __init__(self, mode: str, failure: RuntimeError) -> None:
+        """Store the scenario mode and failure, and start with empty records."""
         self.mode = mode
         self.failure = failure
         self.members: set[int] = set()

@@ -60,6 +60,7 @@ class HookChild(WebSocketResource):
     _events: typ.ClassVar[list[str]] = []
 
     def __init__(self) -> None:
+        """Register the instance and start with empty connect params."""
         HookChild.instances.append(self)
         self.params: dict[str, object] = {}
 
@@ -79,6 +80,7 @@ class HookParent(WebSocketResource):
     instances: typ.ClassVar[list[HookParent]] = []
 
     def __init__(self) -> None:
+        """Record the instance and mount HookChild at the ``child`` subroute."""
         HookParent.instances.append(self)
         self.add_subroute("child", HookChild)
 
@@ -89,6 +91,7 @@ def create_global_hook(
     """Produce a global hook that records context assertions."""
 
     def global_hook(context: HookContext) -> None:
+        """Check the child target for each event and log the event name."""
         assert isinstance(context.target, HookChild), (
             "global hook should target the connecting child resource"
         )
@@ -112,6 +115,7 @@ def create_parent_hook(
     """Produce a parent-level hook for order verification."""
 
     def parent_hook(context: HookContext) -> None:
+        """Check the parent target for each event and log under the parent prefix."""
         assert context.resource in HookParent.instances, (
             "parent hook should run against a known HookParent instance"
         )
@@ -133,6 +137,7 @@ def create_child_hook(
     """Produce a child-level hook that inspects payload flow."""
 
     def child_hook(context: HookContext) -> None:
+        """Check result and payload state per event and log under the child prefix."""
         assert isinstance(context.target, HookChild), (
             "child hook should target the connecting child resource"
         )
@@ -156,6 +161,7 @@ class BoomResource(WebSocketResource):
     instances: typ.ClassVar[list[BoomResource]] = []
 
     def __init__(self) -> None:
+        """Record the instance for later inspection."""
         BoomResource.instances.append(self)
 
     async def on_connect(self, req: object, ws: object, **params: object) -> bool:
@@ -173,6 +179,7 @@ def create_error_reporting_global_hook(
     """Produce a global hook recording events and checking the reported error."""
 
     def global_hook(context: HookContext) -> None:
+        """Log the event and check that after_receive reports the RuntimeError."""
         events.append(("global", context.event))
         if context.event == "after_receive":
             assert isinstance(context.error, RuntimeError), (
@@ -188,6 +195,7 @@ def create_error_reporting_resource_hook(
     """Produce a resource hook recording events and checking raw/error state."""
 
     def resource_hook(context: HookContext) -> None:
+        """Log the event and check the raw payload and the reported error."""
         events.append(("resource", context.event))
         if context.event == "before_receive":
             assert context.raw == b'{"type":"boom"}', (
@@ -215,6 +223,7 @@ class HookTestEnvironment:
         self._register_hooks()
 
     def _register_hooks(self) -> None:
+        """Attach global, parent, and child hooks, then mount the route."""
         global_hook = create_global_hook(self.events)
         parent_hook = create_parent_hook(self.events)
         child_hook = create_child_hook(self.events)
@@ -334,16 +343,20 @@ def test_hookcollection_inheritance_propagates_changes() -> None:
     """Child classes observe parent hook registrations added later."""
 
     class Parent(WebSocketResource):
+        """Base resource whose hook collection child classes inherit."""
+
         pass
 
     class Child(Parent):
+        """Subclass of Parent that adds its own after-receive hook."""
+
         pass
 
     def parent_before(context: HookContext) -> None:
-        return None
+        """Serve as a before-receive hook registered on the parent."""
 
     def child_after(context: HookContext) -> None:
-        return None
+        """Serve as an after-receive hook registered on the child only."""
 
     Parent.hooks.add("before_receive", parent_before)
     assert parent_before in Parent.hooks.iter("before_receive"), (
@@ -367,11 +380,14 @@ async def test_receive_hooks_skip_cancelled_error() -> None:
     """Cancelled dispatches propagate without invoking after hooks."""
 
     class CancelResource(WebSocketResource):
+        """Resource with no handler, used to test cancelled dispatch hooks."""
+
         pass
 
     events: list[str] = []
 
     def after_hook(context: HookContext) -> None:
+        """Record each event so the test can detect whether it ran."""
         events.append(context.event)
 
     CancelResource.hooks.add("after_receive", after_hook)
@@ -380,6 +396,7 @@ async def test_receive_hooks_skip_cancelled_error() -> None:
     resource.bind_hook_manager(manager)
 
     async def run() -> None:
+        """Enter the receive hooks and raise CancelledError inside them."""
         async with _receive_hooks(manager, resource, ws=DummyWS(), raw=b"noop"):
             raise asyncio.CancelledError
 
@@ -403,6 +420,7 @@ async def test_before_disconnect_legacy_call_is_deprecated_and_returns_context(
     manager = HookManager(global_hooks=global_hooks, resources=(resource,))
 
     async def invoke_legacy_call() -> HookContext:
+        """Call notify_before_disconnect with legacy arguments in the chosen style."""
         if target_style == "keyword":
             return await manager.notify_before_disconnect(
                 target=resource, ws=ws, close_code=4002

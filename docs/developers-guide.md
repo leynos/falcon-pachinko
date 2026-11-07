@@ -199,16 +199,33 @@ cleanup may emit standard DEBUG events with fixed fields `operation`, `outcome`,
 fixed operation and outcome values for publication, membership maintenance,
 listener termination and disconnect cleanup. Keep successful message decoding
 and local delivery silent, distinguish decode failures from delivery failures,
-and emit no unconditional per-frame events. Exclude identifiers, payloads,
-exception values and tracebacks. Host logging handlers may aggregate metrics or
-start and end spans using task or context; broker decorators may measure queue
-waits and operations, while existing lifecycle hooks support resource
-instrumentation. Filter, sample or aggregate to bound event volume because
-publication and lease renewal are frequent and DEBUG is off by default. Metrics
-must use fixed operation and outcome dimensions, never room, message,
-connection or node IDs as labels. Keep instrumentation optional and
-host-configured, with no mandatory SDK, public constructor changes or
-`WorkerController` changes.
+and emit no unconditional per-frame events. Envelope payload conversion is
+observed too: when a context built by `dispatch_with_envelope` reaches
+`convert_and_invoke_handler`, a caught `msgspec.ValidationError` emits one DEBUG
+`Operation observation` record whose `operation` is `dispatch` and `outcome` is
+`rejected`, carrying the bounded `expected_type` label and `exception_type`.
+Schema mode does not emit that record: `dispatch_with_schema` sets
+`target_type`, and its own `Schema dispatch observation` already reports
+`rejected_fields` or `conversion_failed` for the same rejection. Schema decode
+failures that reach `on_unhandled` before conversion likewise emit only the
+schema observation. Accepted payloads, including optional payloads, emit
+nothing. Exclude identifiers, payloads, exception values and tracebacks. Host
+logging handlers may aggregate metrics or start and end spans using task or
+context; broker decorators may measure queue waits and operations, while
+existing lifecycle hooks support resource instrumentation. Filter, sample or
+aggregate to bound event volume because publication and lease renewal are
+frequent and DEBUG is off by default. Metrics must use fixed operation and
+outcome dimensions, never room, message, connection or node IDs as labels. Keep
+instrumentation optional and host-configured, with no mandatory SDK, public
+resource or router constructor changes, or `WorkerController` changes.
+
+Dispatch rejection timing uses `HandlerInvocationContext.monotonic_clock`,
+typed as `collections.abc.Callable[[], float]` and defaulting to
+`time.monotonic`. `convert_and_invoke_handler` reads it around typed-payload
+conversion so the rejection observation reports a non-negative duration.
+Dispatcher-created contexts use the default. Tests that construct
+`HandlerInvocationContext` directly can inject controlled readings to verify
+exact and clamped durations without patching the dispatcher module clock.
 
 ## Dependency bounds
 
@@ -227,16 +244,20 @@ installing Falcon 4.0.0 with `uv pip install falcon==4.0.0` and running
 committed and `.gitignore` does not exclude it. The dependency bounds above are
 deliberately wide, so the lockfile pins the Falcon release tested by
 `lint-test` and the shared coverage action; Dependabot keeps that release
-current. See "Dependency management with uv" below for how the lockfile is
-maintained.
+current. See the [lock-file policy](#lock-file-policy) below for how the
+lockfile is maintained.
 
 The `falcon-minimum` job in `.github/workflows/ci.yml` checks the lower bound
-on every pull request and every push to `main`. After `make build` installs the
-locked environment, the job overrides Falcon with `FALCON_MINIMUM_VERSION`,
-verifies the installed version, and runs the full suite with
-`uv run --no-sync pytest -v`. The `--no-sync` flag keeps uv from restoring the
-locked release; `make test` would run its `build` prerequisite and restore that
-release.
+on every pull request and every push to `main`. After `make build` installs and
+validates the locked environment, the job overrides Falcon with
+`FALCON_MINIMUM_VERSION`, verifies the installed version, and runs the full
+suite with `uv run --locked --no-sync pytest -v`. uv's
+[`--no-sync` option](https://docs.astral.sh/uv/reference/cli/#uv-run) implies
+frozen mode, so this command skips environment synchronization and does not
+check lock freshness. The preceding `make build` runs
+`uv sync --group dev --locked` and fails on a stale lock before applying the
+Falcon override. Avoiding a later sync preserves that override; `make test`
+would run its `build` prerequisite and restore the locked release.
 
 When the lower bound changes, update the `falcon` bound in `pyproject.toml`,
 `FALCON_MINIMUM_VERSION` in the workflow, and `EXPECTED_FALCON_VERSION` in
@@ -244,49 +265,107 @@ When the lower bound changes, update the `falcon` bound in `pyproject.toml`,
 `tests/workflow_contracts/test_falcon_minimum_lane.py` as well; its workflow
 contract keeps those values aligned.
 
-## Dependency management with uv
+## Lock-file policy
 
-The project is uv-managed. `pyproject.toml` declares runtime dependencies under
-`[project]`, development tooling under `[dependency-groups]`, and the
-`examples` and `testing` sets as `[project.optional-dependencies]` extras. The
-lockfile `uv.lock` resolves all three, including every interpreter version in
-`requires-python`, and is committed alongside them.
+This repository commits `uv.lock` to pin one reviewed dependency release set
+for development and CI, despite the wide runtime bounds declared in
+`pyproject.toml`. This decision supersedes the floating-resolution behaviour
+recorded in issue [#83](https://github.com/leynos/falcon-pachinko/issues/83).
+The [decision record](adr-003-commit-uv-lock-for-development-and-ci.md)
+explains the rationale and compatibility trade-off. The lockfile resolves the
+runtime dependencies, development group and `examples` and `testing` extras
+across the declared `requires-python` range.
 
-`make build` runs:
+Routine CI validates the reviewed lockfile release set, rather than every
+Falcon release allowed by `>=4,<5`. Grouped Dependabot updates provide the
+reviewed path for newer releases; their pull requests run locked CI. Published
+distributions still expose the declared ranges to consumers.
+
+Use `make build` to install the development environment. Its equivalent direct
+command is:
 
 ```sh
 uv sync --group dev --locked
 ```
 
-`--locked` is what makes the committed lockfile load-bearing. A plain `uv sync`
-re-resolves whenever `pyproject.toml` and `uv.lock` disagree, so a branch that
-edited one but not the other would install a dependency set nobody reviewed and
-report success. With `--locked` the same disagreement fails the build instead,
-which is the behaviour CI needs: `ci.yml` installs the project by running
-`make build`, so the lockfile CI installs is the lockfile the branch committed.
+Each locked sync is exact: it removes extras not named in that command. When an
+environment needs only one optional extra, sync it with the development group
+and the lockfile:
 
-### Changing a dependency
+```sh
+uv sync --group dev --extra examples --locked
+uv sync --group dev --extra testing --locked
+```
 
-- After editing any dependency in `pyproject.toml`, run `uv lock` and commit
-  the regenerated `uv.lock` in the same change. `make build` fails until it is
-  refreshed.
-- To upgrade one dependency without disturbing the rest, use
-  `uv lock --upgrade-package <name>`. A bare `uv lock --upgrade` re-resolves
-  everything and produces a diff no reviewer can attribute to a reason.
+These are alternatives, not cumulative installs. When both extras are needed,
+request them together:
+
+```sh
+uv sync --group dev --extra examples --extra testing --locked
+```
+
+`--locked` requires the lockfile to match `pyproject.toml`; a stale or missing
+lockfile makes the command fail rather than silently resolving a different
+release set. Repository-owned CI project-environment commands use `--locked`
+and never regenerate the lock. Commands that sync the project environment fail
+when the lock is stale. The `falcon-minimum` lane's `uv run --no-sync` commands
+are frozen and do not re-check lock freshness; they run only after `make build`
+has checked and synced the locked environment, then preserve the deliberate
+Falcon override. The main coverage lane runs `uv lock --check` before its
+pinned shared coverage action, whose project sync is maintained outside this
+repository. The separate scheduled/manual mutation workflow also delegates to a
+pinned shared workflow; that workflow runs `uv run --with` without `--locked`,
+so uv automatically updates an out-of-date lock while preparing that job's
+project environment. This mutation workflow is not a pull-request check.
+`make test` runs the complete suite and requests the `examples` extra in its
+locked `uv run` command. After the CI lane runs the dedicated `lint_toolchain`
+step, it uses `make test-ci` to avoid running those integration tests twice
+while keeping them in the local suite.
+
+### Refreshing the lockfile
+
+- After changing dependency declarations in `pyproject.toml`, run `uv lock`,
+  review the resulting changes, and commit the regenerated lockfile in the same
+  change.
+- For a targeted upgrade, use `uv lock --upgrade-package <name>` and review
+  the lockfile diff.
+- Do not run the broad `uv lock --upgrade` without reviewing the full set of
+  package changes; it can update every compatible dependency.
 - Bump the `ruff` and `ty` pins in the Makefile and in `ci.yml` together, not
   through the lockfile: they run as `uv tool run --from <tool>==<pin>` outside
   the project environment, and `tests/test_toolchain_versions.py` holds the two
   sites to one another.
 
+### Scope and build environments
+
+This lockfile governs only the development and CI project environments.
+Published wheels and source distributions retain the dependency ranges from
+`pyproject.toml`; consumers resolve those ranges for their own environments.
+The release build uses `uv build` and the isolated backend declared in
+`[build-system]`, which is outside the project lock.
+
+Tool environments are separate as well. `uv tool run` and `uv run --no-project`
+do not use the project lock. A future `uvx cibuildwheel` invocation would have
+its own tool environment; the current release workflow does not use it. Pins
+for tools invoked by Makefile and CI remain at those call sites. This policy
+adds no pins for `mbake`, `cibuildwheel` or the build backend.
+
+### Command contracts
+
+`tests/test_uv_command_contracts.py` enforces this policy in Makefile recipes,
+GitHub Actions `run:` steps and composite-action `action.yml` files, using
+`tests/_uv_command_scanner.py`. The scanner reports unlocked project commands
+with source lines and fails closed on unsupported shell syntax or uv and env
+options that could hide a command. When adding a supported option, update the
+scanner's option tables and the focused command-contract tests together.
+
 ### Dependabot
 
-`.github/dependabot.yml` reads Python dependencies through the `uv` ecosystem,
-which is the ecosystem that understands `uv.lock`; `pip` reads
-`requirements*.txt` and the older `pyproject.toml` layout and would leave the
-lockfile unmaintained. Dependabot's lockfile updates and the entry's grouping,
-limits, labels and cooldown are held by `tests/test_uv_toolchain.py`, which
-also asserts that the lockfile is committed, not ignored, and that `make build`
-installs it with `--locked`.
+Dependabot's root `uv` entry in `.github/dependabot.yml` is the only automated
+lockfile refresh path. It groups minor and patch updates into pull requests; CI
+validates each candidate against the committed lock with `--locked`.
+`tests/test_uv_toolchain.py` holds the updater configuration and the lockfile
+contract in place.
 
 The auto-merge workflow needs no change for this: `dependabot-automerge.yml`
 keys on the actor `dependabot[bot]`, not on the ecosystem that opened the pull
@@ -426,6 +505,10 @@ an unexpected share of `rejected_fields` or `no_handler` outcomes without
 collecting message content.
 
 ## Safe diagnostics
+
+`convert_and_invoke_handler` converts every typed envelope payload, including
+`None` from omission or JSON `null`. Validation failures reach `on_unhandled`;
+handler defaults are not applied.
 
 Framework diagnostics must not call `repr()` or `str()` on raw payloads,
 decoded caller values, or other caller-controlled objects. Use the shared
@@ -682,8 +765,19 @@ gates with `make markdownlint` and `make spelling`.
 
 ## Lint and Typecheck Toolchain
 
-`make lint` provisions nose, then runs Ruff, both Pylint passes, ambrleaks and
-the blocking nose duplication gate. `make typecheck` runs
+`make lint` provisions nose, then runs `make interrogate` (`--fail-under 100`
+over `falcon_pachinko`, `examples`, `scripts`, `tests` and `tools`, so every
+module, class and function needs a docstring), Ruff, both Pylint passes,
+ambrleaks and the blocking nose duplication gate. The `interrogate` target also
+fails on any `MISSED` row, because interrogate rounds its percentage to one
+decimal and so passes a lone gap in a repository this size. The one
+`@typ.overload`ed method, `notify_before_disconnect`, is ignored by name in
+`[tool.interrogate]` because interrogate does not recognize the `typ` alias and
+Ruff (D418) forbids a docstring on a stub; because that name also hides the
+implementation, `tests/workflow_contracts/test_interrogate_gate.py` asserts
+that the exclusion names only that method and that the implementation has a
+docstring. The same test holds the pin, the flags, the targets, CI's uv setup
+and the failing paths of the target. `make typecheck` runs
 `ty check --extra-search-path .` against `falcon_pachinko`, `tests`, `tools`,
 and the release helpers `scripts/release_assets.py`,
 `scripts/release_assets_cli.py`, `scripts/release_version.py` and
@@ -882,10 +976,12 @@ configured roots are passed together in one detector invocation so cross-root
 families remain visible. The initial report selected only `__init__.py`,
 `exceptions.py`, `router.py`, and `websocket.py`, with no excluded paths.
 
-`make build` installs the `dev` dependency group with `uv sync --group dev`; it
-does not install the optional `examples` extra. Run
-`uv sync --group dev --extra examples` before running example programs or tests
-that require example-only dependencies such as `aiosqlite`.
+`make build` installs the `dev` dependency group with
+`uv sync --group dev --locked`; it does not install the optional `examples`
+extra. `make test` requests that extra when it runs pytest. Before running an
+example program or a direct test command that needs example-only dependencies
+such as `aiosqlite`, use `uv sync --group dev --extra examples --locked`. See
+the [lock-file policy](#lock-file-policy) for how exact syncs select extras.
 
 The detector runs `syntax,semantic,near`, with a minimum of 24 intermediate-
 language tokens, `surface = "all"`, and a top-30 ranked-family limit. `all`
@@ -1010,13 +1106,13 @@ make mutation           # mutate the package against the whole suite
 make mutation-results   # list the last run's mutants and their statuses
 ```
 
-`make mutation` runs `mutmut` through `uv run --with mutmut==3.6.0`, so the
-tool is injected at call time and is deliberately not a project dependency.
-`make mutation-results` prints one line per mutant, grouped by status. To see
-what a surviving mutant actually changed, ask mutmut directly:
+`make mutation` runs `mutmut` through `uv run --locked --with mutmut==3.6.0`,
+so the tool is injected at call time and is deliberately not a project
+dependency. `make mutation-results` prints one line per mutant, grouped by
+status. To see what a surviving mutant actually changed, ask mutmut directly:
 
 ```sh
-UV_PYTHON=3.13 uv run --with mutmut==3.6.0 mutmut show <mutant-name>
+UV_PYTHON=3.13 uv run --locked --with mutmut==3.6.0 mutmut show <mutant-name>
 ```
 
 A run leaves a generated `mutants/` tree in the working directory. It is
@@ -1046,17 +1142,18 @@ The `[tool.mutmut]` section in `pyproject.toml` is the whole configuration:
   `docs/users-guide.md` relative to its copied file.
 - **`pytest_add_cli_args_test_selection`** names the three test trees the run
   uses: `tests/`, `falcon_pachinko/unittests/` and `falcon_pachinko/behaviour/`.
-- **`pytest_add_cli_args`** drops four modules and one marker.
+- **`pytest_add_cli_args`** drops five test paths and one marker.
   `--ignore=tests/workflow_contracts`,
-  `--ignore=tests/test_toolchain_versions.py` and
-  `--ignore=tests/test_uv_toolchain.py` are repository-tooling contracts that
-  read `.github/workflows/`, `Makefile`, `uv.lock`, `pylintrc-df12.toml` and
-  `.markdownlint-cli2.jsonc` — none of which mutmut copies into `mutants/`, so
-  all three fail the baseline there. They say nothing about
-  `falcon_pachinko/`'s behaviour, so excluding them costs the mutation score
-  nothing. `--ignore=tests/test_release_archives.py` excludes the distribution
-  archive test, which builds with `uv` and installs a wheel in a fresh virtual
-  environment that the `mutants/` tree cannot support.
+  `--ignore=tests/test_toolchain_versions.py`,
+  `--ignore=tests/test_uv_toolchain.py` and
+  `--ignore=tests/test_uv_command_contracts.py` are repository-tooling
+  contracts that read `.github/workflows/`, `.github/actions/`, `Makefile`,
+  `uv.lock`, `pylintrc-df12.toml` and `.markdownlint-cli2.jsonc` — none of
+  which mutmut copies into `mutants/`, so all four fail the baseline there.
+  They say nothing about `falcon_pachinko/`'s behaviour, so excluding them
+  costs the mutation score nothing. `--ignore=tests/test_release_archives.py`
+  excludes the distribution archive test, which builds with `uv` and installs a
+  wheel in a fresh virtual environment that the `mutants/` tree cannot support.
   `-m "not lint_toolchain"` drops the tests that provision a PyPy interpreter
   and reach the network; `-p no:cacheprovider` keeps the run from writing a
   cache into the copied tree. Mutmut has no `runner` key in 3.6.0, so these
@@ -1139,8 +1236,8 @@ repository keeps no copy of the readers or the refusal cases. What it holds:
 require `UV_PYTHON: '3.13'` on every `generate-coverage` step, set on the job
 in both lanes, and hold that version inside `requires-python` (`>=3.12`),
 because generate-coverage otherwise takes the `python3` that the latest
-`setup-python` put on `PATH`, and `uv sync` refuses an interpreter outside the
-range. The ratchet baseline key carries the interpreter
+`setup-python` put on `PATH`, and a locked project sync refuses an interpreter
+outside the range. The ratchet baseline key carries the interpreter
 (`ratchet-baseline-<os>-py<major.minor>-`), so a lane on another Python would
 miss its baseline rather than compare against the wrong one.
 
@@ -1167,11 +1264,11 @@ no coverage until the next push or a dispatch on main.
 itself does not. **PyYAML** (`pyyaml>=6.0.3`) parses the GitHub Actions
 documents and **Hypothesis** (`hypothesis>=6.168.0`) generates the documents
 the label readers are held to. Both are in the `dev` dependency group, so
-`make build`, which runs `uv sync --group dev`, installs them;
-`uv sync --group dev` on its own does as well. `make test` collects the
-contracts, which is what makes them a gate rather than a convenience, and
-`uv run pytest tests/workflow_contracts` runs them alone. Running them without
-those dependencies fails at import.
+`make build`, which runs `uv sync --group dev --locked`, installs them;
+`uv sync --group dev --locked` on its own does as well. `make test` collects
+the contracts, which is what makes them a gate rather than a convenience, and
+`uv run --locked pytest tests/workflow_contracts` runs them alone. Running them
+without those dependencies fails at import.
 
 ## Markdown formatting and linting
 
@@ -1219,24 +1316,25 @@ Repository-owned Linux lanes run on Ubicloud managed runners. Scheduled,
 dispatch-only and `pull_request_target` work stays GitHub-hosted, where
 public-repository minutes are free and where this migration has nothing to gain.
 
-| Job                                   | Trigger            | Ceiling |
-| ------------------------------------- | ------------------ | ------- |
-| `ci.yml` `lint-test`                  | pull request, push | 15 min  |
-| `ci.yml` `falcon-minimum`             | pull request, push | 30 min  |
-| `ci.yml` `build-dist`                 | pull request, push | 15 min  |
-| `coverage-main.yml` `coverage-upload` | push to `main`     | 15 min  |
-| `release.yml` `check-version`         | tag push           | 30 min  |
-| `release.yml` `build-wheels`          | tag push           | 30 min  |
-| `release.yml` `attest`                | tag push           | 30 min  |
-| `release.yml` `draft-release`         | tag push           | 30 min  |
-| `release.yml` `publish-pypi`          | tag push           | 30 min  |
-| `release.yml` `publish-release`       | tag push           | 30 min  |
+| Job                             | Trigger            | Ceiling |
+| ------------------------------- | ------------------ | ------- |
+| `ci.yml` `lint-test`            | pull request, push | 15 min  |
+| `ci.yml` `falcon-minimum`       | pull request, push | 30 min  |
+| `ci.yml` `build-dist`           | pull request, push | 15 min  |
+| `release.yml` `check-version`   | tag push           | 30 min  |
+| `release.yml` `build-wheels`    | tag push           | 30 min  |
+| `release.yml` `attest`          | tag push           | 30 min  |
+| `release.yml` `draft-release`   | tag push           | 30 min  |
+| `release.yml` `publish-pypi`    | tag push           | 30 min  |
+| `release.yml` `publish-release` | tag push           | 30 min  |
 
 *Table: the lanes that run on Ubicloud.*
 
-Everything else stays GitHub-hosted. `delayed-pr-comment.yml`'s
-`delay_and_comment` is dispatch-only. `dependabot-automerge.yml`'s `automerge`
-calls a reusable workflow and declares no runner of its own.
+Everything else stays GitHub-hosted. `coverage-main.yml`'s `coverage-upload`
+runs on `ubuntu-latest`, because a main coverage upload blocks no one's work.
+`delayed-pr-comment.yml`'s `delay_and_comment` is dispatch-only.
+`dependabot-automerge.yml`'s `automerge` calls a reusable workflow and declares
+no runner of its own.
 
 ### Pull-request lanes use a fork-safe runner expression
 
@@ -1284,31 +1382,32 @@ An Ubicloud runner registers as a just-in-time self-hosted runner, so GitHub's
 six-hour cap does not apply and an unbounded lane can run to the five-day
 limit. Every lane that can reach Ubicloud therefore declares `timeout-minutes`.
 
-The two measured ceilings are sized from real runs rather than chosen:
+The measured ceilings are sized from real runs rather than chosen:
 
-| Run                               | Job               | Queue | Run time |
-| --------------------------------- | ----------------- | ----- | -------- |
-| CI, pull request, 2026-09-17      | `lint-test`       | 2 s   | 36 s     |
-| CI, push, 2026-09-16              | `lint-test`       | 3 s   | 19 s     |
-| Coverage (main), push, 2026-09-16 | `coverage-upload` | 3 s   | 34 s     |
-| Coverage (main), push, 2026-08-13 | `coverage-upload` | 588 s | 30 s     |
-| CI, PR, 2026-09-17, Ubicloud      | `lint-test`       | 11 s  | 44 s     |
+| Run                                                                                                                      | Job               | Queue | Run time |
+| ------------------------------------------------------------------------------------------------------------------------ | ----------------- | ----- | -------- |
+| CI, pull request, 2026-09-17                                                                                             | `lint-test`       | 2 s   | 36 s     |
+| CI, push, 2026-09-16                                                                                                     | `lint-test`       | 3 s   | 19 s     |
+| Coverage (main), push, 2026-09-16                                                                                        | `coverage-upload` | 3 s   | 34 s     |
+| Coverage (main), push, 2026-08-13                                                                                        | `coverage-upload` | 588 s | 30 s     |
+| CI, PR, 2026-09-17, Ubicloud                                                                                             | `lint-test`       | 11 s  | 44 s     |
+| [CI, PR #261, 2026-10-30, Ubicloud](https://github.com/leynos/falcon-pachinko/actions/runs/40990972737/job/123853021889) | `lint-test`       | 19 s  | 226 s    |
 
 *Table: the runs the ceilings are sized from.*
 
-Fifteen minutes is roughly twenty-five times the longest of these, which leaves
-room for a cold cache and for Ubicloud's two vCPUs. `falcon-minimum` has no
-recorded run yet; its thirty-minute ceiling gives the uncovered full suite
+Fifteen minutes is roughly four times the longest recorded run (226 s), which
+leaves room for a cold cache and for Ubicloud's two vCPUs. `falcon-minimum` has
+no recorded run yet; its thirty-minute ceiling gives the uncovered full suite
 extra headroom. `build-dist` also has no recorded run, so its fifteen-minute
 ceiling is provisional. The release lanes have no recorded runs either, so
 their thirty-minute ceilings are provisional and set wide because a release
 killed part-way is worse than one that runs long. Re-size each lane after its
 third Ubicloud run.
 
-The last row is the first run on Ubicloud, and it is slower than the
-GitHub-hosted run above it: 44 s against 36 s, on an 11 s queue against 2 s.
-One sample decides nothing, but it is what the paragraph below predicts, and it
-is recorded rather than quietly dropped.
+The 30 October PR run is the latest Ubicloud sample. It includes the current
+`Run tests` and `Generate coverage` steps and supersedes the earlier 44 s
+maximum. One sample does not justify changing the timeout, but its 226 s run
+time remains within the current 15-minute ceiling.
 
 The second coverage sample is the reason this repository is worth moving at
 all. Its 588 s queue against a 30 s run is the queueing the migration targets;
@@ -1346,8 +1445,8 @@ never infer a SHA from an unverified version comment.
 They need two development dependencies that the library itself does not.
 **PyYAML** parses the GitHub Actions documents, and **Hypothesis** generates
 the declarations the label readers are held to. Both are in the `dev`
-dependency group, so `make build`, which runs `uv sync --group dev`, installs
-them; `uv sync --group dev` on its own does as well. Running
+dependency group, so `make build`, which runs `uv sync --group dev --locked`,
+installs them; `uv sync --group dev --locked` on its own does as well. Running
 `make test-workflow-contracts` or `make all` without them fails at import.
 
 The readers take the directory they read rather than reaching for a module

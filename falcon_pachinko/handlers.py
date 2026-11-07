@@ -326,6 +326,7 @@ class _HandlesMessageDescriptor:
     def __init__(
         self, message_type: str, func: Handler, *, strict: bool = True
     ) -> None:
+        """Reject reserved lifecycle names, then record the handler's payload type."""
         # The reserved check runs before ``get_payload_type`` so that a
         # lifecycle callback is refused for what it is, not for the signature
         # it happens to have. ``on_connect(self, req, ws, **params)`` has two
@@ -341,6 +342,7 @@ class _HandlesMessageDescriptor:
         self.name: str | None = None
 
     def __set_name__(self, owner: type, name: str) -> None:
+        """Register the handler with its owner, refusing a duplicate message type."""
         self.owner = owner
         self.name = name
 
@@ -367,6 +369,7 @@ class _HandlesMessageDescriptor:
     def __get__(
         self, instance: object, owner: type | None = None
     ) -> Handler | _HandlesMessageDescriptor:
+        """Bind the handler to instance, or return the descriptor for class access."""
         if instance is None:
             return self
         # cast: ``Handler`` is a bare callable alias, so the checker cannot see
@@ -385,6 +388,7 @@ def handles_message(
     def decorator(
         func: cabc.Callable[..., cabc.Awaitable[None]],
     ) -> _HandlesMessageDescriptor:
+        """Wrap func in a descriptor that registers it when the class is created."""
         return _HandlesMessageDescriptor(message_type, func, strict=strict)
 
     return decorator

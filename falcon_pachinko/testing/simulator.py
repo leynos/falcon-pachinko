@@ -200,6 +200,7 @@ class WebSocketSimulator(_LifecycleSocket):
         await self._inbound.put(_DisconnectMarker(code))
 
     def _prepare_inbound_payload(self, payload: object, kind: FrameKind) -> object:
+        """Convert ``payload`` to the frame form for ``kind``, validating its type."""
         match kind:
             case "text":
                 return self._prepare_text_payload(payload)
@@ -212,12 +213,14 @@ class WebSocketSimulator(_LifecycleSocket):
 
     @staticmethod
     def _prepare_text_payload(payload: object) -> str:
+        """Return ``payload`` unchanged after checking that it is a ``str``."""
         if not isinstance(payload, str):
             raise TypeError(_TEXT_PAYLOAD_REQUIRED_MSG)
         return payload
 
     @staticmethod
     def _prepare_bytes_payload(payload: object) -> bytes:
+        """Return ``payload`` as immutable bytes after checking it is bytes-like."""
         if not isinstance(payload, bytes | bytearray | memoryview):
             raise TypeError(_BINARY_PAYLOAD_REQUIRED_MSG)
         return bytes(payload)

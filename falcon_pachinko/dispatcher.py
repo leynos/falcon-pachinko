@@ -6,6 +6,7 @@ import dataclasses as dc
 import decimal
 import inspect
 import logging
+import time
 import typing as typ
 
 import msgspec as ms
@@ -47,6 +48,8 @@ _SCHEMA_DISPATCH_OUTCOMES = frozenset({
 type _DeliveryOutcome = typ.Literal["delivered", "rejected_fields", "conversion_failed"]
 
 if typ.TYPE_CHECKING:  # pragma: no cover - type hints only
+    import collections.abc as cabc
+
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
 
@@ -84,7 +87,7 @@ def _log_schema_dispatch(
 
 
 class Envelope(ms.Struct, frozen=True):
-    """Simple envelope for messages without a schema."""
+    """Envelope where omitted and null payloads both decode to ``None``."""
 
     type: str
     payload: typ.Any | None = None
@@ -92,17 +95,26 @@ class Envelope(ms.Struct, frozen=True):
 
 @dc.dataclass(slots=True, repr=False)
 class HandlerInvocationContext:
-    """Context for invoking a message handler."""
+    """Context for invoking a message handler.
+
+    Attributes
+    ----------
+    target_type : type | None
+        Struct selected by schema dispatch, when it differs from the handler's
+        annotation. Schema mode always converts to the resolved member so an
+        unannotated conventional handler still receives a typed payload.
+    monotonic_clock : cabc.Callable[[], float]
+        Clock used to measure typed-payload rejection time. Defaults to
+        :func:`time.monotonic`.
+    """
 
     resource: WebSocketResource
     ws: WebSocketLike
     raw: str | bytes
     handler_info: HandlerInfo
     payload: object
-    #: Struct selected by schema dispatch, when it differs from the handler's
-    #: annotation. Schema mode always converts to the resolved member so an
-    #: unannotated conventional handler still receives a typed payload.
     target_type: type | None = None
+    monotonic_clock: cabc.Callable[[], float] = time.monotonic
 
     def __repr__(self) -> str:
         """Describe the invocation without displaying raw or decoded values."""
@@ -209,10 +221,47 @@ def _convert_payload(context: HandlerInvocationContext, payload_type: type) -> o
     )
 
 
+def _log_envelope_rejection(
+    context: HandlerInvocationContext,
+    exc: ms.ValidationError,
+    started: float,
+) -> None:
+    """Record a rejected envelope conversion with bounded metadata.
+
+    Envelope dispatch has no schema observation of its own, so this record is
+    what lets application telemetry count rejected conversions and their
+    elapsed time. Schema dispatch already records its decision through
+    ``_log_schema_dispatch``, so it does not emit this record as well.
+
+    Parameters
+    ----------
+    context : HandlerInvocationContext
+        The invocation being rejected; only its type labels are recorded.
+    exc : ms.ValidationError
+        The vendor error whose type is recorded instead of its message.
+    started : float
+        Monotonic reading taken before validation began.
+    """
+    if context.target_type is not None:
+        return
+    logger.debug(
+        "Operation observation",
+        extra={
+            "operation": "dispatch",
+            "outcome": "rejected",
+            "duration_seconds": max(0.0, context.monotonic_clock() - started),
+            "exception_type": _type_name(exc),
+            "expected_type": _expected_type_label(context.handler_info),
+        },
+    )
+
+
 async def convert_and_invoke_handler(
     context: HandlerInvocationContext,
 ) -> _DeliveryOutcome:
-    """Convert ``payload`` to the handler's type and invoke it.
+    """Validate typed payloads, including omitted and null values, then invoke.
+
+    Omission and null are equivalent; handler parameter defaults are not applied.
 
     Returns
     -------
@@ -227,18 +276,21 @@ async def convert_and_invoke_handler(
     )
     payload = context.payload
     failure: _DeliveryOutcome | None = None
-    if payload_type is not None and payload is not None:
+    if payload_type is not None:
+        started = context.monotonic_clock()
         try:
             validate_strict_payload(
                 payload, payload_type, strict=context.handler_info.strict
             )
-        except ms.ValidationError:
+        except ms.ValidationError as exc:
             failure = "rejected_fields"
+            _log_envelope_rejection(context, exc, started)
         else:
             try:
                 payload = _convert_payload(context, payload_type)
-            except ms.ValidationError:
+            except ms.ValidationError as exc:
                 failure = "conversion_failed"
+                _log_envelope_rejection(context, exc, started)
     if failure is not None:
         # The fallback runs after the ``except`` blocks, not inside them, so an
         # exception it raises does not inherit the vendor ``ValidationError``

@@ -124,8 +124,8 @@ AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(DF12_PYTHON) \
 	--from '$(DF12_PYTHON_LINTS)' --with pylint==$(PYLINT_VERSION) \
 	--with astroid==$(ASTROID_VERSION) ambrleaks
 
-.PHONY: help all clean build build-release lint lint-pylint lint-df12 \
-	pylint-pypy-python fmt check-fmt markdownlint nixie spelling test \
+.PHONY: help all clean build build-release lint interrogate lint-pylint lint-df12 \
+	pylint-pypy-python fmt check-fmt markdownlint nixie spelling test test-ci \
 	test-workflow-contracts check-cv005 typecheck install-nose duplication \
 	duplication-test duplication-allow mutation mutation-results \
 	$(TOOLS) $(VENV_TOOLS)
@@ -164,7 +164,7 @@ define ensure_tool
 endef
 
 define ensure_tool_venv
-	@uv run which $(1) >/dev/null 2>&1 || { \
+	@uv run --locked which $(1) >/dev/null 2>&1 || { \
 	  printf "Error: '%s' is required in the virtualenv, but is not installed\n" "$(1)" >&2; \
 	  exit 1; \
 	}
@@ -186,7 +186,29 @@ check-fmt: uv $(MDTABLEFIX) ## Verify formatting
 	$(RUFF) format --check
 	$(MDTABLEFIX) --check $(MDTABLEFIX_SELECT) $(MDTABLEFIX_RULES)
 
-lint: uv install-nose ## Run linters
+# Docstring presence for every Python file the repository owns. Ruff keeps docstring
+# style; interrogate only checks that a docstring exists.
+INTERROGATE_VERSION ?= 1.7.0
+INTERROGATE = $(UV) tool run \
+	--from 'interrogate==$(INTERROGATE_VERSION)' interrogate
+INTERROGATE_TARGETS ?= falcon_pachinko examples scripts tests tools
+# Level 2 prints a MISSED row per undocumented definition, which the
+# `interrogate` target fails on: the rounded percentage alone passes a lone gap.
+INTERROGATE_FLAGS ?= -vv --fail-under 100
+
+# Interrogate rounds its percentage to one decimal, so `--fail-under 100` alone
+# passes a lone gap in a large repository; fail on any MISSED row as well.
+interrogate: uv ## Enforce complete Python docstring coverage
+	@report="$$($(INTERROGATE) $(INTERROGATE_FLAGS) $(INTERROGATE_TARGETS))"; \
+	  status=$$?; \
+	  printf '%s\n' "$$report"; \
+	  test "$$status" -eq 0 || exit "$$status"; \
+	  if printf '%s\n' "$$report" | grep -q '| *MISSED *|'; then \
+	    printf '%s\n' 'interrogate: undocumented definitions remain; see the MISSED rows above' >&2; \
+	    exit 1; \
+	  fi
+
+lint: uv install-nose interrogate ## Run linters
 	$(RUFF) check .
 	$(MAKE) --no-print-directory lint-pylint
 	$(MAKE) --no-print-directory lint-df12
@@ -253,8 +275,11 @@ nixie: $(NIXIE) ## Validate Mermaid diagrams
 	  -not -path './.uv-tools/*' -not -path './.uv-python/*' \
 	  -print0 | xargs -0 $(NIXIE)
 
-test: build uv pytest ## Run tests
-	uv run pytest -v
+test: build uv pytest ## Run the complete test suite
+	uv run --locked --extra examples pytest -v
+
+test-ci: build uv pytest ## Run tests after CI's dedicated lint-toolchain step
+	uv run --locked --extra examples pytest -v -m "not lint_toolchain"
 
 # Mutation testing is not a commit gate: it is slow and it is informational.
 # `.github/workflows/mutation.yml` calls the estate's reusable workflow, which
@@ -265,7 +290,7 @@ test: build uv pytest ## Run tests
 # `[tool.mutmut]` has no key for one.
 MUTMUT_VERSION ?= 3.6.0
 MUTMUT_PYTHON ?= 3.13
-MUTMUT = UV_PYTHON=$(MUTMUT_PYTHON) $(UV_ENV) $(UV) run --with mutmut==$(MUTMUT_VERSION) mutmut
+MUTMUT = UV_PYTHON=$(MUTMUT_PYTHON) $(UV_ENV) $(UV) run --locked --with mutmut==$(MUTMUT_VERSION) mutmut
 
 mutation: build uv ## Run mutation testing locally (slow)
 	$(MUTMUT) run
@@ -294,7 +319,7 @@ check-cv005: ## Check the shared CV-005 CodeScene workflow contracts
 # source, so they are fast and worth running on their own while editing a
 # workflow. `test` collects them too, which is what makes them a gate.
 test-workflow-contracts: check-cv005 build uv pytest ## Check the CI workflows' shape
-	uv run pytest tests/workflow_contracts -v
+	uv run --locked pytest tests/workflow_contracts -v
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | \

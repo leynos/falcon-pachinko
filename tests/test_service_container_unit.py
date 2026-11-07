@@ -17,6 +17,7 @@ class _SentinelResource(WebSocketResource):
     """Example resource used to verify injection behaviour."""
 
     def __init__(self, *, value: object) -> None:
+        """Store the injected keyword value for later assertions."""
         self.value = value
 
 
@@ -73,6 +74,7 @@ def test_create_resource_reuses_cached_signatures(
     original = di.inspect.signature
 
     def _tracking_signature(target: cabc.Callable[..., object]) -> object:
+        """Record the target callable and delegate to inspect.signature."""
         calls.append(target)
         return original(target)
 

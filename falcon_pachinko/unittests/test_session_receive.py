@@ -34,24 +34,29 @@ class _SocketWithoutCloseCode:
     """Expose no acceptance probe and no effective close-code metadata."""
 
     def __init__(self) -> None:
+        """Start open with no recorded close codes."""
         self.closed = False
         self.close_codes: list[int] = []
 
     @property
     def close_code(self) -> None:
-        return None
+        """Close code, always None because the socket exposes none."""
 
     async def accept(self) -> None:
+        """Accept the connection without any setup work."""
         pass
 
     async def close(self, code: int = 1000) -> None:
+        """Mark the socket closed and record the close code."""
         self.closed = True
         self.close_codes.append(code)
 
     async def send_media(self, data: object) -> None:
+        """Discard outgoing media."""
         del data
 
     async def receive_media(self) -> object:
+        """Raise a disconnect once closed, and fail any earlier receive."""
         if self.closed:
             raise falcon.WebSocketDisconnected(None)
         pytest.fail("the test socket only receives after server close")
@@ -63,6 +68,7 @@ class _AcceptAndCloseResource(RecordingResource):
     async def on_connect(
         self, req: falcon.Request, ws: object, **params: object
     ) -> bool:
+        """Accept the socket, close it with 4001, and report success."""
         del req, params
         websocket = typ.cast("typ.Any", ws)
         await websocket.accept()
@@ -91,12 +97,14 @@ async def test_not_ready_native_socket_preserves_buffered_frame() -> None:
     disconnect_received = asyncio.Event()
 
     async def receive() -> dict[str, object]:
+        """Return the next queued message and flag when disconnect is reached."""
         message = await events.get()
         if message.get("type") == "websocket.disconnect":
             disconnect_received.set()
         return message
 
     async def send(message: dict[str, object]) -> None:
+        """Discard the outgoing message after yielding to the event loop."""
         del message
         await asyncio.sleep(0)
 
@@ -129,9 +137,12 @@ async def test_close_before_buffered_frame_skips_overridden_dispatch() -> None:
     """A closed transport cannot enter even an overridden resource dispatcher."""
 
     class AcceptAndClose(RecordingResource):
+        """Resource that accepts the socket and closes it during setup."""
+
         async def on_connect(
             self, req: falcon.Request, ws: object, **params: object
         ) -> bool:
+            """Accept the socket and close it with 4004."""
             del req, params
             socket = typ.cast("SessionSocket", ws)
             await socket.accept()
@@ -198,6 +209,7 @@ async def test_close_during_receive_skips_later_receive_hooks() -> None:
     events: list[str] = []
 
     async def close_before_receive(context: object) -> None:
+        """Close the socket from a before-receive hook."""
         events.append("before")
         typed_context = typ.cast("typ.Any", context)
         await typed_context.ws.close(4001)
@@ -223,18 +235,23 @@ async def test_close_guard_overrides_wrapped_is_closed_probe() -> None:
     """A pending transport close blocks receive hooks before it completes."""
 
     class ClosePendingSocket(SessionSocket):
+        """Socket whose close stays pending until the test releases it."""
+
         def __init__(self) -> None:
+            """Buffer one late frame and create the close gate events."""
             super().__init__(b'{"type":"too-late"}')
             self.close_started = asyncio.Event()
             self.finish_close = asyncio.Event()
 
         @property
         def is_closed(self) -> bool:
+            """Report the wrapped socket's closed flag."""
             return self.closed
 
         async def close(
             self, code: int | None = 1000, reason: str | None = None
         ) -> None:
+            """Signal that close started, wait for release, then close."""
             del reason
             self.close_started.set()
             await self.finish_close.wait()
@@ -275,9 +292,12 @@ async def test_failed_close_rolls_back_its_provisional_code() -> None:
     """A failed transport close must not masquerade as an effective close."""
 
     class FailingCloseSocket(SessionSocket):
+        """Socket whose close attempt always fails."""
+
         async def close(
             self, code: int | None = 1000, reason: str | None = None
         ) -> None:
+            """Raise a RuntimeError instead of closing the socket."""
             del code, reason
             raise RuntimeError("failed")
 
@@ -302,7 +322,10 @@ async def test_handler_close_skips_after_receive_hooks() -> None:
     events: list[str] = []
 
     class ClosingResource(RecordingResource):
+        """Resource that closes the socket with 4004 after an unhandled frame."""
+
         async def on_unhandled(self, ws: object, message: str | bytes) -> None:
+            """Record the unhandled message, then close with 4004."""
             await super().on_unhandled(ws, message)
             await typ.cast("typ.Any", ws).close(4004)
 
@@ -334,13 +357,17 @@ async def test_close_from_receive_hook_stops_remaining_hook_layers(
     events: list[str] = []
 
     class HookedResource(RecordingResource):
+        """Recording resource whose class-level hooks form a receive layer."""
+
         pass
 
     async def close_socket(context: object) -> None:
+        """Record the close and close the socket with 4001."""
         events.append("close")
         await typ.cast("typ.Any", context).ws.close(4001)
 
     def record_late_hook(context: object) -> None:
+        """Record that a hook which should have been skipped still ran."""
         del context
         events.append("late")
 

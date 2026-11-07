@@ -86,6 +86,8 @@ async def _failing_worker(*, ready: asyncio.Event | None = None) -> None:
 
 
 class _CleanupGate(typ.NamedTuple):
+    """Hold a worker and the events that let a test observe its cleanup."""
+
     worker: cabc.Callable[[], cabc.Coroutine[object, object, None]]
     started: asyncio.Event
     cleanup_started: asyncio.Event

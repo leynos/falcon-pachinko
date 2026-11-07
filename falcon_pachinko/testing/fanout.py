@@ -16,6 +16,7 @@ class InMemoryFanoutTransport(FanoutTransport):
     """Model node leases and byte-only inboxes without sharing socket objects."""
 
     def __init__(self, *, clock: cabc.Callable[[], float] = time.monotonic) -> None:
+        """Create empty registries, using ``clock`` to judge lease expiry."""
         self._clock = clock
         self._rooms: dict[str, dict[str, float]] = {}
         self._inboxes: dict[str, asyncio.Queue[bytes | None]] = {}

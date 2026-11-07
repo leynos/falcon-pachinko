@@ -24,6 +24,7 @@ class RecordingWebSocket:
     """WebSocket stub that records lifecycle changes and sent payloads."""
 
     def __init__(self, *frames: object) -> None:
+        """Create an unaccepted stub that replays the given inbound frames."""
         self.unaccepted = True
         self.accepted = False
         self.closed = False
@@ -87,6 +88,7 @@ class RequestStub:
     """Minimal request double exposing headers and routing metadata."""
 
     def __init__(self, path: str, headers: dict[str, str]) -> None:
+        """Store the request path and a case-insensitive copy of the headers."""
         self.path = path
         self.path_template = "/ws"
         self._headers = {key.lower(): value for key, value in headers.items()}
@@ -100,6 +102,7 @@ class RecordingBackend(ConnectionBackend):
     """Custom backend that records calls for assertion."""
 
     def __init__(self) -> None:
+        """Create empty connection and room registries with an empty call log."""
         self._websockets: dict[str, WebSocketLike] = {}
         self._rooms: dict[str, set[str]] = {}
         self.calls: list[str] = []

@@ -37,6 +37,7 @@ class _LiveResource(WebSocketResource):
     """Share the welcome frame across live route resources."""
 
     def __init__(self, shared: LiveAppState) -> None:
+        """Share application state with sibling live resources."""
         self.shared = shared
 
     async def on_session_start(self, ws: WebSocketLike) -> None:

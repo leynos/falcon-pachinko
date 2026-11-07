@@ -97,3 +97,24 @@ def _no_duplicate_keys(
 StrictLoader.add_constructor(
     yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicate_keys
 )
+
+
+def load_strict_yaml(text: str) -> object:
+    """Load YAML with the safe loader and duplicate-key rejection.
+
+    Parameters
+    ----------
+    text : str
+        YAML document source text.
+
+    Returns
+    -------
+    object
+        The value parsed from the YAML document.
+
+    Notes
+    -----
+    Invalid YAML, duplicate mapping keys, and unhashable mapping keys
+    propagate as ``yaml.YAMLError``.
+    """
+    return yaml.load(text, Loader=StrictLoader)  # ruff: ignore[unsafe-yaml-load] - StrictLoader subclasses SafeLoader and rejects duplicate keys

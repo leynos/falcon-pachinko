@@ -105,6 +105,7 @@ def test_queries_never_start_a_process(
     """Reading the Makefile is a pure query; only the command helpers spawn."""
 
     def refuse(*args: object, **kwargs: object) -> typ.NoReturn:
+        """Fail the test if any query reaches the subprocess runner."""
         pytest.fail(f"a query started a process: {args!r} {kwargs!r}")
 
     monkeypatch.setattr(_makefile.subprocess, "run", refuse)

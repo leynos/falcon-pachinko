@@ -65,6 +65,7 @@ class WorkspaceRepository:
     """In-memory repository coordinating workspaces, projects, and tasks."""
 
     def __init__(self) -> None:
+        """Create an empty workspace map guarded by an asyncio lock."""
         self._workspaces: dict[str, Workspace] = {}
         self._lock = asyncio.Lock()
 
@@ -158,6 +159,7 @@ class WorkspaceRepository:
             }
 
     def _get_or_create_workspace(self, workspace_id: str) -> Workspace:
+        """Return the named workspace, creating it; the caller must hold the lock."""
         if (workspace := self._workspaces.get(workspace_id)) is None:
             workspace = Workspace(
                 workspace_id=workspace_id,
@@ -169,6 +171,7 @@ class WorkspaceRepository:
 
     @staticmethod
     def _get_or_create_project(workspace: Workspace, project_id: str) -> Project:
+        """Return the named project, creating it; the caller must hold the lock."""
         if (project := workspace.projects.get(project_id)) is None:
             project = Project(
                 project_id=project_id,
@@ -179,6 +182,7 @@ class WorkspaceRepository:
         return project
 
     def _ensure_project_locked(self, workspace_id: str, project_id: str) -> Project:
+        """Return the project, creating missing parents; the caller holds the lock."""
         workspace = self._get_or_create_workspace(workspace_id)
         return self._get_or_create_project(workspace, project_id)
 
@@ -187,6 +191,7 @@ class AuditTrail:
     """Simple async-friendly audit recorder used by the hooks."""
 
     def __init__(self) -> None:
+        """Create an empty record list guarded by an asyncio lock."""
         self._records: list[dict[str, object]] = []
         self._lock = asyncio.Lock()
 
@@ -219,6 +224,7 @@ class AnnouncementFeed:
     """Async queue used by workers to broadcast state changes."""
 
     def __init__(self) -> None:
+        """Create the unbounded queue that carries workspace announcements."""
         self._queue: asyncio.Queue[tuple[str, dict[str, object]]] = asyncio.Queue()
 
     async def publish(self, workspace_id: str, payload: dict[str, object]) -> None:
@@ -242,6 +248,7 @@ class AuthenticationError(PermissionError):
     """
 
     def __init__(self, workspace_id: str, reason: AuthenticationFailure) -> None:
+        """Record the refused workspace and reason, but never the presented token."""
         self.workspace_id = workspace_id
         self.reason: AuthenticationFailure = reason
         super().__init__(f"invalid token for workspace {workspace_id!r}")
@@ -251,6 +258,7 @@ class TokenAuthenticator:
     """Trivial header-based authenticator wired into global hooks."""
 
     def __init__(self, secrets: cabc.Mapping[str, str]) -> None:
+        """Copy the secrets so later caller mutations cannot change checks."""
         self._secrets = dict(secrets)
 
     async def verify(self, workspace_id: str, token: str | None) -> None:

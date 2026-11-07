@@ -40,6 +40,7 @@ class UnsupportedRunnerDeclarationError(WorkflowShapeError):
     """
 
     def __init__(self, where: str, value: object) -> None:
+        """Report the refused ``value`` found at the declaration site ``where``."""
         super().__init__(
             f"{where} declares {value!r}; runs-on must be a label, a list of "
             "labels, or a mapping of group and labels"

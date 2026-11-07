@@ -46,6 +46,8 @@ async def test_session_start_failure_is_removed_and_audited_by_router(
     resource, _repo, audit, _feed = _build_resource(manager)
 
     class FailingSetupSocket(RecordingWebSocket):
+        """Socket whose readiness send raises the parametrized failure."""
+
         async def send_media(self, data: object) -> None:
             """Fail the readiness send after the handshake completes."""
             del data
@@ -393,6 +395,8 @@ async def test_cancelled_session_start_keeps_rollback_failure_as_cause() -> None
     """Preserve rollback failure identity without copying its message to notes."""
 
     class CancelledJoinBackend(FailingRollbackBackend):
+        """Backend whose room join raises a cancellation, which must stay primary."""
+
         def __init__(self) -> None:
             """Keep one cancellation object so identity is testable."""
             super().__init__()

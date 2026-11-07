@@ -68,6 +68,7 @@ def _guard_session_clock(
     use_fallback_clock = False
 
     def read_clock() -> float:
+        """Return the host clock reading, or a fallback when it fails."""
         nonlocal last_reading, use_fallback_clock
         if use_fallback_clock:
             return time.monotonic()

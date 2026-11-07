@@ -23,6 +23,7 @@ class RenamedStrictResource(WebSocketResource):
     """Resource validating a renamed payload strictly."""
 
     def __init__(self) -> None:
+        """Start with no recorded payloads or rejected frames."""
         self.seen: list[str] = []
         self.fallback: list[str | bytes] = []
 

@@ -43,6 +43,7 @@ class LiveSessionResource(WebSocketResource):
     schema = SessionMessage
 
     def __init__(self, recorder: SessionRecorder) -> None:
+        """Bind the resource to the recorder that observes live dispatch."""
         self.recorder = recorder
 
     @handles_message("echo")
@@ -81,6 +82,7 @@ class RouterSessionScenario:
 
 
 def _resource_factory(recorder: SessionRecorder) -> WebSocketResource:
+    """Build a LiveSessionResource that reports to the given recorder."""
     return LiveSessionResource(recorder)
 
 
@@ -137,6 +139,7 @@ def when_send_echo(context: RouterSessionScenario) -> RouterSessionScenario:
     """Send one tagged message and receive its reply on the live socket."""
 
     async def exchange() -> None:
+        """Connect, send an echo message, and record the reply."""
         async with context.context.client.connect("/ws") as session:
             await session.send_json(EchoMessage(payload="hello"))
             context.replies.append(await asyncio.wait_for(session.receive_json(), 5))
@@ -153,6 +156,7 @@ def when_send_ordered(context: RouterSessionScenario) -> RouterSessionScenario:
     """Send text, binary, and text frames and receive each reply in order."""
 
     async def exchange() -> None:
+        """Send text, binary, and text frames, then record every reply."""
         async with context.context.client.connect("/ws") as session:
             await session.send_json(EchoMessage(payload="first"))
             await session.send_bytes(msjson.encode(EchoMessage(payload="second")))
@@ -176,6 +180,7 @@ def when_send_unknown_then_known(
     """Verify fallback and ordinary dispatch share one open session."""
 
     async def exchange() -> None:
+        """Send an unknown frame and then a known one on the same connection."""
         async with context.context.client.connect("/ws") as session:
             await session.send_json({"type": "unknown", "payload": "skip"})
             context.replies.append(await asyncio.wait_for(session.receive_json(), 5))
@@ -194,6 +199,7 @@ def when_send_failure(context: RouterSessionScenario) -> RouterSessionScenario:
     """Observe the server failure as a WebSocket close frame."""
 
     async def exchange() -> None:
+        """Send a failing message and record the close code the server used."""
         async with context.context.client.connect("/ws") as session:
             await session.send_json(FailMessage(payload="raise"))
             with pytest.raises(ConnectionClosed):
@@ -210,6 +216,7 @@ def when_client_closes(context: RouterSessionScenario) -> RouterSessionScenario:
     """Close the live connection and wait for server lifecycle completion."""
 
     async def exchange() -> None:
+        """Close with code 4008 and record the close code the client observed."""
         async with context.context.client.connect("/ws") as session:
             await session.close(code=4008, reason="client test close")
             await asyncio.wait_for(context.context.recorder.disconnected.wait(), 5)

@@ -31,7 +31,7 @@ jobs:
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     # Ubicloud runners register as just-in-time self-hosted runners, so
     # GitHub's six-hour limit does not apply and the lane needs its own
-    # ceiling. The longest observed run of this job is 36 s; see the runner
+    # ceiling. The longest observed run of this job is 226 s; see the runner
     # placement section of the developer guide for the measurements.
     timeout-minutes: 15
     env:
@@ -46,7 +46,7 @@ jobs:
           python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Install mdtablefix
         # `make check-fmt` runs `mdtablefix --check` with the Git selection and
@@ -54,7 +54,7 @@ jobs:
         # `--git`. The action
         # installs a prebuilt release through a hardened cargo-binstall rather
         # than building from source.
-        uses: leynos/shared-actions/.github/actions/install-mdtablefix@872f59f53717b5bebe8e24b2f4a7496b089a939a
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@6ca3d5217016143c5857d23a63eb649ea5fcd538
         with:
           version: "0.6.1"
 
@@ -118,10 +118,16 @@ jobs:
       # tests never skip, so an unprovisioned interpreter fails this step
       # instead of passing it silently.
       - name: Test lint toolchain
-        run: uv run pytest -m lint_toolchain -p no:cacheprovider
+        run: uv run --locked pytest -m lint_toolchain -p no:cacheprovider
 
       - name: Run typechecker
         run: make typecheck
+
+      # Keep `make test` complete for local runs. This CI target excludes the
+      # lint-toolchain marker already exercised by the dedicated step above.
+      # The examples extra still comes from the committed lock.
+      - name: Run tests
+        run: make test-ci
 
       # The shared CV-005 contract library holds the coverage and CodeScene shape
       # of these workflows; `make test` runs only the repository's own contracts.
@@ -129,7 +135,7 @@ jobs:
         run: make check-cv005
 
       - name: Check workflow contracts
-        run: uv run pytest tests/workflow_contracts
+        run: uv run --locked pytest tests/workflow_contracts
 
       # Markdown is linted through the upstream action rather than a `run:`
       # step, because the action's release carries the linter's whole
@@ -149,7 +155,7 @@ jobs:
       # the work and the CodeScene upload for the same commit.
       - name: Generate coverage
         if: github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/generate-coverage@872f59f53717b5bebe8e24b2f4a7496b089a939a
+        uses: leynos/shared-actions/.github/actions/generate-coverage@6ca3d5217016143c5857d23a63eb649ea5fcd538
         with:
           output-path: coverage.xml
           format: cobertura
@@ -193,7 +199,7 @@ jobs:
           python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
 
       - name: Install locked environment
         run: make build
@@ -202,14 +208,18 @@ jobs:
         run: uv pip install "falcon==${FALCON_MINIMUM_VERSION}"
 
       - name: Verify Falcon minimum version
+        # `--no-sync` implies frozen mode; `make build` checks lock freshness.
+        # Keep `--locked` here for the repository command contract.
         run: >-
-          uv run --no-sync python -c
+          uv run --locked --no-sync python -c
           "import importlib.metadata, os, sys; actual =
           importlib.metadata.version('falcon'); expected =
           os.environ['FALCON_MINIMUM_VERSION']; sys.exit(0 if actual == expected else 1)"
 
       - name: Run full test suite
-        run: uv run --no-sync pytest -v
+        # `--no-sync` implies frozen mode; `make build` checks lock freshness.
+        # Keep `--locked` here for the repository command contract.
+        run: uv run --locked --no-sync pytest -v
 
   build-dist:
     runs-on: >-

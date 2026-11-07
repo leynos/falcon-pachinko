@@ -51,6 +51,7 @@ class _WorkerLifecycleMiddleware:
         conn_mgr: WebSocketConnectionManager,
         feed: AnnouncementFeed,
     ) -> None:
+        """Keep the controller, connection manager, and feed for lifespan callbacks."""
         self._controller = controller
         self._conn_mgr = conn_mgr
         self._feed = feed
@@ -100,6 +101,7 @@ def _require_token_hook(
     """
 
     async def _hook(context: HookContext) -> None:
+        """Authenticate the connection, auditing and raising 401 on refusal."""
         params = context.params or {}
         raw_workspace_id = params.get("workspace_id")
         workspace_id = raw_workspace_id if isinstance(raw_workspace_id, str) else None

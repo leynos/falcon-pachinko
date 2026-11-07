@@ -41,6 +41,7 @@ class AuthEnvelopeResource(WebSocketResource):
     """Retain fallback frames without placing them in an application error."""
 
     def __init__(self) -> None:
+        """Start with no retained fallback frame."""
         self.fallback_raw: str | bytes | None = None
 
     @handles_message("client.hello")

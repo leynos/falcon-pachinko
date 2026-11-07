@@ -692,11 +692,15 @@ def test_array_like_schema_member_raises() -> None:
     """A schema member encoded as a JSON array cannot be tag-dispatched."""
 
     class ArrayMessage(ms.Struct, tag="array", array_like=True):
+        """A tagged member whose JSON encoding is an array, not an object."""
+
         value: str
 
     with pytest.raises(TypeError, match="array_like"):
 
         class BadResource(WebSocketResource):
+            """Expose the array-encoded member as its schema."""
+
             schema = ArrayMessage
 
 
@@ -726,6 +730,7 @@ def test_schema_strict_key_check_matches_the_declared_wire_keys(
     raw = msjson.encode(frame)
 
     def dispatch(resource: _RecordingResource) -> list[object]:
+        """Dispatch the generated frame and return the recorded events."""
         resource.bind_default_hook_manager()
         asyncio.run(resource.dispatch(DummyWS(), raw))
         return resource.events
