@@ -52,12 +52,12 @@ class WildcardPinRefusedError(BuildInputError):
         super().__init__(f"{subject!r} must not use a wildcard pin")
 
 
-class UnrecognisedHashOptionError(BuildInputError):
+class UnrecognizedHashOptionError(BuildInputError):
     """A constraint carries an option that is not a hash."""
 
     def __init__(self, subject: str, option: str) -> None:
         """Build the exception message."""
-        super().__init__(f"{subject}: unrecognised option {option!r}")
+        super().__init__(f"{subject}: unrecognized option {option!r}")
 
 
 class NonSha256HashError(BuildInputError):
@@ -264,14 +264,14 @@ def _hashes(options: list[str], subject: str) -> tuple[str, ...]:
         If the requirement carries no hash at all.
     NonSha256HashError
         If an option names a hash algorithm other than SHA-256.
-    UnrecognisedHashOptionError
+    UnrecognizedHashOptionError
         If an option is not a hash at all.
     """
     hashes: list[str] = []
     for option in options:
         match = _HASH_OPTION.fullmatch(option)
         if match is None:
-            raise UnrecognisedHashOptionError(subject, option)
+            raise UnrecognizedHashOptionError(subject, option)
         if match.group("algorithm") != "sha256":
             raise NonSha256HashError(subject)
         digest = match.group("digest")
@@ -470,7 +470,7 @@ def test_constraint_parser_rejects_unreviewed_inputs(text: str, reason: str) -> 
 
 
 def test_constraint_lookup_ignores_project_name_spelling() -> None:
-    """PEP 503 normalisation makes Setuptools match setuptools."""
+    """PEP 503 normalization makes Setuptools match setuptools."""
     constraints = parse_constraints(
         "setuptools==84.2.1 \\\n    --hash=sha256:" + "a" * 64 + "\n"
     )
