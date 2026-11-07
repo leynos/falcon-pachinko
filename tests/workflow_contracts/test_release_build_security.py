@@ -359,12 +359,13 @@ def test_publication_jobs_wait_on_the_build_outputs() -> None:
     """A job cannot read another job's outputs without depending on it."""
     for name in ("attest", "publish-pypi", "publish-release"):
         needs = job(RELEASE, name).get("needs")
-        if isinstance(needs, str):
-            declared = {needs}
-        elif isinstance(needs, list):
-            declared = {str(item) for item in needs}
-        else:
-            declared = set()
+        match needs:
+            case str():
+                declared = {needs}
+            case list():
+                declared = {str(item) for item in needs}
+            case _:
+                declared = set()
         assert "build-wheels" in declared, f"{name} must need build-wheels"
 
 

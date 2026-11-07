@@ -160,21 +160,21 @@ release-wheel: build-constraints.txt ## Build and compare two wheels from the sa
 	export SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)"; \
 	out='$(RELEASE_WHEEL_DIR)'; mkdir -p "$$out"; \
 	repeat="$$(mktemp -d "$${out%/}-repeat.XXXXXXXX")"; \
+	trap 'rm -rf "$$repeat"' EXIT; \
 	rm -f "$$out"/*.whl "$$out"/*.tar.gz; \
 	rm -rf build ./*.egg-info; \
 	$(UV) build --sdist --out-dir "$$out" --no-cache --build-constraint build-constraints.txt --require-build-hashes; \
-	set -- "$$out"/*.tar.gz; test "$$#" -eq 1 && test -f "$$1"; sdist="$$1"; \
+	set -- "$$out"/*.tar.gz; test "$$#" -eq 1; test -f "$$1"; sdist="$$1"; \
 	rm -rf build ./*.egg-info; \
 	$(UV) build "$$sdist" --wheel --out-dir "$$out" --no-cache --build-constraint build-constraints.txt --require-build-hashes; \
 	rm -rf build ./*.egg-info; \
 	$(UV) build "$$sdist" --wheel --out-dir "$$repeat" --no-cache --build-constraint build-constraints.txt --require-build-hashes; \
-	set -- "$$out"/*.whl; test "$$#" -eq 1 && test -f "$$1"; first="$$1"; \
-	set -- "$$repeat"/*.whl; test "$$#" -eq 1 && test -f "$$1"; second="$$1"; \
+	set -- "$$out"/*.whl; test "$$#" -eq 1; test -f "$$1"; first="$$1"; \
+	set -- "$$repeat"/*.whl; test "$$#" -eq 1; test -f "$$1"; second="$$1"; \
 	test "$${first##*/}" = "$${second##*/}"; \
-	first_hash="$$(sha256sum "$$first" | cut -d' ' -f1)"; \
-	second_hash="$$(sha256sum "$$second" | cut -d' ' -f1)"; \
-	if [ "$$first_hash" != "$$second_hash" ]; then printf 'Wheel digests differ: %s %s\n' "$$first_hash" "$$second_hash" >&2; exit 1; fi; \
-	rm -rf "$$repeat"
+	first_hash="$$(sha256sum "$$first")"; first_hash="$${first_hash%% *}"; \
+	second_hash="$$(sha256sum "$$second")"; second_hash="$${second_hash%% *}"; \
+	if [ "$$first_hash" != "$$second_hash" ]; then printf 'Wheel digests differ: %s %s\n' "$$first_hash" "$$second_hash" >&2; exit 1; fi
 
 clean: ## Remove build artefacts
 	rm -rf build dist *.egg-info \

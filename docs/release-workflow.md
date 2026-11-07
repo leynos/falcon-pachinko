@@ -178,11 +178,12 @@ no longer match.
 The `build-wheels` job holds `contents: read` only, and every checkout in the
 release and CI workflows sets `persist-credentials: false`, including the
 composite action. The build job records the wheel and sdist names and SHA-256
-digests as job outputs. The `attest`, `publish-pypi` and `publish-release` jobs
-download the `wheels-pure` artefact and run
-`scripts/verify_build_distributions.py` against those outputs before they
-attest, upload or publish anything. Only `draft-release` and `publish-release`
-hold `contents: write`, and neither runs a build command.
+digests as job outputs. The `attest` job downloads the `wheels-pure` artefact
+and runs `scripts/verify_build_distributions.py` against those outputs before
+it attests anything. `publish-pypi` and `publish-release` consume the
+`release-dist` artefact that attestation produced and run the same verification
+before they upload or publish. Only `draft-release` and `publish-release` hold
+`contents: write`, and neither runs a build command.
 
 The committed `uv.lock` covers development and CI project environments, not the
 isolated build backend; see the Developer Guide's
