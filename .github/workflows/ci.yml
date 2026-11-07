@@ -155,7 +155,7 @@ jobs:
       # the work and the CodeScene upload for the same commit.
       - name: Generate coverage
         if: github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/generate-coverage@6ca3d5217016143c5857d23a63eb649ea5fcd538
+        uses: leynos/shared-actions/.github/actions/generate-coverage@f84a7def5646a6fc7ba77c1f486906f66a0fed96
         with:
           output-path: coverage.xml
           format: cobertura

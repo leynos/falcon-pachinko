@@ -1342,8 +1342,10 @@ no recorded run yet; its thirty-minute ceiling gives the uncovered full suite
 extra headroom. `build-dist` also has no recorded run, so its fifteen-minute
 ceiling is provisional. The release lanes have no recorded runs either, so
 their thirty-minute ceilings are provisional and set wide because a release
-killed part-way is worse than one that runs long. Re-size each lane after its
-third Ubicloud run.
+killed part-way is worse than one that runs long. `coverage-baseline` restores,
+compares and saves two small files on the smallest runner, so its
+fifteen-minute ceiling is provisional too. Re-size each lane after its third
+Ubicloud run.
 
 The 30 October PR run is the latest Ubicloud sample. It includes the current
 `Run tests` and `Generate coverage` steps and supersedes the earlier 44 s
