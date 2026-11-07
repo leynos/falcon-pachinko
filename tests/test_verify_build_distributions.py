@@ -26,19 +26,9 @@ WHEEL = "falcon_pachinko-0.1.0a3-py3-none-any.whl"
 SDIST = "falcon_pachinko-0.1.0a3.tar.gz"
 
 
-def _publish(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Write one wheel and one sdist into a fresh publish directory.
-
-    Parameters
-    ----------
-    tmp_path : pathlib.Path
-        The test's temporary directory.
-
-    Returns
-    -------
-    pathlib.Path
-        The directory holding the two distributions.
-    """
+@pytest.fixture
+def publish_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Provide a publish directory holding one wheel and one sdist."""
     directory = tmp_path / "publish"
     directory.mkdir()
     (directory / WHEEL).write_bytes(b"wheel bytes")
@@ -79,20 +69,24 @@ def _verify(directory: pathlib.Path, *, wheel_name: str = WHEEL) -> None:
     )
 
 
-def test_matching_distributions_are_accepted(tmp_path: pathlib.Path) -> None:
+def test_matching_distributions_are_accepted(publish_dir: pathlib.Path) -> None:
     """The exact files the build reported pass the check."""
-    _verify(_publish(tmp_path))
+    verify(
+        publish_dir,
+        wheel=_identity(publish_dir / WHEEL),
+        sdist=_identity(publish_dir / SDIST),
+    )
 
 
-def test_a_different_wheel_name_is_refused(tmp_path: pathlib.Path) -> None:
+def test_a_different_wheel_name_is_refused(publish_dir: pathlib.Path) -> None:
     """A renamed wheel is not the artefact the build job measured."""
     with pytest.raises(DistributionVerificationError, match="expected"):
-        _verify(_publish(tmp_path), wheel_name="other.whl")
+        _verify(publish_dir, wheel_name="other.whl")
 
 
-def test_a_different_digest_is_refused(tmp_path: pathlib.Path) -> None:
+def test_a_different_digest_is_refused(publish_dir: pathlib.Path) -> None:
     """Different bytes under the same name are refused."""
-    directory = _publish(tmp_path)
+    directory = publish_dir
     with pytest.raises(DistributionVerificationError, match="sha256"):
         verify(
             directory,
@@ -101,25 +95,25 @@ def test_a_different_digest_is_refused(tmp_path: pathlib.Path) -> None:
         )
 
 
-def test_an_extra_distribution_is_refused(tmp_path: pathlib.Path) -> None:
+def test_an_extra_distribution_is_refused(publish_dir: pathlib.Path) -> None:
     """A second wheel means the directory is not the reviewed build."""
-    directory = _publish(tmp_path)
+    directory = publish_dir
     (directory / "extra.whl").write_bytes(b"extra")
     with pytest.raises(DistributionVerificationError, match="exactly one wheel"):
         _verify(directory)
 
 
-def test_an_unexpected_file_is_refused(tmp_path: pathlib.Path) -> None:
+def test_an_unexpected_file_is_refused(publish_dir: pathlib.Path) -> None:
     """A non-distribution beside the pair is also a handoff failure."""
-    directory = _publish(tmp_path)
+    directory = publish_dir
     (directory / "notes.txt").write_text("unexpected")
     with pytest.raises(DistributionVerificationError, match="unexpected files"):
         _verify(directory)
 
 
-def test_a_missing_sdist_is_refused(tmp_path: pathlib.Path) -> None:
+def test_a_missing_sdist_is_refused(publish_dir: pathlib.Path) -> None:
     """The release always travels with its source distribution."""
-    directory = _publish(tmp_path)
+    directory = publish_dir
     (directory / SDIST).unlink()
     with pytest.raises(DistributionVerificationError, match="source distribution"):
         verify(
@@ -130,10 +124,10 @@ def test_a_missing_sdist_is_refused(tmp_path: pathlib.Path) -> None:
 
 
 def test_the_cli_reports_a_refusal(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+    publish_dir: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A refusal is a non-zero exit with a GitHub Actions error annotation."""
-    directory = _publish(tmp_path)
+    directory = publish_dir
     status = main([
         "--directory",
         str(directory),

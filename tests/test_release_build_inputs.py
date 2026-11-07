@@ -15,6 +15,7 @@ import tomllib
 
 import pytest
 from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
 
 from tests._makefile import (
     REPO_ROOT,
@@ -311,11 +312,12 @@ def parse_constraints(text: str) -> dict[str, Constraint]:
             requirement = Requirement(requirement_token)
         except InvalidRequirement as error:
             raise InvalidConstraintRequirementError(requirement_token) from error
+        name = canonicalize_name(requirement.name)
         version = exact_version(requirement, requirement_token)
-        if requirement.name in constraints:
-            raise DuplicateConstraintError(requirement.name)
-        constraints[requirement.name] = Constraint(
-            name=requirement.name,
+        if name in constraints:
+            raise DuplicateConstraintError(name)
+        constraints[name] = Constraint(
+            name=name,
             version=version,
             hashes=_hashes(options, requirement_token),
         )
@@ -345,7 +347,7 @@ def assert_constraints_cover(
     """
     for requirement in requirements:
         version = exact_version(requirement, str(requirement))
-        constraint = constraints.get(requirement.name)
+        constraint = constraints.get(canonicalize_name(requirement.name))
         if constraint is None:
             raise MissingConstraintError(requirement.name)
         if constraint.version != version:
@@ -465,6 +467,14 @@ def test_constraint_parser_rejects_unreviewed_inputs(text: str, reason: str) -> 
     """A range, unhashed or malformed pin must fail the contract."""
     with pytest.raises(BuildInputError, match=reason):
         parse_constraints(text)
+
+
+def test_constraint_lookup_ignores_project_name_spelling() -> None:
+    """PEP 503 normalisation makes Setuptools match setuptools."""
+    constraints = parse_constraints(
+        "setuptools==84.2.1 \\\n    --hash=sha256:" + "a" * 64 + "\n"
+    )
+    assert_constraints_cover([Requirement("Setuptools==84.2.1")], constraints)
 
 
 def test_constraints_must_match_the_backend_pin() -> None:
