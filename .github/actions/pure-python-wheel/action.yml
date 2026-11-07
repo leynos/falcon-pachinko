@@ -10,6 +10,19 @@ inputs:
   artifact-name:
     description: Name of the uploaded artefact
     default: wheels-pure
+outputs:
+  wheel-name:
+    description: File name of the verified wheel
+    value: ${{ steps.digests.outputs.wheel-name }}
+  wheel-sha256:
+    description: SHA-256 digest of the verified wheel
+    value: ${{ steps.digests.outputs.wheel-sha256 }}
+  sdist-name:
+    description: File name of the verified source distribution
+    value: ${{ steps.digests.outputs.sdist-name }}
+  sdist-sha256:
+    description: SHA-256 digest of the verified source distribution
+    value: ${{ steps.digests.outputs.sdist-sha256 }}
 runs:
   using: composite
   steps:
@@ -26,12 +39,40 @@ runs:
       with:
         version: "0.13.2"
     - name: Build sdist and wheel
+      id: build
       shell: bash
       env:
         OUT_DIR: ${{ inputs.out-dir }}
       run: |
         set -euo pipefail
         make release-wheel RELEASE_WHEEL_DIR="$OUT_DIR"
+    # Record the identity of the exact files the build produced. Publication
+    # jobs compare their downloaded copies against these values, so a later
+    # job cannot silently publish a different set of bytes.
+    - name: Record distribution digests
+      id: digests
+      shell: bash
+      env:
+        OUT_DIR: ${{ inputs.out-dir }}
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        wheels=("$OUT_DIR"/*.whl)
+        sdists=("$OUT_DIR"/*.tar.gz)
+        if [ "${#wheels[@]}" -ne 1 ]; then
+          echo "Expected exactly one wheel, found ${#wheels[@]}." >&2
+          exit 1
+        fi
+        if [ "${#sdists[@]}" -ne 1 ]; then
+          echo "Expected exactly one source distribution, found ${#sdists[@]}." >&2
+          exit 1
+        fi
+        wheel="${wheels[0]}"
+        sdist="${sdists[0]}"
+        printf 'wheel-name=%s\n' "${wheel##*/}" >> "$GITHUB_OUTPUT"
+        printf 'wheel-sha256=%s\n' "$(sha256sum "$wheel" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        printf 'sdist-name=%s\n' "${sdist##*/}" >> "$GITHUB_OUTPUT"
+        printf 'sdist-sha256=%s\n' "$(sha256sum "$sdist" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
     - name: Stage distributions
       shell: bash
       env:

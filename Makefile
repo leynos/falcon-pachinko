@@ -127,9 +127,9 @@ AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(DF12_PYTHON) \
 .PHONY: help all clean build build-release release-wheel update-build-constraints \
 	lint interrogate lint-pylint lint-df12 \
 	pylint-pypy-python fmt check-fmt markdownlint nixie spelling test test-ci \
-	test-workflow-contracts check-cv005 typecheck install-nose duplication \
-	duplication-test duplication-allow mutation mutation-results \
-	$(TOOLS) $(VENV_TOOLS)
+	test-workflow-contracts test-release-security check-cv005 typecheck \
+	install-nose duplication duplication-test duplication-allow mutation \
+	mutation-results $(TOOLS) $(VENV_TOOLS)
 
 .DEFAULT_GOAL := all
 
@@ -148,26 +148,26 @@ build: uv .venv uv.lock ## Build virtual-env and install deps
 
 # `uv build` writes both artefacts into `dist/`, which is the directory
 # `make clean` removes and `.gitignore` excludes.
-build-release: ## Build artefacts (sdist & wheel)
-	SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" uv build --out-dir dist --no-cache --build-constraint build-constraints.txt --require-build-hashes
+build-release: build-constraints.txt ## Build artefacts (sdist & wheel)
+	SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" $(UV) build --out-dir dist --no-cache --build-constraint build-constraints.txt --require-build-hashes
 
 update-build-constraints: ## Regenerate isolated build dependency hashes
-	python3 -c 'import tomllib; print("\n".join(tomllib.load(open("pyproject.toml", "rb"))["build-system"]["requires"]))' | uv pip compile - --generate-hashes --universal --python-version 3.12 --output-file build-constraints.txt
+	python3 -c 'import pathlib, tomllib; print("\n".join(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["build-system"]["requires"]))' | $(UV) pip compile - --generate-hashes --universal --python-version 3.12 --output-file build-constraints.txt
 
 RELEASE_WHEEL_DIR ?= dist
-release-wheel: ## Build and compare two wheels from the same sdist
+release-wheel: build-constraints.txt ## Build and compare two wheels from the same sdist
 	@set -eu; \
 	export SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)"; \
 	out='$(RELEASE_WHEEL_DIR)'; mkdir -p "$$out"; \
 	repeat="$$(mktemp -d "$${out%/}-repeat.XXXXXXXX")"; \
 	rm -f "$$out"/*.whl "$$out"/*.tar.gz; \
 	rm -rf build ./*.egg-info; \
-	uv build --sdist --out-dir "$$out" --no-cache --build-constraint build-constraints.txt --require-build-hashes; \
+	$(UV) build --sdist --out-dir "$$out" --no-cache --build-constraint build-constraints.txt --require-build-hashes; \
 	set -- "$$out"/*.tar.gz; test "$$#" -eq 1 && test -f "$$1"; sdist="$$1"; \
 	rm -rf build ./*.egg-info; \
-	uv build "$$sdist" --wheel --out-dir "$$out" --no-cache --build-constraint build-constraints.txt --require-build-hashes; \
+	$(UV) build "$$sdist" --wheel --out-dir "$$out" --no-cache --build-constraint build-constraints.txt --require-build-hashes; \
 	rm -rf build ./*.egg-info; \
-	uv build "$$sdist" --wheel --out-dir "$$repeat" --no-cache --build-constraint build-constraints.txt --require-build-hashes; \
+	$(UV) build "$$sdist" --wheel --out-dir "$$repeat" --no-cache --build-constraint build-constraints.txt --require-build-hashes; \
 	set -- "$$out"/*.whl; test "$$#" -eq 1 && test -f "$$1"; first="$$1"; \
 	set -- "$$repeat"/*.whl; test "$$#" -eq 1 && test -f "$$1"; second="$$1"; \
 	test "$${first##*/}" = "$${second##*/}"; \
@@ -282,7 +282,7 @@ lint-df12: uv ## Run df12-python-lints and ambrleaks on CPython 3.14
 	$(AMBRLEAKS) tests
 
 typecheck: build uv ## Run typechecking
-	$(TY) check --extra-search-path . falcon_pachinko tests tools scripts/release_assets.py scripts/release_assets_cli.py scripts/release_version.py scripts/release_provenance.py
+	$(TY) check --extra-search-path . falcon_pachinko tests tools scripts/release_assets.py scripts/release_assets_cli.py scripts/release_version.py scripts/release_provenance.py scripts/verify_build_distributions.py
 
 # Local convenience only. CI lints Markdown through
 # DavidAnson/markdownlint-cli2-action, whose release carries the linter's
@@ -346,6 +346,14 @@ check-cv005: ## Check the shared CV-005 CodeScene workflow contracts
 # workflow. `test` collects them too, which is what makes them a gate.
 test-workflow-contracts: check-cv005 build uv pytest ## Check the CI workflows' shape
 	uv run --locked pytest tests/workflow_contracts -v
+
+# The release build contracts read `pyproject.toml`, the generated constraints,
+# the Makefile recipes and the workflow documents. They are fast enough to run
+# on their own while editing any of them, and `test` collects them too.
+test-release-security: build uv pytest ## Check release build inputs and authority
+	uv run --locked pytest -v tests/test_release_build_inputs.py \
+	  tests/test_verify_build_distributions.py \
+	  tests/workflow_contracts/test_release_build_security.py
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | \

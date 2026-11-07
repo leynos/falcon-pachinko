@@ -339,13 +339,19 @@ This lockfile governs only the development and CI project environments.
 Published wheels and source distributions retain the dependency ranges from
 `pyproject.toml`; consumers resolve those ranges for their own environments.
 The release build uses `uv build` and the isolated backend declared in
-`[build-system]`, which is outside the project lock.
+`[build-system]`, which is outside the project lock. Issue
+[#209](https://github.com/leynos/falcon-pachinko/issues/209) covers runtime,
+development and extra dependencies, and does not cover isolated build
+requirements. Those are pinned exactly in `pyproject.toml` and hash-bound in
+`build-constraints.txt`; see the release workflow guide's
+[build requirements and credentials](release-workflow.md#build-requirements-and-credentials).
 
 Tool environments are separate as well. `uv tool run` and `uv run --no-project`
 do not use the project lock. A future `uvx cibuildwheel` invocation would have
 its own tool environment; the current release workflow does not use it. Pins
 for tools invoked by Makefile and CI remain at those call sites. This policy
-adds no pins for `mbake`, `cibuildwheel` or the build backend.
+adds no pins for `mbake` or `cibuildwheel`; the build backend is pinned
+separately, as described above.
 
 ### Command contracts
 
