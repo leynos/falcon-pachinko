@@ -347,12 +347,17 @@ def test_publication_verifies_the_build_digest() -> None:
         assert len(found) == 1, f"{name} must verify the build identity once"
         env = found[0].get("env")
         assert isinstance(env, dict), f"{name} must pass the expected values via env"
-        assert env["EXPECTED_WHEEL_SHA256"] == (
-            "${{ needs.build-wheels.outputs.wheel-sha256 }}"
-        ), f"{name} must compare the wheel digest"
-        assert env["EXPECTED_SDIST_SHA256"] == (
-            "${{ needs.build-wheels.outputs.sdist-sha256 }}"
-        ), f"{name} must compare the sdist digest"
+        script = str(found[0].get("run", ""))
+        for output in _DIGEST_OUTPUTS:
+            variable = "EXPECTED_" + output.upper().replace("-", "_")
+            assert env[variable] == (
+                "${{ needs.build-wheels.outputs." + output + " }}"
+            ), f"{name} must bind {variable} to the build output"
+            assert f'"${variable}"' in script, f"{name} must pass {variable}"
+        assert env["DIST_DIR"] == "dist/publish", f"{name} must verify dist/publish"
+        assert '--directory "$DIST_DIR"' in script, (
+            f"{name} must verify the DIST_DIR directory"
+        )
 
 
 def test_publication_jobs_wait_on_the_build_outputs() -> None:
@@ -373,7 +378,9 @@ def test_publication_jobs_wait_on_the_build_outputs() -> None:
     ("job_name", "later_step"),
     [
         ("attest", "Attest build provenance"),
+        ("publish-pypi", "Skip artefacts already on PyPI"),
         ("publish-pypi", "Publish to PyPI"),
+        ("publish-release", "Stage the assets the release lacks"),
         ("publish-release", "Upload the assets the release lacks"),
         ("publish-release", "Publish the GitHub Release"),
     ],

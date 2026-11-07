@@ -392,18 +392,51 @@ def test_every_constraint_has_a_sha256_hash() -> None:
         )
 
 
+_REQUIRED_BUILD_OPTIONS = (
+    "--build-constraint build-constraints.txt",
+    "--require-build-hashes",
+    "--no-cache",
+)
+
+
+def assert_build_invocations_are_verified(recipe: str, target: str) -> None:
+    """Require every ``uv build`` call to constrain and verify its inputs.
+
+    Parameters
+    ----------
+    recipe : str
+        A Makefile recipe body.
+    target : str
+        The Make target, named in a failure.
+
+    Notes
+    -----
+    Each invocation is checked separately, so one unconstrained build cannot
+    hide behind two correct ones.
+    """
+    invocations = recipe.split("$(UV) build")[1:]
+    assert invocations, f"{target} must call uv build"
+    for index, invocation in enumerate(invocations):
+        for option in _REQUIRED_BUILD_OPTIONS:
+            assert option in invocation, f"{target} build {index} lacks {option}"
+
+
 @pytest.mark.parametrize("target", ["release-wheel", "build-release"])
 def test_build_recipes_require_verified_isolated_inputs(target: str) -> None:
     """Every release build isolates the backend and verifies its hashes."""
     recipe = makefile_recipe(target)
-    for option in (
-        "--build-constraint build-constraints.txt",
-        "--require-build-hashes",
-        "--no-cache",
-    ):
-        assert option in recipe, f"{target} lacks {option}"
+    assert_build_invocations_are_verified(recipe, target)
     assert "SOURCE_DATE_EPOCH" in recipe, f"{target} must fix the build timestamp"
     assert "--no-build-isolation" not in recipe, f"{target} must isolate builds"
+
+
+@pytest.mark.parametrize("option", _REQUIRED_BUILD_OPTIONS)
+def test_one_unconstrained_build_invocation_is_refused(option: str) -> None:
+    """A single invocation missing an option fails the whole recipe."""
+    invocation = "$(UV) build " + " ".join(_REQUIRED_BUILD_OPTIONS)
+    recipe = " ; ".join([invocation, invocation.replace(option, ""), invocation])
+    with pytest.raises(AssertionError, match="build 1 lacks"):
+        assert_build_invocations_are_verified(recipe, "synthetic")
 
 
 def test_release_wheel_compares_two_independent_builds() -> None:

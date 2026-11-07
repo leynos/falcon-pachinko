@@ -152,7 +152,10 @@ build-release: build-constraints.txt ## Build artefacts (sdist & wheel)
 	SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)" $(UV) build --out-dir dist --no-cache --build-constraint build-constraints.txt --require-build-hashes
 
 update-build-constraints: ## Regenerate isolated build dependency hashes
-	python3 -c 'import pathlib, tomllib; print("\n".join(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["build-system"]["requires"]))' | $(UV) pip compile - --generate-hashes --universal --python-version 3.12 --output-file build-constraints.txt
+	@set -eu; \
+	requires="$$(mktemp)"; trap 'rm -f "$$requires"' EXIT; \
+	$(UV) run --no-project --python 3.12 python -c 'import pathlib, tomllib; print("\n".join(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["build-system"]["requires"]))' > "$$requires"; \
+	$(UV) pip compile - --generate-hashes --universal --python-version 3.12 --output-file build-constraints.txt < "$$requires"
 
 RELEASE_WHEEL_DIR ?= dist
 release-wheel: build-constraints.txt ## Build and compare two wheels from the same sdist
