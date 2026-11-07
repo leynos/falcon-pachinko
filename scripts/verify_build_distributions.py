@@ -93,7 +93,7 @@ def sha256_of(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
-def _single_distribution(
+def single_distribution(
     directory: pathlib.Path, pattern: str, description: str
 ) -> pathlib.Path:
     """Return the one file matching *pattern* in *directory*.
@@ -200,8 +200,8 @@ def verify(
         The source distribution name and digest the build job reported.
 
     """
-    wheel_path = _single_distribution(directory, "*.whl", "wheel")
-    sdist_path = _single_distribution(directory, "*.tar.gz", "source distribution")
+    wheel_path = single_distribution(directory, "*.whl", "wheel")
+    sdist_path = single_distribution(directory, "*.tar.gz", "source distribution")
     _reject_unexpected_files(directory, (wheel_path, sdist_path))
     _check_identity(wheel_path, wheel, "wheel")
     _check_identity(sdist_path, sdist, "source distribution")

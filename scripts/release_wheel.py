@@ -19,7 +19,11 @@ import subprocess  # ruff: ignore[suspicious-subprocess-import] - runs the repos
 import sys
 import tempfile
 
-from scripts.verify_build_distributions import sha256_of
+from scripts.verify_build_distributions import (
+    DistributionVerificationError,
+    sha256_of,
+    single_distribution,
+)
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_CONSTRAINTS = "build-constraints.txt"
@@ -28,16 +32,6 @@ _BUILD_FLAGS = ("--no-cache", "--require-build-hashes")
 
 class ReleaseBuildError(RuntimeError):
     """A release build did not produce the artefact the recipe expects."""
-
-
-class DistributionCountError(ReleaseBuildError):
-    """A directory does not hold exactly one distribution of a kind."""
-
-    def __init__(self, directory: pathlib.Path, pattern: str, count: int) -> None:
-        """Build the exception message."""
-        super().__init__(
-            f"{directory} must hold exactly one {pattern} file; found {count}"
-        )
 
 
 class WheelNameMismatchError(ReleaseBuildError):
@@ -142,32 +136,6 @@ def clear_build_state() -> None:
         shutil.rmtree(egg_info, ignore_errors=True)
 
 
-def single_distribution(directory: pathlib.Path, pattern: str) -> pathlib.Path:
-    """Return the one file matching *pattern* in *directory*.
-
-    Parameters
-    ----------
-    directory : pathlib.Path
-        The directory to search.
-    pattern : str
-        The glob for the distribution suffix, such as ``*.whl``.
-
-    Returns
-    -------
-    pathlib.Path
-        The single matching file.
-
-    Raises
-    ------
-    DistributionCountError
-        If the directory holds zero or more than one match.
-    """
-    matches = sorted(directory.glob(pattern))
-    if len(matches) != 1:
-        raise DistributionCountError(directory, pattern, len(matches))
-    return matches[0]
-
-
 def compare_wheels(first: pathlib.Path, second: pathlib.Path) -> str:
     """Require two independently built wheels to be identical.
 
@@ -216,6 +184,12 @@ def build_release(
     -------
     str
         The shared SHA-256 digest of the two wheels.
+
+    Notes
+    -----
+    The function deletes every ``*.whl`` and ``*.tar.gz`` file already in
+    *output_dir* before it builds, so the directory must hold only release
+    artefacts.
     """
     directory = output_dir if output_dir.is_absolute() else REPO_ROOT / output_dir
     directory.mkdir(parents=True, exist_ok=True)
@@ -230,7 +204,7 @@ def build_release(
         constraints=constraints,
         environment=environment,
     )
-    sdist = single_distribution(directory, "*.tar.gz")
+    sdist = single_distribution(directory, "*.tar.gz", "source distribution")
     with tempfile.TemporaryDirectory(
         prefix=f"{directory.name}-repeat.", dir=directory.parent
     ) as repeat:
@@ -253,8 +227,8 @@ def build_release(
             constraints=constraints,
             environment=environment,
         )
-        first = single_distribution(directory, "*.whl")
-        second = single_distribution(repeat_dir, "*.whl")
+        first = single_distribution(directory, "*.whl", "wheel")
+        second = single_distribution(repeat_dir, "*.whl", "wheel")
         return compare_wheels(first, second)
 
 
@@ -282,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
         digest = build_release(arguments.output_dir, constraints=arguments.constraints)
-    except ReleaseBuildError as error:
+    except (ReleaseBuildError, DistributionVerificationError) as error:
         print(f"::error::{error}", file=sys.stderr)
         return 1
     except subprocess.CalledProcessError as error:

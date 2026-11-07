@@ -18,6 +18,9 @@ from scripts.release_wheel import (
     build_command,
     compare_wheels,
     main,
+)
+from scripts.verify_build_distributions import (
+    DistributionVerificationError,
     sha256_of,
     single_distribution,
 )
@@ -81,7 +84,7 @@ def test_one_distribution_is_accepted(tmp_path: pathlib.Path) -> None:
     """A directory holding one match yields that file."""
     wheel = tmp_path / WHEEL
     wheel.write_bytes(b"wheel bytes")
-    assert single_distribution(tmp_path, "*.whl") == wheel, (
+    assert single_distribution(tmp_path, "*.whl", "wheel") == wheel, (
         "the only wheel in the directory must be returned"
     )
 
@@ -93,8 +96,8 @@ def test_an_ambiguous_distribution_count_is_refused(
     """Zero or two matches mean the build produced the wrong artefact."""
     for name in names:
         (tmp_path / name).write_bytes(b"wheel bytes")
-    with pytest.raises(ReleaseBuildError, match="exactly one"):
-        single_distribution(tmp_path, "*.whl")
+    with pytest.raises(DistributionVerificationError, match="exactly one"):
+        single_distribution(tmp_path, "*.whl", "wheel")
 
 
 def test_every_build_command_is_verified() -> None:
