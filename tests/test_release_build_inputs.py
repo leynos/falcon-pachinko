@@ -307,7 +307,9 @@ def parse_constraints(text: str) -> dict[str, Constraint]:
     """
     constraints: dict[str, Constraint] = {}
     for line in _logical_lines(text):
-        requirement_token, *options = line.split()
+        # Split only at the --hash options: a universal resolution can attach
+        # an environment marker to the requirement itself.
+        requirement_token, *options = re.split(r"\s+(?=--)", line)
         try:
             requirement = Requirement(requirement_token)
         except InvalidRequirement as error:
@@ -423,13 +425,12 @@ def assert_build_invocations_are_verified(recipe: str, target: str) -> None:
             assert option in invocation, f"{target} build {index} lacks {option}"
 
 
-@pytest.mark.parametrize("target", ["release-wheel", "build-release"])
-def test_build_recipes_require_verified_isolated_inputs(target: str) -> None:
-    """Every release build isolates the backend and verifies its hashes."""
-    recipe = makefile_recipe(target)
-    assert_build_invocations_are_verified(recipe, target)
-    assert "SOURCE_DATE_EPOCH" in recipe, f"{target} must fix the build timestamp"
-    assert "--no-build-isolation" not in recipe, f"{target} must isolate builds"
+def test_build_release_requires_verified_isolated_inputs() -> None:
+    """The Makefile release build isolates the backend and verifies its hashes."""
+    recipe = makefile_recipe("build-release")
+    assert_build_invocations_are_verified(recipe, "build-release")
+    assert "SOURCE_DATE_EPOCH" in recipe, "build-release must fix the build timestamp"
+    assert "--no-build-isolation" not in recipe, "build-release must isolate builds"
 
 
 @pytest.mark.parametrize("option", _REQUIRED_BUILD_OPTIONS)
@@ -441,13 +442,12 @@ def test_one_unconstrained_build_invocation_is_refused(option: str) -> None:
         assert_build_invocations_are_verified(recipe, "synthetic")
 
 
-def test_release_wheel_compares_two_independent_builds() -> None:
-    """The release recipe builds twice and refuses differing digests."""
+def test_release_wheel_runs_the_two_build_script() -> None:
+    """The target delegates the determinism check to the tested script."""
     recipe = makefile_recipe("release-wheel")
-    assert recipe.count("--wheel") >= 2, "the wheel must be built twice"
     missing = [
         token
-        for token in ("mktemp -d", "sha256sum", "Wheel digests differ")
+        for token in ("-m scripts.release_wheel", "RELEASE_WHEEL_DIR")
         if token not in recipe
     ]
     assert not missing, f"release-wheel lacks {missing}"
@@ -467,6 +467,17 @@ def test_constraint_parser_rejects_unreviewed_inputs(text: str, reason: str) -> 
     """A range, unhashed or malformed pin must fail the contract."""
     with pytest.raises(BuildInputError, match=reason):
         parse_constraints(text)
+
+
+def test_marker_bearing_pins_are_parsed() -> None:
+    """A universal resolution may attach an environment marker to a pin."""
+    constraints = parse_constraints(
+        "setuptools==84.2.1 ; python_full_version < '3.11' \\\n"
+        "    --hash=sha256:" + "a" * 64 + "\n"
+    )
+    assert constraints["setuptools"].version == "84.2.1", (
+        "the marker must not swallow the pinned version"
+    )
 
 
 def test_constraint_lookup_ignores_project_name_spelling() -> None:

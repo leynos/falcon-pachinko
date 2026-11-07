@@ -157,27 +157,14 @@ update-build-constraints: ## Regenerate isolated build dependency hashes
 	$(UV) run --no-project --python 3.12 python -c 'import pathlib, tomllib; print("\n".join(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["build-system"]["requires"]))' > "$$requires"; \
 	$(UV) pip compile - --generate-hashes --universal --python-version 3.12 --output-file build-constraints.txt < "$$requires"
 
+# The two-build comparison lives in `scripts/release_wheel.py` so each failure
+# branch can be tested with fabricated outputs. This target only wires the
+# output directory; the script keeps the sdist-first build and every
+# constraint, hash and cache flag.
 RELEASE_WHEEL_DIR ?= dist
 release-wheel: build-constraints.txt ## Build and compare two wheels from the same sdist
-	@set -eu; \
-	export SOURCE_DATE_EPOCH="$$(git log -1 --format=%ct)"; \
-	out='$(RELEASE_WHEEL_DIR)'; mkdir -p "$$out"; \
-	repeat="$$(mktemp -d "$${out%/}-repeat.XXXXXXXX")"; \
-	trap 'rm -rf "$$repeat"' EXIT; \
-	rm -f "$$out"/*.whl "$$out"/*.tar.gz; \
-	rm -rf build ./*.egg-info; \
-	$(UV) build --sdist --out-dir "$$out" --no-cache --build-constraint build-constraints.txt --require-build-hashes; \
-	set -- "$$out"/*.tar.gz; test "$$#" -eq 1; test -f "$$1"; sdist="$$1"; \
-	rm -rf build ./*.egg-info; \
-	$(UV) build "$$sdist" --wheel --out-dir "$$out" --no-cache --build-constraint build-constraints.txt --require-build-hashes; \
-	rm -rf build ./*.egg-info; \
-	$(UV) build "$$sdist" --wheel --out-dir "$$repeat" --no-cache --build-constraint build-constraints.txt --require-build-hashes; \
-	set -- "$$out"/*.whl; test "$$#" -eq 1; test -f "$$1"; first="$$1"; \
-	set -- "$$repeat"/*.whl; test "$$#" -eq 1; test -f "$$1"; second="$$1"; \
-	test "$${first##*/}" = "$${second##*/}"; \
-	first_hash="$$(sha256sum "$$first")"; first_hash="$${first_hash%% *}"; \
-	second_hash="$$(sha256sum "$$second")"; second_hash="$${second_hash%% *}"; \
-	if [ "$$first_hash" != "$$second_hash" ]; then printf 'Wheel digests differ: %s %s\n' "$$first_hash" "$$second_hash" >&2; exit 1; fi
+	$(UV) run --no-project --python 3.12 python -m scripts.release_wheel \
+	  --output-dir '$(RELEASE_WHEEL_DIR)'
 
 clean: ## Remove build artefacts
 	rm -rf build dist *.egg-info \
@@ -285,7 +272,7 @@ lint-df12: uv ## Run df12-python-lints and ambrleaks on CPython 3.14
 	$(AMBRLEAKS) tests
 
 typecheck: build uv ## Run typechecking
-	$(TY) check --extra-search-path . falcon_pachinko tests tools scripts/release_assets.py scripts/release_assets_cli.py scripts/release_version.py scripts/release_provenance.py scripts/verify_build_distributions.py
+	$(TY) check --extra-search-path . falcon_pachinko tests tools scripts/release_assets.py scripts/release_assets_cli.py scripts/release_version.py scripts/release_provenance.py scripts/release_wheel.py scripts/verify_build_distributions.py
 
 # Local convenience only. CI lints Markdown through
 # DavidAnson/markdownlint-cli2-action, whose release carries the linter's
@@ -355,6 +342,7 @@ test-workflow-contracts: check-cv005 build uv pytest ## Check the CI workflows' 
 # on their own while editing any of them, and `test` collects them too.
 test-release-security: build uv pytest ## Check release build inputs and authority
 	uv run --locked pytest -v tests/test_release_build_inputs.py \
+	  tests/test_release_wheel.py \
 	  tests/test_verify_build_distributions.py \
 	  tests/workflow_contracts/test_release_build_security.py
 

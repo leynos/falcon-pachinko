@@ -20,7 +20,13 @@ RELEASE = "release.yml"
 CI = "ci.yml"
 WHEEL_ACTION = ROOT / ".github" / "actions" / "pure-python-wheel" / "action.yml"
 
-_BUILD_COMMAND = re.compile(r"(?<![\w-])(?:uv|make)(?![\w-])")
+_BUILD_COMMAND = re.compile(
+    r"(?<![\w-])(?:"
+    r"uvx?|make|pyproject-build|setup\.py"
+    r"|pip3?\s+wheel"
+    r"|python3?\s+-m\s+build"
+    r")(?![\w-])"
+)
 _EXACT_UV_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 _VERIFY_SCRIPT = "verify_build_distributions.py"
 _DIGEST_OUTPUTS = ("wheel-name", "wheel-sha256", "sdist-name", "sdist-sha256")
@@ -399,6 +405,30 @@ def test_verification_precedes_every_publication_action(
     assert verify_index < names.index(later_step), (
         f"{job_name} must verify before {later_step}"
     )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "uv build",
+        "make release-wheel",
+        "uvx --from build pyproject-build",
+        "python3 -m build",
+        "pip wheel .",
+        "python setup.py bdist_wheel",
+    ],
+)
+def test_every_rebuild_form_is_detected(command: str) -> None:
+    """A publication job must not rebuild through any frontend."""
+    assert _BUILD_COMMAND.search(command), f"{command!r} must count as a build"
+
+
+@pytest.mark.parametrize(
+    "command", ["python3 -m pytest", "pip download .", "uvicorn app:api"]
+)
+def test_unrelated_commands_are_not_builds(command: str) -> None:
+    """The contract stays narrow enough for ordinary publication steps."""
+    assert not _BUILD_COMMAND.search(command), f"{command!r} is not a build"
 
 
 def test_publication_jobs_never_run_a_build_command() -> None:
