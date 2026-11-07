@@ -106,7 +106,7 @@ def test_an_extra_distribution_is_refused(publish_dir: pathlib.Path) -> None:
 def test_an_unexpected_file_is_refused(publish_dir: pathlib.Path) -> None:
     """A non-distribution beside the pair is also a handoff failure."""
     directory = publish_dir
-    (directory / "notes.txt").write_text("unexpected")
+    (directory / "notes.txt").write_text("unexpected", encoding="utf-8")
     with pytest.raises(DistributionVerificationError, match="unexpected files"):
         _verify(directory)
 
