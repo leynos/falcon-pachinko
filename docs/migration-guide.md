@@ -32,13 +32,22 @@ Redacted samples are bounded and intended for trusted local debugging.
 Conventional-handler DEBUG messages retain their lazy format but now include
 only a bounded handler name and exception class.
 
-`HookContext` and `TraceEvent` keep their fields, constructors, slots, equality
-behaviour and operational payload values. `HandlerInvocationContext` keeps its
-existing invocation fields and adds an optional
-`monotonic_clock: collections.abc.Callable[[], float]`, defaulting to
-`time.monotonic`, for dispatch-rejection timing. Tests that construct the
-context directly can inject controlled clock readings. All three
-representations now show safe metadata instead of raw or decoded values.
+`HookContext` and `TraceEvent` keep their existing fields, constructors, slots,
+equality behaviour and operational payload values, but their representations
+now show safe metadata instead of raw or decoded values.
+`HandlerInvocationContext` keeps its existing fields and operational payload
+values, and its representation also shows safe metadata. It gains two optional
+fields. `target_type` defaults to `None`, and schema dispatch sets it to the
+resolved Struct so a conventional handler without a payload annotation still
+receives the typed member.
+`monotonic_clock: collections.abc.Callable[[], float]` defaults to
+`time.monotonic` and measures dispatch-rejection time; tests that construct the
+context directly can inject controlled clock readings. The added fields change
+the generated constructor signature, slots and equality inputs, but existing
+positional and keyword constructor calls remain valid. Schema dispatch also
+emits bounded DEBUG observations on the `falcon_pachinko.dispatcher` logger;
+see the
+[developer guide](developers-guide.md#validation-error-import-boundary).
 `TraceEvent.summary()` is new and returns the same kind of metadata. Code that
 relied on payload values appearing in `repr()` must read the explicit payload
 field at a trusted boundary.
@@ -104,6 +113,33 @@ A `schema` assigned after class creation still bypasses the class-creation
 check. There the configuration `TypeError` propagates during dispatch instead
 of reaching `on_unhandled`; it is deliberately not converted into a bad-frame
 fallback, which would disguise a broken schema as a malformed message.
+
+## Schema-mode unknown fields
+
+Schema dispatch now rejects undeclared top-level fields before converting a
+message to its Struct. Previously the frame was decoded straight into the
+schema union, and `msgspec` silently discarded any field the selected Struct
+did not declare, so a strict handler ran on a message that violated its
+no-extra-fields contract. The dispatcher now decodes the frame generically,
+resolves the member from its tag, validates the retained object, and only then
+decodes the original frame into the member, passing the handler's strictness.
+Wire-level values such as integer mapping keys, `msgspec.Raw` JSON, and exact
+`Decimal` numbers therefore still arrive intact, including for a `strict=False`
+handler whose message also needs lax coercion.
+
+- A message with an extra top-level field now reaches `on_unhandled` with the
+  original frame. Remove the extra field from the sender, or declare it on the
+  Struct.
+- `@handles_message(..., strict=False)` keeps one meaning in both envelope and
+  schema modes: undeclared top-level fields are ignored and lax coercion is
+  allowed. A Struct declared with `forbid_unknown_fields=True` still rejects
+  extras.
+- A field renamed with `rename="camel"` must arrive under its encoded wire
+  name (`camelCase`). The Python attribute name is not accepted on the wire.
+- Nested Structs keep their own `forbid_unknown_fields` setting; the
+  framework's check is shallow.
+- A schema member declared with `array_like=True` has no keyed tag on the wire
+  and is now rejected with a `TypeError` at class definition.
 
 ## Reserved lifecycle handlers
 
@@ -396,7 +432,9 @@ registration or mounting, before the route can handle a connection.
   raising `ValueError` on duplicate IDs and ignoring stale room entries in
   `snapshot` or documenting alternative semantics.
 - When migrating message handlers, ensure schema tags match incoming payloads;
-  extra fields are rejected unless `strict=False` is used on `@handles_message`.
+  extra fields are rejected unless `strict=False` is used on
+  `@handles_message`. This now applies to schema mode too, where extras were
+  previously discarded before validation.
 - Keep every member of a `schema` on the same tag kind. Mixing string and
   integer tags now raises `TypeError` at class definition rather than failing
   on the first frame; see *Schema tag kinds* above.

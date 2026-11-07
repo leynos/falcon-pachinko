@@ -279,16 +279,34 @@ async def test_registered_handler_precedes_integer_tag_fallback() -> None:
 
 
 @pytest.mark.asyncio
-async def test_none_tag_calls_fallback_without_conventional_handler(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param(msjson.encode(Untagged(value="untagged")), id="valid-frame"),
+        # The schema is resolved before the frame is inspected, so even a
+        # frame that would otherwise fall back as malformed must surface the
+        # configuration error first.
+        pytest.param(b"not json", id="malformed"),
+        pytest.param(b"[]", id="non-object-array"),
+        pytest.param(b"7", id="non-object-scalar"),
+    ],
+)
+async def test_runtime_assigned_untagged_schema_is_a_configuration_error(
+    raw: str | bytes,
 ) -> None:
-    """None tags should call on_unhandled rather than on_none."""
+    """A runtime-assigned untagged schema fails visibly, not as a bad frame.
+
+    Class creation rejects an untagged schema, so assigning one afterwards
+    bypasses that check. Tag dispatch cannot resolve an untagged member at all;
+    reporting every frame as unhandled would leave the broken schema installed
+    and hide the configuration mistake behind the fallback.
+    """
     r = UntaggedFallbackResource()
     r.bind_default_hook_manager()
-    monkeypatch.setattr(r, "schema", Untagged)
-    raw = msjson.encode(Untagged(value="untagged"))
-    await r.dispatch(DummyWS(), raw)
-    assert r.events == [("raw", raw)], "on_none must not run for a None tag"
+    r.schema = Untagged
+    with pytest.raises(TypeError, match="schema Struct types must define a tag"):
+        await r.dispatch(DummyWS(), raw)
+    assert not r.events, "an invalid schema must not be reported as a bad frame"
 
 
 @pytest.mark.asyncio
@@ -362,6 +380,85 @@ async def test_reserved_tag_refusal_logs_a_reason_token(
     await r.dispatch(DummyWS(), unknown)
     assert "reserved_lifecycle_tag" not in caplog.text, (
         f"an ordinary unknown tag must not emit the reserved-tag signal: {caplog.text}"
+    )
+
+
+def _schema_observations(
+    caplog: pytest.LogCaptureFixture,
+) -> list[tuple[object, object, object]]:
+    """Return the bounded fields of each schema-dispatch observation."""
+    return [
+        (
+            record.__dict__.get("outcome"),
+            record.__dict__.get("handler_mode"),
+            record.__dict__.get("strict"),
+        )
+        for record in caplog.records
+        if record.getMessage() == "Schema dispatch observation"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_schema_dispatch_observations_cover_each_decision(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Schema dispatch reports bounded outcomes without frame contents."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
+    r = SchemaResource()
+    r.bind_default_hook_manager()
+    await r.dispatch(DummyWS(), msjson.encode(Join(room="a")))
+    await r.dispatch(DummyWS(), b"not json")
+    await r.dispatch(DummyWS(), msjson.encode({"type": "oops"}))
+    await r.dispatch(
+        DummyWS(), msjson.encode({"type": "join", "room": "a", "extra": 1})
+    )
+    await r.dispatch(DummyWS(), msjson.encode({"type": "join", "room": 1}))
+
+    expected = [
+        ("delivered", "registered", True),
+        ("malformed", None, None),
+        ("unknown_tag", None, None),
+        ("rejected_fields", "registered", True),
+        ("conversion_failed", "registered", True),
+    ]
+    assert _schema_observations(caplog) == expected, (
+        "each schema decision must produce exactly one bounded observation"
+    )
+    assert "oops" not in caplog.text, "an unknown tag value must not be logged"
+    assert "not json" not in caplog.text, "a malformed frame must not be logged"
+
+
+@pytest.mark.asyncio
+async def test_schema_dispatch_observes_missing_handler_and_config_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A missing handler and a configuration error are distinct outcomes."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
+    reserved = ReservedTagResource()
+    reserved.bind_default_hook_manager()
+    await reserved.dispatch(DummyWS(), msjson.encode(ReservedTag(reason="peer")))
+    assert _schema_observations(caplog) == [("no_handler", "conventional", None)], (
+        "a resolved member without a registered handler must report a "
+        "conventional lookup"
+    )
+
+    caplog.clear()
+    broken = UntaggedFallbackResource()
+    broken.bind_default_hook_manager()
+    broken.schema = Untagged
+    with pytest.raises(TypeError, match="schema Struct types must define a tag"):
+        await broken.dispatch(DummyWS(), msjson.encode(Untagged(value="x")))
+    assert _schema_observations(caplog) == [("configuration_error", None, None)], (
+        "a configuration error must be observed even though it propagates"
+    )
+
+    caplog.clear()
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
+    integer = IntegerTagResource()
+    integer.bind_default_hook_manager()
+    await integer.dispatch(DummyWS(), msjson.encode(IntegerMessage(value="one")))
+    assert _schema_observations(caplog) == [("delivered", "conventional", True)], (
+        "a conventional integer-tag handler must be reported as conventional"
     )
 
 

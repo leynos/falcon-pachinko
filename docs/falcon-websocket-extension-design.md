@@ -566,10 +566,40 @@ driver controls frame reception and dispatch order.
 
 - **Automatic Deserialization and Strictness**: For routed messages where the
   handler's `payload` parameter is type-annotated with a `msgspec.Struct`, the
-  library will perform high-performance validation and deserialization. By
-  default, `msgspec` forbids extra fields in the payload. This strictness is a
-  feature for ensuring contract adherence. Falcon-Pachinko exposes a ``strict``
-  option on ``@handles_message`` to relax this behaviour when needed:
+  library validates and deserializes the payload with `msgspec`. Envelope mode
+  decodes the envelope and then validates and converts its `payload` to the
+  handler's annotated type.
+
+  Schema mode runs in four ordered steps:
+
+  1. **Generic decode.** `msgspec.json.decode` turns the frame into a plain
+     JSON object. Nothing is discarded yet, so undeclared fields are still
+     available to the strict decision.
+  2. **Member resolution.** The object's tag field selects the schema member.
+     A missing tag, a boolean tag, a tag of the wrong kind, or an unknown tag
+     sends the raw frame to `on_unhandled`.
+  3. **Validation.** With `strict=True`, every top-level key must be a field's
+     encoded wire name or the member's tag field. The check is shallow; a
+     nested Struct enforces its own `forbid_unknown_fields` during conversion.
+     `strict=False` skips the key check and uses lax coercion. A Struct
+     declared with `forbid_unknown_fields=True` still rejects extras.
+  4. **Conversion.** The original frame is decoded into the selected Struct
+     with `msgspec.json.decode`, passing the handler's strictness, so
+     wire-level values survive: integer mapping keys, `msgspec.Raw` JSON, and
+     exact `Decimal` numbers. Keeping the generically decoded object as the
+     conversion input, as a lax fallback would, degrades those values whenever
+     another field needs coercion. A `ValidationError` from validation or
+     conversion sends the raw frame to `on_unhandled`; a configuration
+     `TypeError` propagates.
+
+  Decoding directly into the schema union is deliberately not used: `msgspec`
+  drops undeclared fields during that decode, which would let a strict handler
+  run on a message that violated its contract. A schema member must be encoded
+  as a JSON object, so an `array_like=True` member is rejected when the
+  resource class is defined.
+
+  Conventional `on_<tag>` handlers always validate strictly; `strict=False`
+  requires the decorator form:
 
   ```python
   @handles_message("type", strict=False)

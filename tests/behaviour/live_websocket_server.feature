@@ -34,3 +34,9 @@ Feature: Live Falcon ASGI WebSocket server
     And the client triggers a server failure
     Then the client observes close code 1011
     And the harness exposes the server exception
+
+  Scenario: an extra schema field is rejected without breaking the session
+    Given a Falcon ASGI app mounted with the live WebSocket router
+    When the client opens "/ws/schema"
+    And the client sends an extra-field schema frame then a valid one
+    Then the extra-field frame reaches on_unhandled and the valid frame is answered
