@@ -8,7 +8,7 @@ so a broken comparison fails here rather than during a release.
 
 from __future__ import annotations
 
-import typing as typ
+import pathlib
 
 import pytest
 
@@ -25,10 +25,8 @@ from scripts.verify_build_distributions import (
     single_distribution,
 )
 
-if typ.TYPE_CHECKING:
-    import pathlib
-
 WHEEL = "falcon_pachinko-0.1.0a3-py3-none-any.whl"
+SDIST = "falcon_pachinko-0.1.0a3.tar.gz"
 REQUIRED_OPTIONS = (
     "--build-constraint",
     "build-constraints.txt",
@@ -114,6 +112,81 @@ class SyntheticBuildFailureError(ReleaseBuildError):
     def __init__(self) -> None:
         """Build the exception message."""
         super().__init__("the two wheels differ")
+
+
+def _out_dir(arguments: tuple[str, ...]) -> pathlib.Path:
+    """Return the directory named by a build's ``--out-dir`` argument.
+
+    Parameters
+    ----------
+    arguments : tuple of str
+        The arguments passed to one build.
+
+    Returns
+    -------
+    pathlib.Path
+        The build's output directory.
+    """
+    return pathlib.Path(arguments[arguments.index("--out-dir") + 1])
+
+
+def test_build_release_builds_the_wheel_twice_from_the_sdist(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The recipe builds the sdist, then compares two wheels built from it."""
+    output_dir = tmp_path / "dist"
+    output_dir.mkdir()
+    (output_dir / "old.whl").write_bytes(b"stale wheel")
+    calls: list[tuple[tuple[str, ...], str, str]] = []
+
+    def fake_build(
+        *arguments: str, constraints: str, environment: dict[str, str]
+    ) -> None:
+        """Record the call and write the artefact the real build would."""
+        calls.append((arguments, constraints, environment["SOURCE_DATE_EPOCH"]))
+        out_dir = _out_dir(arguments)
+        name = SDIST if "--sdist" in arguments else WHEEL
+        (out_dir / name).write_bytes(b"artefact bytes")
+
+    def fixed_epoch() -> str:
+        """Return a fixed commit time for every build."""
+        return "1"
+
+    def ignore_clear() -> None:
+        """Leave the build tree alone; the fake build writes nothing there."""
+
+    monkeypatch.setattr(release_wheel, "run_build", fake_build)
+    monkeypatch.setattr(release_wheel, "source_date_epoch", fixed_epoch)
+    monkeypatch.setattr(release_wheel, "clear_build_state", ignore_clear)
+
+    digest = release_wheel.build_release(output_dir)
+
+    assert not (output_dir / "old.whl").exists(), (
+        "a stale wheel must not survive into the comparison"
+    )
+    assert len(calls) == 3, f"expected three builds, got {len(calls)}"
+    sdist_call, first_wheel, second_wheel = calls
+    assert sdist_call[0][0] == "--sdist", "the first build must create the sdist"
+    assert not any(argument.endswith(".tar.gz") for argument in sdist_call[0]), (
+        "the sdist build must not read an existing sdist"
+    )
+    for description, call in (("first", first_wheel), ("second", second_wheel)):
+        assert call[0][0].endswith(".tar.gz"), (
+            f"the {description} wheel build must read the sdist"
+        )
+        assert "--wheel" in call[0], f"the {description} build must create a wheel"
+    assert _out_dir(first_wheel[0]) != _out_dir(second_wheel[0]), (
+        "the two wheel builds need separate output directories"
+    )
+    assert all(call[2] == "1" for call in calls), (
+        "every build must share one SOURCE_DATE_EPOCH"
+    )
+    assert all(call[1] == "build-constraints.txt" for call in calls), (
+        "every build must use the reviewed constraints file"
+    )
+    assert digest == sha256_of(output_dir / WHEEL), (
+        "the function must report the shared wheel digest"
+    )
 
 
 def test_main_reports_a_refusal(
