@@ -533,8 +533,13 @@ pytest_add_cli_args = [
     "no:cacheprovider",
 ]
 
+# The release build runs this backend in an isolated environment that never
+# reads uv.lock, so each requirement is pinned exactly and mirrored with
+# hashes in build-constraints.txt. Bump the pins and regenerate that file with
+# `make update-build-constraints`; tests/test_release_build_inputs.py fails
+# when the two disagree.
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools==84.2.1", "wheel==0.48.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

@@ -2,16 +2,17 @@
 
 Falcon-Pachinko publishes one source distribution and its wheel to PyPI, then
 makes the tag's GitHub Release a digest-checked mirror. The release workflow
-uses the same sdist-first build as pull-request CI: plain
-`uv build --out-dir dist` builds the sdist, then builds the wheel from that
-sdist. The attested files are carried between jobs; publication jobs do not
-rebuild them.
+uses the same sdist-first build as pull-request CI: `make release-wheel` builds
+the sdist, then builds the wheel from that sdist twice and compares the two
+SHA-256 digests. The attested files are carried between jobs; publication jobs
+do not rebuild them.
 
 `uv build` uses an isolated environment for the backend declared in
 `[build-system]`; that backend environment is outside the project's lock-file
-policy. Published wheels and source distributions retain the dependency ranges
-declared in `pyproject.toml`, so consumers resolve those ranges in their own
-environments. See the Developer Guide's
+policy, so its inputs are pinned and hash-bound separately. Published wheels
+and source distributions retain the dependency ranges declared in
+`pyproject.toml`, so consumers resolve those ranges in their own environments.
+See the Developer Guide's
 [lock-file policy](developers-guide.md#lock-file-policy).
 
 ## Release jobs
@@ -129,14 +130,73 @@ environment settings.
 
 ## Build requirements and credentials
 
-The project currently builds with `setuptools>=61.0` and `wheel`. Constraining
-and hash-binding build requirements remain tracked by
-[issue #230](https://github.com/leynos/falcon-pachinko/issues/230). The
-committed `uv.lock` covers development and CI project environments, not the
+The release build runs the PEP 517 backend declared in `[build-system]` in an
+isolated environment. That environment never reads `uv.lock`, so the build
+inputs are constrained separately:
+
+- `pyproject.toml` pins each backend requirement to one exact release. A range
+  or wildcard pin is rejected by `tests/test_release_build_inputs.py`, because
+  it could select an unreviewed future release.
+- `build-constraints.txt` is generated from those pins with
+  `uv pip compile --generate-hashes --universal --python-version 3.12`. It pins
+  every transitive build requirement and records the SHA-256 digest of each
+  distribution.
+- The build recipes pass `--build-constraint build-constraints.txt`,
+  `--require-build-hashes` and `--no-cache`. uv refuses a requirement outside
+  the constraints file, a distribution whose digest is not listed, and a cached
+  wheel that would bypass the check.
+- Builds stay isolated. `--no-build-isolation` is never used: it would run the
+  backend from the project environment, which is a different, unreviewed set of
+  packages.
+
+`--require-build-hashes` is a preview option, added in uv 0.13.0. The release
+workflow and the composite build action pin uv 0.13.2, so they have it; a local
+`uv` older than 0.13.0 rejects the flag, and `make release-wheel` then fails
+with an unknown-argument error rather than building.
+
+`SOURCE_DATE_EPOCH` is taken from `git log -1 --format=%ct`, so the
+distributions carry the commit timestamp rather than the time of the build.
+
+`make release-wheel` runs `scripts/release_wheel.py`, which builds the sdist
+once, then builds the wheel from that sdist twice into separate directories and
+compares the two SHA-256 digests. A difference fails the build. Both builds use
+the same runner, Python minor version and uv release, so the check proves the
+recipe is deterministic within one environment; it does not prove
+cross-environment reproducibility. CI runs the same target on every pull
+request, and unit tests drive each failure branch of the comparison with
+fabricated build outputs. The wheel is pure Python, so the release does not use
+cibuildwheel and has no second build path to constrain.
+
+### Updating the build backend
+
+1. Change the exact pins in `[build-system].requires` in `pyproject.toml`.
+2. Run `make update-build-constraints` to regenerate `build-constraints.txt`.
+3. Review the version and hash diff, and the upstream release notes for the new
+   backend release.
+4. Run `make release-wheel` to confirm the two builds still agree.
+5. Merge through a pull request.
+
+A Dependabot update to `[build-system].requires` that does not regenerate the
+constraints file fails `tests/test_release_build_inputs.py`, because the pins
+no longer match.
+
+### Credentials
+
+The `build-wheels` job holds `contents: read` only, and every checkout in the
+release and CI workflows sets `persist-credentials: false`, including the
+composite action. The build job records the wheel and sdist names and SHA-256
+digests as job outputs. The `attest` job downloads the `wheels-pure` artefact
+and runs `scripts/verify_build_distributions.py` against those outputs before
+it attests anything. `publish-pypi` and `publish-release` consume the
+`release-dist` artefact that attestation produced and run the same verification
+before they upload or publish. Only `draft-release` and `publish-release` hold
+`contents: write`, and neither runs a build command.
+
+The committed `uv.lock` covers development and CI project environments, not the
 isolated build backend; see the Developer Guide's
-[lock-file policy](developers-guide.md#lock-file-policy). The release workflow
-limits the build job to read access and passes its attested artefact to
-publication jobs, so those jobs do not rebuild with publication credentials.
+[lock-file policy](developers-guide.md#lock-file-policy). Issue
+[#209](https://github.com/leynos/falcon-pachinko/issues/209) covers runtime,
+development and extra dependencies, not isolated build requirements.
 
 The release process and the GitHub Release's role as a reconciled mirror are
 recorded in [ADR-002](adr-002-attested-reconciled-release-pipeline.md).

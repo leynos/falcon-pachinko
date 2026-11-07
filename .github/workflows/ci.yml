@@ -39,6 +39,10 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The lane never pushes. Keeping the token out of the checkout also
+          # keeps it out of the release build this job exercises.
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -47,6 +51,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.2"
 
       - name: Install mdtablefix
         # `make check-fmt` runs `mdtablefix --check` with the Git selection and
@@ -136,6 +142,16 @@ jobs:
 
       - name: Check workflow contracts
         run: uv run --locked pytest tests/workflow_contracts
+
+      # These contracts keep the isolated build on reviewed, hash-verified
+      # inputs and keep publication authority out of the build job.
+      - name: Check release build security contracts
+        run: make test-release-security
+
+      # Exercise the same two-build comparison the release build uses. A
+      # non-deterministic wheel fails here before it can reach a tag.
+      - name: Build the release wheel twice and compare
+        run: make release-wheel
 
       # Markdown is linted through the upstream action rather than a `run:`
       # step, because the action's release carries the linter's whole
