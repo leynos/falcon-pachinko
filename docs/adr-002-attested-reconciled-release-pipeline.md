@@ -29,13 +29,15 @@ without overwriting immutable files or publishing an incomplete release.
 
 ### Build and validation
 
-Build both distributions with plain `uv build --out-dir dist`. `uv` builds the
-sdist first and builds the wheel from that sdist, making sdist completeness a
-prerequisite for every wheel. The same composite build action runs in pull
-request CI and on release tags. CI requires exactly one sdist and one wheel;
-attestation collects every wheel with exactly one sdist and rejects unexpected
-files. Archive checks verify the import modules, public testing package,
-package data, wheel metadata, and installed imports.
+Build both distributions with `make release-wheel`, which runs `uv build` under
+a hash-verified build constraint. `uv` builds the sdist first and builds the
+wheel from that sdist, making sdist completeness a prerequisite for every
+wheel; the recipe builds that wheel twice and compares the digests. The same
+composite build action runs in pull request CI and on release tags. CI requires
+exactly one sdist and one wheel; attestation collects every wheel with exactly
+one sdist and rejects unexpected files. Archive checks verify the import
+modules, public testing package, package data, wheel metadata, and installed
+imports.
 
 Keep the pure-Python build path and remove the unused cibuildwheel matrix and
 its local action. Do not add native-platform builds for a package with no

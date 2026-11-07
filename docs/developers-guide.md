@@ -338,8 +338,9 @@ while keeping them in the local suite.
 This lockfile governs only the development and CI project environments.
 Published wheels and source distributions retain the dependency ranges from
 `pyproject.toml`; consumers resolve those ranges for their own environments.
-The release build uses `uv build` and the isolated backend declared in
-`[build-system]`, which is outside the project lock. Issue
+The release build runs `make release-wheel`, which uses `uv build` and the
+isolated backend declared in `[build-system]`; that backend is outside the
+project lock. Issue
 [#209](https://github.com/leynos/falcon-pachinko/issues/209) covers runtime,
 development and extra dependencies, and does not cover isolated build
 requirements. Those are pinned exactly in `pyproject.toml` and hash-bound in

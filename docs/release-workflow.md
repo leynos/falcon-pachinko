@@ -2,10 +2,10 @@
 
 Falcon-Pachinko publishes one source distribution and its wheel to PyPI, then
 makes the tag's GitHub Release a digest-checked mirror. The release workflow
-uses the same sdist-first build as pull-request CI: plain
-`uv build --out-dir dist` builds the sdist, then builds the wheel from that
-sdist. The attested files are carried between jobs; publication jobs do not
-rebuild them.
+uses the same sdist-first build as pull-request CI: `make release-wheel` builds
+the sdist, then builds the wheel from that sdist twice and compares the two
+SHA-256 digests. The attested files are carried between jobs; publication jobs
+do not rebuild them.
 
 `uv build` uses an isolated environment for the backend declared in
 `[build-system]`; that backend environment is outside the project's lock-file
@@ -152,13 +152,15 @@ inputs are constrained separately:
 `SOURCE_DATE_EPOCH` is taken from `git log -1 --format=%ct`, so the
 distributions carry the commit timestamp rather than the time of the build.
 
-`make release-wheel` builds the sdist once, then builds the wheel from that
-sdist twice into separate directories and compares the two SHA-256 digests. A
-difference fails the build. Both builds use the same runner, Python minor
-version and uv release, so the check proves the recipe is deterministic within
-one environment; it does not prove cross-environment reproducibility. CI runs
-the same target on every pull request. The wheel is pure Python, so the release
-does not use cibuildwheel and has no second build path to constrain.
+`make release-wheel` runs `scripts/release_wheel.py`, which builds the sdist
+once, then builds the wheel from that sdist twice into separate directories and
+compares the two SHA-256 digests. A difference fails the build. Both builds use
+the same runner, Python minor version and uv release, so the check proves the
+recipe is deterministic within one environment; it does not prove
+cross-environment reproducibility. CI runs the same target on every pull
+request, and unit tests drive each failure branch of the comparison with
+fabricated build outputs. The wheel is pure Python, so the release does not use
+cibuildwheel and has no second build path to constrain.
 
 ### Updating the build backend
 
