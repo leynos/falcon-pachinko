@@ -66,6 +66,7 @@ LANE_CEILINGS = {
     ("ci.yml", "lint-test"): 15,
     ("ci.yml", "falcon-minimum"): 30,
     ("ci.yml", "build-dist"): 15,
+    ("coverage-main.yml", "coverage-baseline"): 15,
     ("release.yml", "check-version"): 30,
     ("release.yml", "build-wheels"): 30,
     ("release.yml", "attest"): 30,
@@ -77,6 +78,7 @@ LANE_CEILINGS = {
 #: them, so they name their label outright; a guard here would be noise that
 #: reads as protection.
 PUSH_ONLY_UBICLOUD_LANES = (
+    ("coverage-main.yml", "coverage-baseline"),
     ("release.yml", "check-version"),
     ("release.yml", "build-wheels"),
     ("release.yml", "attest"),
