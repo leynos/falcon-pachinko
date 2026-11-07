@@ -149,6 +149,11 @@ inputs are constrained separately:
   backend from the project environment, which is a different, unreviewed set of
   packages.
 
+`--require-build-hashes` is a preview option, added in uv 0.13.0. The release
+workflow and the composite build action pin uv 0.13.2, so they have it; a local
+`uv` older than 0.13.0 rejects the flag, and `make release-wheel` then fails
+with an unknown-argument error rather than building.
+
 `SOURCE_DATE_EPOCH` is taken from `git log -1 --format=%ct`, so the
 distributions carry the commit timestamp rather than the time of the build.
 
