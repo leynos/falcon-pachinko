@@ -200,21 +200,46 @@ fixed operation and outcome values for publication, membership maintenance,
 listener termination and disconnect cleanup. Keep successful message decoding
 and local delivery silent, distinguish decode failures from delivery failures,
 and emit no unconditional per-frame events. Envelope payload conversion is
-observed too: when `convert_and_invoke_handler` catches a
-`msgspec.ValidationError`, it emits one DEBUG `Operation observation` record
-whose `operation` is `dispatch` and `outcome` is `rejected`, carrying the
-bounded `expected_type` label and `exception_type`. Schema decode failures that
-reach `on_unhandled` before this conversion step do not emit that record.
-Accepted payloads, including optional payloads, emit nothing. Exclude
-identifiers, payloads, exception values and tracebacks. Host logging handlers
-may aggregate metrics or start and end spans using task or context; broker
-decorators may measure queue waits and operations, while existing lifecycle
-hooks support resource instrumentation. Filter, sample or aggregate to bound
-event volume because publication and lease renewal are frequent and DEBUG is
-off by default. Metrics must use fixed operation and outcome dimensions, never
-room, message, connection or node IDs as labels. Keep instrumentation optional
-and host-configured, with no mandatory SDK, public resource or router
-constructor changes, or `WorkerController` changes.
+observed too: when a context built by `dispatch_with_envelope` reaches
+`convert_and_invoke_handler`, a caught `msgspec.ValidationError` emits one DEBUG
+`Operation observation` record whose `operation` is `dispatch` and `outcome` is
+`rejected`, carrying the bounded `expected_type` label and `exception_type`.
+Schema mode does not emit that record: `dispatch_with_schema` sets
+`target_type`, and its own `Schema dispatch observation` already reports
+`rejected_fields` or `conversion_failed` for the same rejection. Schema decode
+failures that reach `on_unhandled` before conversion likewise emit only the
+schema observation. Accepted payloads, including optional payloads, emit
+nothing. Exclude identifiers, payloads, exception values and tracebacks. Host
+logging handlers may aggregate metrics or start and end spans using task or
+context; broker decorators may measure queue waits and operations, while
+existing lifecycle hooks support resource instrumentation. Filter, sample or
+aggregate to bound event volume because publication and lease renewal are
+frequent and DEBUG is off by default. Metrics must use fixed operation and
+outcome dimensions, never room, message, connection or node IDs as labels. Keep
+instrumentation optional and host-configured, with no mandatory SDK, public
+resource or router constructor changes, or `WorkerController` changes.
+
+Schema dispatch follows the same rule: it emits the bounded DEBUG record
+described above rather than calling a metric client. A host that wants a
+counter increments one per `Schema dispatch observation`, using `operation`
+(fixed to `schema_dispatch`) and `outcome` as the only dimensions. Never add
+the resource type, a tag, a payload value or an exception string as a label.
+`falcon_pachinko.SchemaDispatchCounter` is a ready-made `logging.Handler` for
+that: attach it to the `falcon_pachinko.dispatcher` logger, read `counts()`,
+and export `rejection_ratio()`, which returns `0.0` for an empty counter. It
+counts only the fixed labels in `SCHEMA_DISPATCH_OUTCOMES`, so a stray record
+cannot grow the label set. Counts are unsampled: they cover exactly the records
+the handler receives, so treat them as a lower bound when DEBUG logging for
+that logger is sampled or filtered.
+
+Aggregate by `outcome` and alert on a rising rate of `rejected_fields`,
+`conversion_failed` or `configuration_error`: the first two mean clients
+disagree with the schema, and the last means a resource is misconfigured.
+`malformed` and `unknown_tag` track hostile or outdated peers.
+`rejection_ratio()` divides every non-`delivered` outcome by all counted
+outcomes, so alert on that ratio rather than an absolute rejection count. A
+handler that raises is not a dispatch outcome: the frame was delivered, and the
+exception belongs to the session driver.
 
 Dispatch rejection timing uses `HandlerInvocationContext.monotonic_clock`,
 typed as `collections.abc.Callable[[], float]` and defaulting to
@@ -444,6 +469,74 @@ first derives that union at decode time, and that configuration `TypeError`
 propagates instead of becoming an `on_unhandled` fallback. Reject the
 temptation to catch it at the decode site: widening the handler would leave the
 invalid schema in place and disguise a schema bug as a malformed message.
+
+## Schema-mode dispatch
+
+Schema dispatch resolves the target before conversion. The dispatcher decodes
+the frame generically with the inspection decoder described below, resolves the
+schema member from the tag, validates the retained mapping when the handler is
+strict, and then decodes the original frame into the resolved member with
+`msgspec.json.decode`, passing the handler's strictness. Decoding straight into
+the union would discard undeclared fields before the strict decision, but
+keeping the generic mapping as the conversion input would lose wire-level
+detail: integer mapping keys would arrive as strings, `msgspec.Raw` fields as
+decoded JSON, and neither the member's declared field types nor the handler's
+strictness would be applied. Inspection floats do decode as `Decimal`, so their
+values stay exact, but the mapping is still not the declared payload. Do not
+fall back to converting that mapping when a lenient wire decode rejects a
+value: one field needing lax coercion would then change how its neighbours
+decode. The shared `validate_strict_payload` path compares top-level keys with
+the target's encoded field names and tag field; the check is shallow, so nested
+Structs keep their own `forbid_unknown_fields` semantics. `strict=False` skips
+that check and uses lax coercion in both dispatch modes. A `ValidationError`
+from validation or conversion routes to `on_unhandled`; a configuration
+`TypeError` (such as a mixed-tag union, an untagged Struct, or an `array_like`
+member) must propagate and must not reach `on_unhandled`. See
+[ADR 003](adr-003-schema-mode-strict-validation.md).
+
+The inspection decode uses a `msgspec.json.Decoder` whose `float_hook` builds a
+`decimal.Decimal`, not `msgspec.json.decode`. The inspection mapping is never
+converted, but a default decoder would still reject a literal such as `1e400`
+as out of float range before the typed wire decode could hand it to a `Decimal`
+field or capture it inside `msgspec.Raw` JSON. Keep the hook on the inspection
+decoder only: the wire decode must use the member's declared types, and its
+`strict` value comes from the handler.
+
+`HandlerInvocationContext.target_type` is the resolved schema member. Schema
+dispatch sets it whenever a member is selected, so a conventional `on_<tag>`
+handler with no payload annotation still receives the Struct rather than the
+inspection mapping. It defaults to `None`; conversion falls back to the
+handler's annotated `payload_type` when it is unset. Envelope dispatch leaves
+it as `None`.
+
+`SchemaDispatch` and the cached `schema_dispatch()` resolver expose the schema
+member table. `resolve()` performs an exact-type tag lookup: a missing,
+boolean, wrong-kind, or unhashable tag returns `None` rather than raising or
+selecting a member. `schema_dispatch()` validates the schema before building
+the table and raises `TypeError` for a configuration error; the table itself is
+frozen and its member mapping is read-only.
+
+Schema dispatch emits one bounded DEBUG record per dispatched frame on the
+`falcon_pachinko.dispatcher` logger when DEBUG for that logger is enabled and
+unfiltered, with the message `Schema dispatch observation`. Its `extra` fields
+are `operation` (`schema_dispatch`), `outcome` (one of `delivered`, `malformed`,
+`unknown_tag`, `no_handler`, `rejected_fields`, `conversion_failed`,
+`configuration_error`), `resource_type` (the resource class name),
+`handler_mode` (`registered` or `conventional`, once a handler is selected), and
+`strict` (the selected handler's strictness, once known). The record never
+includes the raw frame, payload values, field values, or peer-supplied tag
+text. An unexpected `outcome` value is coerced to `other` rather than recorded
+verbatim.
+
+The observation records the payload decision and is emitted before the frame is
+delivered. A handler that is cancelled or raises, and an `on_unhandled`
+fallback that raises, therefore keep the outcome the decision reached:
+`delivered` for a handler that failed after receiving its payload, and
+`rejected_fields` or `conversion_failed` for a fallback that could not
+complete. Delivery failures are not dispatch outcomes; they propagate to the
+session driver, which decides whether to close the session. Operators can alert
+on an unexpected share of `rejected_fields` or `no_handler` outcomes without
+collecting message content.
 
 ## Safe diagnostics
 

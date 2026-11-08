@@ -566,10 +566,55 @@ driver controls frame reception and dispatch order.
 
 - **Automatic Deserialization and Strictness**: For routed messages where the
   handler's `payload` parameter is type-annotated with a `msgspec.Struct`, the
-  library will perform high-performance validation and deserialization. By
-  default, `msgspec` forbids extra fields in the payload. This strictness is a
-  feature for ensuring contract adherence. Falcon-Pachinko exposes a ``strict``
-  option on ``@handles_message`` to relax this behaviour when needed:
+  library validates and deserializes the payload with `msgspec`. Envelope mode
+  decodes the envelope and then validates and converts its `payload` to the
+  handler's annotated type.
+
+  Schema mode runs in six ordered steps:
+
+  1. **Schema resolution.** The resource's `schema` is resolved through the
+     cached `schema_dispatch()` table, which also validates the schema. Doing
+     this first means a configuration error, such as a mixed-tag union, an
+     untagged Struct or an `array_like` member, raises `TypeError` for every
+     frame rather than surfacing only once a well-formed one arrives.
+  2. **Generic decode.** A shared inspection decoder turns the frame into a
+     plain JSON object. Nothing is discarded yet, so undeclared fields are
+     still available to the strict decision. The decoder uses
+     `float_hook=decimal.Decimal`, because a default decode parses every JSON
+     float as a binary `float` and would reject a literal such as `1e400`
+     that is valid for a `Decimal` or `msgspec.Raw` field. A frame that does
+     not decode to an object, including one whose exponent exceeds
+     `decimal.Decimal`'s limits, goes to `on_unhandled`.
+  3. **Member resolution.** The object's tag field selects the schema member.
+     A missing tag, a boolean tag, a tag of the wrong kind, or an unknown tag
+     sends the raw frame to `on_unhandled`.
+  4. **Handler selection.** The member's registered `@handles_message` handler
+     is used when one exists; otherwise a conventional `on_<tag>` handler is
+     looked up. The selected handler supplies the strictness the next step
+     uses, so selection precedes validation. No handler sends the raw frame to
+     `on_unhandled`.
+  5. **Validation.** With `strict=True`, every top-level key must be a field's
+     encoded wire name or the member's tag field. The check is shallow; a
+     nested Struct enforces its own `forbid_unknown_fields` during conversion.
+     `strict=False` skips the key check and uses lax coercion. A Struct
+     declared with `forbid_unknown_fields=True` still rejects extras.
+  6. **Conversion.** The original frame is decoded into the selected Struct
+     with `msgspec.json.decode`, passing the handler's strictness, so
+     wire-level values survive: integer mapping keys, `msgspec.Raw` JSON, and
+     exact `Decimal` numbers. Keeping the generically decoded object as the
+     conversion input, as a lax fallback would, degrades those values whenever
+     another field needs coercion. A `ValidationError` from validation or
+     conversion sends the raw frame to `on_unhandled`; a configuration
+     `TypeError` propagates.
+
+  Decoding directly into the schema union is deliberately not used: `msgspec`
+  drops undeclared fields during that decode, which would let a strict handler
+  run on a message that violated its contract. A schema member must be encoded
+  as a JSON object, so an `array_like=True` member is rejected when the
+  resource class is defined.
+
+  Conventional `on_<tag>` handlers always validate strictly; `strict=False`
+  requires the decorator form:
 
   ```python
   @handles_message("type", strict=False)
@@ -1613,18 +1658,36 @@ values as JSON.
 
 The resource's dispatch method performs these steps:
 
-1. Decode the received raw message using
-   `msgspec.json.decode(message, type=self.schema)`. `msgspec`'s tagged union
-   support automatically inspects a tag field in the JSON to select the correct
-   `Struct` for decoding.
+1. Resolve the resource's schema through the cached `SchemaDispatch` table,
+   which validates it first. A configuration `TypeError` propagates for every
+   frame, good or bad.
 
-2. Inspect the `tag` of the resulting `Struct` instance.
+2. Decode the received raw message with the shared inspection decoder into a
+   plain JSON object. Nothing is discarded yet, so undeclared fields are still
+   available to the strict decision.
 
-3. Find a handler registered with `@handles_message` for that tag. If not found,
-   attempt to find a handler by the `on_{tag}` naming convention.
+3. Resolve the schema member from the object's tag field. A missing, wrongly
+   typed or unknown tag sends the raw frame to `on_unhandled`.
 
-4. Dynamically invoke the handler, e.g.,
-   `await self.on_send_message(ws, msg)`.
+4. Find a handler registered with `@handles_message` for that tag. If not found,
+   attempt to find a handler by the `on_{tag}` naming convention. No handler
+   sends the raw frame to `on_unhandled`.
+
+5. With a strict handler, compare the object's top-level keys with the member's
+   encoded wire names plus its tag field. An undeclared key sends the raw frame
+   to `on_unhandled`.
+
+6. Decode the original frame into the resolved `Struct` with
+   `msgspec.json.decode`, passing the handler's strictness so wire-level values
+   survive. A conversion `ValidationError` sends the raw frame to
+   `on_unhandled`.
+
+7. Invoke the handler, e.g., `await self.on_send_message(ws, msg)`.
+
+Decoding straight into `self.schema` is deliberately not used: `msgspec` would
+discard undeclared fields before the strict decision and select the member
+itself, which leaves a strict handler able to receive a message that violated
+its no-extra-fields contract.
 
 This schema-driven dispatch keeps message validation and handler selection in
 the resource, separate from the transport receive loop owned by the router's

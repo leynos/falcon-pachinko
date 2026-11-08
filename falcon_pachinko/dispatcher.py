@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import decimal
 import inspect
 import logging
 import time
 import typing as typ
 
 import msgspec as ms
-import msgspec.inspect as msinspect
 import msgspec.json as msjson
 
 from .diagnostics import _class_name, _frame_metadata, _identifier, _type_name
@@ -19,16 +19,52 @@ from .exceptions import (
     SignatureInspectionError,
 )
 from .handlers import LIFECYCLE_CALLBACK_NAMES, HandlerInfo, get_payload_type
-from .schema import validate_strict_payload
+from .observability import SCHEMA_DISPATCH_OUTCOMES
+from .schema import SchemaDispatch, schema_dispatch, validate_strict_payload
 from .utils import to_snake_case
 
 logger = logging.getLogger(__name__)
+
+# Generic schema inspection needs only the frame's keys and tag value, but a
+# default decoder parses every JSON float as a binary ``float``. A literal such
+# as ``1e400`` is out of float range yet valid for a ``Decimal`` or
+# ``msgspec.Raw`` field, and the default decoder rejects it before the typed
+# wire decode can preserve the value. Decoding inspection floats as ``Decimal``
+# keeps every literal exact and unbounded.
+_INSPECTION_DECODER = msjson.Decoder(float_hook=decimal.Decimal)
+
+type _DeliveryOutcome = typ.Literal["delivered", "rejected_fields", "conversion_failed"]
 
 if typ.TYPE_CHECKING:  # pragma: no cover - type hints only
     import collections.abc as cabc
 
     from .protocols import WebSocketLike
     from .resource import WebSocketResource
+
+
+def _log_schema_dispatch(
+    resource: WebSocketResource,
+    outcome: str,
+    *,
+    handler_mode: str | None = None,
+    strict: bool | None = None,
+) -> None:
+    """Emit bounded schema-dispatch metadata without reflecting the frame."""
+    # Only the resource's type name is recorded, never the resource itself.
+    # ``outcome`` is coerced to ``other`` when unrecognized so a caller cannot
+    # introduce an unbounded log field. ``handler_mode`` is ``"registered"`` or
+    # ``"conventional"`` once a handler was selected, and ``strict`` is that
+    # handler's strictness once known.
+    logger.debug(
+        "Schema dispatch observation",
+        extra={
+            "operation": "schema_dispatch",
+            "outcome": (outcome if outcome in SCHEMA_DISPATCH_OUTCOMES else "other"),
+            "resource_type": _type_name(resource),
+            "handler_mode": handler_mode,
+            "strict": strict,
+        },
+    )
 
 
 class Envelope(ms.Struct, frozen=True):
@@ -47,6 +83,10 @@ class HandlerInvocationContext:
     monotonic_clock : cabc.Callable[[], float]
         Clock used to measure typed-payload rejection time. Defaults to
         :func:`time.monotonic`.
+    target_type : type | None
+        Struct selected by schema dispatch, when it differs from the handler's
+        annotation. Schema mode always converts to the resolved member so an
+        unannotated conventional handler still receives a typed payload.
     """
 
     resource: WebSocketResource
@@ -54,7 +94,11 @@ class HandlerInvocationContext:
     raw: str | bytes
     handler_info: HandlerInfo
     payload: object
+    # ``monotonic_clock`` keeps the sixth positional slot it had before schema
+    # dispatch existed, so a caller passing a clock positionally still binds it
+    # to the clock rather than to ``target_type``.
     monotonic_clock: cabc.Callable[[], float] = time.monotonic
+    target_type: type | None = None
 
     def __repr__(self) -> str:
         """Describe the invocation without displaying raw or decoded values."""
@@ -94,10 +138,9 @@ def find_conventional_handler(
     Only names in ``_conventional_handler_names`` are considered. That
     allowlist is built once when the class is created and excludes the
     lifecycle callbacks, so a peer-chosen tag cannot reach ``on_connect``,
-    ``on_session_start``, ``on_disconnect`` or ``on_unhandled``, nor an alias
-    of one. A class
-    without the attribute (a non-monitored stand-in) offers no conventional
-    handlers at all.
+    ``on_session_start``, ``on_disconnect`` or ``on_unhandled``, nor an alias of
+    one. A class without the attribute (a non-monitored stand-in) offers no
+    conventional handlers at all.
 
     Returns
     -------
@@ -134,47 +177,116 @@ def find_conventional_handler(
     return HandlerInfo(func, payload_type, strict=True)
 
 
-async def convert_and_invoke_handler(context: HandlerInvocationContext) -> None:
+def _convert_payload(context: HandlerInvocationContext, payload_type: type) -> object:
+    """Convert the retained payload, or re-decode a schema frame from the wire."""
+    # Schema dispatch decodes frames generically so undeclared keys can be
+    # inspected. That mapping is inspection-only: integer mapping keys arrive as
+    # strings, ``msgspec.Raw`` fields arrive as decoded JSON, and neither the
+    # member's declared field types nor the handler's strictness are applied.
+    # Inspection floats do decode through ``decimal.Decimal``, so their values
+    # stay exact, but the mapping is still not the declared payload. Re-decoding
+    # the original frame into the resolved member restores msgspec's wire
+    # semantics.
+    #
+    # The wire decode carries the handler's strictness rather than falling back
+    # to converting the mapping. A fallback would let one field that needs lax
+    # coercion change how its neighbours decode, losing the wire values the
+    # second decode exists to preserve.
+    if context.target_type is None:
+        return ms.convert(
+            context.payload,
+            type=payload_type,
+            strict=context.handler_info.strict,
+        )
+    return msjson.decode(
+        context.raw,
+        type=payload_type,
+        strict=context.handler_info.strict,
+    )
+
+
+def _log_envelope_rejection(
+    context: HandlerInvocationContext,
+    exc: ms.ValidationError,
+    started: float,
+) -> None:
+    """Record a rejected envelope conversion with bounded metadata."""
+    # Envelope dispatch has no schema observation of its own, so this record is
+    # what lets application telemetry count rejected conversions and their
+    # elapsed time. Schema dispatch already records its decision through
+    # ``_log_schema_dispatch``, so it does not emit this record as well. Only
+    # type labels are recorded: the vendor error's type stands in for its
+    # message, and ``started`` is the monotonic reading taken before validation.
+    if context.target_type is not None:
+        return
+    logger.debug(
+        "Operation observation",
+        extra={
+            "operation": "dispatch",
+            "outcome": "rejected",
+            "duration_seconds": max(0.0, context.monotonic_clock() - started),
+            "exception_type": _type_name(exc),
+            "expected_type": _expected_type_label(context.handler_info),
+        },
+    )
+
+
+def _decide_payload(
+    context: HandlerInvocationContext,
+) -> tuple[_DeliveryOutcome, object]:
+    """Validate and convert the payload, returning the decision and its value."""
+    payload_type = (
+        context.target_type
+        if context.target_type is not None
+        else context.handler_info.payload_type
+    )
+    payload = context.payload
+    if payload_type is None:
+        return "delivered", payload
+    started = context.monotonic_clock()
+    try:
+        validate_strict_payload(
+            payload, payload_type, strict=context.handler_info.strict
+        )
+    except ms.ValidationError as exc:
+        _log_envelope_rejection(context, exc, started)
+        return "rejected_fields", payload
+    try:
+        return "delivered", _convert_payload(context, payload_type)
+    except ms.ValidationError as exc:
+        _log_envelope_rejection(context, exc, started)
+        return "conversion_failed", payload
+    # The fallback runs in ``_deliver``, after this function has returned, so an
+    # exception it raises does not inherit the vendor ``ValidationError`` as its
+    # implicit ``__context__``.
+
+
+async def _deliver(
+    context: HandlerInvocationContext, outcome: _DeliveryOutcome, payload: object
+) -> None:
+    """Invoke the handler, or the fallback for a rejected frame."""
+    if outcome == "delivered":
+        await context.handler_info.handler(context.resource, context.ws, payload)
+    else:
+        await context.resource.on_unhandled(context.ws, context.raw)
+
+
+async def convert_and_invoke_handler(
+    context: HandlerInvocationContext,
+) -> _DeliveryOutcome:
     """Validate typed payloads, including omitted and null values, then invoke.
 
     Omission and null are equivalent; handler parameter defaults are not applied.
+
+    Returns
+    -------
+    _DeliveryOutcome
+        ``"delivered"`` when the handler ran, otherwise the rejection that
+        routed the frame to ``on_unhandled``.
     """
-    payload_type = context.handler_info.payload_type
-    payload = context.payload
-    rejected = False
-    if payload_type is not None:
-        started = context.monotonic_clock()
-        try:
-            validate_strict_payload(
-                payload, payload_type, strict=context.handler_info.strict
-            )
-            payload = ms.convert(
-                payload,
-                type=payload_type,
-                strict=context.handler_info.strict,
-            )
-        except ms.ValidationError as exc:
-            duration_seconds = max(0.0, context.monotonic_clock() - started)
-            # Application telemetry can count rejections without seeing frames
-            # or payload values; the default on_unhandled is silent.
-            logger.debug(
-                "Operation observation",
-                extra={
-                    "operation": "dispatch",
-                    "outcome": "rejected",
-                    "duration_seconds": duration_seconds,
-                    "exception_type": _type_name(exc),
-                    "expected_type": _expected_type_label(context.handler_info),
-                },
-            )
-            rejected = True
-    if rejected:
-        # The fallback runs outside the ``except`` block so an error it raises
-        # does not retain the vendor validation error as its implicit
-        # ``__context__``; diagnostics tests rely on that detachment.
-        await context.resource.on_unhandled(context.ws, context.raw)
-        return
-    await context.handler_info.handler(context.resource, context.ws, payload)
+    outcome, payload = _decide_payload(context)
+    await _deliver(context, outcome, payload)
+    return outcome
 
 
 async def dispatch(
@@ -187,40 +299,125 @@ async def dispatch(
         await dispatch_with_envelope(resource, ws, raw)
 
 
+def _decode_schema_frame(raw: str | bytes) -> dict[str, object] | None:
+    """Decode ``raw`` to a JSON object, or return ``None`` when it is not one."""
+    # Returning from inside the ``except`` suite keeps the vendor decode error
+    # out of ``__context__``: callers fall back outside it, so no application
+    # error is raised while that exception is being handled. The decode error
+    # can quote the frame, so it must not be chained to a reply.
+    try:
+        payload = _INSPECTION_DECODER.decode(raw)
+    # An exponent beyond ``decimal.Decimal``'s limits makes the float hook raise
+    # ``InvalidOperation`` (a ``DecimalException``) rather than a decode error.
+    # Left uncaught, one peer-supplied literal would escape dispatch and close
+    # the session instead of reaching ``on_unhandled`` like any other bad frame.
+    except (ms.DecodeError, ms.ValidationError, decimal.DecimalException):
+        return None
+    match payload:
+        case dict():
+            return typ.cast("dict[str, object]", payload)
+        case _:
+            return None
+
+
+def _select_handler(
+    resource: WebSocketResource,
+    table: SchemaDispatch,
+    payload: dict[str, object],
+) -> tuple[type, str, HandlerInfo] | None:
+    """Resolve the frame's member and handler, observing a failed lookup.
+
+    Returns
+    -------
+    tuple[type, str, HandlerInfo] | None
+        The resolved member, the handler mode that found it, and the handler;
+        or ``None`` when the frame names no member or no handler serves it.
+    """
+    resolution = table.resolve(payload)
+    if resolution is None:
+        _log_schema_dispatch(resource, "unknown_tag")
+        return None
+    member, tag = resolution
+    handler_mode = "registered"
+    entry = resource.__class__._struct_handlers.get(member)
+    if entry is None:
+        # msgspec permits integer tags; conventional lookup uses strings.
+        handler_mode = "conventional"
+        entry = find_conventional_handler(resource, str(tag))
+    if entry is None:
+        _log_schema_dispatch(resource, "no_handler", handler_mode=handler_mode)
+        return None
+    return member, handler_mode, entry
+
+
 async def dispatch_with_schema(
     resource: WebSocketResource, ws: WebSocketLike, raw: str | bytes
 ) -> None:
     """Decode and dispatch ``raw`` using ``resource.schema``.
 
-    Non-``None`` tags are converted with ``str()`` for conventional handler
-    lookup; ``None`` tags fall back to ``on_unhandled``.
+    The frame is decoded generically to a mapping first. Decoding straight into
+    the schema union would let ``msgspec`` discard undeclared fields before the
+    strict decision, so a strict handler could receive a message that violated
+    its no-extra-fields contract. The mapping is retained through validation and
+    the original frame is then decoded into the resolved Struct, which keeps
+    wire-level values the generic mapping cannot carry.
+
+    ``None`` tags, unknown tags, non-object frames and malformed JSON fall back
+    to ``on_unhandled``. A configuration ``TypeError`` from an invalid schema
+    propagates instead.
+
+    Each frame produces one bounded DEBUG observation when DEBUG logging for
+    this logger is enabled and unfiltered. The observation records the payload
+    decision and is emitted *before* the frame is delivered, so a handler that
+    is cancelled or raises, and a rejection fallback that raises, still leave
+    the outcome the decision actually reached. Delivery failures are not
+    dispatch outcomes: they propagate to the session driver, which decides
+    whether to close.
+
+    Raises
+    ------
+    TypeError
+        If ``resource.schema`` is not a valid tagged-Struct schema.
     """
-    failed = False
+    # ``dispatch`` only routes here when a schema is set. Resolve the tag table
+    # first so a misconfigured schema raises for every frame, good or bad,
+    # rather than surfacing only once a well-formed object arrives.
+    schema = typ.cast("type", resource.schema)
     try:
-        message = msjson.decode(raw, type=resource.schema)
-    except (ms.DecodeError, ms.ValidationError):
-        failed = True
-    if failed:
+        table = schema_dispatch(schema)
+    except TypeError:
+        # A configuration error is not a bad frame: record it and let it
+        # propagate so the broken schema is not hidden behind on_unhandled.
+        _log_schema_dispatch(resource, "configuration_error")
+        raise
+    payload = _decode_schema_frame(raw)
+    if payload is None:
+        _log_schema_dispatch(resource, "malformed")
         await resource.on_unhandled(ws, raw)
         return
 
-    entry = resource.__class__._struct_handlers.get(type(message))
-    if not entry:
-        info = msinspect.type_info(type(message))
-        tag = info.tag if isinstance(info, msinspect.StructType) else None
-        # msgspec permits integer tags; conventional lookup uses strings.
-        conv = (
-            find_conventional_handler(resource, str(tag)) if tag is not None else None
-        )
-        if conv is None:
-            await resource.on_unhandled(ws, raw)
-            return
-        ctx = HandlerInvocationContext(resource, ws, raw, conv, message)
-        await convert_and_invoke_handler(ctx)
+    target = _select_handler(resource, table, payload)
+    if target is None:
+        await resource.on_unhandled(ws, raw)
         return
+    member, handler_mode, entry = target
 
-    ctx = HandlerInvocationContext(resource, ws, raw, entry, message)
-    await convert_and_invoke_handler(ctx)
+    # Pass the member by keyword: the positional slots belong to the envelope
+    # context, and a positional member would shift ``monotonic_clock``.
+    ctx = HandlerInvocationContext(
+        resource, ws, raw, entry, payload, target_type=member
+    )
+    # Decide first, observe the decision, then deliver. The observation must
+    # record the frame's true outcome even when delivery never completes: a
+    # handler that is cancelled or that raises, and a rejection fallback that
+    # raises, all leave the already-recorded outcome the correct one. Observing
+    # after delivery would instead lose the record for a cancellation (not an
+    # ``Exception``) and would have to guess a replacement label for a failure.
+    outcome, decoded = _decide_payload(ctx)
+    _log_schema_dispatch(
+        resource, outcome, handler_mode=handler_mode, strict=entry.strict
+    )
+    await _deliver(ctx, outcome, decoded)
 
 
 async def dispatch_with_envelope(
