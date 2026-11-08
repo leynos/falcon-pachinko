@@ -224,12 +224,21 @@ described above rather than calling a metric client. A host that wants a
 counter increments one per `Schema dispatch observation`, using `operation`
 (fixed to `schema_dispatch`) and `outcome` as the only dimensions. Never add
 the resource type, a tag, a payload value or an exception string as a label.
+`falcon_pachinko.SchemaDispatchCounter` is a ready-made `logging.Handler` for
+that: attach it to the `falcon_pachinko.dispatcher` logger, read `counts()`,
+and export `rejection_ratio()`, which returns `0.0` for an empty counter. It
+counts only the fixed labels in `SCHEMA_DISPATCH_OUTCOMES`, so a stray record
+cannot grow the label set. Counts are unsampled: they cover exactly the records
+the handler receives, so treat them as a lower bound when DEBUG logging for
+that logger is sampled or filtered.
+
 Aggregate by `outcome` and alert on a rising rate of `rejected_fields`,
-`conversion_failed`, `handler_error` or `configuration_error`: the first two
-mean clients disagree with the schema, `handler_error` means an application
-callback raised, and the last means a resource is misconfigured. `malformed` and
-`unknown_tag` track hostile or outdated peers. `delivered` is the denominator,
-so alert on a rejection ratio rather than an absolute count.
+`conversion_failed` or `configuration_error`: the first two mean clients
+disagree with the schema, and the last means a resource is misconfigured.
+`malformed` and `unknown_tag` track hostile or outdated peers. `delivered` is
+the denominator, so alert on a rejection ratio rather than an absolute count. A
+handler that raises is not a dispatch outcome: the frame was delivered, and the
+exception belongs to the session driver.
 
 Dispatch rejection timing uses `HandlerInvocationContext.monotonic_clock`,
 typed as `collections.abc.Callable[[], float]` and defaulting to
@@ -506,18 +515,27 @@ selecting a member. `schema_dispatch()` validates the schema before building
 the table and raises `TypeError` for a configuration error; the table itself is
 frozen and its member mapping is read-only.
 
-Schema dispatch emits exactly one bounded DEBUG record per dispatched frame on
-the `falcon_pachinko.dispatcher` logger, with the message
-`Schema dispatch observation`. Its `extra` fields are `operation`
-(`schema_dispatch`), `outcome` (one of `delivered`, `malformed`, `unknown_tag`,
-`no_handler`, `rejected_fields`, `conversion_failed`, `handler_error`,
+Schema dispatch emits one bounded DEBUG record per dispatched frame on the
+`falcon_pachinko.dispatcher` logger when DEBUG for that logger is enabled and
+unfiltered, with the message `Schema dispatch observation`. Its `extra` fields
+are `operation` (`schema_dispatch`), `outcome` (one of `delivered`, `malformed`,
+`unknown_tag`, `no_handler`, `rejected_fields`, `conversion_failed`,
 `configuration_error`), `resource_type` (the resource class name),
 `handler_mode` (`registered` or `conventional`, once a handler is selected), and
 `strict` (the selected handler's strictness, once known). The record never
-includes the raw frame, payload values, field values, or peer-supplied tag text.
-`handler_error` means the handler, or the `on_unhandled` fallback, raised; the
-exception still propagates. Operators can alert on an unexpected share of
-`rejected_fields` or `no_handler` outcomes without collecting message content.
+includes the raw frame, payload values, field values, or peer-supplied tag
+text. An unexpected `outcome` value is coerced to `other` rather than recorded
+verbatim.
+
+The observation records the payload decision and is emitted before the frame is
+delivered. A handler that is cancelled or raises, and an `on_unhandled`
+fallback that raises, therefore keep the outcome the decision reached:
+`delivered` for a handler that failed after receiving its payload, and
+`rejected_fields` or `conversion_failed` for a fallback that could not
+complete. Delivery failures are not dispatch outcomes; they propagate to the
+session driver, which decides whether to close the session. Operators can alert
+on an unexpected share of `rejected_fields` or `no_handler` outcomes without
+collecting message content.
 
 ## Safe diagnostics
 

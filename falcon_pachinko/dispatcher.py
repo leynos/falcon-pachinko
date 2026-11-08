@@ -19,7 +19,8 @@ from .exceptions import (
     SignatureInspectionError,
 )
 from .handlers import LIFECYCLE_CALLBACK_NAMES, HandlerInfo, get_payload_type
-from .schema import schema_dispatch, validate_strict_payload
+from .observability import SCHEMA_DISPATCH_OUTCOMES
+from .schema import SchemaDispatch, schema_dispatch, validate_strict_payload
 from .utils import to_snake_case
 
 logger = logging.getLogger(__name__)
@@ -31,20 +32,6 @@ logger = logging.getLogger(__name__)
 # wire decode can preserve the value. Decoding inspection floats as ``Decimal``
 # keeps every literal exact and unbounded.
 _INSPECTION_DECODER = msjson.Decoder(float_hook=decimal.Decimal)
-
-# Bounded outcome labels for schema-dispatch observations. Keeping the set here
-# means an unexpected caller value becomes ``other`` rather than an unbounded
-# log field.
-_SCHEMA_DISPATCH_OUTCOMES = frozenset({
-    "delivered",
-    "malformed",
-    "unknown_tag",
-    "no_handler",
-    "rejected_fields",
-    "conversion_failed",
-    "configuration_error",
-    "handler_error",
-})
 
 type _DeliveryOutcome = typ.Literal["delivered", "rejected_fields", "conversion_failed"]
 
@@ -72,7 +59,7 @@ def _log_schema_dispatch(
         "Schema dispatch observation",
         extra={
             "operation": "schema_dispatch",
-            "outcome": (outcome if outcome in _SCHEMA_DISPATCH_OUTCOMES else "other"),
+            "outcome": (outcome if outcome in SCHEMA_DISPATCH_OUTCOMES else "other"),
             "resource_type": _type_name(resource),
             "handler_mode": handler_mode,
             "strict": strict,
@@ -244,6 +231,46 @@ def _log_envelope_rejection(
     )
 
 
+def _decide_payload(
+    context: HandlerInvocationContext,
+) -> tuple[_DeliveryOutcome, object]:
+    """Validate and convert the payload, returning the decision and its value."""
+    payload_type = (
+        context.target_type
+        if context.target_type is not None
+        else context.handler_info.payload_type
+    )
+    payload = context.payload
+    if payload_type is None:
+        return "delivered", payload
+    started = context.monotonic_clock()
+    try:
+        validate_strict_payload(
+            payload, payload_type, strict=context.handler_info.strict
+        )
+    except ms.ValidationError as exc:
+        _log_envelope_rejection(context, exc, started)
+        return "rejected_fields", payload
+    try:
+        return "delivered", _convert_payload(context, payload_type)
+    except ms.ValidationError as exc:
+        _log_envelope_rejection(context, exc, started)
+        return "conversion_failed", payload
+    # The fallback runs in ``_deliver``, after this function has returned, so an
+    # exception it raises does not inherit the vendor ``ValidationError`` as its
+    # implicit ``__context__``.
+
+
+async def _deliver(
+    context: HandlerInvocationContext, outcome: _DeliveryOutcome, payload: object
+) -> None:
+    """Invoke the handler, or the fallback for a rejected frame."""
+    if outcome == "delivered":
+        await context.handler_info.handler(context.resource, context.ws, payload)
+    else:
+        await context.resource.on_unhandled(context.ws, context.raw)
+
+
 async def convert_and_invoke_handler(
     context: HandlerInvocationContext,
 ) -> _DeliveryOutcome:
@@ -257,36 +284,9 @@ async def convert_and_invoke_handler(
         ``"delivered"`` when the handler ran, otherwise the rejection that
         routed the frame to ``on_unhandled``.
     """
-    payload_type = (
-        context.target_type
-        if context.target_type is not None
-        else context.handler_info.payload_type
-    )
-    payload = context.payload
-    failure: _DeliveryOutcome | None = None
-    if payload_type is not None:
-        started = context.monotonic_clock()
-        try:
-            validate_strict_payload(
-                payload, payload_type, strict=context.handler_info.strict
-            )
-        except ms.ValidationError as exc:
-            failure = "rejected_fields"
-            _log_envelope_rejection(context, exc, started)
-        else:
-            try:
-                payload = _convert_payload(context, payload_type)
-            except ms.ValidationError as exc:
-                failure = "conversion_failed"
-                _log_envelope_rejection(context, exc, started)
-    if failure is not None:
-        # The fallback runs after the ``except`` blocks, not inside them, so an
-        # exception it raises does not inherit the vendor ``ValidationError``
-        # as its implicit ``__context__``.
-        await context.resource.on_unhandled(context.ws, context.raw)
-        return failure
-    await context.handler_info.handler(context.resource, context.ws, payload)
-    return "delivered"
+    outcome, payload = _decide_payload(context)
+    await _deliver(context, outcome, payload)
+    return outcome
 
 
 async def dispatch(
@@ -320,27 +320,34 @@ def _decode_schema_frame(raw: str | bytes) -> dict[str, object] | None:
             return None
 
 
-async def _invoke_and_observe(
+def _select_handler(
     resource: WebSocketResource,
-    ctx: HandlerInvocationContext,
-    *,
-    handler_mode: str,
-    strict: bool,
-) -> None:
-    """Invoke the handler and record exactly one bounded dispatch observation."""
-    try:
-        outcome = await convert_and_invoke_handler(ctx)
-    except Exception:
-        # Any application failure is a dispatch outcome. The observation is
-        # otherwise emitted only after the invocation returns, so a handler or
-        # a rejection fallback that raises would leave its frame unobserved.
-        # Record the bounded outcome and let the exception propagate: the
-        # session driver decides whether to close.
-        _log_schema_dispatch(
-            resource, "handler_error", handler_mode=handler_mode, strict=strict
-        )
-        raise
-    _log_schema_dispatch(resource, outcome, handler_mode=handler_mode, strict=strict)
+    table: SchemaDispatch,
+    payload: dict[str, object],
+) -> tuple[type, str, HandlerInfo] | None:
+    """Resolve the frame's member and handler, observing a failed lookup.
+
+    Returns
+    -------
+    tuple[type, str, HandlerInfo] | None
+        The resolved member, the handler mode that found it, and the handler;
+        or ``None`` when the frame names no member or no handler serves it.
+    """
+    resolution = table.resolve(payload)
+    if resolution is None:
+        _log_schema_dispatch(resource, "unknown_tag")
+        return None
+    member, tag = resolution
+    handler_mode = "registered"
+    entry = resource.__class__._struct_handlers.get(member)
+    if entry is None:
+        # msgspec permits integer tags; conventional lookup uses strings.
+        handler_mode = "conventional"
+        entry = find_conventional_handler(resource, str(tag))
+    if entry is None:
+        _log_schema_dispatch(resource, "no_handler", handler_mode=handler_mode)
+        return None
+    return member, handler_mode, entry
 
 
 async def dispatch_with_schema(
@@ -359,9 +366,13 @@ async def dispatch_with_schema(
     to ``on_unhandled``. A configuration ``TypeError`` from an invalid schema
     propagates instead.
 
-    Every frame produces exactly one bounded DEBUG observation, including a
-    frame whose handler raises: the failure is recorded as ``handler_error``
-    before the exception continues to propagate.
+    Each frame produces one bounded DEBUG observation when DEBUG logging for
+    this logger is enabled and unfiltered. The observation records the payload
+    decision and is emitted *before* the frame is delivered, so a handler that
+    is cancelled or raises, and a rejection fallback that raises, still leave
+    the outcome the decision actually reached. Delivery failures are not
+    dispatch outcomes: they propagate to the session driver, which decides
+    whether to close.
 
     Raises
     ------
@@ -385,32 +396,28 @@ async def dispatch_with_schema(
         await resource.on_unhandled(ws, raw)
         return
 
-    resolution = table.resolve(payload)
-    if resolution is None:
-        _log_schema_dispatch(resource, "unknown_tag")
+    target = _select_handler(resource, table, payload)
+    if target is None:
         await resource.on_unhandled(ws, raw)
         return
-    member, tag = resolution
-
-    handler_mode = "registered"
-    entry = resource.__class__._struct_handlers.get(member)
-    if entry is None:
-        # msgspec permits integer tags; conventional lookup uses strings.
-        handler_mode = "conventional"
-        entry = find_conventional_handler(resource, str(tag))
-    if entry is None:
-        _log_schema_dispatch(resource, "no_handler", handler_mode=handler_mode)
-        await resource.on_unhandled(ws, raw)
-        return
+    member, handler_mode, entry = target
 
     # Pass the member by keyword: the positional slots belong to the envelope
     # context, and a positional member would shift ``monotonic_clock``.
     ctx = HandlerInvocationContext(
         resource, ws, raw, entry, payload, target_type=member
     )
-    await _invoke_and_observe(
-        resource, ctx, handler_mode=handler_mode, strict=entry.strict
+    # Decide first, observe the decision, then deliver. The observation must
+    # record the frame's true outcome even when delivery never completes: a
+    # handler that is cancelled or that raises, and a rejection fallback that
+    # raises, all leave the already-recorded outcome the correct one. Observing
+    # after delivery would instead lose the record for a cancellation (not an
+    # ``Exception``) and would have to guess a replacement label for a failure.
+    outcome, decoded = _decide_payload(ctx)
+    _log_schema_dispatch(
+        resource, outcome, handler_mode=handler_mode, strict=entry.strict
     )
+    await _deliver(ctx, outcome, decoded)
 
 
 async def dispatch_with_envelope(

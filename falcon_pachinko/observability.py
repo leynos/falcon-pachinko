@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import dataclasses as dc
 import enum
+import logging
 import typing as typ
 
 if typ.TYPE_CHECKING:
@@ -65,10 +67,11 @@ class ExceptionCategory(enum.StrEnum):
 
 
 class Counter(enum.StrEnum):
-    """Counter instruments exposed by the optional session boundary."""
+    """Counter instruments exposed by the optional instrumentation boundaries."""
 
     SESSION_OUTCOMES = "websocket.session.outcomes"
     CLEANUP_FAILURES = "websocket.cleanup.failures"
+    SCHEMA_DISPATCH_OUTCOMES = "websocket.schema_dispatch.outcomes"
 
 
 class Duration(enum.StrEnum):
@@ -188,6 +191,76 @@ class NoOpSessionInstrumentation:
 
 
 NOOP_SESSION_INSTRUMENTATION = NoOpSessionInstrumentation()
+
+# Bounded outcome labels for schema-dispatch observations. The dispatcher
+# coerces an unexpected value to ``other``, and the counter below rejects a
+# label it does not know, so neither can grow an unbounded label set.
+SCHEMA_DISPATCH_OUTCOMES = frozenset({
+    "delivered",
+    "malformed",
+    "unknown_tag",
+    "no_handler",
+    "rejected_fields",
+    "conversion_failed",
+    "configuration_error",
+})
+
+_SCHEMA_DISPATCH_MESSAGE = "Schema dispatch observation"
+_DISPATCHER_LOGGER = "falcon_pachinko.dispatcher"
+
+
+class SchemaDispatchCounter(logging.Handler):
+    """Count schema-dispatch outcomes from the dispatcher's DEBUG records.
+
+    Attach the handler to the ``falcon_pachinko.dispatcher`` logger. Records
+    from another logger, records with another message, and records whose
+    ``outcome`` is outside :data:`SCHEMA_DISPATCH_OUTCOMES` are ignored, so the
+    counter cannot grow an unbounded label set.
+
+    Counts are unsampled: they cover exactly the records this handler receives.
+    If DEBUG logging is disabled, filtered or sampled for that logger, the
+    counter sees only what survives, so treat the totals as a lower bound.
+    """
+
+    counter_name = Counter.SCHEMA_DISPATCH_OUTCOMES
+
+    def __init__(self) -> None:
+        """Start with no counted outcomes."""
+        super().__init__(level=logging.DEBUG)
+        self._counts: collections.Counter[str] = collections.Counter()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Count one bounded schema-dispatch outcome, ignoring anything else."""
+        if record.name != _DISPATCHER_LOGGER:
+            return
+        if record.getMessage() != _SCHEMA_DISPATCH_MESSAGE:
+            return
+        outcome = getattr(record, "outcome", None)
+        if outcome not in SCHEMA_DISPATCH_OUTCOMES:
+            return
+        self._counts[outcome] += 1
+
+    def counts(self) -> dict[str, int]:
+        """Return a snapshot of the counts keyed by outcome label."""
+        return dict(self._counts)
+
+    def rejection_ratio(self) -> float:
+        """Return rejected frames over counted frames, or ``0.0`` when empty.
+
+        ``delivered`` is the only accepted outcome, so every other label counts
+        as a rejection. A zero denominator returns ``0.0`` rather than raising,
+        so a fresh counter is safe to export before traffic arrives.
+
+        Returns
+        -------
+        float
+            Rejected frames divided by counted frames, in ``[0.0, 1.0]``.
+        """
+        total = sum(self._counts.values())
+        if total == 0:
+            return 0.0
+        return (total - self._counts.get("delivered", 0)) / total
+
 
 _APPLICATION_CLOSE_CODE_MIN = 3000
 _APPLICATION_CLOSE_CODE_MAX = 4999
@@ -441,6 +514,7 @@ class LifecycleObserver(typ.Protocol):
 
 
 __all__ = (
+    "SCHEMA_DISPATCH_OUTCOMES",
     "CloseCodeCategory",
     "Counter",
     "Duration",

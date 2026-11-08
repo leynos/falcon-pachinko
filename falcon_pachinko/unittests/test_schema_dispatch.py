@@ -101,18 +101,6 @@ class SchemaResource(WebSocketResource):
         self.events.append(("raw", message))
 
 
-class RaisingResource(WebSocketResource):
-    """Resource whose handler fails after the frame is delivered."""
-
-    schema = Join
-
-    @handles_message("join")
-    async def handle_join(self, ws: WebSocketLike, payload: Join) -> None:
-        """Fail so the dispatch observation can be checked."""
-        msg = "handler exploded"
-        raise RuntimeError(msg)
-
-
 class IntegerTagResource(WebSocketResource):
     """Resource with a conventional handler for an integer tag."""
 
@@ -454,13 +442,16 @@ async def test_schema_dispatch_observations_cover_each_decision(
     r = SchemaResource()
     r.bind_default_hook_manager()
     canary = "CANARY-room-value"
-    await r.dispatch(DummyWS(), msjson.encode(Join(room=canary)))
-    await r.dispatch(DummyWS(), b"not json")
-    await r.dispatch(DummyWS(), msjson.encode({"type": "oops"}))
-    await r.dispatch(
-        DummyWS(), msjson.encode({"type": "join", "room": canary, "extra": 1})
-    )
-    await r.dispatch(DummyWS(), msjson.encode({"type": "join", "room": 1}))
+    tag_canary = "CANARY-unknown-tag"
+    frames = [
+        msjson.encode(Join(room=canary)),
+        b"not json",
+        msjson.encode({"type": tag_canary}),
+        msjson.encode({"type": "join", "room": canary, "extra": 1}),
+        msjson.encode({"type": "join", "room": 1}),
+    ]
+    for raw in frames:
+        await r.dispatch(DummyWS(), raw)
 
     expected = [
         ("delivered", "registered", True),
@@ -472,7 +463,11 @@ async def test_schema_dispatch_observations_cover_each_decision(
     assert _schema_observations(caplog) == expected, (
         "each schema decision must produce exactly one bounded observation"
     )
-    _assert_bounded_observations(caplog, "oops", "not json", canary)
+    # Check each complete frame as well as its values: a record that echoed a
+    # fragment (the tag alone, say) would escape a value-only check.
+    _assert_bounded_observations(
+        caplog, canary, tag_canary, *(raw.decode() for raw in frames)
+    )
 
 
 @pytest.mark.asyncio
@@ -484,54 +479,38 @@ async def test_schema_dispatch_observes_missing_handler_and_config_error(
     reserved = ReservedTagResource()
     reserved.bind_default_hook_manager()
     reason = "CANARY-reserved-reason"
-    await reserved.dispatch(DummyWS(), msjson.encode(ReservedTag(reason=reason)))
+    reserved_raw = msjson.encode(ReservedTag(reason=reason))
+    await reserved.dispatch(DummyWS(), reserved_raw)
     assert _schema_observations(caplog) == [("no_handler", "conventional", None)], (
         "a resolved member without a registered handler must report a "
         "conventional lookup"
     )
-    _assert_bounded_observations(caplog, reason)
+    _assert_bounded_observations(caplog, reason, reserved_raw.decode())
 
     caplog.clear()
     broken = UntaggedFallbackResource()
     broken.bind_default_hook_manager()
     broken.schema = Untagged
     untagged_value = "CANARY-untagged-value"
+    untagged_raw = msjson.encode(Untagged(value=untagged_value))
     with pytest.raises(TypeError, match="schema Struct types must define a tag"):
-        await broken.dispatch(DummyWS(), msjson.encode(Untagged(value=untagged_value)))
+        await broken.dispatch(DummyWS(), untagged_raw)
     assert _schema_observations(caplog) == [("configuration_error", None, None)], (
         "a configuration error must be observed even though it propagates"
     )
-    _assert_bounded_observations(caplog, untagged_value)
+    _assert_bounded_observations(caplog, untagged_value, untagged_raw.decode())
 
     caplog.clear()
     caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
     integer = IntegerTagResource()
     integer.bind_default_hook_manager()
     integer_value = "CANARY-conventional-value"
-    await integer.dispatch(
-        DummyWS(), msjson.encode(IntegerMessage(value=integer_value))
-    )
+    integer_raw = msjson.encode(IntegerMessage(value=integer_value))
+    await integer.dispatch(DummyWS(), integer_raw)
     assert _schema_observations(caplog) == [("delivered", "conventional", True)], (
         "a conventional integer-tag handler must be reported as conventional"
     )
-    _assert_bounded_observations(caplog, integer_value)
-
-
-@pytest.mark.asyncio
-async def test_schema_dispatch_observes_a_raising_handler(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A handler that raises still leaves exactly one bounded observation."""
-    caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
-    r = RaisingResource()
-    r.bind_default_hook_manager()
-    room = "CANARY-raising-room"
-    with pytest.raises(RuntimeError, match="handler exploded"):
-        await r.dispatch(DummyWS(), msjson.encode(Join(room=room)))
-    assert _schema_observations(caplog) == [("handler_error", "registered", True)], (
-        "a raising handler must be observed before the exception propagates"
-    )
-    _assert_bounded_observations(caplog, room)
+    _assert_bounded_observations(caplog, integer_value, integer_raw.decode())
 
 
 def test_invalid_schema_type_raises() -> None:

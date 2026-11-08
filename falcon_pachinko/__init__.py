@@ -16,10 +16,12 @@ from .hooks import HookCollection, HookContext, HookManager
 from .lifecycle import AcceptOptions, LifecycleError, WebSocketSession
 from .media import configure_raw_frame_media
 from .observability import (
+    SCHEMA_DISPATCH_OUTCOMES,
     LifecycleObservationEvent,
     LifecycleObserver,
     LifecycleSpan,
     LifecycleSpanResult,
+    SchemaDispatchCounter,
     SessionDimensions,
     SessionInstrumentation,
     SessionSpan,
@@ -45,6 +47,7 @@ from .workers import WorkerController, worker
 
 __all__ = (
     "DEFAULT_SENSITIVE_KEYS",
+    "SCHEMA_DISPATCH_OUTCOMES",
     "AcceptOptions",
     "ClusterFanout",
     "ConnectionBackend",
@@ -62,6 +65,7 @@ __all__ = (
     "LifecycleSpanResult",
     "MissingDependencyError",
     "ResourceFactory",
+    "SchemaDispatchCounter",
     "ServiceContainer",
     "ServiceNotFoundError",
     "SessionDimensions",
