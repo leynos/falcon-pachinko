@@ -320,6 +320,29 @@ def _decode_schema_frame(raw: str | bytes) -> dict[str, object] | None:
             return None
 
 
+async def _invoke_and_observe(
+    resource: WebSocketResource,
+    ctx: HandlerInvocationContext,
+    *,
+    handler_mode: str,
+    strict: bool,
+) -> None:
+    """Invoke the handler and record exactly one bounded dispatch observation."""
+    try:
+        outcome = await convert_and_invoke_handler(ctx)
+    except Exception:
+        # Any application failure is a dispatch outcome. The observation is
+        # otherwise emitted only after the invocation returns, so a handler or
+        # a rejection fallback that raises would leave its frame unobserved.
+        # Record the bounded outcome and let the exception propagate: the
+        # session driver decides whether to close.
+        _log_schema_dispatch(
+            resource, "handler_error", handler_mode=handler_mode, strict=strict
+        )
+        raise
+    _log_schema_dispatch(resource, outcome, handler_mode=handler_mode, strict=strict)
+
+
 async def dispatch_with_schema(
     resource: WebSocketResource, ws: WebSocketLike, raw: str | bytes
 ) -> None:
@@ -385,23 +408,8 @@ async def dispatch_with_schema(
     ctx = HandlerInvocationContext(
         resource, ws, raw, entry, payload, target_type=member
     )
-    try:
-        outcome = await convert_and_invoke_handler(ctx)
-    except Exception:
-        # Any application failure is a dispatch outcome. The observation is
-        # otherwise emitted only after the invocation returns, so a handler or
-        # a rejection fallback that raises would leave its frame unobserved.
-        # Record the bounded outcome and let the exception propagate: the
-        # session driver decides whether to close.
-        _log_schema_dispatch(
-            resource, "handler_error", handler_mode=handler_mode, strict=entry.strict
-        )
-        raise
-    _log_schema_dispatch(
-        resource,
-        outcome,
-        handler_mode=handler_mode,
-        strict=entry.strict,
+    await _invoke_and_observe(
+        resource, ctx, handler_mode=handler_mode, strict=entry.strict
     )
 
 
