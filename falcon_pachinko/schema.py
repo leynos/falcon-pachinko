@@ -1,4 +1,17 @@
-"""Schema validation helpers."""
+"""Schema validation and tag-based member resolution for message dispatch.
+
+A resource declares its ``schema`` as a tagged :class:`msgspec.Struct` or a
+union of them. :func:`validate_schema_types` enforces that shape, and
+:func:`schema_dispatch` caches one :class:`SchemaDispatch` table per schema,
+mapping each declared tag to its member.
+
+The dispatcher decodes a frame generically so undeclared fields survive, asks
+that table which member the frame's tag names, and looks the member up in the
+handler map built by :func:`populate_struct_handlers`. Before conversion it
+calls :func:`validate_strict_payload`, which compares the frame's keys with the
+member's declared wire names -- the strict unknown-field decision ``msgspec``
+cannot make once the frame is already decoded.
+"""
 
 from __future__ import annotations
 

@@ -583,6 +583,39 @@ async def test_schema_lenient_ignores_out_of_float_range_extra() -> None:
 
 
 @pytest.mark.asyncio
+async def test_schema_extreme_exponent_reaches_fallback_without_closing() -> None:
+    """An exponent beyond ``Decimal`` limits is a bad frame, not a crash.
+
+    The inspection decoder's ``float_hook`` raises ``decimal.InvalidOperation``
+    for such a literal. Uncaught, it would escape dispatch and close the
+    session; the frame must instead reach ``on_unhandled`` and leave the
+    connection able to handle the next message.
+    """
+    r = ExtremeNumberResource()
+    r.bind_default_hook_manager()
+    raw = (
+        b'{"type": "extreme_number", "amount": 1e99999999999999999999999, '
+        b'"values": [], "blob": {}}'
+    )
+    await r.dispatch(DummyWS(), raw)
+    assert r.events == [("raw", raw)], (
+        "an undecodable exponent must reach on_unhandled with the exact frame"
+    )
+
+    valid = (
+        b'{"type": "extreme_number", "amount": 1e400, '
+        b'"values": [-1e400], "blob": {"n": 1e400}}'
+    )
+    await r.dispatch(DummyWS(), valid)
+    assert r.events[-1] == (
+        "extreme_number",
+        decimal.Decimal("1E+400"),
+        [decimal.Decimal("-1E+400")],
+        b'{"n": 1e400}',
+    ), "the session must keep dispatching after a rejected exponent"
+
+
+@pytest.mark.asyncio
 async def test_schema_nested_structs_ignore_extras_by_default() -> None:
     """Nested Structs keep their own default: undeclared nested fields drop.
 

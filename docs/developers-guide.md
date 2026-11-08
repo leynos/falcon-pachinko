@@ -219,6 +219,17 @@ outcome dimensions, never room, message, connection or node IDs as labels. Keep
 instrumentation optional and host-configured, with no mandatory SDK, public
 resource or router constructor changes, or `WorkerController` changes.
 
+Schema dispatch follows the same rule: it emits the bounded DEBUG record
+described above rather than calling a metric client. A host that wants a
+counter increments one per `Schema dispatch observation`, using `operation`
+(fixed to `schema_dispatch`) and `outcome` as the only dimensions. Never add
+the resource type, a tag, a payload value or an exception string as a label.
+Aggregate by `outcome` and alert on a rising rate of `rejected_fields`,
+`conversion_failed` or `configuration_error`: the first two mean clients
+disagree with the schema, and the last means a resource is misconfigured.
+`malformed` and `unknown_tag` track hostile or outdated peers. `delivered` is
+the denominator, so alert on a rejection ratio rather than an absolute count.
+
 Dispatch rejection timing uses `HandlerInvocationContext.monotonic_clock`,
 typed as `collections.abc.Callable[[], float]` and defaulting to
 `time.monotonic`. `convert_and_invoke_handler` reads it around typed-payload
@@ -447,6 +458,8 @@ first derives that union at decode time, and that configuration `TypeError`
 propagates instead of becoming an `on_unhandled` fallback. Reject the
 temptation to catch it at the decode site: widening the handler would leave the
 invalid schema in place and disguise a schema bug as a malformed message.
+
+## Schema-mode dispatch
 
 Schema dispatch resolves the target before conversion. The dispatcher decodes
 the frame generically with the inspection decoder described below, resolves the

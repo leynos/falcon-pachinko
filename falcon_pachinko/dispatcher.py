@@ -61,19 +61,12 @@ def _log_schema_dispatch(
     handler_mode: str | None = None,
     strict: bool | None = None,
 ) -> None:
-    """Emit bounded schema-dispatch metadata without reflecting the frame.
-
-    Parameters
-    ----------
-    resource : WebSocketResource
-        The resource handling the frame; only its type name is recorded.
-    outcome : str
-        The dispatch decision, coerced to ``other`` when unrecognised.
-    handler_mode : str | None, optional
-        ``"registered"`` or ``"conventional"`` once a handler was selected.
-    strict : bool | None, optional
-        The selected handler's strictness, once known.
-    """
+    """Emit bounded schema-dispatch metadata without reflecting the frame."""
+    # Only the resource's type name is recorded, never the resource itself.
+    # ``outcome`` is coerced to ``other`` when unrecognized so a caller cannot
+    # introduce an unbounded log field. ``handler_mode`` is ``"registered"`` or
+    # ``"conventional"`` once a handler was selected, and ``strict`` is that
+    # handler's strictness once known.
     logger.debug(
         "Schema dispatch observation",
         extra={
@@ -99,13 +92,13 @@ class HandlerInvocationContext:
 
     Attributes
     ----------
+    monotonic_clock : cabc.Callable[[], float]
+        Clock used to measure typed-payload rejection time. Defaults to
+        :func:`time.monotonic`.
     target_type : type | None
         Struct selected by schema dispatch, when it differs from the handler's
         annotation. Schema mode always converts to the resolved member so an
         unannotated conventional handler still receives a typed payload.
-    monotonic_clock : cabc.Callable[[], float]
-        Clock used to measure typed-payload rejection time. Defaults to
-        :func:`time.monotonic`.
     """
 
     resource: WebSocketResource
@@ -113,8 +106,11 @@ class HandlerInvocationContext:
     raw: str | bytes
     handler_info: HandlerInfo
     payload: object
-    target_type: type | None = None
+    # ``monotonic_clock`` keeps the sixth positional slot it had before schema
+    # dispatch existed, so a caller passing a clock positionally still binds it
+    # to the clock rather than to ``target_type``.
     monotonic_clock: cabc.Callable[[], float] = time.monotonic
+    target_type: type | None = None
 
     def __repr__(self) -> str:
         """Describe the invocation without displaying raw or decoded values."""
@@ -226,22 +222,13 @@ def _log_envelope_rejection(
     exc: ms.ValidationError,
     started: float,
 ) -> None:
-    """Record a rejected envelope conversion with bounded metadata.
-
-    Envelope dispatch has no schema observation of its own, so this record is
-    what lets application telemetry count rejected conversions and their
-    elapsed time. Schema dispatch already records its decision through
-    ``_log_schema_dispatch``, so it does not emit this record as well.
-
-    Parameters
-    ----------
-    context : HandlerInvocationContext
-        The invocation being rejected; only its type labels are recorded.
-    exc : ms.ValidationError
-        The vendor error whose type is recorded instead of its message.
-    started : float
-        Monotonic reading taken before validation began.
-    """
+    """Record a rejected envelope conversion with bounded metadata."""
+    # Envelope dispatch has no schema observation of its own, so this record is
+    # what lets application telemetry count rejected conversions and their
+    # elapsed time. Schema dispatch already records its decision through
+    # ``_log_schema_dispatch``, so it does not emit this record as well. Only
+    # type labels are recorded: the vendor error's type stands in for its
+    # message, and ``started`` is the monotonic reading taken before validation.
     if context.target_type is not None:
         return
     logger.debug(
@@ -319,7 +306,11 @@ def _decode_schema_frame(raw: str | bytes) -> dict[str, object] | None:
     # can quote the frame, so it must not be chained to a reply.
     try:
         payload = _INSPECTION_DECODER.decode(raw)
-    except (ms.DecodeError, ms.ValidationError):
+    # An exponent beyond ``decimal.Decimal``'s limits makes the float hook raise
+    # ``InvalidOperation`` (a ``DecimalException``) rather than a decode error.
+    # Left uncaught, one peer-supplied literal would escape dispatch and close
+    # the session instead of reaching ``on_unhandled`` like any other bad frame.
+    except (ms.DecodeError, ms.ValidationError, decimal.DecimalException):
         return None
     match payload:
         case dict():
@@ -384,7 +375,11 @@ async def dispatch_with_schema(
         await resource.on_unhandled(ws, raw)
         return
 
-    ctx = HandlerInvocationContext(resource, ws, raw, entry, payload, member)
+    # Pass the member by keyword: the positional slots belong to the envelope
+    # context, and a positional member would shift ``monotonic_clock``.
+    ctx = HandlerInvocationContext(
+        resource, ws, raw, entry, payload, target_type=member
+    )
     outcome = await convert_and_invoke_handler(ctx)
     _log_schema_dispatch(
         resource,

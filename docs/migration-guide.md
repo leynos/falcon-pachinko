@@ -37,17 +37,17 @@ equality behaviour and operational payload values, but their representations
 now show safe metadata instead of raw or decoded values.
 `HandlerInvocationContext` keeps its existing fields and operational payload
 values, and its representation also shows safe metadata. It gains two optional
-fields. `target_type` defaults to `None`, and schema dispatch sets it to the
-resolved Struct so a conventional handler without a payload annotation still
-receives the typed member.
-`monotonic_clock: collections.abc.Callable[[], float]` defaults to
-`time.monotonic` and measures dispatch-rejection time; tests that construct the
-context directly can inject controlled clock readings. The added fields change
-the generated constructor signature, slots and equality inputs, but existing
-positional and keyword constructor calls remain valid. Schema dispatch also
-emits bounded DEBUG observations on the `falcon_pachinko.dispatcher` logger;
-see the
-[developer guide](developers-guide.md#validation-error-import-boundary).
+fields. `monotonic_clock: collections.abc.Callable[[], float]` keeps the sixth
+positional slot, defaults to `time.monotonic`, and measures dispatch-rejection
+time; tests that construct the context directly can inject controlled clock
+readings. `target_type` follows it, defaults to `None`, and schema dispatch
+sets it to the resolved Struct so a conventional handler without a payload
+annotation still receives the typed member. Pass `target_type` by keyword: a
+sixth positional argument still binds to `monotonic_clock`. The added fields
+change the generated constructor signature, slots and equality inputs, but
+existing positional and keyword constructor calls remain valid. Schema dispatch
+also emits bounded DEBUG observations on the `falcon_pachinko.dispatcher`
+logger; see the [developer guide](developers-guide.md#schema-mode-dispatch).
 `TraceEvent.summary()` is new and returns the same kind of metadata. Code that
 relied on payload values appearing in `repr()` must read the explicit payload
 field at a trusted boundary.
@@ -140,6 +140,11 @@ handler whose message also needs lax coercion.
   framework's check is shallow.
 - A schema member declared with `array_like=True` has no keyed tag on the wire
   and is now rejected with a `TypeError` at class definition.
+
+Envelope handlers use the same key comparison. Their payload is validated
+against the annotated Struct's encoded wire names plus its tag field, so a
+`rename="camel"` field must arrive as `camelCase` there too, and a tagged
+Struct's tag field is no longer reported as an unknown field.
 
 ## Reserved lifecycle handlers
 

@@ -12,6 +12,13 @@ import pytest
 from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
 from falcon_pachinko.unittests.helpers import DummyWS
 
+# The attributes ``logging`` adds to every record, plus the ones a formatter
+# adds later. Anything outside this set arrived through ``extra`` and is
+# therefore framework-chosen metadata.
+_LOG_RECORD_KEYS = frozenset(
+    vars(logging.LogRecord("", logging.DEBUG, "", 0, "", (), None))
+) | frozenset({"message", "asctime"})
+
 
 class Join(ms.Struct, tag="join"):
     """Message structure for join events."""
@@ -406,11 +413,12 @@ async def test_schema_dispatch_observations_cover_each_decision(
     caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
     r = SchemaResource()
     r.bind_default_hook_manager()
-    await r.dispatch(DummyWS(), msjson.encode(Join(room="a")))
+    canary = "CANARY-room-value"
+    await r.dispatch(DummyWS(), msjson.encode(Join(room=canary)))
     await r.dispatch(DummyWS(), b"not json")
     await r.dispatch(DummyWS(), msjson.encode({"type": "oops"}))
     await r.dispatch(
-        DummyWS(), msjson.encode({"type": "join", "room": "a", "extra": 1})
+        DummyWS(), msjson.encode({"type": "join", "room": canary, "extra": 1})
     )
     await r.dispatch(DummyWS(), msjson.encode({"type": "join", "room": 1}))
 
@@ -424,8 +432,29 @@ async def test_schema_dispatch_observations_cover_each_decision(
     assert _schema_observations(caplog) == expected, (
         "each schema decision must produce exactly one bounded observation"
     )
-    assert "oops" not in caplog.text, "an unknown tag value must not be logged"
-    assert "not json" not in caplog.text, "a malformed frame must not be logged"
+    # ``caplog.text`` renders only the formatted message, so a value smuggled
+    # through ``extra`` would pass that check. Inspect every record's full
+    # ``__dict__`` instead, which is where ``extra`` fields land.
+    rendered = " ".join(repr(record.__dict__) for record in caplog.records)
+    assert "oops" not in rendered, "an unknown tag value must not be logged"
+    assert "not json" not in rendered, "a malformed frame must not be logged"
+    assert canary not in rendered, "a payload value must not be logged"
+    permitted = {
+        "operation",
+        "outcome",
+        "resource_type",
+        "handler_mode",
+        "strict",
+    }
+    for record in caplog.records:
+        if record.getMessage() != "Schema dispatch observation":
+            continue
+        assert set(record.__dict__) & permitted == permitted, (
+            "each observation must carry the documented structured fields"
+        )
+        assert not set(record.__dict__) - permitted - _LOG_RECORD_KEYS, (
+            "an observation must not carry undocumented fields"
+        )
 
 
 @pytest.mark.asyncio

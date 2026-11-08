@@ -492,16 +492,18 @@ class ChatResource(WebSocketResource):
   the broken schema in place. Fix the schema instead of handling the exception.
 - Schema dispatch decodes the frame to a plain JSON object first, resolves the
   member from its tag, and validates that object before decoding the original
-  frame into the Struct. Decoding straight into the schema would let `msgspec`
-  discard undeclared fields before the strict decision, so a strict handler
-  would run on a message that violated its no-extra-fields contract. Converting
-  the plain object instead would lose wire-level values such as integer mapping
-  keys, `msgspec.Raw` JSON, and the declared field types, so a `Decimal` such as
-  `1e400` that is outside the range of a binary float would not arrive exactly
-  as sent. A `strict=False` handler decodes the original frame with lax
-  coercion for the same reason, so those values survive alongside a coerced
-  field. With default-strict validation, any undeclared top-level field sends
-  the raw frame to `on_unhandled`.
+  frame into the Struct. That first decode reads JSON floats as
+  `decimal.Decimal`, so an out-of-float-range literal does not fail before the
+  member's declared type is applied. Decoding straight into the schema would let
+  `msgspec` discard undeclared fields before the strict decision, so a strict
+  handler would run on a message that violated its no-extra-fields contract.
+  Converting the plain object instead would lose wire-level values such as
+  integer mapping keys, `msgspec.Raw` JSON, and the declared field types, so a
+  `Decimal` such as `1e400` that is outside the range of a binary float would
+  not arrive exactly as sent. A `strict=False` handler decodes the original
+  frame with lax coercion for the same reason, so those values survive
+  alongside a coerced field. With default-strict validation, any undeclared
+  top-level field sends the raw frame to `on_unhandled`.
 - The allowed keys are the Struct's encoded wire names plus its tag field. A
   field declared with `rename="camel"` must arrive as `camelCase`; the Python
   attribute name is not a valid wire name.
@@ -532,6 +534,12 @@ handler validates either value against its annotation. Annotations that reject
 `None` send both to `on_unhandled`; use `T | None` to accept a missing payload.
 `T | None` and `typing.Any` accept both values as `None`. Parameter defaults
 are never applied, and untyped handlers still receive `None`.
+
+Strict validation in envelope mode compares the payload's keys the same way as
+schema mode: the allowed set is the annotated Struct's encoded wire names plus
+its tag field. A field declared with `rename="camel"` must therefore arrive as
+`camelCase` in the envelope payload, and a tagged Struct's tag field is
+accepted there even though it is not a declared field.
 
 Until [#283](https://github.com/leynos/falcon-pachinko/issues/283) is fixed,
 however, a non-null JSON object with a `msgspec.Struct | None` annotation can

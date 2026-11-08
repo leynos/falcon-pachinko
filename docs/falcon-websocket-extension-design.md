@@ -572,9 +572,14 @@ driver controls frame reception and dispatch order.
 
   Schema mode runs in four ordered steps:
 
-  1. **Generic decode.** `msgspec.json.decode` turns the frame into a plain
-     JSON object. Nothing is discarded yet, so undeclared fields are still
-     available to the strict decision.
+  1. **Generic decode.** A shared inspection decoder turns the frame into a
+     plain JSON object. Nothing is discarded yet, so undeclared fields are
+     still available to the strict decision. The decoder uses
+     `float_hook=decimal.Decimal`, because a default decode parses every JSON
+     float as a binary `float` and would reject a literal such as `1e400`
+     that is valid for a `Decimal` or `msgspec.Raw` field. A frame that does
+     not decode to an object, including one whose exponent exceeds
+     `decimal.Decimal`'s limits, goes to `on_unhandled`.
   2. **Member resolution.** The object's tag field selects the schema member.
      A missing tag, a boolean tag, a tag of the wrong kind, or an unknown tag
      sends the raw frame to `on_unhandled`.
