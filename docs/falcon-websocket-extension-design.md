@@ -1648,18 +1648,30 @@ values as JSON.
 
 The resource's dispatch method performs these steps:
 
-1. Decode the received raw message using
-   `msgspec.json.decode(message, type=self.schema)`. `msgspec`'s tagged union
-   support automatically inspects a tag field in the JSON to select the correct
-   `Struct` for decoding.
+1. Decode the received raw message with the shared inspection decoder into a
+   plain JSON object. Nothing is discarded yet, so undeclared fields are still
+   available to the strict decision.
 
-2. Inspect the `tag` of the resulting `Struct` instance.
+2. Resolve the schema member from the object's tag field using the cached
+   `SchemaDispatch` table. A missing, wrongly typed or unknown tag sends the
+   raw frame to `on_unhandled`.
 
-3. Find a handler registered with `@handles_message` for that tag. If not found,
+3. With a strict handler, compare the object's top-level keys with the member's
+   encoded wire names plus its tag field. An undeclared key sends the raw frame
+   to `on_unhandled`.
+
+4. Find a handler registered with `@handles_message` for that tag. If not found,
    attempt to find a handler by the `on_{tag}` naming convention.
 
-4. Dynamically invoke the handler, e.g.,
+5. Decode the original frame into the resolved `Struct` with
+   `msgspec.json.decode`, passing the handler's strictness so wire-level values
+   survive, then invoke the handler, e.g.,
    `await self.on_send_message(ws, msg)`.
+
+Decoding straight into `self.schema` is deliberately not used: `msgspec` would
+discard undeclared fields before the strict decision and select the member
+itself, which leaves a strict handler able to receive a message that violated
+its no-extra-fields contract.
 
 This schema-driven dispatch keeps message validation and handler selection in
 the resource, separate from the transport receive loop owned by the router's

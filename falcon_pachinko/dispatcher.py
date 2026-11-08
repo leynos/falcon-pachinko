@@ -43,6 +43,7 @@ _SCHEMA_DISPATCH_OUTCOMES = frozenset({
     "rejected_fields",
     "conversion_failed",
     "configuration_error",
+    "handler_error",
 })
 
 type _DeliveryOutcome = typ.Literal["delivered", "rejected_fields", "conversion_failed"]
@@ -335,6 +336,10 @@ async def dispatch_with_schema(
     to ``on_unhandled``. A configuration ``TypeError`` from an invalid schema
     propagates instead.
 
+    Every frame produces exactly one bounded DEBUG observation, including a
+    frame whose handler raises: the failure is recorded as ``handler_error``
+    before the exception continues to propagate.
+
     Raises
     ------
     TypeError
@@ -380,7 +385,18 @@ async def dispatch_with_schema(
     ctx = HandlerInvocationContext(
         resource, ws, raw, entry, payload, target_type=member
     )
-    outcome = await convert_and_invoke_handler(ctx)
+    try:
+        outcome = await convert_and_invoke_handler(ctx)
+    except Exception:
+        # Any application failure is a dispatch outcome. The observation is
+        # otherwise emitted only after the invocation returns, so a handler or
+        # a rejection fallback that raises would leave its frame unobserved.
+        # Record the bounded outcome and let the exception propagate: the
+        # session driver decides whether to close.
+        _log_schema_dispatch(
+            resource, "handler_error", handler_mode=handler_mode, strict=entry.strict
+        )
+        raise
     _log_schema_dispatch(
         resource,
         outcome,

@@ -225,10 +225,11 @@ counter increments one per `Schema dispatch observation`, using `operation`
 (fixed to `schema_dispatch`) and `outcome` as the only dimensions. Never add
 the resource type, a tag, a payload value or an exception string as a label.
 Aggregate by `outcome` and alert on a rising rate of `rejected_fields`,
-`conversion_failed` or `configuration_error`: the first two mean clients
-disagree with the schema, and the last means a resource is misconfigured.
-`malformed` and `unknown_tag` track hostile or outdated peers. `delivered` is
-the denominator, so alert on a rejection ratio rather than an absolute count.
+`conversion_failed`, `handler_error` or `configuration_error`: the first two
+mean clients disagree with the schema, `handler_error` means an application
+callback raised, and the last means a resource is misconfigured. `malformed` and
+`unknown_tag` track hostile or outdated peers. `delivered` is the denominator,
+so alert on a rejection ratio rather than an absolute count.
 
 Dispatch rejection timing uses `HandlerInvocationContext.monotonic_clock`,
 typed as `collections.abc.Callable[[], float]` and defaulting to
@@ -505,17 +506,18 @@ selecting a member. `schema_dispatch()` validates the schema before building
 the table and raises `TypeError` for a configuration error; the table itself is
 frozen and its member mapping is read-only.
 
-Schema dispatch emits one bounded DEBUG record per decision on the
-`falcon_pachinko.dispatcher` logger, with the message
+Schema dispatch emits exactly one bounded DEBUG record per dispatched frame on
+the `falcon_pachinko.dispatcher` logger, with the message
 `Schema dispatch observation`. Its `extra` fields are `operation`
 (`schema_dispatch`), `outcome` (one of `delivered`, `malformed`, `unknown_tag`,
-`no_handler`, `rejected_fields`, `conversion_failed`, `configuration_error`),
-`resource_type` (the resource class name), `handler_mode` (`registered` or
-`conventional`, once a handler is selected), and `strict` (the selected
-handler's strictness, once known). The record never includes the raw frame,
-payload values, field values, or peer-supplied tag text. Operators can alert on
-an unexpected share of `rejected_fields` or `no_handler` outcomes without
-collecting message content.
+`no_handler`, `rejected_fields`, `conversion_failed`, `handler_error`,
+`configuration_error`), `resource_type` (the resource class name),
+`handler_mode` (`registered` or `conventional`, once a handler is selected), and
+`strict` (the selected handler's strictness, once known). The record never
+includes the raw frame, payload values, field values, or peer-supplied tag text.
+`handler_error` means the handler, or the `on_unhandled` fallback, raised; the
+exception still propagates. Operators can alert on an unexpected share of
+`rejected_fields` or `no_handler` outcomes without collecting message content.
 
 ## Safe diagnostics
 

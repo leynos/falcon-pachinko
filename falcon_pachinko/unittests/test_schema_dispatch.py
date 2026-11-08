@@ -101,6 +101,18 @@ class SchemaResource(WebSocketResource):
         self.events.append(("raw", message))
 
 
+class RaisingResource(WebSocketResource):
+    """Resource whose handler fails after the frame is delivered."""
+
+    schema = Join
+
+    @handles_message("join")
+    async def handle_join(self, ws: WebSocketLike, payload: Join) -> None:
+        """Fail so the dispatch observation can be checked."""
+        msg = "handler exploded"
+        raise RuntimeError(msg)
+
+
 class IntegerTagResource(WebSocketResource):
     """Resource with a conventional handler for an integer tag."""
 
@@ -405,6 +417,34 @@ def _schema_observations(
     ]
 
 
+def _assert_bounded_observations(
+    caplog: pytest.LogCaptureFixture, *forbidden: str
+) -> None:
+    """Assert observations carry only permitted fields and no frame values."""
+    # ``caplog.text`` renders only the formatted message, so a value smuggled
+    # through ``extra`` would pass that check. Inspect every record's full
+    # ``__dict__`` instead, which is where ``extra`` fields land.
+    rendered = " ".join(repr(record.__dict__) for record in caplog.records)
+    for value in forbidden:
+        assert value not in rendered, f"{value!r} must not be logged"
+    permitted = {
+        "operation",
+        "outcome",
+        "resource_type",
+        "handler_mode",
+        "strict",
+    }
+    for record in caplog.records:
+        if record.getMessage() != "Schema dispatch observation":
+            continue
+        assert set(record.__dict__) & permitted == permitted, (
+            "each observation must carry the documented structured fields"
+        )
+        assert not set(record.__dict__) - permitted - _LOG_RECORD_KEYS, (
+            "an observation must not carry undocumented fields"
+        )
+
+
 @pytest.mark.asyncio
 async def test_schema_dispatch_observations_cover_each_decision(
     caplog: pytest.LogCaptureFixture,
@@ -432,29 +472,7 @@ async def test_schema_dispatch_observations_cover_each_decision(
     assert _schema_observations(caplog) == expected, (
         "each schema decision must produce exactly one bounded observation"
     )
-    # ``caplog.text`` renders only the formatted message, so a value smuggled
-    # through ``extra`` would pass that check. Inspect every record's full
-    # ``__dict__`` instead, which is where ``extra`` fields land.
-    rendered = " ".join(repr(record.__dict__) for record in caplog.records)
-    assert "oops" not in rendered, "an unknown tag value must not be logged"
-    assert "not json" not in rendered, "a malformed frame must not be logged"
-    assert canary not in rendered, "a payload value must not be logged"
-    permitted = {
-        "operation",
-        "outcome",
-        "resource_type",
-        "handler_mode",
-        "strict",
-    }
-    for record in caplog.records:
-        if record.getMessage() != "Schema dispatch observation":
-            continue
-        assert set(record.__dict__) & permitted == permitted, (
-            "each observation must carry the documented structured fields"
-        )
-        assert not set(record.__dict__) - permitted - _LOG_RECORD_KEYS, (
-            "an observation must not carry undocumented fields"
-        )
+    _assert_bounded_observations(caplog, "oops", "not json", canary)
 
 
 @pytest.mark.asyncio
@@ -465,30 +483,55 @@ async def test_schema_dispatch_observes_missing_handler_and_config_error(
     caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
     reserved = ReservedTagResource()
     reserved.bind_default_hook_manager()
-    await reserved.dispatch(DummyWS(), msjson.encode(ReservedTag(reason="peer")))
+    reason = "CANARY-reserved-reason"
+    await reserved.dispatch(DummyWS(), msjson.encode(ReservedTag(reason=reason)))
     assert _schema_observations(caplog) == [("no_handler", "conventional", None)], (
         "a resolved member without a registered handler must report a "
         "conventional lookup"
     )
+    _assert_bounded_observations(caplog, reason)
 
     caplog.clear()
     broken = UntaggedFallbackResource()
     broken.bind_default_hook_manager()
     broken.schema = Untagged
+    untagged_value = "CANARY-untagged-value"
     with pytest.raises(TypeError, match="schema Struct types must define a tag"):
-        await broken.dispatch(DummyWS(), msjson.encode(Untagged(value="x")))
+        await broken.dispatch(DummyWS(), msjson.encode(Untagged(value=untagged_value)))
     assert _schema_observations(caplog) == [("configuration_error", None, None)], (
         "a configuration error must be observed even though it propagates"
     )
+    _assert_bounded_observations(caplog, untagged_value)
 
     caplog.clear()
     caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
     integer = IntegerTagResource()
     integer.bind_default_hook_manager()
-    await integer.dispatch(DummyWS(), msjson.encode(IntegerMessage(value="one")))
+    integer_value = "CANARY-conventional-value"
+    await integer.dispatch(
+        DummyWS(), msjson.encode(IntegerMessage(value=integer_value))
+    )
     assert _schema_observations(caplog) == [("delivered", "conventional", True)], (
         "a conventional integer-tag handler must be reported as conventional"
     )
+    _assert_bounded_observations(caplog, integer_value)
+
+
+@pytest.mark.asyncio
+async def test_schema_dispatch_observes_a_raising_handler(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A handler that raises still leaves exactly one bounded observation."""
+    caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
+    r = RaisingResource()
+    r.bind_default_hook_manager()
+    room = "CANARY-raising-room"
+    with pytest.raises(RuntimeError, match="handler exploded"):
+        await r.dispatch(DummyWS(), msjson.encode(Join(room=room)))
+    assert _schema_observations(caplog) == [("handler_error", "registered", True)], (
+        "a raising handler must be observed before the exception propagates"
+    )
+    _assert_bounded_observations(caplog, room)
 
 
 def test_invalid_schema_type_raises() -> None:
