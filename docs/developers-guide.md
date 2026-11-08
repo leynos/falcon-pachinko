@@ -235,8 +235,9 @@ that logger is sampled or filtered.
 Aggregate by `outcome` and alert on a rising rate of `rejected_fields`,
 `conversion_failed` or `configuration_error`: the first two mean clients
 disagree with the schema, and the last means a resource is misconfigured.
-`malformed` and `unknown_tag` track hostile or outdated peers. `delivered` is
-the denominator, so alert on a rejection ratio rather than an absolute count. A
+`malformed` and `unknown_tag` track hostile or outdated peers.
+`rejection_ratio()` divides every non-`delivered` outcome by all counted
+outcomes, so alert on that ratio rather than an absolute rejection count. A
 handler that raises is not a dispatch outcome: the frame was delivered, and the
 exception belongs to the session driver.
 

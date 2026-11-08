@@ -196,4 +196,8 @@ async def test_schema_dispatch_keeps_its_decision_when_delivery_fails(
     assert _schema_observations(caplog) == [(case.outcome, "registered", True)], (
         "the observation records the payload decision, not the delivery failure"
     )
-    _assert_bounded_observations(caplog, case.room, raw.decode())
+    # Check the tag on its own as well as in the frame: a record that echoed
+    # only the tag would survive a complete-frame check.
+    tag = Join.__struct_config__.tag
+    assert isinstance(tag, str), "these tests rely on a string tag"
+    _assert_bounded_observations(caplog, case.room, tag, raw.decode())

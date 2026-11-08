@@ -486,6 +486,15 @@ async def test_schema_dispatch_observes_missing_handler_and_config_error(
         "conventional lookup"
     )
     _assert_bounded_observations(caplog, reason, reserved_raw.decode())
+    # Check the tag on its own as well as in the frame: a record that echoed
+    # only the tag would survive a complete-frame check. Compare values rather
+    # than substrings, because the refusal record legitimately names the
+    # conventional ``on_disconnect`` handler it rejected.
+    tag = ReservedTag.__struct_config__.tag
+    for record in caplog.records:
+        if record.getMessage() != "Schema dispatch observation":
+            continue
+        assert tag not in record.__dict__.values(), "the tag must not be logged"
 
     caplog.clear()
     broken = UntaggedFallbackResource()
