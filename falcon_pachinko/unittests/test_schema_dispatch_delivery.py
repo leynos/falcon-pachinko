@@ -5,8 +5,12 @@ these tests drive the paths where delivery never completes: a handler that
 raises, a handler that is cancelled, and a rejection fallback that raises.
 """
 
+from __future__ import annotations
+
 import asyncio
+import dataclasses as dc
 import logging
+import typing as typ
 
 import msgspec as ms
 import msgspec.json as msjson
@@ -14,6 +18,9 @@ import pytest
 
 from falcon_pachinko import WebSocketLike, WebSocketResource, handles_message
 from falcon_pachinko.unittests.helpers import DummyWS
+
+if typ.TYPE_CHECKING:  # pragma: no cover - type hints only
+    import collections.abc as cabc
 
 # The attributes ``logging`` adds to every record, plus the ones a formatter
 # adds later. Anything outside this set arrived through ``extra`` and is
@@ -110,57 +117,83 @@ def _assert_bounded_observations(
         )
 
 
+def _plain_frame(room: str) -> bytes:
+    """Encode a frame that decodes as a valid ``Join``."""
+    return msjson.encode(Join(room=room))
+
+
+def _extra_field_frame(room: str) -> bytes:
+    """Encode a ``Join`` frame with an undeclared field, which strict rejects."""
+    return msjson.encode({"type": "join", "room": room, "extra": 1})
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _DeliveryCase:
+    """One scenario in which delivery fails after the payload decision."""
+
+    resource_type: type[WebSocketResource]
+    error: type[BaseException]
+    match: str | None
+    outcome: str
+    frame_for: cabc.Callable[[str], bytes]
+    room: str
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(
+            _DeliveryCase(
+                RaisingResource,
+                RuntimeError,
+                "handler exploded",
+                "delivered",
+                _plain_frame,
+                "CANARY-raising-room",
+            ),
+            id="raising-handler",
+        ),
+        pytest.param(
+            _DeliveryCase(
+                CancellingResource,
+                asyncio.CancelledError,
+                None,
+                "delivered",
+                _plain_frame,
+                "CANARY-cancelled-room",
+            ),
+            id="cancelled-handler",
+        ),
+        pytest.param(
+            _DeliveryCase(
+                RaisingFallbackResource,
+                RuntimeError,
+                "fallback exploded",
+                "rejected_fields",
+                _extra_field_frame,
+                "CANARY-fallback-room",
+            ),
+            id="raising-fallback",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_schema_dispatch_observes_a_raising_handler(
-    caplog: pytest.LogCaptureFixture,
+async def test_schema_dispatch_keeps_its_decision_when_delivery_fails(
+    caplog: pytest.LogCaptureFixture, case: _DeliveryCase
 ) -> None:
-    """A handler that raises leaves the decision it was delivered under."""
+    """Delivery failures keep the decision the frame was observed under.
+
+    ``CancelledError`` is a ``BaseException``, so an observation emitted only
+    after delivery would be skipped entirely for a cancelled handler. A raising
+    fallback must also keep reporting its rejection, not a handler failure.
+    """
     caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
-    r = RaisingResource()
-    r.bind_default_hook_manager()
-    room = "CANARY-raising-room"
-    raw = msjson.encode(Join(room=room))
-    with pytest.raises(RuntimeError, match="handler exploded"):
-        await r.dispatch(DummyWS(), raw)
-    assert _schema_observations(caplog) == [("delivered", "registered", True)], (
+    resource = case.resource_type()
+    resource.bind_default_hook_manager()
+    raw = case.frame_for(case.room)
+    with pytest.raises(case.error, match=case.match):
+        await resource.dispatch(DummyWS(), raw)
+    assert _schema_observations(caplog) == [(case.outcome, "registered", True)], (
         "the observation records the payload decision, not the delivery failure"
     )
-    _assert_bounded_observations(caplog, room, raw.decode())
-
-
-@pytest.mark.asyncio
-async def test_schema_dispatch_observes_a_cancelled_handler(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Cancellation during delivery still leaves the decision observed."""
-    caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
-    r = CancellingResource()
-    r.bind_default_hook_manager()
-    room = "CANARY-cancelled-room"
-    raw = msjson.encode(Join(room=room))
-    # ``CancelledError`` is a ``BaseException``, so an observation emitted only
-    # after delivery would be skipped entirely for a cancelled handler.
-    with pytest.raises(asyncio.CancelledError):
-        await r.dispatch(DummyWS(), raw)
-    assert _schema_observations(caplog) == [("delivered", "registered", True)], (
-        "a cancelled handler must still leave its decision observed"
-    )
-    _assert_bounded_observations(caplog, room, raw.decode())
-
-
-@pytest.mark.asyncio
-async def test_schema_dispatch_observes_a_raising_fallback(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A rejection whose fallback raises keeps the rejection outcome."""
-    caplog.set_level(logging.DEBUG, logger="falcon_pachinko.dispatcher")
-    r = RaisingFallbackResource()
-    r.bind_default_hook_manager()
-    room = "CANARY-fallback-room"
-    raw = msjson.encode({"type": "join", "room": room, "extra": 1})
-    with pytest.raises(RuntimeError, match="fallback exploded"):
-        await r.dispatch(DummyWS(), raw)
-    assert _schema_observations(caplog) == [("rejected_fields", "registered", True)], (
-        "a raising fallback must not be relabelled as a handler failure"
-    )
-    _assert_bounded_observations(caplog, room, raw.decode())
+    _assert_bounded_observations(caplog, case.room, raw.decode())
