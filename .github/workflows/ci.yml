@@ -54,7 +54,7 @@ jobs:
         # `--git`. The action
         # installs a prebuilt release through a hardened cargo-binstall rather
         # than building from source.
-        uses: leynos/shared-actions/.github/actions/install-mdtablefix@6ca3d5217016143c5857d23a63eb649ea5fcd538
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@0eabb6bc07148981de5da395e30cd78d83f5c7c2
         with:
           version: "0.6.1"
 
@@ -155,7 +155,7 @@ jobs:
       # the work and the CodeScene upload for the same commit.
       - name: Generate coverage
         if: github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/generate-coverage@f84a7def5646a6fc7ba77c1f486906f66a0fed96
+        uses: leynos/shared-actions/.github/actions/generate-coverage@0eabb6bc07148981de5da395e30cd78d83f5c7c2
         with:
           output-path: coverage.xml
           format: cobertura
