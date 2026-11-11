@@ -37,6 +37,31 @@ while logging the traceback. Failures the worker handles this way no longer
 surface at `stop()`; cancellation still propagates, so `stop()` returns cleanly
 on lifespan shutdown.
 
+The worker's policy is explicit and keyword-only, forwarded by
+`WorkerController.start()`:
+
+- `send_timeout: float = 5.0` bounds each recipient send.
+  `broadcast_to_room` applies it per send, so one unresponsive recipient cannot
+  stall delivery to the rest.
+- `restart_delay: float = 1.0` is the pause between an unexpected failure and
+  the restarted loop. It is a fixed delay, not a backoff.
+- `sleep: Callable[[float], Awaitable[None]] = asyncio.sleep` supplies that
+  delay; tests replace it to avoid wall-clock waits.
+
+`announcement_worker` is a synchronous factory: it validates the policy and
+only then returns the consuming coroutine. `WorkerController.start()` therefore
+raises `ValueError` for a non-positive or `NaN` `send_timeout`, or a negative
+`restart_delay`, before any task exists.
+
+Expected recipient failures — `falcon.WebSocketDisconnected` and send timeouts
+— are absorbed by `_deliver_announcement` and logged at DEBUG with a count.
+Room membership is resolved with `connections()` before broadcasting, so a
+backend failure while listing recipients propagates to the supervising loop
+instead of being counted as a recipient failure. Unexpected failures are logged
+with `logger.exception` and restart the loop. An announcement dequeued at the
+moment of an unexpected failure is dropped, not replayed: the reference
+application treats delivery as best effort and does not buffer for retry.
+
 ## WebSocket session lifecycle
 
 `WebSocketRouter.on_websocket()` negotiates the connection and runs the accepted

@@ -874,6 +874,13 @@ The `@worker` decorator is optional and marks intent only.
 `WorkerController.start()` runs only the workers that the application passes to
 it. An undecorated async function works in the same way.
 
+`start()` forwards its keyword arguments to each worker, so worker-specific
+options are configured at the call site during application startup. Prefer
+keyword-only parameters, and validate policy values in a synchronous factory so
+`start()` rejects an invalid configuration before it creates the worker's task.
+The reference example's `announcement_worker` in section 11 demonstrates this
+with its `send_timeout`, `restart_delay`, and `sleep` options.
+
 ## 10. Testing Toolkit
 
 - **WebSocketTestClient** – Real websocket client powered by `websockets`,
@@ -1005,6 +1012,22 @@ when such a failure occurred is dropped rather than replayed. Cancellation
 propagates, so lifespan shutdown through `WorkerController.stop()` stops the
 worker cleanly. Applications that need stronger delivery guarantees should
 adapt this policy to their own requirements.
+
+The worker takes its policy as keyword-only options, passed through
+`WorkerController.start()`:
+
+| Option          | Default         | Meaning                                                     |
+| --------------- | --------------- | ----------------------------------------------------------- |
+| `send_timeout`  | `5.0` seconds   | Upper bound on every recipient send.                        |
+| `restart_delay` | `1.0` seconds   | Pause before restarting after an unexpected failure.        |
+| `sleep`         | `asyncio.sleep` | Awaitable used for the restart delay; injectable for tests. |
+
+`send_timeout` must be positive; `NaN` and zero are rejected because they would
+make every send time out without ever being reported. `restart_delay` must not
+be negative; zero restarts immediately. An invalid value raises `ValueError`
+from `WorkerController.start()` before the worker task is created, so a
+misconfigured policy fails startup instead of silently disabling delivery or
+supervision.
 
 The live pytest-bdd feature verifies the full journey, including
 `workspace.loaded`, `project.loaded`, `session.open`, `message.received`,
