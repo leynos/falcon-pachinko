@@ -117,11 +117,13 @@ values into shell scripts through quoted environment variables; shell steps use
 `set -euo pipefail` and do not interpolate `${{ ... }}` into `run:` text. Pin
 every third-party action in the release workflow and build composite action to
 a reviewed full commit SHA. Do not use `softprops/action-gh-release`, silent
-`find`/`xargs` uploads, stored PyPI tokens, or release telemetry. The separate
-credential constraints and hash-bound backend requirements remain in
-[issue #230](https://github.com/leynos/falcon-pachinko/issues/230), pending the
-`uv.lock` decision in issue #209. Immutable action pin coverage for the other
-workflows remains in issue #233.
+`find`/`xargs` uploads, stored PyPI tokens, or release telemetry. The isolated
+build's backend requirements are exact pins, hash-bound through
+`build-constraints.txt` and enforced by `make release-wheel` inside the
+read-only build job, as
+[issue #230](https://github.com/leynos/falcon-pachinko/issues/230) records. The
+runtime dependency lock-file decision remains in issue #209. Immutable action
+pin coverage for the other workflows remains in issue #233.
 
 Use the GitHub `pypi` environment, restricted to `v*.*.*` tags, and bind the
 PyPI Trusted Publisher to owner `leynos`, repository `falcon-pachinko`, workflow
@@ -154,8 +156,10 @@ repository and must be checked before the first tag. The chosen Ubicloud
 publisher runner differs from the GitHub-hosted runner shown in PyPA guidance,
 so its OIDC compatibility remains an operational assumption to verify.
 
-The exact build-backend constraints and hash binding are deliberately deferred
-to issue #230, which depends on the repository's lock-file decision in
+The isolated build's exact backend pins, generated hash-bound constraints, and
+read-only build job were added under
+[issue #230](https://github.com/leynos/falcon-pachinko/issues/230), separately
+from the runtime dependency lock-file decision in
 [issue #209](https://github.com/leynos/falcon-pachinko/issues/209). This ADR
 records the artefact handoff and privilege separation that let publication
 consume attested bytes without resolving build requirements again.
