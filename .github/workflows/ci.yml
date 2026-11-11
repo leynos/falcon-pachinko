@@ -148,6 +148,15 @@ jobs:
       - name: Check release build security contracts
         run: make test-release-security
 
+      # The fast contracts only read the flags. This drives the real isolated
+      # build with the committed constraints as a control, then with every
+      # permitted hash for an input replaced, and requires the second to fail.
+      # It is opt-in because `--no-cache` re-downloads the backend.
+      - name: Prove the build rejects a tampered input hash
+        env:
+          RELEASE_BUILD_HASH_TEST: "1"
+        run: uv run --locked pytest -v tests/test_release_build_hash_enforcement.py
+
       # Exercise the same two-build comparison the release build uses. A
       # non-deterministic wheel fails here before it can reach a tag.
       - name: Build the release wheel twice and compare
