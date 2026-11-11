@@ -37,6 +37,7 @@ class _RecordingSleep:
     """Stand-in for ``asyncio.sleep`` that records the requested delays."""
 
     def __init__(self) -> None:
+        """Initialise the recorder with no delays observed yet."""
         self.delays: list[float] = []
 
     # pylint: disable-next=trivial-attribute-wrapper  # recording the delay is this stub's entire purpose

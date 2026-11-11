@@ -229,6 +229,7 @@ def announcement_scenario(
     async def _register(
         conn_id: str, websocket: WebSocketLike, workspace_id: str
     ) -> None:
+        """Join ``conn_id`` to the room announcements for ``workspace_id`` use."""
         await conn_mgr.add_connection(conn_id, websocket)
         await conn_mgr.join_room(conn_id, _workspace_room(workspace_id))
 
@@ -277,6 +278,7 @@ def publish_announcements(announcement_scenario: AnnouncementScenario) -> None:
     """Publish to both workspaces and wait for the healthy recipients."""
 
     async def _publish() -> None:
+        """Publish events and wait for the healthy recipients to receive them."""
         await announcement_scenario.feed.publish("atlas", {"seq": 1})
         await announcement_scenario.feed.publish("atlas", {"seq": 2})
         await announcement_scenario.feed.publish("zephyr", {"seq": 3})

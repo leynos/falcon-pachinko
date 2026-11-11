@@ -20,14 +20,6 @@ if typ.TYPE_CHECKING:
     from falcon_pachinko.protocols import WebSocketLike
 
 
-from falcon_pachinko._disconnect import _PeerDisconnectedError
-
-"""Shared test doubles used by the unit and behaviour suites."""
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-    from falcon_pachinko.protocols import WebSocketLike
-
-
 class RecordingWebSocket:
     """WebSocket stub that records lifecycle changes and sent payloads."""
 
@@ -96,6 +88,7 @@ class DisconnectingWebSocket(RecordingWebSocket):
     """WebSocket stub whose recipient has already dropped the connection."""
 
     def __init__(self, close_code: int = 1001) -> None:
+        """Initialise the stub with the close code a dropped peer reports."""
         super().__init__()
         self.close_code = close_code
 
@@ -109,6 +102,7 @@ class SignallingWebSocket(RecordingWebSocket):
     """WebSocket stub that signals after receiving an expected message count."""
 
     def __init__(self, *, expected: int, received: asyncio.Event) -> None:
+        """Initialise the stub with the message count that signals ``received``."""
         super().__init__()
         self._expected = expected
         self._received = received
@@ -125,6 +119,7 @@ class FailingOnceWebSocket(RecordingWebSocket):
     """WebSocket stub that fails its first send, then records later ones."""
 
     def __init__(self) -> None:
+        """Initialise the stub with no send attempts recorded yet."""
         super().__init__()
         self.sends_attempted = 0
 
@@ -142,6 +137,7 @@ class BlockingWebSocket(RecordingWebSocket):
     """WebSocket stub that blocks inside ``send_media`` until cancelled."""
 
     def __init__(self, *, started: asyncio.Event) -> None:
+        """Initialise the stub with the event that signals an in-flight send."""
         super().__init__()
         self._started = started
 
