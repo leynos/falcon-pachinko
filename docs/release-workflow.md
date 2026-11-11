@@ -19,25 +19,28 @@ See the Developer Guide's
 
 A push of a tag matching `v*.*.*` starts these jobs:
 
-| Job               | Work                                                                                                                                              |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `check-version`   | Compare the tag, without its leading `v`, to the exact project version in `pyproject.toml`; classify pre-releases.                                |
-| `build-wheels`    | Build the sdist and wheel into the `wheels-pure` artefact.                                                                                        |
-| `attest`          | Require one sdist and at least one wheel, attest every distribution, and hand off the files with the tag-named Sigstore bundle as `release-dist`. |
-| `draft-release`   | Create or reuse the GitHub Release and snapshot any existing assets for reconciliation.                                                           |
-| `publish-pypi`    | Publish only missing filenames through PyPI Trusted Publishing, then wait for PyPI's Simple index to show every expected file.                    |
-| `publish-release` | Fill missing draft assets using PyPI's canonical bytes, compare destination digests, then publish the GitHub Release.                             |
+| Job               | Work                                                                                                                                                         |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `check-version`   | Compare the tag, without its leading `v`, to the exact project version in `pyproject.toml`; classify pre-releases.                                           |
+| `build-wheels`    | Build the sdist and wheel into the `wheels-pure` artefact.                                                                                                   |
+| `attest`          | Require one sdist and at least one wheel, attest every distribution, and hand off the files with the tag-named Sigstore bundle as `release-dist`.            |
+| `draft-release`   | Create or reuse the GitHub Release and snapshot any existing assets for reconciliation.                                                                      |
+| `publish-pypi`    | Publish only missing filenames through PyPI Trusted Publishing, then wait for PyPI's Simple index to show every expected file.                               |
+| `publish-release` | Fill missing draft assets using PyPI's canonical bytes, verify their provenance before upload, compare destination digests, then publish the GitHub Release. |
 
 An empty or malformed distribution artefact fails before publication. The
 GitHub Release remains a draft until PyPI contains the distributions and both
 destinations agree on their SHA-256 digests. The Sigstore bundle is attached
-only when every canonical distribution came from the current attested build.
-Every publication attempt downloads the release's original bundle and canonical
-files. It verifies their SHA-256 digests against PyPI, then uses
-`gh attestation verify` to verify each file against the bundle, repository,
-release workflow identity, tag and source commit. A completed release therefore
-passes a rerun even if rebuilt bytes differ. Missing or invalid provenance
-fails verification and keeps a draft unpublished.
+only when every canonical distribution came from the current attested build. A
+staged file whose bytes differ from the current build must verify against the
+release's original bundle before it is uploaded: the run downloads that bundle
+and uses `gh attestation verify` with the repository, release workflow
+identity, tag and source commit. Bytes identical to the current build are
+already covered by the build job's measurement. After the upload, both
+destinations are re-checked and the release's files are verified the same way.
+A completed release therefore passes a rerun even if rebuilt bytes differ.
+Missing or invalid provenance fails verification before any asset is attached
+and keeps a draft unpublished.
 
 To recover an interrupted publication, identify the original workflow run that
 built the bytes PyPI holds and rerun only its failed jobs:
@@ -62,8 +65,10 @@ after its original bundle verifies the downloaded bytes and binds their exact
 filename and digest. All carried files are validated before staging changes;
 missing or invalid provenance stops publication. Identical bytes from the
 current attested build need no carry. A name missing from GitHub is fetched
-from PyPI. A digest mismatch fails the run and leaves the release in draft so
-the conflict can be investigated without publishing divergent bytes.
+from PyPI, and a fetched file is uploaded only when its bytes equal the current
+build or its original attestation verifies. A digest mismatch fails the run and
+leaves the release in draft so the conflict can be investigated without
+publishing divergent bytes.
 
 The jobs use per-job permissions. Version checking and distribution building
 receive `contents: read`; attestation also receives `id-token: write` and

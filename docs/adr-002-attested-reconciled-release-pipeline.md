@@ -66,10 +66,10 @@ filename makes retries idempotent. Attach that bundle to GitHub only when all
 canonical distribution bytes match the current attested build. An existing
 published file with different bytes requires the earlier build's bundle. Verify
 that bundle cryptographically against the downloaded canonical files, the
-repository's release workflow identity, tag and source commit. If it is absent
-or invalid, verification fails and the draft remains unpublished. Recover by
-rerunning the original run's failed publication jobs while its `release-dist`
-artefact remains available.
+repository's release workflow identity, tag and source commit, and do so before
+any staged file is uploaded. If it is absent or invalid, verification fails and
+the draft remains unpublished. Recover by rerunning the original run's failed
+publication jobs while its `release-dist` artefact remains available.
 
 ### Destinations and retry behaviour
 
@@ -89,11 +89,13 @@ copied into PyPI only after verifying its original bundle and matching the
 exact named SHA-256 subject. Validate all differing carried bytes before
 mutating PyPI staging. Identical bytes already attested by the current build
 remain in place. A GitHub asset missing for a PyPI name is fetched from PyPI.
-Validate fetched hashes against the Simple index and compare final SHA-256
-digests at both destinations. Never overwrite or clobber an existing GitHub
-asset. Fail on an empty artefact set. Leave a draft in place on any mismatch;
-remove draft status only after successful convergence, setting the GitHub
-pre-release flag from the checked project version.
+Validate fetched hashes against the Simple index, then verify each fetched file
+that differs from the current build against the release's original bundle
+before uploading it; only current-build bytes need no original attestation.
+Compare final SHA-256 digests at both destinations. Never overwrite or clobber
+an existing GitHub asset. Fail on an empty artefact set. Leave a draft in place
+on any mismatch; remove draft status only after successful convergence, setting
+the GitHub pre-release flag from the checked project version.
 
 Queue repeated runs for the same tag by setting `cancel-in-progress: false`.
 Reuse existing releases, skip already published PyPI filenames, and upload only

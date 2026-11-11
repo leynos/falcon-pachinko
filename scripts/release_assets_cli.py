@@ -13,7 +13,8 @@ or falcon-pachinko) at release time, and every network call stays in the workflo
 ``curl`` and ``gh`` steps. That is the documented exception to the scripting
 standards' Cyclopts and Python 3.13 defaults. Each subcommand is one step of
 ``release.yml``: ``carryover`` (``draft-release``), ``stage-pypi``
-(``publish-pypi``), then ``stage-github``, ``check-fetched``, and ``verify``
+(``publish-pypi``), then ``stage-github``, ``check-fetched``,
+``needs-provenance``, ``require-provenance``, and ``verify``
 (``publish-release``), plus ``index-expected``, which the post-upload index
 re-read polls until the listing catches up with that upload. The reconciliation
 logic itself lives in ``scripts/release_assets.py``; this module only wires it
@@ -36,8 +37,10 @@ from scripts.release_assets import (
     check_fetched,
     local_names,
     missing_from_index,
+    require_staged_provenance,
     stage_github,
     stage_pypi,
+    staged_needing_provenance,
     verify,
 )
 
@@ -146,6 +149,17 @@ def _check_fetched(state: State, args: argparse.Namespace) -> None:
     check_fetched(state, _path(args, "output"))
 
 
+def _needs_provenance(state: State, args: argparse.Namespace) -> None:
+    """Print the staged filenames whose bytes need an original attestation."""
+    for name in staged_needing_provenance(state, _path(args, "output")):
+        print(name)
+
+
+def _require_provenance(state: State, args: argparse.Namespace) -> None:
+    """Fail unless every foreign staged file has a matching verified record."""
+    require_staged_provenance(state, _path(args, "output"), _path(args, "provenance"))
+
+
 def _verify(state: State, args: argparse.Namespace) -> None:
     """Fail on any artefact or bundle the two destinations disagree on."""
     problems = verify(state, _path(args, "bundles"), args.github_files)
@@ -160,6 +174,8 @@ _COMMANDS: dict[str, cabc.Callable[[State, argparse.Namespace], None]] = {
     "stage-pypi": _stage_pypi,
     "stage-github": _stage_github,
     "check-fetched": _check_fetched,
+    "needs-provenance": _needs_provenance,
+    "require-provenance": _require_provenance,
     "index-expected": _index_expected,
     "verify": _verify,
 }
@@ -170,6 +186,8 @@ _REQUIRES: dict[str, tuple[str, ...]] = {
     "stage-pypi": ("index", "assets", "github_files", "provenance"),
     "stage-github": ("index", "assets", "bundles", "output"),
     "check-fetched": ("index", "assets", "output"),
+    "needs-provenance": ("output",),
+    "require-provenance": ("output", "provenance"),
     "index-expected": ("index",),
     "verify": ("index", "assets", "bundles"),
 }

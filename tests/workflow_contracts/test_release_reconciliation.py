@@ -47,12 +47,14 @@ _PYPI_ONLY, _GITHUB_ONLY, _NEITHER, _BOTH = (
 )
 _ARTEFACTS = (_PYPI_ONLY, _GITHUB_ONLY, _NEITHER, _BOTH)
 _DRAFT_STEP = "Note whether the release is a draft"
+_PROVENANCE_STEP = "Verify the staged assets' provenance"
 _PUBLISH_STEPS = (
     _DRAFT_STEP,
     "Fetch the PyPI index",
     "List the release assets",
     "Stage the assets the release lacks",
     "Check the fetched PyPI bytes",
+    _PROVENANCE_STEP,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -296,7 +298,7 @@ def test_the_bundle_is_withheld_when_the_published_bytes_are_not_this_build(
     shutil.copyfile(fake.github / _GITHUB_ONLY, fake.pypi / _GITHUB_ONLY)
     _draft_and_publish_pypi(fake)
     cwd, env = _job_directory(fake, "publish-release")
-    for name in _PUBLISH_STEPS:
+    for name in _PUBLISH_STEPS[:5]:
         _step("publish-release", name, cwd, env)
 
     assert list((cwd / "github-upload").iterdir()), "artefacts are staged"
@@ -304,30 +306,113 @@ def test_the_bundle_is_withheld_when_the_published_bytes_are_not_this_build(
         "the run's bundle must not ride along with bytes it did not build"
     )
 
-    _step("publish-release", "Upload the assets the release lacks", cwd, env)
+    # The staged PyPI bytes differ from this run's build, so they need the
+    # original attestation, which this release does not hold.
+    refused = _run_step("publish-release", _PROVENANCE_STEP, cwd, env)
+    assert refused.returncode != 0, "unattested foreign bytes must be refused"
     assert _BUNDLE not in _holdings(fake.github), "Release contract failed"
+    assert not any(call[:2] == ["release", "upload"] for call in fake.calls("gh")), (
+        "no asset may reach the release before its provenance is verified"
+    )
 
 
 def test_interrupted_release_with_rebuilt_bytes_remains_draft(
     fake: FakeRelease,
 ) -> None:
-    """Do not publish when the original attestation is unavailable."""
+    """Do not upload when the original attestation is unavailable."""
     (fake.github / _BUNDLE).unlink()
     for name in _ARTEFACTS:
         (fake.pypi / name).write_bytes(f"original {name}".encode())
         (fake.github / name).unlink(missing_ok=True)
     _draft_and_publish_pypi(fake)
-    cwd = _publish_release(fake, verify=False)
-    completed = run_bash(
-        step_script("publish-release", "Check both destinations hold the same bytes"),
-        cwd,
-        fake.env(GITHUB_REF_NAME=_TAG),
-    )
-    assert completed.returncode != 0, "missing provenance must fail verification"
+    cwd, env = _job_directory(fake, "publish-release")
+    for name in _PUBLISH_STEPS[:5]:
+        _step("publish-release", name, cwd, env)
+
+    completed = _run_step("publish-release", _PROVENANCE_STEP, cwd, env)
+
+    assert completed.returncode != 0, "missing provenance must refuse the upload"
     assert "provenance" in completed.stderr.lower(), "explain the recovery failure"
-    assert _BUNDLE not in _holdings(fake.github), "do not attach the rebuilt bundle"
+    assert not any(call[:2] == ["release", "upload"] for call in fake.calls("gh")), (
+        "the release must receive no unattested asset"
+    )
     assert not any(call[:2] == ["release", "edit"] for call in fake.calls("gh")), (
         "the release must remain a draft"
+    )
+
+
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [
+        ("FAKE_ATTESTATION_EXIT", "1"),
+        ("FAKE_ATTESTATION_RECORD_DIGEST", "f" * 64),
+        ("FAKE_ATTESTATION_RECORD_NAME", "other.whl"),
+        ("FAKE_ATTESTATION_RECORD_RAW", "not JSON"),
+    ],
+    ids=["rejected-signature", "wrong-digest", "wrong-name", "malformed-record"],
+)
+def test_a_mismatched_attestation_blocks_the_upload(
+    fake: FakeRelease, variable: str, value: str
+) -> None:
+    """A signature, subject, or record that disagrees stops the upload."""
+    _draft_and_publish_pypi(fake)
+    cwd, env = _job_directory(fake, "publish-release")
+    for name in _PUBLISH_STEPS[:5]:
+        _step("publish-release", name, cwd, env)
+
+    completed = _run_step(
+        "publish-release", _PROVENANCE_STEP, cwd, {**env, variable: value}
+    )
+
+    assert completed.returncode != 0, f"{variable}={value} must refuse the upload"
+    assert not any(call[:2] == ["release", "upload"] for call in fake.calls("gh")), (
+        "a failing provenance check must run before the upload"
+    )
+    assert _PYPI_ONLY not in _holdings(fake.github), "do not upload foreign bytes"
+
+
+def test_staged_pypi_bytes_are_verified_before_upload(fake: FakeRelease) -> None:
+    """The original attestation is checked before the upload command runs."""
+    _draft_and_publish_pypi(fake)
+    cwd, env = _job_directory(fake, "publish-release")
+    for name in _PUBLISH_STEPS:
+        _step("publish-release", name, cwd, env)
+    _step("publish-release", "Upload the assets the release lacks", cwd, env)
+
+    calls = fake.calls("gh")
+    verified = [
+        index
+        for index, call in enumerate(calls)
+        if call[:2] == ["attestation", "verify"]
+        and call[2] == f"github-upload/{_PYPI_ONLY}"
+    ]
+    uploaded = [
+        index for index, call in enumerate(calls) if call[:2] == ["release", "upload"]
+    ]
+    assert len(verified) == 1, "verify the one foreign staged file exactly once"
+    assert uploaded, "the verified asset must be uploaded"
+    assert verified[0] < uploaded[0], (
+        "provenance must be verified before the asset is uploaded"
+    )
+    call = calls[verified[0]]
+    assert call[call.index("--repo") + 1] == "leynos/falcon-pachinko", (
+        "scope provenance to this repository"
+    )
+    assert call[call.index("--bundle") + 1] == f"staged-provenance/{_BUNDLE}", (
+        "verify against the release's original attestation"
+    )
+    assert call[call.index("--cert-identity") + 1] == (
+        "https://github.com/leynos/falcon-pachinko/"
+        f".github/workflows/release.yml@refs/tags/{_TAG}"
+    ), "require the tag's release workflow certificate"
+    assert call[call.index("--source-ref") + 1] == f"refs/tags/{_TAG}", (
+        "bind provenance to the tag"
+    )
+    assert call[call.index("--source-digest") + 1] == "a" * 40, (
+        "bind provenance to the tagged commit"
+    )
+    assert (fake.github / _PYPI_ONLY).read_bytes() == b"pypi", (
+        "the verified canonical bytes are uploaded"
     )
 
 

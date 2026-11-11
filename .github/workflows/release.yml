@@ -450,6 +450,47 @@ jobs:
           set -euo pipefail
           python3 -m scripts.release_assets_cli check-fetched --publish dist/publish \
             --index pypi-index.json --assets release-assets.json --output github-upload
+      # PyPI's files are immutable, so a re-run can stage bytes an earlier run
+      # built. The digest check above proves they are the files PyPI lists, not
+      # who built them, so every staged file that differs from this run's build
+      # must also verify against the release's original attestation, bound to
+      # the release workflow, tag and source commit. The check runs before the
+      # upload, because the later provenance check cannot undo an asset already
+      # attached to the draft.
+      - name: Verify the staged assets' provenance
+        id: staged-provenance
+        run: |
+          set -euo pipefail
+          mkdir -p staged-provenance
+          python3 -m scripts.release_assets_cli needs-provenance \
+            --publish dist/publish --output github-upload \
+            > staged-provenance/names.txt
+          if [ ! -s staged-provenance/names.txt ]; then
+            echo "Every staged asset is this run's build."
+            exit 0
+          fi
+          bundle="falcon-pachinko-${GITHUB_REF_NAME}.sigstore.json"
+          if ! gh release download "${GITHUB_REF_NAME}" --pattern "${bundle}" \
+            --dir staged-provenance; then
+            echo "::error::The release has no provenance bundle for the staged" \
+              "bytes this run did not build." >&2
+            exit 1
+          fi
+          while IFS= read -r name; do
+            if ! gh attestation verify "github-upload/${name}" \
+              --bundle "staged-provenance/${bundle}" --repo "${GH_REPO}" \
+              --cert-identity "https://github.com/${GH_REPO}/.github/workflows/release.yml@refs/tags/${GITHUB_REF_NAME}" \
+              --source-ref "refs/tags/${GITHUB_REF_NAME}" \
+              --source-digest "${GITHUB_SHA}" --format json \
+              > "staged-provenance/${name}.json"; then
+              echo "::error::${name} is not this run's build and its original" \
+                "attestation did not verify." >&2
+              exit 1
+            fi
+          done < staged-provenance/names.txt
+          python3 -m scripts.release_assets_cli require-provenance \
+            --publish dist/publish --output github-upload \
+            --provenance staged-provenance
       # No `--clobber`: an asset the release already holds is canonical. A
       # published release is complete, so a re-run -- which always stages the
       # bundle it built, even when the release already carries that name --
