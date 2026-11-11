@@ -12,5 +12,5 @@ Feature: Full reference example workflow
 
   Scenario: A disconnected recipient does not stop announcements for other workspaces
     Given an announcement worker with a disconnected atlas recipient
-    When announcements are published for the atlas and zephyr workspaces
-    Then healthy recipients in both workspaces receive every announcement
+    When clients in the atlas and zephyr workspaces create tasks
+    Then each workspace client receives its own announcement

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import logging
+import math
 import typing as typ
 
 import falcon
@@ -34,34 +36,73 @@ _SEND_TIMEOUT_SECONDS = 5.0
 _RESTART_DELAY_SECONDS = 1.0
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _DeliveryPolicy:
+    """Resolved delivery and supervision options for the announcement helpers.
+
+    Bundling the three options keeps the helper signatures small and ensures
+    the consumer and the supervising loop observe the same values.
+    """
+
+    send_timeout: float
+    restart_delay: float
+    sleep: cabc.Callable[[float], cabc.Awaitable[None]] = asyncio.sleep
+
+
+def _validate_delivery_policy(send_timeout: float, restart_delay: float) -> None:
+    """Reject policy values that would silently disable delivery or supervision.
+
+    Raises
+    ------
+    ValueError
+        If ``send_timeout`` is not a positive number, or ``restart_delay`` is
+        negative.
+    """
+    # NaN is rejected explicitly: every comparison against it is false, so it
+    # would make every send time out without ever being reported.
+    if math.isnan(send_timeout) or send_timeout <= 0:
+        msg = f"send_timeout must be positive, got {send_timeout!r}"
+        raise ValueError(msg)
+    if restart_delay < 0:
+        msg = f"restart_delay must not be negative, got {restart_delay!r}"
+        raise ValueError(msg)
+
+
 async def _deliver_announcement(
     conn_mgr: WebSocketConnectionManager,
     workspace_id: str,
     payload: dict[str, object],
-    send_timeout: float,
+    policy: _DeliveryPolicy,
 ) -> None:
     """Deliver one announcement, absorbing expected recipient failures.
 
     ``broadcast_to_room`` re-raises a lone recipient failure directly and
-    groups two or more in an ``ExceptionGroup``; ``except*`` handles both
-    shapes. Any other failure, including a non-expected member of a mixed
-    group, still propagates to the supervising loop.
+    groups two or more in an ``ExceptionGroup``; separate ``except*`` clauses
+    handle both shapes and keep disconnects distinguishable from timeouts. Any
+    other failure, including a non-expected member of a mixed group, still
+    propagates to the supervising loop.
+
+    The room is resolved before broadcasting so a backend failure while listing
+    recipients is reported by the supervising loop instead of being mistaken
+    for a recipient that stopped accepting frames.
     """
+    room = _workspace_room(workspace_id)
+    if not [websocket async for websocket in conn_mgr.connections(room=room)]:
+        return
     try:
-        await conn_mgr.broadcast_to_room(
-            _workspace_room(workspace_id),
-            payload,
-            timeout=send_timeout,
-        )
-    except* (falcon.WebSocketDisconnected, TimeoutError) as recipient_group:
-        # A disconnected or unresponsive recipient does not fail the
-        # announcement for the rest of the room: broadcast_to_room has already
-        # attempted every recipient by the time it re-raises. The count is
-        # logged without the workspace identifier so retained logs cannot
-        # identify a customer.
+        await conn_mgr.broadcast_to_room(room, payload, timeout=policy.send_timeout)
+    except* falcon.WebSocketDisconnected as disconnected:
+        # broadcast_to_room has already attempted every recipient by the time
+        # it re-raises. The count is logged without the workspace identifier so
+        # retained logs cannot identify a customer.
         logger.debug(
-            "Skipped %d disconnected or unresponsive recipient(s)",
-            len(recipient_group.exceptions),
+            "Skipped %d disconnected recipient(s)",
+            len(disconnected.exceptions),
+        )
+    except* TimeoutError as unresponsive:
+        logger.debug(
+            "Skipped %d unresponsive recipient(s)",
+            len(unresponsive.exceptions),
         )
 
 
@@ -69,7 +110,7 @@ async def _consume_announcements(
     *,
     conn_mgr: WebSocketConnectionManager,
     announcement_feed: AnnouncementFeed,
-    send_timeout: float,
+    policy: _DeliveryPolicy,
 ) -> None:
     """Broadcast queued announcements until the worker is cancelled."""
     while True:
@@ -78,22 +119,46 @@ async def _consume_announcements(
             conn_mgr,
             workspace_id,
             payload,
-            send_timeout,
+            policy,
         )
+
+
+async def _run_announcement_worker(
+    *,
+    conn_mgr: WebSocketConnectionManager,
+    announcement_feed: AnnouncementFeed,
+    policy: _DeliveryPolicy,
+) -> None:
+    """Consume announcements, restarting the loop after unexpected failures."""
+    while True:
+        try:
+            await _consume_announcements(
+                conn_mgr=conn_mgr,
+                announcement_feed=announcement_feed,
+                policy=policy,
+            )
+        except Exception:
+            # This consumer serves every workspace, so any escaping delivery
+            # failure would permanently stop unrelated users' announcements.
+            logger.exception(
+                "Announcement worker failed; restarting in %s seconds",
+                policy.restart_delay,
+            )
+            await policy.sleep(policy.restart_delay)
 
 
 # Explicit policy options keep the example adaptable; they are keyword-only.
 # @codescene(disable:"Excess Number of Function Arguments") #270 delivery policy
 @worker
 # pylint: disable-next=too-many-arguments  # delivery and supervision policy is explicit
-async def announcement_worker(  # ruff: ignore[too-many-arguments] - delivery and supervision policy is explicit
+def announcement_worker(  # ruff: ignore[too-many-arguments] - delivery and supervision policy is explicit
     *,
     conn_mgr: WebSocketConnectionManager,
     announcement_feed: AnnouncementFeed,
     send_timeout: float = _SEND_TIMEOUT_SECONDS,
     restart_delay: float = _RESTART_DELAY_SECONDS,
     sleep: cabc.Callable[[float], cabc.Awaitable[None]] = asyncio.sleep,
-) -> None:
+) -> cabc.Coroutine[object, object, None]:
     """Broadcast feed updates to everyone listening within a workspace.
 
     Delivery is best effort: a recipient that has disconnected, or that does
@@ -106,6 +171,11 @@ async def announcement_worker(  # ruff: ignore[too-many-arguments] - delivery an
     dropped rather than requeued, so recovery does not replay it. Cancellation
     (and therefore lifespan shutdown through ``WorkerController.stop()``)
     propagates without being treated as a failure.
+
+    The policy is validated before the coroutine is created, so
+    ``WorkerController.start()`` raises ``ValueError`` for a non-positive or
+    ``NaN`` ``send_timeout`` or a negative ``restart_delay`` instead of
+    scheduling a worker that would silently skip every delivery.
 
     Parameters
     ----------
@@ -122,19 +192,19 @@ async def announcement_worker(  # ruff: ignore[too-many-arguments] - delivery an
     sleep : Callable[[float], Awaitable[None]], optional
         Awaitable sleep function used for ``restart_delay``. Injecting it lets
         tests observe the delay without waiting for it.
+
+    Returns
+    -------
+    collections.abc.Coroutine[object, object, None]
+        The coroutine that consumes the announcement feed.
     """
-    while True:
-        try:
-            await _consume_announcements(
-                conn_mgr=conn_mgr,
-                announcement_feed=announcement_feed,
-                send_timeout=send_timeout,
-            )
-        except Exception:
-            # This consumer serves every workspace, so any escaping delivery
-            # failure would permanently stop unrelated users' announcements.
-            logger.exception(
-                "Announcement worker failed; restarting in %s seconds",
-                restart_delay,
-            )
-            await sleep(restart_delay)
+    _validate_delivery_policy(send_timeout, restart_delay)
+    return _run_announcement_worker(
+        conn_mgr=conn_mgr,
+        announcement_feed=announcement_feed,
+        policy=_DeliveryPolicy(
+            send_timeout=send_timeout,
+            restart_delay=restart_delay,
+            sleep=sleep,
+        ),
+    )

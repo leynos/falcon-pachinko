@@ -140,12 +140,18 @@ class BlockingWebSocket(RecordingWebSocket):
         """Initialise the stub with the event that signals an in-flight send."""
         super().__init__()
         self._started = started
+        self.cancelled = asyncio.Event()
 
     @typ.override
     async def send_media(self, data: object) -> None:
         """Signal that the send is in flight, then wait for cancellation."""
         self._started.set()
-        await asyncio.Event().wait()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            # Reaching this point proves the send was cancelled by a deadline
+            # or by shutdown rather than completing.
+            self.cancelled.set()
 
 
 class RequestStub:
@@ -232,6 +238,27 @@ class RecordingBackend(ConnectionBackend):
         return [
             (cid, self._websockets[cid]) for cid in members if cid in self._websockets
         ]
+
+
+class SnapshotTimeoutBackend(RecordingBackend):
+    """Backend whose room snapshot fails once the way a slow backend would."""
+
+    def __init__(self) -> None:
+        """Initialise the backend with its injected failure still pending."""
+        super().__init__()
+        self.snapshot_failures = 1
+        self.snapshot_calls = 0
+
+    @typ.override
+    async def snapshot(
+        self, room: str | None = None
+    ) -> list[tuple[str, WebSocketLike]]:
+        """Raise ``TimeoutError`` once, then delegate to the recording backend."""
+        self.snapshot_calls += 1
+        if self.snapshot_failures:
+            self.snapshot_failures -= 1
+            raise TimeoutError
+        return await super().snapshot(room)
 
 
 class Hostile:

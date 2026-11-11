@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import typing as typ
 
 import pytest
@@ -19,7 +20,9 @@ from tests._stubs import (
     BlockingWebSocket,
     DisconnectingWebSocket,
     FailingOnceWebSocket,
+    RecordingWebSocket,
     SignallingWebSocket,
+    SnapshotTimeoutBackend,
 )
 
 if typ.TYPE_CHECKING:  # pragma: no cover - typing helpers
@@ -89,6 +92,15 @@ def _error_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     return [record for record in caplog.records if record.levelno >= logging.ERROR]
 
 
+def _debug_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """Return the worker's captured DEBUG messages, interpolated."""
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.DEBUG and record.name == WORKER_LOGGER
+    ]
+
+
 @pytest_asyncio.fixture
 async def controller() -> cabc.AsyncIterator[WorkerController]:
     """Yield a controller and always stop it in teardown."""
@@ -140,6 +152,9 @@ async def test_disconnect_keeps_announcements_flowing_to_other_workspaces(
     assert _error_records(caplog) == [], (
         "expected disconnects must not be logged as errors"
     )
+    assert "Skipped 1 disconnected recipient(s)" in _debug_messages(caplog), (
+        "a disconnect must be reported distinctly from a send timeout"
+    )
 
 
 @pytest.mark.asyncio
@@ -173,6 +188,9 @@ async def test_grouped_disconnects_keep_announcements_flowing(
     )
     assert _error_records(caplog) == [], (
         "grouped disconnects must not be logged as errors"
+    )
+    assert "Skipped 2 disconnected recipient(s)" in _debug_messages(caplog), (
+        "a grouped disconnect must be reported once with its recipient count"
     )
 
 
@@ -218,6 +236,198 @@ async def test_unresponsive_recipient_does_not_stall_the_consumer(
     assert _error_records(caplog) == [], (
         "a send timeout must be treated as a best-effort delivery failure"
     )
+    assert "Skipped 1 unresponsive recipient(s)" in _debug_messages(caplog), (
+        "a send timeout must be reported distinctly from a disconnect"
+    )
+
+
+def _faulty_recipient(kind: str) -> RecordingWebSocket:
+    """Build the faulty recipient double named by a generated fault kind."""
+    if kind == "disconnect":
+        return DisconnectingWebSocket()
+    return BlockingWebSocket(started=asyncio.Event())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fault_kinds", "expected_debug"),
+    [
+        (("timeout", "timeout"), ("Skipped 2 unresponsive recipient(s)",)),
+        (
+            ("timeout", "disconnect"),
+            (
+                "Skipped 1 disconnected recipient(s)",
+                "Skipped 1 unresponsive recipient(s)",
+            ),
+        ),
+    ],
+)
+async def test_expected_failure_group_keeps_announcements_flowing(
+    controller: WorkerController,
+    caplog: pytest.LogCaptureFixture,
+    fault_kinds: tuple[str, ...],
+    expected_debug: tuple[str, ...],
+) -> None:
+    """A grouped expected failure must not stop later announcements."""
+    feed = AnnouncementFeed()
+    conn_mgr = WebSocketConnectionManager()
+    atlas_received = asyncio.Event()
+    atlas_healthy = SignallingWebSocket(expected=2, received=atlas_received)
+    zephyr_received = asyncio.Event()
+    zephyr_healthy = SignallingWebSocket(expected=1, received=zephyr_received)
+    await _register(conn_mgr, "atlas-healthy", atlas_healthy, "atlas")
+    for index, kind in enumerate(fault_kinds):
+        await _register(
+            conn_mgr, f"atlas-faulty-{index}", _faulty_recipient(kind), "atlas"
+        )
+    await _register(conn_mgr, "zephyr-healthy", zephyr_healthy, "zephyr")
+    sleep = _RecordingSleep()
+
+    caplog.set_level(logging.DEBUG, logger=WORKER_LOGGER)
+    await controller.start(
+        announcement_worker,
+        conn_mgr=conn_mgr,
+        announcement_feed=feed,
+        send_timeout=SEND_TIMEOUT,
+        restart_delay=RESTART_DELAY,
+        sleep=sleep,
+    )
+    await feed.publish("atlas", {"seq": 1})
+    await feed.publish("atlas", {"seq": 2})
+    await feed.publish("zephyr", {"seq": 3})
+
+    await _wait_for(atlas_received, "atlas announcements")
+    await _wait_for(zephyr_received, "zephyr announcement")
+    await controller.stop()
+
+    assert atlas_healthy.messages == [{"seq": 1}, {"seq": 2}], (
+        "the healthy atlas recipient must receive both announcements in order"
+    )
+    assert zephyr_healthy.messages == [{"seq": 3}], (
+        "the zephyr recipient must receive its announcement after the expected group"
+    )
+    assert not sleep.delays, "expected failures must not restart the worker"
+    assert _error_records(caplog) == [], (
+        "an expected failure group must not be logged as an error"
+    )
+    messages = _debug_messages(caplog)
+    for expected in expected_debug:
+        assert expected in messages, (
+            "each expected failure kind must be reported distinctly"
+        )
+
+
+@pytest.mark.asyncio
+async def test_backend_snapshot_timeout_is_reported_and_worker_restarts(
+    controller: WorkerController,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A backend timeout must reach supervision instead of skipping delivery."""
+    feed = AnnouncementFeed()
+    backend = SnapshotTimeoutBackend()
+    conn_mgr = WebSocketConnectionManager(backend)
+    zephyr_received = asyncio.Event()
+    zephyr_healthy = SignallingWebSocket(expected=1, received=zephyr_received)
+    await _register(conn_mgr, "zephyr-healthy", zephyr_healthy, "zephyr")
+    sleep = _RecordingSleep()
+
+    caplog.set_level(logging.DEBUG, logger=WORKER_LOGGER)
+    await controller.start(
+        announcement_worker,
+        conn_mgr=conn_mgr,
+        announcement_feed=feed,
+        restart_delay=RESTART_DELAY,
+        sleep=sleep,
+    )
+    await feed.publish("atlas", {"seq": 1})
+    await feed.publish("zephyr", {"seq": 2})
+
+    await _wait_for(zephyr_received, "delivery after the backend recovered")
+    await controller.stop()
+
+    assert zephyr_healthy.messages == [{"seq": 2}], (
+        "the event dequeued when the backend failed must be dropped, not replayed"
+    )
+    assert sleep.delays == [RESTART_DELAY], (
+        "a backend timeout must restart the consuming loop"
+    )
+    errors = _error_records(caplog)
+    assert len(errors) == 1, "the backend timeout must be reported once"
+    assert errors[0].exc_info is not None, "the failure must be logged with a traceback"
+    assert isinstance(errors[0].exc_info[1], TimeoutError), (
+        "the reported failure must be the backend timeout, not a recipient failure"
+    )
+    assert backend.snapshot_calls >= 2, (
+        "the worker must take a snapshot for each attempted announcement"
+    )
+
+
+@pytest.mark.asyncio
+async def test_configured_send_timeout_cancels_the_blocked_send(
+    controller: WorkerController,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The configured deadline must cancel a blocked send before shutdown."""
+    feed = AnnouncementFeed()
+    conn_mgr = WebSocketConnectionManager()
+    started = asyncio.Event()
+    blocking = BlockingWebSocket(started=started)
+    zephyr_received = asyncio.Event()
+    zephyr_healthy = SignallingWebSocket(expected=1, received=zephyr_received)
+    await _register(conn_mgr, "atlas-blocking", blocking, "atlas")
+    await _register(conn_mgr, "zephyr-healthy", zephyr_healthy, "zephyr")
+
+    caplog.set_level(logging.DEBUG, logger=WORKER_LOGGER)
+    await controller.start(
+        announcement_worker,
+        conn_mgr=conn_mgr,
+        announcement_feed=feed,
+        send_timeout=SEND_TIMEOUT,
+    )
+    await feed.publish("atlas", {"seq": 1})
+    await _wait_for(started, "the in-flight broadcast")
+    # This proves the per-send deadline fired: the worker is still running, and
+    # only ``wait_for`` can cancel the blocked send before ``stop()``.
+    await _wait_for(blocking.cancelled, "the per-send deadline")
+    await feed.publish("zephyr", {"seq": 2})
+    await _wait_for(zephyr_received, "the announcement after the timeout")
+    await controller.stop()
+
+    assert not blocking.messages, "the blocked recipient must not record a delivery"
+    assert zephyr_healthy.messages == [{"seq": 2}], (
+        "consumption must continue after the configured deadline cancels a send"
+    )
+    assert _error_records(caplog) == [], (
+        "a cancelled send must not be logged as an error"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy", "match"),
+    [
+        ({"send_timeout": -1.0}, "send_timeout must be positive"),
+        ({"send_timeout": 0.0}, "send_timeout must be positive"),
+        ({"send_timeout": math.nan}, "send_timeout must be positive"),
+        ({"restart_delay": -0.5}, "restart_delay must not be negative"),
+    ],
+)
+async def test_invalid_policy_is_rejected_at_startup(
+    controller: WorkerController,
+    policy: dict[str, float],
+    match: str,
+) -> None:
+    """An invalid policy must fail startup instead of degrading delivery."""
+    feed = AnnouncementFeed()
+    conn_mgr = WebSocketConnectionManager()
+
+    with pytest.raises(ValueError, match=match):
+        await controller.start(
+            announcement_worker,
+            conn_mgr=conn_mgr,
+            announcement_feed=feed,
+            **policy,
+        )
 
 
 @pytest.mark.asyncio
