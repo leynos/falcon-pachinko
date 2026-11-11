@@ -124,11 +124,12 @@ AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(DF12_PYTHON) \
 	--from '$(DF12_PYTHON_LINTS)' --with pylint==$(PYLINT_VERSION) \
 	--with astroid==$(ASTROID_VERSION) ambrleaks
 
-.PHONY: help all clean build build-release lint interrogate lint-pylint lint-df12 \
+.PHONY: help all clean build build-release release-wheel update-build-constraints \
+	lint interrogate lint-pylint lint-df12 \
 	pylint-pypy-python fmt check-fmt markdownlint nixie spelling test test-ci \
-	test-workflow-contracts check-cv005 typecheck install-nose duplication \
-	duplication-test duplication-allow mutation mutation-results \
-	$(TOOLS) $(VENV_TOOLS)
+	test-workflow-contracts test-release-security check-cv005 typecheck \
+	install-nose duplication duplication-test duplication-allow mutation \
+	mutation-results $(TOOLS) $(VENV_TOOLS)
 
 .DEFAULT_GOAL := all
 
@@ -145,10 +146,27 @@ all: build check-fmt test test-workflow-contracts typecheck spelling
 build: uv .venv uv.lock ## Build virtual-env and install deps
 	uv sync --group dev --locked
 
+# `build-release` is the short name older checklists use. It runs the one
+# reviewed release recipe rather than a second, single-wheel build whose flags
+# could drift from the recipe that is actually exercised.
 # `uv build` writes both artefacts into `dist/`, which is the directory
 # `make clean` removes and `.gitignore` excludes.
-build-release: ## Build artefacts (sdist & wheel)
-	uv build --out-dir dist
+build-release: release-wheel ## Build artefacts (sdist & wheel)
+
+update-build-constraints: ## Regenerate isolated build dependency hashes
+	@set -eu; \
+	requires="$$(mktemp)"; trap 'rm -f "$$requires"' EXIT; \
+	$(UV) run --no-project --python 3.12 python -c 'import pathlib, tomllib; print("\n".join(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["build-system"]["requires"]))' > "$$requires"; \
+	$(UV) pip compile - --generate-hashes --universal --python-version 3.12 --output-file build-constraints.txt < "$$requires"
+
+# The two-build comparison lives in `scripts/release_wheel.py` so each failure
+# branch can be tested with fabricated outputs. This target only wires the
+# output directory; the script keeps the sdist-first build and every
+# constraint, hash and cache flag.
+RELEASE_WHEEL_DIR ?= dist
+release-wheel: build-constraints.txt ## Build and compare two wheels from the same sdist
+	$(UV) run --no-project --python 3.12 python -m scripts.release_wheel \
+	  --output-dir '$(RELEASE_WHEEL_DIR)'
 
 clean: ## Remove build artefacts
 	rm -rf build dist *.egg-info \
@@ -256,7 +274,7 @@ lint-df12: uv ## Run df12-python-lints and ambrleaks on CPython 3.14
 	$(AMBRLEAKS) tests
 
 typecheck: build uv ## Run typechecking
-	$(TY) check --extra-search-path . falcon_pachinko tests tools scripts/release_assets.py scripts/release_assets_cli.py scripts/release_version.py scripts/release_provenance.py
+	$(TY) check --extra-search-path . falcon_pachinko tests tools scripts/release_assets.py scripts/release_assets_cli.py scripts/release_version.py scripts/release_provenance.py scripts/release_wheel.py scripts/verify_build_distributions.py
 
 # Local convenience only. CI lints Markdown through
 # DavidAnson/markdownlint-cli2-action, whose release carries the linter's
@@ -320,6 +338,15 @@ check-cv005: ## Check the shared CV-005 CodeScene workflow contracts
 # workflow. `test` collects them too, which is what makes them a gate.
 test-workflow-contracts: check-cv005 build uv pytest ## Check the CI workflows' shape
 	uv run --locked pytest tests/workflow_contracts -v
+
+# The release build contracts read `pyproject.toml`, the generated constraints,
+# the Makefile recipes and the workflow documents. They are fast enough to run
+# on their own while editing any of them, and `test` collects them too.
+test-release-security: build uv pytest ## Check release build inputs and authority
+	uv run --locked pytest -v tests/test_release_build_inputs.py \
+	  tests/test_release_wheel.py \
+	  tests/test_verify_build_distributions.py \
+	  tests/workflow_contracts/test_release_build_security.py
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | \

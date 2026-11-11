@@ -29,13 +29,15 @@ without overwriting immutable files or publishing an incomplete release.
 
 ### Build and validation
 
-Build both distributions with plain `uv build --out-dir dist`. `uv` builds the
-sdist first and builds the wheel from that sdist, making sdist completeness a
-prerequisite for every wheel. The same composite build action runs in pull
-request CI and on release tags. CI requires exactly one sdist and one wheel;
-attestation collects every wheel with exactly one sdist and rejects unexpected
-files. Archive checks verify the import modules, public testing package,
-package data, wheel metadata, and installed imports.
+Build both distributions with `make release-wheel`, which runs `uv build` under
+a hash-verified build constraint. `uv` builds the sdist first and builds the
+wheel from that sdist, making sdist completeness a prerequisite for every
+wheel; the recipe builds that wheel twice and compares the digests. The same
+composite build action runs in pull request CI and on release tags. CI requires
+exactly one sdist and one wheel; attestation collects every wheel with exactly
+one sdist and rejects unexpected files. Archive checks verify the import
+modules, public testing package, package data, wheel metadata, and installed
+imports.
 
 Keep the pure-Python build path and remove the unused cibuildwheel matrix and
 its local action. Do not add native-platform builds for a package with no
@@ -64,10 +66,10 @@ filename makes retries idempotent. Attach that bundle to GitHub only when all
 canonical distribution bytes match the current attested build. An existing
 published file with different bytes requires the earlier build's bundle. Verify
 that bundle cryptographically against the downloaded canonical files, the
-repository's release workflow identity, tag and source commit. If it is absent
-or invalid, verification fails and the draft remains unpublished. Recover by
-rerunning the original run's failed publication jobs while its `release-dist`
-artefact remains available.
+repository's release workflow identity, tag and source commit, and do so before
+any staged file is uploaded. If it is absent or invalid, verification fails and
+the draft remains unpublished. Recover by rerunning the original run's failed
+publication jobs while its `release-dist` artefact remains available.
 
 ### Destinations and retry behaviour
 
@@ -87,11 +89,13 @@ copied into PyPI only after verifying its original bundle and matching the
 exact named SHA-256 subject. Validate all differing carried bytes before
 mutating PyPI staging. Identical bytes already attested by the current build
 remain in place. A GitHub asset missing for a PyPI name is fetched from PyPI.
-Validate fetched hashes against the Simple index and compare final SHA-256
-digests at both destinations. Never overwrite or clobber an existing GitHub
-asset. Fail on an empty artefact set. Leave a draft in place on any mismatch;
-remove draft status only after successful convergence, setting the GitHub
-pre-release flag from the checked project version.
+Validate fetched hashes against the Simple index, then verify each fetched file
+that differs from the current build against the release's original bundle
+before uploading it; only current-build bytes need no original attestation.
+Compare final SHA-256 digests at both destinations. Never overwrite or clobber
+an existing GitHub asset. Fail on an empty artefact set. Leave a draft in place
+on any mismatch; remove draft status only after successful convergence, setting
+the GitHub pre-release flag from the checked project version.
 
 Queue repeated runs for the same tag by setting `cancel-in-progress: false`.
 Reuse existing releases, skip already published PyPI filenames, and upload only
@@ -113,11 +117,13 @@ values into shell scripts through quoted environment variables; shell steps use
 `set -euo pipefail` and do not interpolate `${{ ... }}` into `run:` text. Pin
 every third-party action in the release workflow and build composite action to
 a reviewed full commit SHA. Do not use `softprops/action-gh-release`, silent
-`find`/`xargs` uploads, stored PyPI tokens, or release telemetry. The separate
-credential constraints and hash-bound backend requirements remain in
-[issue #230](https://github.com/leynos/falcon-pachinko/issues/230), pending the
-`uv.lock` decision in issue #209. Immutable action pin coverage for the other
-workflows remains in issue #233.
+`find`/`xargs` uploads, stored PyPI tokens, or release telemetry. The isolated
+build's backend requirements are exact pins, hash-bound through
+`build-constraints.txt` and enforced by `make release-wheel` inside the
+read-only build job, as
+[issue #230](https://github.com/leynos/falcon-pachinko/issues/230) records. The
+runtime dependency lock-file decision remains in issue #209. Immutable action
+pin coverage for the other workflows remains in issue #233.
 
 Use the GitHub `pypi` environment, restricted to `v*.*.*` tags, and bind the
 PyPI Trusted Publisher to owner `leynos`, repository `falcon-pachinko`, workflow
@@ -150,8 +156,10 @@ repository and must be checked before the first tag. The chosen Ubicloud
 publisher runner differs from the GitHub-hosted runner shown in PyPA guidance,
 so its OIDC compatibility remains an operational assumption to verify.
 
-The exact build-backend constraints and hash binding are deliberately deferred
-to issue #230, which depends on the repository's lock-file decision in
+The isolated build's exact backend pins, generated hash-bound constraints, and
+read-only build job were added under
+[issue #230](https://github.com/leynos/falcon-pachinko/issues/230), separately
+from the runtime dependency lock-file decision in
 [issue #209](https://github.com/leynos/falcon-pachinko/issues/209). This ADR
 records the artefact handoff and privilege separation that let publication
 consume attested bytes without resolving build requirements again.

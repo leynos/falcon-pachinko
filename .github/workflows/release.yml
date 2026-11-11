@@ -58,13 +58,19 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    outputs:
+      wheel-name: ${{ steps.build.outputs.wheel-name }}
+      wheel-sha256: ${{ steps.build.outputs.wheel-sha256 }}
+      sdist-name: ${{ steps.build.outputs.sdist-name }}
+      sdist-sha256: ${{ steps.build.outputs.sdist-sha256 }}
     steps:
       # A local action must already be on disk to be resolved, so the
       # composite's own checkout cannot be the first one.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/pure-python-wheel
+      - id: build
+        uses: ./.github/actions/pure-python-wheel
         with:
           python-version: '3.13'
           artifact-name: wheels-pure
@@ -110,6 +116,24 @@ jobs:
           fi
           mkdir -p dist/publish
           mv -- "${files[@]}" dist/publish/
+      # Bind the handoff to the bytes the build job measured. A downloaded
+      # artefact with a different name or digest fails before attestation, so
+      # every later job consumes only the reviewed build.
+      - name: Verify the distributions match the build digests
+        env:
+          DIST_DIR: dist/publish
+          EXPECTED_WHEEL_NAME: ${{ needs.build-wheels.outputs.wheel-name }}
+          EXPECTED_WHEEL_SHA256: ${{ needs.build-wheels.outputs.wheel-sha256 }}
+          EXPECTED_SDIST_NAME: ${{ needs.build-wheels.outputs.sdist-name }}
+          EXPECTED_SDIST_SHA256: ${{ needs.build-wheels.outputs.sdist-sha256 }}
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_build_distributions.py \
+            --directory "$DIST_DIR" \
+            --wheel-name "$EXPECTED_WHEEL_NAME" \
+            --wheel-sha256 "$EXPECTED_WHEEL_SHA256" \
+            --sdist-name "$EXPECTED_SDIST_NAME" \
+            --sdist-sha256 "$EXPECTED_SDIST_SHA256"
       - name: Attest build provenance
         id: provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
@@ -234,6 +258,7 @@ jobs:
   publish-pypi:
     needs:
       - attest
+      - build-wheels
       - draft-release
     # Release orchestration uploads artefacts built on the Ubicloud runners.
     # Keep its placement consistent with the repository's release lanes.
@@ -248,6 +273,23 @@ jobs:
     steps:
       - *scripts-checkout
       - *release-dist
+      # The PyPI job holds a publishing token, so it re-checks the build
+      # identity before it uploads anything.
+      - name: Verify the distributions match the build digests
+        env:
+          DIST_DIR: dist/publish
+          EXPECTED_WHEEL_NAME: ${{ needs.build-wheels.outputs.wheel-name }}
+          EXPECTED_WHEEL_SHA256: ${{ needs.build-wheels.outputs.wheel-sha256 }}
+          EXPECTED_SDIST_NAME: ${{ needs.build-wheels.outputs.sdist-name }}
+          EXPECTED_SDIST_SHA256: ${{ needs.build-wheels.outputs.sdist-sha256 }}
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_build_distributions.py \
+            --directory "$DIST_DIR" \
+            --wheel-name "$EXPECTED_WHEEL_NAME" \
+            --wheel-sha256 "$EXPECTED_WHEEL_SHA256" \
+            --sdist-name "$EXPECTED_SDIST_NAME" \
+            --sdist-sha256 "$EXPECTED_SDIST_SHA256"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: release-github-state
@@ -332,6 +374,7 @@ jobs:
   # then agree.
   publish-release:
     needs:
+      - build-wheels
       - check-version
       - draft-release
       - publish-pypi
@@ -345,6 +388,23 @@ jobs:
     steps:
       - *scripts-checkout
       - *release-dist
+      # The job that writes the GitHub Release re-checks the build identity
+      # before it stages or uploads any distribution.
+      - name: Verify the distributions match the build digests
+        env:
+          DIST_DIR: dist/publish
+          EXPECTED_WHEEL_NAME: ${{ needs.build-wheels.outputs.wheel-name }}
+          EXPECTED_WHEEL_SHA256: ${{ needs.build-wheels.outputs.wheel-sha256 }}
+          EXPECTED_SDIST_NAME: ${{ needs.build-wheels.outputs.sdist-name }}
+          EXPECTED_SDIST_SHA256: ${{ needs.build-wheels.outputs.sdist-sha256 }}
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_build_distributions.py \
+            --directory "$DIST_DIR" \
+            --wheel-name "$EXPECTED_WHEEL_NAME" \
+            --wheel-sha256 "$EXPECTED_WHEEL_SHA256" \
+            --sdist-name "$EXPECTED_SDIST_NAME" \
+            --sdist-sha256 "$EXPECTED_SDIST_SHA256"
       # Recorded once, before any staging: the upload decision below compares
       # this against PyPI's post-upload state.
       - name: Note whether the release is a draft
@@ -390,6 +450,47 @@ jobs:
           set -euo pipefail
           python3 -m scripts.release_assets_cli check-fetched --publish dist/publish \
             --index pypi-index.json --assets release-assets.json --output github-upload
+      # PyPI's files are immutable, so a re-run can stage bytes an earlier run
+      # built. The digest check above proves they are the files PyPI lists, not
+      # who built them, so every staged file that differs from this run's build
+      # must also verify against the release's original attestation, bound to
+      # the release workflow, tag and source commit. The check runs before the
+      # upload, because the later provenance check cannot undo an asset already
+      # attached to the draft.
+      - name: Verify the staged assets' provenance
+        id: staged-provenance
+        run: |
+          set -euo pipefail
+          mkdir -p staged-provenance
+          python3 -m scripts.release_assets_cli needs-provenance \
+            --publish dist/publish --output github-upload \
+            > staged-provenance/names.txt
+          if [ ! -s staged-provenance/names.txt ]; then
+            echo "Every staged asset is this run's build."
+            exit 0
+          fi
+          bundle="falcon-pachinko-${GITHUB_REF_NAME}.sigstore.json"
+          if ! gh release download "${GITHUB_REF_NAME}" --pattern "${bundle}" \
+            --dir staged-provenance; then
+            echo "::error::The release has no provenance bundle for the staged" \
+              "bytes this run did not build." >&2
+            exit 1
+          fi
+          while IFS= read -r name; do
+            if ! gh attestation verify "github-upload/${name}" \
+              --bundle "staged-provenance/${bundle}" --repo "${GH_REPO}" \
+              --cert-identity "https://github.com/${GH_REPO}/.github/workflows/release.yml@refs/tags/${GITHUB_REF_NAME}" \
+              --source-ref "refs/tags/${GITHUB_REF_NAME}" \
+              --source-digest "${GITHUB_SHA}" --format json \
+              > "staged-provenance/${name}.json"; then
+              echo "::error::${name} is not this run's build and its original" \
+                "attestation did not verify." >&2
+              exit 1
+            fi
+          done < staged-provenance/names.txt
+          python3 -m scripts.release_assets_cli require-provenance \
+            --publish dist/publish --output github-upload \
+            --provenance staged-provenance
       # No `--clobber`: an asset the release already holds is canonical. A
       # published release is complete, so a re-run -- which always stages the
       # bundle it built, even when the release already carries that name --

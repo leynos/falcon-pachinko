@@ -27,6 +27,9 @@ if typ.TYPE_CHECKING:
         ("check-fetched", "index"),
         ("check-fetched", "assets"),
         ("check-fetched", "output"),
+        ("needs-provenance", "output"),
+        ("require-provenance", "output"),
+        ("require-provenance", "provenance"),
         ("index-expected", "index"),
         ("verify", "index"),
         ("verify", "assets"),
@@ -42,6 +45,8 @@ def test_missing_input_fails_before_reading_state(
         "stage-pypi": ("index", "assets", "github-files", "provenance"),
         "stage-github": ("index", "assets", "bundles", "output"),
         "check-fetched": ("index", "assets", "output"),
+        "needs-provenance": ("output",),
+        "require-provenance": ("output", "provenance"),
         "index-expected": ("index",),
         "verify": ("index", "assets", "bundles"),
     }

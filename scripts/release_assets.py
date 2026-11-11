@@ -39,6 +39,9 @@ INDEX_URL = "https://pypi.org/simple/falcon-pachinko/"
 #: more, and the bound keeps a name safe as a path and as a TSV field.
 _SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
 _DIGEST_PREFIX = "sha256:"
+#: Suffix of the tag-named Sigstore bundle, which is not a distribution and
+#: carries no provenance record of its own.
+_BUNDLE_SUFFIX = ".sigstore.json"
 
 
 class ReleaseAssetError(Exception):
@@ -632,6 +635,89 @@ def check_fetched(state: State, output: Path) -> None:
     """
     for name in sorted(state.plan().github_uploads & set(state.pypi)):
         _check_digest(output / name, state.pypi[name].sha256)
+
+
+def _matches_build(state: State, staged: Path) -> bool:
+    """Return whether ``staged`` holds this run's bytes for its name.
+
+    Parameters
+    ----------
+    state : State
+        The staged artefacts and destination listings.
+    staged : pathlib.Path
+        One file staged for the GitHub Release.
+
+    Returns
+    -------
+    bool
+        Whether a file of the same name in the build directory holds identical
+        bytes. A name this run did not build cannot match.
+    """
+    built = state.publish / staged.name
+    return built.is_file() and sha256_of(built) == sha256_of(staged)
+
+
+def staged_needing_provenance(state: State, staged: Path) -> list[str]:
+    """Return staged distributions whose bytes are not this run's build.
+
+    PyPI's files are immutable, so a re-run can stage bytes an earlier run
+    built. Those bytes need that run's verified attestation; bytes identical to
+    this run's build are already covered by the measured build.
+
+    Parameters
+    ----------
+    state : State
+        The staged artefacts and destination listings.
+    staged : pathlib.Path
+        The directory holding files staged for the GitHub Release.
+
+    Returns
+    -------
+    list[str]
+        Sorted distribution filenames that need an original attestation. The
+        tag-named Sigstore bundle is not a distribution and is excluded.
+
+    Notes
+    -----
+    Errors from listing or hashing the directories propagate to the caller.
+    """
+    return [
+        name
+        for name in local_names(staged)
+        if not name.endswith(_BUNDLE_SUFFIX)
+        and not _matches_build(state, staged / name)
+    ]
+
+
+def require_staged_provenance(state: State, staged: Path, provenance: Path) -> None:
+    """Require a verified original attestation for every foreign staged file.
+
+    Parameters
+    ----------
+    state : State
+        The staged artefacts and destination listings.
+    staged : pathlib.Path
+        The directory holding files staged for the GitHub Release.
+    provenance : pathlib.Path
+        The verifier's JSON results, one per staged filename.
+
+    Raises
+    ------
+    ReleaseAssetError
+        If a staged file is not this run's build and its record is absent,
+        unreadable, malformed, or names another subject.
+    """
+    for name in staged_needing_provenance(state, staged):
+        try:
+            require_matching_record(
+                provenance / f"{name}.json", name, sha256_of(staged / name)
+            )
+        except (OSError, ProvenanceRecordError) as error:
+            msg = (
+                f"refusing to upload {name}: it is not this run's build and no "
+                f"verified original attestation covers it: {error}"
+            )
+            raise ReleaseAssetError(msg) from error
 
 
 def _bundle_problems(bundles: Path, github: cabc.Collection[str]) -> list[str]:
