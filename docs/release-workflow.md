@@ -163,9 +163,9 @@ CI also proves the flag is enforced, not merely passed. It runs the real
 isolated sdist build once with the committed constraints as a control, then
 with every permitted hash for `wheel` replaced, and requires the second build
 to fail with a hash mismatch and write no distribution. That test is opt-in
-(`RELEASE_BUILD_HASH_TEST=1`) because `--no-cache` downloads the
-backend again; the workflow's release-build security step sets it, and a local
-`make test` skips it.
+(`RELEASE_BUILD_HASH_TEST=1`) because `--no-cache` downloads the backend again;
+the workflow's release-build security step sets it, and a local `make test`
+skips it.
 
 `SOURCE_DATE_EPOCH` is taken from `git log -1 --format=%ct`, so the
 distributions carry the commit timestamp rather than the time of the build.
