@@ -84,6 +84,76 @@ class RecordingWebSocket:
         return message
 
 
+class DisconnectingWebSocket(RecordingWebSocket):
+    """WebSocket stub whose recipient has already dropped the connection."""
+
+    def __init__(self, close_code: int = 1001) -> None:
+        """Initialise the stub with the close code a dropped peer reports."""
+        super().__init__()
+        self.close_code = close_code
+
+    @typ.override
+    async def send_media(self, data: object) -> None:
+        """Fail the send the way an abandoned recipient does."""
+        raise falcon.WebSocketDisconnected(code=self.close_code)
+
+
+class SignallingWebSocket(RecordingWebSocket):
+    """WebSocket stub that signals after receiving an expected message count."""
+
+    def __init__(self, *, expected: int, received: asyncio.Event) -> None:
+        """Initialise the stub with the message count that signals ``received``."""
+        super().__init__()
+        self._expected = expected
+        self._received = received
+
+    @typ.override
+    async def send_media(self, data: object) -> None:
+        """Record data and signal once the expected count is reached."""
+        await super().send_media(data)
+        if len(self.messages) >= self._expected:
+            self._received.set()
+
+
+class FailingOnceWebSocket(RecordingWebSocket):
+    """WebSocket stub that fails its first send, then records later ones."""
+
+    def __init__(self) -> None:
+        """Initialise the stub with no send attempts recorded yet."""
+        super().__init__()
+        self.sends_attempted = 0
+
+    @typ.override
+    async def send_media(self, data: object) -> None:
+        """Raise on the first attempt and record subsequent data."""
+        self.sends_attempted += 1
+        if self.sends_attempted == 1:
+            msg = "recipient send failed"
+            raise RuntimeError(msg)
+        await super().send_media(data)
+
+
+class BlockingWebSocket(RecordingWebSocket):
+    """WebSocket stub that blocks inside ``send_media`` until cancelled."""
+
+    def __init__(self, *, started: asyncio.Event) -> None:
+        """Initialise the stub with the event that signals an in-flight send."""
+        super().__init__()
+        self._started = started
+        self.cancelled = asyncio.Event()
+
+    @typ.override
+    async def send_media(self, data: object) -> None:
+        """Signal that the send is in flight, then wait for cancellation."""
+        self._started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            # Reaching this point proves the send was cancelled by a deadline
+            # or by shutdown rather than completing.
+            self.cancelled.set()
+
+
 class RequestStub:
     """Minimal request double exposing headers and routing metadata."""
 
@@ -168,6 +238,27 @@ class RecordingBackend(ConnectionBackend):
         return [
             (cid, self._websockets[cid]) for cid in members if cid in self._websockets
         ]
+
+
+class SnapshotTimeoutBackend(RecordingBackend):
+    """Backend whose room snapshot fails once the way a slow backend would."""
+
+    def __init__(self) -> None:
+        """Initialise the backend with its injected failure still pending."""
+        super().__init__()
+        self.snapshot_failures = 1
+        self.snapshot_calls = 0
+
+    @typ.override
+    async def snapshot(
+        self, room: str | None = None
+    ) -> list[tuple[str, WebSocketLike]]:
+        """Raise ``TimeoutError`` once, then delegate to the recording backend."""
+        self.snapshot_calls += 1
+        if self.snapshot_failures:
+            self.snapshot_failures -= 1
+            raise TimeoutError
+        return await super().snapshot(room)
 
 
 class Hostile:
