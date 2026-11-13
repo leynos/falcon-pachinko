@@ -65,6 +65,19 @@ def _messages_control(rcfile: pathlib.Path) -> dict[str, list[str]]:
     return config["tool"]["pylint"]["messages control"]
 
 
+def test_tooling_does_not_raise_the_application_python_floor() -> None:
+    """Gate and lint tooling run in isolated environments, not the package floor."""
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert project["project"]["requires-python"] == ">=3.12", (
+        "lint tooling must not raise the application Python floor"
+    )
+    runtime_dependencies = project["project"]["dependencies"]
+    assert not any(
+        dependency.lower().startswith(("cyclopts", "tomlkit"))
+        for dependency in runtime_dependencies
+    ), "tooling-only packages must stay out of application dependencies"
+
+
 @pytest.mark.parametrize(
     ("makefile_variable", "tool"),
     [("RUFF_VERSION", "ruff"), ("TY_VERSION", "ty")],
