@@ -2551,4 +2551,4 @@ is included in the distribution because it provides public testing utilities
 for consumers.
 
 The release pipeline and its attested PyPI and GitHub Release destinations are
-recorded in [ADR-002](adr-002-attested-reconciled-release-pipeline.md).
+recorded in [ADR-002](adrs/adr-0002-attested-reconciled-release-pipeline.md).

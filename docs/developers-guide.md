@@ -293,7 +293,7 @@ This repository commits `uv.lock` to pin one reviewed dependency release set
 for development and CI, despite the wide runtime bounds declared in
 `pyproject.toml`. This decision supersedes the floating-resolution behaviour
 recorded in issue [#83](https://github.com/leynos/falcon-pachinko/issues/83).
-The [decision record](adr-003-commit-uv-lock-for-development-and-ci.md)
+The [decision record](adrs/adr-0003-commit-uv-lock-for-development-and-ci.md)
 explains the rationale and compatibility trade-off. The lockfile resolves the
 runtime dependencies, development group and `examples` and `testing` extras
 across the declared `requires-python` range.
@@ -492,7 +492,7 @@ that check and uses lax coercion in both dispatch modes. A `ValidationError`
 from validation or conversion routes to `on_unhandled`; a configuration
 `TypeError` (such as a mixed-tag union, an untagged Struct, or an `array_like`
 member) must propagate and must not reach `on_unhandled`. See
-[ADR 003](adr-003-schema-mode-strict-validation.md).
+[ADR 003](adrs/adr-0003-schema-mode-strict-validation.md).
 
 The inspection decode uses a `msgspec.json.Decoder` whose `float_hook` builds a
 `decimal.Decimal`, not `msgspec.json.decode`. The inspection mapping is never

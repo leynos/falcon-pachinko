@@ -18,9 +18,9 @@ Those update pull requests can run CI against a reviewed lockfile change.
 
 Commit `uv.lock` and require `--locked` for development and CI project
 environments. The Developer Guide's
-[lock-file policy](developers-guide.md#lock-file-policy) is the authoritative
-source for installation, refresh and CI procedures. This record captures the
-decision's context and consequences.
+[lock-file policy](../developers-guide.md#lock-file-policy) is the
+authoritative source for installation, refresh and CI procedures. This record
+captures the decision's context and consequences.
 
 ## Consequences
 

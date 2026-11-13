@@ -139,4 +139,4 @@ limits the build job to read access and passes its attested artefact to
 publication jobs, so those jobs do not rebuild with publication credentials.
 
 The release process and the GitHub Release's role as a reconciled mirror are
-recorded in [ADR-002](adr-002-attested-reconciled-release-pipeline.md).
+recorded in [ADR-002](adrs/adr-0002-attested-reconciled-release-pipeline.md).
