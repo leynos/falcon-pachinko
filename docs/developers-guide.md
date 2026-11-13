@@ -943,23 +943,18 @@ Each pass keeps its persisted Pylint state in its own directory under
 statistics. CI keys `.uv-python` by runner OS and architecture plus the
 Makefile and `tools/pypy-downloads.json`. It keys `.uv-cache` by runner OS and
 architecture plus the Makefile, `pylintrc-df12.toml`,
-`tools/pypy-downloads.json`, `pyproject.toml` and `scripts/**`. The
-`.tools/nose` cache key also includes runner OS and architecture,
-`pyproject.toml`, `scripts/install_nose.py` and
-`tools/nose-release-digests.json`; `make install-nose` verifies the cached
-binary's pinned version before use.
+`tools/pypy-downloads.json`, `pyproject.toml` and `scripts/**`.
 
 #### Coverage and tests
 
 `PYLINT_TARGETS` covers `falcon_pachinko` (listing its `unittests` and
 `behaviour` directories explicitly, because they carry no `__init__.py`),
-`tests`, `examples`, `tools`, every top-level `scripts/*.py` module, and every
-`scripts/tests/*.py` helper-test module. Both Pylint passes use this same
-target list, so the scripts and tests receive classic and df12 checks.
-Recursive directory discovery covers nested test and tool packages. None of
-these Python files needs syntax newer than Python 3.12, so no separate CPython
-classic pass exists. The three inline script blocks under `examples` declare
-dependencies but no Python version.
+`tests`, `examples`, `tools`, and every top-level `scripts/*.py` module. Both
+Pylint passes use this same target list, so the scripts and tests receive
+classic and df12 checks. Recursive directory discovery covers nested test and
+tool packages. None of these Python files needs syntax newer than Python 3.12,
+so no separate CPython classic pass exists. The three inline script blocks under
+`examples` declare dependencies but no Python version.
 
 `tests/test_lint_toolchain_integration.py` (marker `lint_toolchain`) runs the
 Makefile's own commands against the real interpreters. The tests provision PyPy
@@ -977,25 +972,22 @@ pragmas.
 
 ### Nose code duplication gate
 
-`make lint` provisions and runs a blocking duplication gate. Its implementation
-and focused tests adapt the approach merged in
-[Episodic PR #276](https://github.com/leynos/episodic/pull/276), at immutable
-revision
-[`d9e5ac0d254f375e2986f52d91a3b88c117c833b`](https://github.com/leynos/episodic/commit/d9e5ac0d254f375e2986f52d91a3b88c117c833b).
-The detector is `corca-ai/nose` v0.20.0: the Rust-built `nose` executable, not
-the unrelated Python package of the same name. Adapted material retains its
-upstream attribution and is used under this repository's ISC licence. This
-repository downloads only official release archives and verifies their
-platform-specific SHA-256 digests; it does not use cargo-binstall. The wrapper
-validates that configured roots exist and contain Python candidates after the
-explicit exclusions. Before its single combined JSON query, the wrapper asks
-Nose for JSON stats on each root and fails with status 2 if any root has no
-effective Python sources. This uses the pinned detector's actual handling of
-`.ignore`, `.gitignore`, hidden paths, `.git/info/exclude`, and global Git
-ignore rules without trying to duplicate its ignore precedence in Python. The
-query's own warning remains a final check for a wholly empty scan. Stale
-allow-rule diagnostics say “unmatched in this capped scan” because absence from
-a ranked report does not prove that duplication has disappeared.
+`make lint` provisions and runs a blocking duplication gate. The gate is the
+installed `df12-duplication` command from
+[df12-python-lints](https://github.com/leynos/df12-python-lints), pinned by
+commit in the Makefile (`DF12_GATES_SHA`) and run in CI through the
+shared-actions `df12-duplication` action; its behaviour, tests and benchmarks
+live in df12-python-lints. The detector is `corca-ai/nose` v0.20.0: the
+Rust-built `nose` executable, not the unrelated Python package of the same name.
+`df12-duplication install` downloads only official release archives and
+verifies them against the platform-specific SHA-256 digest table shipped in the
+package; it does not use cargo-binstall. `[tool.nose] version` is the only
+detector pin. The command validates that configured roots exist and contain
+Python candidates after the explicit exclusions, and fails with status 2 if any
+root has no effective Python sources. Stale allow-rule diagnostics say
+“unmatched in this scan” because absence from a ranked report does not prove
+that duplication has disappeared. The design was adapted from
+[Episodic PR #276](https://github.com/leynos/episodic/pull/276).
 
 The scan covers production modules under `falcon_pachinko/`. Setuptools uses
 package discovery with the `falcon_pachinko*` include pattern and excludes
@@ -1004,11 +996,11 @@ distribution therefore includes `falcon_pachinko.testing`, but omits the
 behaviour and unit-test support packages. These package-discovery rules are
 separate from the duplication gate's source exclusions for `testing/`,
 `unittests/`, and `behaviour/`. The gate also omits `examples/`, top-level
-`tests/`, `tools/`, and maintenance `scripts/`: these are examples, tests,
-tooling, and the gate itself, rather than shipped production modules. The
-configured roots are passed together in one detector invocation so cross-root
-families remain visible. The initial report selected only `__init__.py`,
-`exceptions.py`, `router.py`, and `websocket.py`, with no excluded paths.
+`tests/`, `tools/`, and maintenance `scripts/`: these are examples, tests, and
+tooling, rather than shipped production modules. The configured roots are
+passed together in one detector invocation so cross-root families remain
+visible. The initial report selected only `__init__.py`, `exceptions.py`,
+`router.py`, and `websocket.py`, with no excluded paths.
 
 `make build` installs the `dev` dependency group with
 `uv sync --group dev --locked`; it does not install the optional `examples`
@@ -1025,52 +1017,31 @@ enforced by that scan. The initial selected surface contained three families
 and did not reach the cap. The semantic channel supplies a limited,
 witness-backed check; it is not a guarantee of finding every Type-4 clone.
 
-The gate and its tests use an isolated, explicitly selected CPython 3.14
-tooling environment with `--no-project`; the package's Python `>=3.12` floor,
-platform support, and runtime dependencies remain unchanged. The pinned
-official binaries cover Linux glibc and macOS on x86-64 and AArch64. The gate
-uses POSIX file locking and directory operations, so native Windows gate use is
-unsupported; use POSIX or WSL. Missing trusted binaries are provisioning
-errors, with no source-build fallback. `NOSE_BIN` may select another binary;
-relative paths resolve from the repository root, and the expected version is
-checked before every scan and after installation.
-
-Detector and installer operations receive explicit runtime contexts. The
-`DetectorContext` carries the repository root, environment, binary discoverer,
-and command runner. The `InstallerContext` carries repository, configuration,
-and manifest paths; environment and process runner; system, machine, and libc
-metadata; downloader; and output callback. The CLI composition boundaries
-assemble these contexts and snapshot process state, so detector and installer
-operations use supplied dependencies rather than reading ambient globals.
-
-The isolated helper-test environment pins Syrupy 6.1.1 for exact snapshots of
-the CLI report and detector argument vectors. It also installs nose before
-running the acceptance suite; real-detector canaries fail if the binary is
-missing or has drifted. Review snapshot changes with the test contract that
-produced them. The gate and test target both pin `pathspec` 1.1.1, and a
-toolchain contract test checks that they stay in sync. This matcher validates
-configured exclusion globs and is a tool-only dependency; it does not enter the
-application environment.
+The gate runs as isolated tooling through `uv tool run`; the package's Python
+`>=3.12` floor, platform support, and runtime dependencies remain unchanged.
+The pinned official binaries cover Linux glibc and macOS on x86-64 and AArch64.
+The gate uses POSIX file locking and directory operations, so native Windows
+gate use is unsupported; use POSIX or WSL. Missing trusted binaries are
+provisioning errors, with no source-build fallback. `NOSE_BIN` may select
+another binary; relative paths resolve from the repository root.
 
 Use these Make targets:
 
 ```text
-make install-nose
 make duplication
-make duplication-test
 make duplication-allow FIRST='path[::name]' [SECOND='path[::name]'] REASON='...'
 ```
 
-The allow target reads `FIRST`, `SECOND`, and `REASON` only when supplied on
-the Make command line. Each TOML entry must have a non-blank reason and cover
-every location in one family. Every key in a `members` entry must match at
-least one location, so unused keys cannot widen an exception. Partial entries
-cannot be combined to allow a family. A named key matches only the exact
-reported unit name, never an unnamed fragment. The CLI accepts repeated
-`--second` values for families with more than two members. Updates preserve
-TOML comments, are idempotent, and use an atomic writer protected by a stable
-sidecar advisory lock. That lock coordinates participating allow commands, not
-unrelated editors.
+`make duplication` installs the detector first. The allow target reads `FIRST`,
+`SECOND` (a whitespace-separated list), and `REASON` only when supplied on the
+Make command line. Each TOML entry must have a non-blank reason and cover every
+location in one family. Every key in a `members` entry must match at least one
+location, so unused keys cannot widen an exception. Partial entries cannot be
+combined to allow a family. A named key matches only the exact reported unit
+name, never an unnamed fragment. The CLI accepts repeated `--second` values for
+families with more than two members. Updates preserve TOML comments, are
+idempotent, and use an atomic writer protected by a stable sidecar advisory
+lock. That lock coordinates participating allow commands, not unrelated editors.
 
 Review an unmatched stale entry against source or a sufficiently widened
 relevant scan before removing it; do not delete it automatically. In this

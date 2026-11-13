@@ -16,20 +16,13 @@ TOOLS = $(MDLINT) $(MDTABLEFIX) $(NIXIE) uv
 VENV_TOOLS = pytest
 UV ?= uv
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
-NOSE_PYTHON_VERSION ?= 3.14
-NOSE_TOOLS_DIR ?= .tools/nose
-NOSE_BIN ?= $(NOSE_TOOLS_DIR)/nose
-NOSE_INSTALL = $(UV_ENV) UV_PYTHON_INSTALL_DIR=.uv-python $(UV) run \
-	--no-project --python $(NOSE_PYTHON_VERSION) scripts/install_nose.py
-DUPLICATION_GATE ?= $(UV_ENV) UV_PYTHON_INSTALL_DIR=.uv-python \
-	NOSE_BIN="$(NOSE_BIN)" $(UV) run --no-project \
-	--python $(NOSE_PYTHON_VERSION) scripts/duplication_gate.py
-DUPLICATION_TEST = $(UV_ENV) UV_PYTHON_INSTALL_DIR=.uv-python $(UV) run \
-	--no-project --python $(NOSE_PYTHON_VERSION) \
-	--with pytest==9.0.2 --with cyclopts==4.25.2 --with tomlkit==0.15.1 \
-	--with hypothesis==6.165.6 --with syrupy==6.1.1 --with pathspec==1.1.1 \
-	python -m pytest \
-	-c scripts/tests/pytest.ini scripts/tests
+# The duplication gate is the installed df12-duplication command. It downloads
+# the nose release named by [tool.nose] version and verifies it against the
+# digest table shipped in the package, so no nose pin or digest lives here.
+DF12_GATES_SHA ?= 56ad71721c3f1f2164ec84b69150582488f1a927
+DF12_GATES = git+https://github.com/leynos/df12-python-lints.git@$(DF12_GATES_SHA)
+DUPLICATION = $(UV_ENV) $(UV) tool run --from \
+	'df12-python-lints[duplication] @ $(DF12_GATES)' df12-duplication
 # Retain the typos-config-builder gate: the bespoke spelling machinery, and
 # the PATHSPEC_VERSION and TYPOS_VERSION pins that served only it, were
 # retired in favour of this single gate subcommand. The RUFF_VERSION below is
@@ -68,11 +61,10 @@ TY ?= $(UV) tool run --from ty==$(TY_VERSION) ty
 PYLINT_VERSION ?= 4.0.8
 ASTROID_VERSION ?= 4.0.4
 # List non-package test directories explicitly: package discovery does not
-# descend into them. Script globs also include gate tests without relying on
-# Pylint's recursive directory discovery.
+# descend into them. The script glob avoids relying on Pylint's recursive
+# directory discovery.
 PYLINT_TARGETS ?= falcon_pachinko falcon_pachinko/unittests \
-	falcon_pachinko/behaviour tests examples tools scripts/*.py \
-	scripts/tests/*.py
+	falcon_pachinko/behaviour tests examples tools scripts/*.py
 # Persisted Pylint state lives in one directory per runtime, so the two passes
 # never read each other's statistics.
 PYLINT_CACHE ?= .cache/pylint
@@ -126,8 +118,8 @@ AMBRLEAKS = $(UV_ENV) $(UV) tool run --python $(DF12_PYTHON) \
 
 .PHONY: help all clean build build-release lint interrogate lint-pylint lint-df12 \
 	pylint-pypy-python fmt check-fmt markdownlint nixie spelling test test-ci \
-	test-workflow-contracts check-cv005 typecheck install-nose duplication \
-	duplication-test duplication-allow mutation mutation-results \
+	test-workflow-contracts check-cv005 typecheck duplication \
+	duplication-allow mutation mutation-results \
 	$(TOOLS) $(VENV_TOOLS)
 
 .DEFAULT_GOAL := all
@@ -208,35 +200,32 @@ interrogate: uv ## Enforce complete Python docstring coverage
 	    exit 1; \
 	  fi
 
-lint: uv install-nose interrogate ## Run linters
+lint: uv interrogate duplication ## Run linters
 	$(RUFF) check .
 	$(MAKE) --no-print-directory lint-pylint
 	$(MAKE) --no-print-directory lint-df12
-	$(DUPLICATION_GATE) check
 
-install-nose: ## Install the pinned, checksum-verified nose detector
-	NOSE_BIN="$(NOSE_BIN)" $(NOSE_INSTALL)
-
-duplication: install-nose ## Run the blocking code-duplication gate
-	$(DUPLICATION_GATE) check
-
-duplication-test: install-nose ## Run isolated nose-gate tests on CPython 3.14
-	NOSE_BIN="$(NOSE_BIN)" $(DUPLICATION_TEST)
+duplication: ## Run the blocking code-duplication gate
+	$(DUPLICATION) install
+	$(DUPLICATION) check
 
 # Only values explicitly supplied on the Make command line are accepted.
 # They travel through the environment so shell metacharacters in REASON stay
-# data when the quoted CLI argument is expanded.
+# data when the quoted CLI argument is expanded; the repeated options are
+# rebuilt from that value at run time rather than interpolated into the recipe.
 cli_value = $(if $(filter command line,$(origin $(1))),$(value $(1)))
 
 duplication-allow: export DUPLICATION_FIRST = $(call cli_value,FIRST)
 duplication-allow: export DUPLICATION_SECOND = $(call cli_value,SECOND)
 duplication-allow: export DUPLICATION_REASON = $(call cli_value,REASON)
 duplication-allow: ## Record one reasoned duplication exception
-	@test -n "$${DUPLICATION_FIRST}" || { printf "Error: FIRST is required (path[::name])\\n" >&2; exit 2; }
-	@test -n "$${DUPLICATION_REASON}" || { printf "Error: REASON is required for a duplication exception\\n" >&2; exit 2; }
-	$(DUPLICATION_GATE) allow --first "$${DUPLICATION_FIRST}" \
-		$(if $(call cli_value,SECOND),--second "$${DUPLICATION_SECOND}",) \
-		--reason "$${DUPLICATION_REASON}"
+	@case "$${DUPLICATION_FIRST}" in *[![:space:]]*) ;; *) printf "Error: FIRST is required (path[::name])\\n" >&2; exit 2;; esac
+	@case "$${DUPLICATION_REASON}" in *[![:space:]]*) ;; *) printf "Error: REASON is required for a duplication exception\\n" >&2; exit 2;; esac
+	@case "$${DUPLICATION_SECOND}" in *[![:print:][:space:]]*) printf "Error: SECOND members must be printable text\\n" >&2; exit 2;; esac
+	@$(DUPLICATION) install
+	@set -f; set --; for key in $${DUPLICATION_SECOND}; do set -- "$$@" --second "$$key"; done; \
+		$(DUPLICATION) allow --first "$${DUPLICATION_FIRST}" "$$@" \
+			--reason "$${DUPLICATION_REASON}"
 
 pylint-pypy-python: uv ## Print the pinned PyPy interpreter, installing it if needed
 	@$(PYPY_PROVISION)
