@@ -58,7 +58,7 @@ jobs:
         with:
           version: "0.6.1"
 
-      # Make provisions PyPy 3.12 and the isolated gate's CPython 3.14 into
+      # Make provisions PyPy 3.12 and the df12 pass's CPython 3.14 into
       # .uv-python. Keying on the Makefile and PyPy manifest invalidates this
       # cache when either interpreter pin changes.
       - name: Cache PyPy lint interpreter
@@ -67,22 +67,14 @@ jobs:
           path: .uv-python
           key: lint-interpreters-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'tools/pypy-downloads.json') }}
 
-      # The Pylint, Astroid, df12, nose-gate and isolated helper-test tools live
-      # in .uv-cache. Their pins and PEP 723 metadata are covered by these
-      # source and configuration inputs.
+      # The Pylint, Astroid, df12 and duplication-gate tools live in
+      # .uv-cache. Their pins are covered by these source and configuration
+      # inputs.
       - name: Cache lint tool environments
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .uv-cache
           key: lint-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'pylintrc-df12.toml', 'tools/pypy-downloads.json', 'pyproject.toml', 'scripts/**') }}
-
-      # A cache hit is checked by `make install-nose` before the gate uses it.
-      # The digest manifest and configured version both participate in the key.
-      - name: Cache pinned nose release binary
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .tools/nose
-          key: nose-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pyproject.toml', 'scripts/install_nose.py', 'tools/nose-release-digests.json') }}
 
       - name: Check spelling
         run: make spelling
@@ -111,8 +103,8 @@ jobs:
       - name: Run linters
         run: make lint
 
-      - name: Test nose duplication gate
-        run: make duplication-test
+      - name: Duplication gate
+        uses: leynos/shared-actions/.github/actions/df12-duplication@a0519a1476ab769ca7b8badfa794f3751213f1ea
 
       # Drive the real PyPy and CPython Pylint passes through the Makefile. The
       # tests never skip, so an unprovisioned interpreter fails this step

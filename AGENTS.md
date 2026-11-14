@@ -82,11 +82,10 @@ When implementing changes, adhere to the following testing procedures:
   `ensure_tool` names any that are missing when a gate needs one.
 
 - **Nose duplication gate:** `make lint` provisions the pinned nose detector
-  and runs the blocking production-source duplication check. Use
-  `make duplication-test` for its isolated CPython 3.14 helper tests; this
-  target also provisions the detector required by its real-binary acceptance
-  tests. Review complete families before adding a reasoned allow rule; do not
-  use broad or automatic suppressions. Add rules with
+  and runs the blocking production-source duplication check through the
+  installed `df12-duplication` command. Review complete families before adding
+  a reasoned allow rule; do not use broad or automatic suppressions. Add rules
+  with
   `make duplication-allow FIRST='path[::name]' [SECOND='path[::name]'] REASON='...'`;
   these values must be Make command-line arguments. See the Developer Guide's
   [nose code duplication gate](docs/developers-guide.md#nose-code-duplication-gate)
