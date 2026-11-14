@@ -407,7 +407,7 @@ roots = ["falcon_pachinko"]
 mode = "syntax,semantic,near"
 min-size = 24
 surface = "all"
-top = 30
+top = 0
 exclude = [
   "testing/**",
   "unittests/**",
