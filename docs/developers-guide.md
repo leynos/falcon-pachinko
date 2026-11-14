@@ -1010,12 +1010,11 @@ such as `aiosqlite`, use `uv sync --group dev --extra examples --locked`. See
 the [lock-file policy](#lock-file-policy) for how exact syncs select extras.
 
 The detector runs `syntax,semantic,near`, with a minimum of 24 intermediate-
-language tokens, `surface = "all"`, and a top-30 ranked-family limit. `all`
-widens the report surface but does not make the ranking exhaustive: allowed
-families still use positions in the top 30, and lower-ranked families are not
-enforced by that scan. The initial selected surface contained three families
-and did not reach the cap. The semantic channel supplies a limited,
-witness-backed check; it is not a guarantee of finding every Type-4 clone.
+language tokens, `surface = "all"`, and `top = 0`, which asks for every family
+so the report is never capped; concordat's `python-duplication-gate` rule
+(NS-001) requires it. `all` widens the report surface to families nose keeps
+off its dashboard. The semantic channel supplies a limited, witness-backed
+check; it is not a guarantee of finding every Type-4 clone.
 
 The gate runs as isolated tooling through `uv tool run`; the package's Python
 `>=3.12` floor, platform support, and runtime dependencies remain unchanged.
