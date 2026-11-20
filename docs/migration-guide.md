@@ -19,7 +19,11 @@ workflow to the composable `WebSocketRouter` architecture.
 - **Pluggable connection manager backends** enable alternative local storage;
   see [Clustered deployments](users-guide.md#clustered-deployments) for
   distributed room fan-out.
-- **Lifespan-managed workers** supersede `add_websocket_worker`.
+- **Lifespan-managed workers** supersede `add_websocket_worker`. Worker
+  failures surface from `WorkerController.stop()`; the reference application's
+  `announcement_worker` adds an opt-in supervision and delivery policy. See
+  [Background Workers](users-guide.md#9-background-workers) and the
+  [reference example](users-guide.md#11-reference-example).
 
 ## Diagnostic compatibility
 
@@ -323,6 +327,13 @@ returns the default manager; Falcon's slotted ASGI app does not expose it as
 - Replace `add_websocket_worker` with `WorkerController` and Falcon middleware
   `process_startup(scope, event)` / `process_shutdown(scope, event)` methods to
   start and stop workers.
+- Carry over any supervision the old worker performed itself. A worker that
+  fails while running ends its task and is reported by `stop()`; a worker that
+  must survive failures needs its own retry loop. The reference example's
+  `announcement_worker` is one worked policy: it bounds each send, absorbs
+  recipient disconnects and timeouts, and restarts after unexpected failures
+  while dropping the in-flight event. Its keyword options are documented in the
+  [reference example](users-guide.md#11-reference-example).
 
 1) **Move WebSocket work into the supported lifecycle:**
 
