@@ -1,4 +1,6 @@
-# ADR 003: Schema-mode strict validation before conversion
+# ADR 0004: Schema-mode strict validation before conversion
+
+Renumbered from 0003 on 2026-11-23 (duplicate number).
 
 Status: Accepted
 
