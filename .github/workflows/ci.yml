@@ -18,7 +18,7 @@ permissions:
 # on the event so a push to `main`, a schedule, or a dispatch, none of which
 # has a successor waiting, always runs to completion.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
