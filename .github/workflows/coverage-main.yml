@@ -71,7 +71,7 @@ jobs:
         run: uv lock --check
 
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@ab489303d8b0f0175bd334335b696ca48e0e7586
+        uses: leynos/shared-actions/.github/actions/generate-coverage@6d29e3a48219305d2b1d7e7416fc81f13a6dbbd8
         with:
           output-path: coverage.xml
           format: cobertura
@@ -113,7 +113,7 @@ jobs:
         # verifies the archive against that manifest's digest, so an
         # `archive-checksum` could only agree with it or go stale and fail.
         if: steps.codescene-token.outputs.available == 'true' && github.ref == 'refs/heads/main'
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@ab489303d8b0f0175bd334335b696ca48e0e7586
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@6d29e3a48219305d2b1d7e7416fc81f13a6dbbd8
         with:
           format: cobertura
           mode: upload
@@ -132,6 +132,6 @@ jobs:
       contents: read
     steps:
       - name: Publish the ratchet baseline
-        uses: leynos/shared-actions/.github/actions/publish-coverage-baseline@ab489303d8b0f0175bd334335b696ca48e0e7586
+        uses: leynos/shared-actions/.github/actions/publish-coverage-baseline@6d29e3a48219305d2b1d7e7416fc81f13a6dbbd8
         with:
           artefact-name: coverage-baseline-handover
