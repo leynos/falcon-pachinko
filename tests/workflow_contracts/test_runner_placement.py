@@ -91,7 +91,6 @@ PUSH_ONLY_UBICLOUD_LANES = (
 #: targets, and public-repository minutes are free there.
 GITHUB_HOSTED_JOBS = {
     ("coverage-main.yml", "coverage-upload"): "main coverage upload blocks no work",
-    ("delayed-pr-comment.yml", "delay_and_comment"): "workflow_dispatch only",
 }
 
 
@@ -310,7 +309,6 @@ def test_the_ceiling_contract_sees_the_lanes_it_guards() -> None:
 LABEL_DECLARING_WORKFLOWS = frozenset({
     "ci.yml",
     "coverage-main.yml",
-    "delayed-pr-comment.yml",
     "release.yml",
 })
 
