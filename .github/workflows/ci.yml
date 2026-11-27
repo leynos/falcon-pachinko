@@ -62,7 +62,7 @@ jobs:
         # `--git`. The action
         # installs a prebuilt release through a hardened cargo-binstall rather
         # than building from source.
-        uses: leynos/shared-actions/.github/actions/install-mdtablefix@ab6505246c6b043b742a225e428e00448c0a37af
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@a108423efa7fb83565089449f2647d34286a48a4
         with:
           version: "0.6.1"
 
@@ -112,7 +112,7 @@ jobs:
         run: make lint
 
       - name: Duplication gate
-        uses: leynos/shared-actions/.github/actions/df12-duplication@ab6505246c6b043b742a225e428e00448c0a37af
+        uses: leynos/shared-actions/.github/actions/df12-duplication@a108423efa7fb83565089449f2647d34286a48a4
 
       # Drive the real PyPy and CPython Pylint passes through the Makefile. The
       # tests never skip, so an unprovisioned interpreter fails this step
@@ -155,7 +155,7 @@ jobs:
       # the work and the CodeScene upload for the same commit.
       - name: Generate coverage
         if: github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/generate-coverage@ab6505246c6b043b742a225e428e00448c0a37af
+        uses: leynos/shared-actions/.github/actions/generate-coverage@a108423efa7fb83565089449f2647d34286a48a4
         with:
           output-path: coverage.xml
           format: cobertura
