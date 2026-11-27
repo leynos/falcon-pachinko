@@ -886,6 +886,71 @@ entire process explicit and testable. Unhandled exceptions in
 `announcement_worker` will propagate and terminate the server, preventing
 silent failures.
 
+#### 3.8.4. Reference Worker Delivery and Supervision Policy
+
+The library provides no supervision, timeout, or delivery policy of its own.
+`WorkerController` starts and stops tasks, and `stop()` reports a worker that
+ended with an exception; retry, backoff, and failure classification belong to
+the application. The reference application demonstrates one complete policy so
+that the extension point is concrete rather than aspirational. Its
+`announcement_worker` makes these decisions:
+
+1. **Best-effort delivery.** An announcement is broadcast once to the room
+   membership captured at broadcast time. Nothing is buffered, replayed, or
+   retried, so the worker adds no durability guarantee to the feed's own.
+
+2. **Per-recipient isolation.** `WebSocketConnectionManager.broadcast_to_room`
+   snapshots the room and applies the send timeout to each send, collecting
+   every failure before raising. A single disconnected or unresponsive
+   recipient therefore cannot prevent the remaining recipients from receiving
+   the frame.
+
+3. **Expected failures are absorbed.** `falcon.WebSocketDisconnected` and send
+   timeouts describe ordinary recipient churn, not a worker defect. Both are
+   caught with `except*` clauses — needed because a lone recipient failure is
+   re-raised directly while two or more arrive in an `ExceptionGroup` — and
+   logged at DEBUG with the affected count. The consuming loop continues.
+
+4. **Backend failures are not recipient failures.** Room membership is resolved
+   through `connections()` before broadcasting. A backend error while listing
+   recipients is a defect in the worker's dependencies and propagates to the
+   supervising loop instead of being mistaken for a recipient that stopped
+   accepting frames.
+
+5. **Unexpected failures restart the loop.** Any other exception is logged with
+   `logger.exception`, preserving the traceback, and the consuming loop
+   restarts after a fixed `restart_delay` (one second by default). The delay is
+   not a backoff: the reference application favours prompt recovery and leaves
+   adaptive retry to applications that need it.
+
+6. **The in-flight event is dropped.** When an unexpected failure occurs, the
+   event already dequeued is abandoned rather than replayed. Replaying would
+   require acknowledgement and deduplication semantics that the feed does not
+   provide; dropping keeps the consumer simple and matches the best-effort
+   contract.
+
+7. **Shutdown remains orderly.** The inner loop does not catch
+   `BaseException`, so `CancelledError` propagates and
+   `WorkerController.stop()` returns cleanly during lifespan shutdown. Only
+   `Exception` triggers a restart.
+
+8. **Policy is validated at startup.** `announcement_worker` is a synchronous
+   factory that validates `send_timeout` (positive, not `NaN`) and
+   `restart_delay` (non-negative) before returning the coroutine, so
+   `WorkerController.start()` raises `ValueError` during application startup
+   rather than failing on the first announcement. `send_timeout` defaults to
+   5.0 seconds and `restart_delay` to 1.0 second; tests inject `sleep` to
+   record the delay without waiting.
+
+Observation for this policy is deliberately log-only. The library remains
+telemetry-agnostic — it has no metrics or tracing dependency, and adding one
+would impose a backend on every application — so the reference application
+distinguishes disconnects from timeouts through separate DEBUG messages, counts
+affected recipients, and reports unexpected failures at ERROR with a traceback.
+Applications that need counters or spans can wrap the worker at the
+`WorkerController.start()` boundary or supply their own logger and metrics
+client without changing the library.
+
 ### 3.9. API Overview
 
 The following table summarizes the key components of the proposed

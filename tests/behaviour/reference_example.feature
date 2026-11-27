@@ -9,3 +9,8 @@ Feature: Full reference example workflow
     Then the connection is accepted
     And the task stream resource replies with a task acknowledgement
     And the announcement feed captures an event for workspace "atlas"
+
+  Scenario: A disconnected recipient does not stop announcements for other workspaces
+    Given an announcement worker with a disconnected atlas recipient
+    When clients in the atlas and zephyr workspaces create tasks
+    Then each workspace client receives its own announcement
