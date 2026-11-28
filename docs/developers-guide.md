@@ -1512,12 +1512,15 @@ which carry the rest of the placement argument. All six release jobs use the
 same 30-minute ceiling. Change a figure in a workflow and this guide in the
 same commit, or the contract fails.
 
-The registry in `.github/actionlint.yaml` is held to an equality with the
-labels actually in use, in both directions. A subset assertion would miss a
-registration that outlived its last use, which reads as a provider still in
-play. The exemption is a named set of GitHub-hosted labels rather than a
-provider prefix: a prefix rule would silently exempt a second paid provider's
-labels, which is the question the registry exists to ask.
+The registry in `.github/actionlint.yaml` is held to the labels actually in
+use, in both directions: every label in use must be covered by an entry, and
+every entry must cover at least one label in use. An entry is an exact label or
+ends in `*`, as the estate's `ubicloud-*` does, and a wildcard stays in use
+while any label matches it. A subset assertion would miss a registration that
+outlived its last use, which reads as a provider still in play. The exemption
+is a named set of GitHub-hosted labels rather than a provider prefix: a prefix
+rule would silently exempt a second paid provider's labels, which is the
+question the registry exists to ask.
 
 The in-use set accounts for every workflow that declares a runner label. The
 contract names the workflows the traversal must reach, so dropping one fails

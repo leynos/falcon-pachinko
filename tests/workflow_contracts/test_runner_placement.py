@@ -30,6 +30,7 @@ import pytest
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+from .registry_comparison import registry_mismatches
 from .runner_labels import (
     collapse_label_whitespace,
     declared_labels,
@@ -333,21 +334,10 @@ def test_the_registry_matches_the_labels_in_use() -> None:
     """
     registered = set(REPOSITORY.registered_labels())
     in_use = labels_in_use(REPOSITORY)
-    unused = {e for e in registered if not any(_covers(e, label) for label in in_use)}
-    unregistered = {
-        label for label in in_use if not any(_covers(e, label) for e in registered)
-    }
+    unregistered, unused = registry_mismatches(registered, in_use)
 
-    assert not unused, f"registered but unused: {sorted(unused)}"
-    assert not unregistered, f"in use but unregistered: {sorted(unregistered)}"
-
-
-def _covers(entry: str, label: str) -> bool:
-    """Say whether a registry entry names a label, exactly or by a ``*`` suffix."""
-    prefix, star, rest = entry.partition("*")
-    if not star:
-        return entry == label
-    return not rest and label.startswith(prefix)
+    assert not unused, f"registered but unused: {unused}"
+    assert not unregistered, f"in use but unregistered: {unregistered}"
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), sorted(LANE_CEILINGS))
