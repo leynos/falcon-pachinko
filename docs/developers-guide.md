@@ -1512,12 +1512,15 @@ which carry the rest of the placement argument. All six release jobs use the
 same 30-minute ceiling. Change a figure in a workflow and this guide in the
 same commit, or the contract fails.
 
-The registry in `.github/actionlint.yaml` is held to an equality with the
-labels actually in use, in both directions. A subset assertion would miss a
-registration that outlived its last use, which reads as a provider still in
-play. The exemption is a named set of GitHub-hosted labels rather than a
-provider prefix: a prefix rule would silently exempt a second paid provider's
-labels, which is the question the registry exists to ask.
+The registry in `.github/actionlint.yaml` is held to the labels actually in
+use, in both directions: every label in use must be covered by an entry, and
+every entry must cover at least one label in use. An entry is an exact label or
+ends in `*`, as the estate's `ubicloud-*` does, and a wildcard stays in use
+while any label matches it. A subset assertion would miss a registration that
+outlived its last use, which reads as a provider still in play. The exemption
+is a named set of GitHub-hosted labels rather than a provider prefix: a prefix
+rule would silently exempt a second paid provider's labels, which is the
+question the registry exists to ask.
 
 The in-use set accounts for every workflow that declares a runner label. The
 contract names the workflows the traversal must reach, so dropping one fails
@@ -1540,3 +1543,25 @@ those distributions, publishes missing files through PyPI Trusted Publishing,
 then reconciles and publishes the GitHub Release after comparing digests.
 Follow the [release workflow guide](release-workflow.md) for versioning,
 repository settings, tag creation, retries, and mismatch recovery.
+
+## YAML lint
+
+`make lint` runs `make yamllint` and `make actionlint` as prerequisites.
+`make yamllint` runs `yamllint --strict` over every tracked `.yml` and `.yaml`
+file, reading `.yamllint.yml`, which extends the estate base
+`.yamllint-estate.yml` (a verbatim copy of the estate canon; do not edit it).
+The base ignores Helm chart templates (`**/charts/**/templates/`), so a tracked
+file there is passed to yamllint but not checked, and a local `ignore` in
+`.yamllint.yml` replaces that entry rather than adding to it. Run it from the
+repository root, because yamllint resolves `extends` against the current
+directory. `make actionlint` checks the GitHub Actions workflows, accepting the
+runner labels in `.github/actionlint.yaml`, and runs ShellCheck over their Bash
+and `sh` `run:` scripts when it is on `PATH` (it skips PowerShell steps).
+
+Install the tools locally at the versions CI uses:
+`uv tool install yamllint==1.38.0`, and the `actionlint` 1.7.12 and
+`shellcheck` 0.11.0 release binaries (a package manager's builds can differ and
+change what the lint reports). CI installs the same pinned versions with the
+`install-yaml-lint` action of `leynos/shared-actions` before it runs
+`make lint`. The `YAMLLINT` and `ACTIONLINT` variables name the commands when
+they are not on `PATH`.

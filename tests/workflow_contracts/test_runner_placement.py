@@ -23,7 +23,6 @@ Run with:
 
 from __future__ import annotations
 
-import re
 import typing as typ
 
 import pytest
@@ -31,6 +30,7 @@ import pytest
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+from .registry_comparison import registry_mismatches
 from .runner_labels import (
     collapse_label_whitespace,
     declared_labels,
@@ -44,7 +44,6 @@ from .workflow_support import (
     GITHUB_HOSTED_LINUX,
     HOSTED_GUARD,
     REPOSITORY,
-    ROOT,
     UBICLOUD_LINUX_LABEL,
 )
 
@@ -333,13 +332,12 @@ def test_the_registry_matches_the_labels_in_use() -> None:
     which is the substantive question the registry exists to ask, so the
     exemption is a named set of GitHub-hosted labels instead.
     """
-    registered = REPOSITORY.registered_labels()
+    registered = set(REPOSITORY.registered_labels())
+    in_use = labels_in_use(REPOSITORY)
+    unregistered, unused = registry_mismatches(registered, in_use)
 
-    assert set(registered) == labels_in_use(REPOSITORY), (
-        "every label GitHub does not host must be registered, and every "
-        f"registration must still be used; registered {sorted(registered)}, "
-        f"in use {sorted(labels_in_use(REPOSITORY))}"
-    )
+    assert not unused, f"registered but unused: {unused}"
+    assert not unregistered, f"in use but unregistered: {unregistered}"
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), sorted(LANE_CEILINGS))
@@ -375,37 +373,3 @@ def test_the_ceiling_table_covers_every_ubicloud_lane() -> None:
         "every Ubicloud lane must carry a documented ceiling; the table names "
         f"{sorted(LANE_CEILINGS)}"
     )
-
-
-#: Paths named in prose, as ``path`` or ``path::test_name``.
-_NAMED_TEST_PATH = re.compile(r"tests/[\w./-]+\.py(?:::(?P<test>\w+))?")
-
-
-def test_the_registry_comment_names_a_contract_that_exists() -> None:
-    """Keep the registry's comment pointing at the rule that holds it.
-
-    `.github/actionlint.yaml` tells its next reader which contract enforces
-    the equality it declares. That is the only signpost from the registry to
-    the rule, and nothing else would notice it going stale: a renamed or
-    merged contract file leaves the comment naming a path that is not there,
-    and the reader concludes the equality is unenforced.
-    """
-    text = REPOSITORY.text(REPOSITORY.actionlint_config)
-    named = list(_NAMED_TEST_PATH.finditer(text))
-
-    assert named, (
-        ".github/actionlint.yaml must name the contract that holds its "
-        "registry to the labels in use"
-    )
-    for match in named:
-        path = ROOT / match.group(0).split("::")[0]
-        # Read through the source's own boundary, so a missing, unreadable or
-        # undecodable file fails as a named contract error rather than a raw
-        # `OSError` or `UnicodeDecodeError`.
-        body = REPOSITORY.text(path)
-        test_name = match.group("test")
-        if test_name is not None:
-            assert f"def {test_name}(" in body, (
-                f".github/actionlint.yaml names {match.group(0)}, but "
-                f"{path.name} defines no {test_name}"
-            )

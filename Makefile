@@ -200,7 +200,7 @@ interrogate: uv ## Enforce complete Python docstring coverage
 	    exit 1; \
 	  fi
 
-lint: uv interrogate duplication ## Run linters
+lint: uv interrogate duplication yamllint actionlint ## Run linters
 	$(RUFF) check .
 	$(MAKE) --no-print-directory lint-pylint
 	$(MAKE) --no-print-directory lint-df12
@@ -313,3 +313,18 @@ test-workflow-contracts: check-cv005 build uv pytest ## Check the CI workflows' 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | \
 	awk 'BEGIN {FS=":"; printf "Available targets:\n"} {printf "  %-20s %s\n", $$1, $$2}'
+
+YAMLLINT ?= yamllint
+ACTIONLINT ?= actionlint
+
+.PHONY: yamllint actionlint
+
+# yamllint reads `.yamllint.yml`, which extends `.yamllint-estate.yml`, and
+# resolves that path against the current directory, so run it from the root.
+yamllint: SHELL := bash
+yamllint: .SHELLFLAGS := -eo pipefail -c
+yamllint: ## Lint every tracked YAML file strictly
+	git ls-files -z '*.yml' '*.yaml' | xargs -0 -r $(YAMLLINT) --strict --
+
+actionlint: ## Lint the GitHub Actions workflows (and their shell scripts when ShellCheck is on PATH)
+	$(ACTIONLINT)

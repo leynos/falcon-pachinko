@@ -108,6 +108,8 @@ jobs:
 
       # Runs Ruff, the classic Pylint pass on PyPy, and the df12 pass on
       # CPython 3.14. Each Pylint pass verifies its interpreter first.
+      - name: Install the YAML lint tools
+        uses: leynos/shared-actions/.github/actions/install-yaml-lint@a108423efa7fb83565089449f2647d34286a48a4
       - name: Run linters
         run: make lint
 
